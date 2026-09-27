@@ -1,0 +1,5 @@
+{
+  "input": ".button { @apply p-4 text-white !important; }",
+  "expected": ".button{padding:1rem!important;color:#fff!important;}",
+  "diagnostics": []
+}

@@ -1,0 +1,10 @@
+{
+  "sources": [
+    {
+      "id": "src/index.html",
+      "content": "<main class=\"flex p-4\"></main>"
+    }
+  ],
+  "expected_css": ".flex{display:flex;}.p-4{padding:1rem;}",
+  "expected_diagnostics": []
+}

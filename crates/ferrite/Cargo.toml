@@ -25,6 +25,8 @@ ferrite-cache = { workspace = true }
 ferrite-manifest = { workspace = true }
 ferrite-frameworks = { workspace = true }
 ferrite-wasm = { workspace = true }
+ferrite-tailwind = { workspace = true }
+ferrite-docs = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
 flate2 = { workspace = true }

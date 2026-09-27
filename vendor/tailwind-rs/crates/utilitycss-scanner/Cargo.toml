@@ -1,0 +1,23 @@
+[package]
+name = "utilitycss-scanner"
+description = "Fast, runtime-independent utility candidate scanner for utilitycss."
+edition = "2021"
+rust-version = "1.88"
+version = "0.1.0"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/nglmercer/tailwind-rs"
+homepage = "https://github.com/nglmercer/tailwind-rs"
+
+[dependencies]
+utilitycss-span = { version = "0.1.0", path = "../utilitycss-span" }
+
+[dev-dependencies]
+proptest = "=1.11.0"
+
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+rust_2018_idioms = { level = "deny", priority = -1 }
+
+[lints.clippy]
+all = "warn"

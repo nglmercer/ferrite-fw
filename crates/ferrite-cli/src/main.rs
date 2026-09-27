@@ -238,6 +238,8 @@ fn default_plugins(root: &std::path::Path) -> Vec<Arc<dyn Plugin>> {
         Arc::new(ferrite::frameworks::ReactPlugin::new()),
         Arc::new(ferrite::frameworks::VuePlugin::new(root.to_path_buf())),
         Arc::new(ferrite::frameworks::SveltePlugin::new(root.to_path_buf())),
+        Arc::new(ferrite::docs::MarkdownPlugin::new(root.to_path_buf())),
+        Arc::new(ferrite::tailwind::TailwindPlugin::new(root.to_path_buf())),
     ]
 }
 

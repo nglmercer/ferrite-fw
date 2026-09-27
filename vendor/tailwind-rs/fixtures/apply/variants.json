@@ -1,0 +1,5 @@
+{
+  "input": ".button { @apply hover:bg-red-500 md:p-8; }",
+  "expected": ".button{}.button:hover{background-color:#ef4444;}@media (min-width: 768px){.button{padding:2rem;}}",
+  "diagnostics": []
+}

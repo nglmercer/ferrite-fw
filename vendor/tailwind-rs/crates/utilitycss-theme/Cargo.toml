@@ -1,0 +1,20 @@
+[package]
+name = "utilitycss-theme"
+description = "Typed deterministic theme tokens for utilitycss."
+edition = "2021"
+rust-version = "1.88"
+version = "0.1.0"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/nglmercer/tailwind-rs"
+homepage = "https://github.com/nglmercer/tailwind-rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+rust_2018_idioms = { level = "deny", priority = -1 }
+
+[lints.clippy]
+all = "warn"

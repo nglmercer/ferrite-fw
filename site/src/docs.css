@@ -1,0 +1,384 @@
+/* Ferrite docs theme: semantic surfaces + light/dark variables.
+   Layout/spacing utilities come from `ferrite:tailwind.css`; every
+   *color* lives here so one `html.dark` class flips the whole site.
+   (Upstream `dark:` is prefers-color-scheme-only, so it cannot drive
+   a manual toggle.) */
+
+:root {
+  --surface: #ffffff;
+  --surface-raised: #f5f5f4;
+  --ink: #1c1917;
+  --ink-muted: #57534e;
+  --ink-faint: #a8a29e;
+  --line: #e7e5e4;
+  --accent-ink: #9a3412;
+  --accent-ink-hover: #7c2d12;
+  --accent-wash: #fff7ed;
+  --nav-active-bg: #fff7ed;
+  --nav-active-ink: #7c2d12;
+  --header-bg: #0c0a09;
+  --header-ink: #f5f5f4;
+  --header-dim: #a8a29e;
+  --code-bg: #f5f5f4;
+  --code-line: #e7e5e4;
+  --pre-bg: #1c1917;
+  --pre-ink: #e7e5e4;
+  --callout-bg: #fff7ed;
+  --callout-ink: #431407;
+  --btn-border: #d6d3d1;
+  --btn-ink: #44403c;
+}
+
+html.dark {
+  --surface: #0c0a09;
+  --surface-raised: #1c1917;
+  --ink: #e7e5e4;
+  --ink-muted: #d6d3d1;
+  --ink-faint: #78716c;
+  --line: #292524;
+  --accent-ink: #fdba74;
+  --accent-ink-hover: #fed7aa;
+  --accent-wash: #431407;
+  --nav-active-bg: #431407;
+  --nav-active-ink: #ffedd5;
+  --header-bg: #0c0a09;
+  --header-ink: #f5f5f4;
+  --header-dim: #a8a29e;
+  --code-bg: #292524;
+  --code-line: #44403c;
+  --pre-bg: #1c1917;
+  --pre-ink: #e7e5e4;
+  --callout-bg: #292524;
+  --callout-ink: #ffedd5;
+  --btn-border: #44403c;
+  --btn-ink: #e7e5e4;
+}
+
+.theme-body {
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.theme-header {
+  background: var(--header-bg);
+  color: var(--header-ink);
+  border-bottom: 1px solid var(--line);
+}
+
+.theme-badge {
+  background: #c2410c;
+  color: #fff;
+}
+
+.theme-title {
+  color: #fff;
+}
+
+.theme-pill {
+  background: #292524;
+  color: #d6d3d1;
+}
+
+.theme-tagline {
+  color: var(--header-dim);
+}
+
+.theme-border {
+  border-color: var(--line);
+}
+
+.nav-link {
+  color: var(--ink-muted);
+}
+
+.nav-link:hover {
+  background: var(--surface-raised);
+  color: var(--ink);
+}
+
+.nav-link-active {
+  background: var(--nav-active-bg);
+  color: var(--nav-active-ink);
+}
+
+.toc-kicker {
+  color: var(--ink-faint);
+}
+
+.toc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.toc-link {
+  color: var(--ink-muted);
+}
+
+.toc-link:hover {
+  color: var(--accent-ink);
+}
+
+.theme-btn {
+  border: 1px solid var(--btn-border);
+  color: var(--btn-ink);
+  background: transparent;
+  border-radius: 0.375rem;
+  font-size: 0.75rem;
+  line-height: 1;
+  padding: 0.4rem 0.6rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.theme-btn:hover {
+  background: var(--surface-raised);
+  color: var(--ink);
+}
+
+.theme-btn[aria-pressed="true"] {
+  background: var(--surface-raised);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* The header stays dark in both modes, so its buttons need their own
+   light-on-dark colors instead of the page-level button vars. */
+.theme-header .theme-btn {
+  border-color: #57534e;
+  color: #e7e5e4;
+}
+
+.theme-header .theme-btn:hover {
+  background: #292524;
+  color: #fff;
+}
+
+.theme-header .theme-btn[aria-pressed="true"] {
+  background: #f5f5f4;
+  border-color: #f5f5f4;
+  color: #1c1917;
+}
+
+/* Smooth theme flip; disabled for reduced-motion users. */
+.theme-body,
+.theme-header,
+.nav-link,
+.toc-link,
+.theme-btn,
+.docs-body,
+.docs-body a,
+.docs-body code,
+.docs-body pre,
+.docs-body th,
+.docs-body td,
+.docs-body blockquote {
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease,
+    border-color 0.2s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .theme-body,
+  .theme-header,
+  .nav-link,
+  .toc-link,
+  .theme-btn,
+  .docs-body,
+  .docs-body a,
+  .docs-body code,
+  .docs-body pre,
+  .docs-body th,
+  .docs-body td,
+  .docs-body blockquote {
+    transition: none;
+  }
+}
+
+.theme-footer {
+  color: var(--ink-faint);
+}
+
+/* Typography for Markdown-rendered docs. */
+
+.docs-body {
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 1rem;
+  line-height: 1.7;
+  color: var(--ink);
+  max-width: 68ch;
+}
+
+.docs-body h1,
+.docs-body h2,
+.docs-body h3,
+.docs-body h4 {
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  scroll-margin-top: 2rem;
+}
+
+.docs-body h1 {
+  font-size: 2rem;
+  font-weight: 700;
+  margin: 0 0 1rem;
+}
+
+.docs-body h2 {
+  font-size: 1.4rem;
+  font-weight: 650;
+  margin: 2.2rem 0 0.8rem;
+  padding-top: 1.2rem;
+  border-top: 1px solid var(--line);
+}
+
+.docs-body h3 {
+  font-size: 1.15rem;
+  font-weight: 600;
+  margin: 1.8rem 0 0.6rem;
+}
+
+.docs-body p {
+  margin: 0 0 1rem;
+}
+
+.docs-body a {
+  color: var(--accent-ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.docs-body a:hover {
+  color: var(--accent-ink-hover);
+}
+
+.docs-body ul,
+.docs-body ol {
+  margin: 0 0 1rem;
+  padding-left: 1.5rem;
+}
+
+.docs-body li {
+  margin-bottom: 0.35rem;
+}
+
+.docs-body code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+  background: var(--code-bg);
+  border: 1px solid var(--code-line);
+  border-radius: 0.375rem;
+  padding: 0.1rem 0.35rem;
+}
+
+.docs-body pre {
+  background: var(--pre-bg);
+  color: var(--pre-ink);
+  border-radius: 0.5rem;
+  padding: 1rem 1.25rem;
+  overflow-x: auto;
+  margin: 0 0 1.25rem;
+}
+
+.docs-body pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+.codeblock {
+  position: relative;
+}
+
+.codeblock pre {
+  padding-right: 4.5rem;
+}
+
+.copy-btn {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  border: 1px solid var(--code-line);
+  background: var(--surface-raised);
+  color: var(--ink-muted);
+  border-radius: 0.375rem;
+  font-size: 0.72rem;
+  line-height: 1;
+  padding: 0.35rem 0.55rem;
+  cursor: pointer;
+  opacity: 0.85;
+}
+
+.copy-btn:hover {
+  color: var(--ink);
+  border-color: var(--ink-faint);
+  opacity: 1;
+}
+
+.copy-btn.copied {
+  color: var(--accent-ink);
+  border-color: var(--accent-ink);
+}
+
+.docs-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 1.25rem;
+  font-size: 0.9rem;
+}
+
+.docs-body th,
+.docs-body td {
+  border: 1px solid var(--line);
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+}
+
+.docs-body th {
+  background: var(--surface-raised);
+  font-weight: 600;
+}
+
+.docs-body blockquote {
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  background: var(--callout-bg);
+  border-radius: 0.5rem;
+  color: var(--callout-ink);
+}
+
+.docs-body blockquote p:last-child {
+  margin-bottom: 0;
+}
+
+/* Compat: utilities the vendored compiler does not emit yet (pre-1.0
+   upstream gaps: margin `auto`, border edge widths, `leading-6`,
+   `shrink-0`, cursor). Same names as Tailwind; delete each line once
+   upstream supports it. */
+.ml-auto {
+  margin-left: auto;
+}
+.mx-auto {
+  margin-left: auto;
+  margin-right: auto;
+}
+.border-b {
+  border-bottom-width: 1px;
+}
+.border-t {
+  border-top-width: 1px;
+}
+.leading-6 {
+  line-height: 1.5rem;
+}
+.shrink-0 {
+  flex-shrink: 0;
+}
+.cursor-pointer {
+  cursor: pointer;
+}

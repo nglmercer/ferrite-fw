@@ -1,0 +1,17 @@
+[
+  {
+    "profile": "native",
+    "candidate": "flex",
+    "expected_css": ".flex{display:flex;}"
+  },
+  {
+    "profile": "native",
+    "candidate": "p-4",
+    "expected_css": ".p-4{padding:1rem;}"
+  },
+  {
+    "profile": "native",
+    "candidate": "[content-visibility:auto]",
+    "expected_css": ".\\[content-visibility\\:auto\\]{content-visibility:auto;}"
+  }
+]

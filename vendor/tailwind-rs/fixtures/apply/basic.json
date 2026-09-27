@@ -1,0 +1,5 @@
+{
+  "input": ".button { @apply flex p-4; }",
+  "expected": ".button{display:flex;padding:1rem;}",
+  "diagnostics": []
+}

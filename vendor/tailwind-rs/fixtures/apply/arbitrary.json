@@ -1,0 +1,5 @@
+{
+  "input": ".card { @apply w-[42rem] bg-[#123456]; }",
+  "expected": ".card{width:42rem;background-color:#123456;}",
+  "diagnostics": []
+}

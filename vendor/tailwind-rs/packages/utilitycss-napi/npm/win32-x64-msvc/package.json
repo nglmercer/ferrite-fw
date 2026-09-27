@@ -1,0 +1,17 @@
+{
+  "name": "@utilitycss/napi-win32-x64-msvc",
+  "version": "0.1.0",
+  "license": "MIT OR Apache-2.0",
+  "repository": "https://github.com/nglmercer/tailwind-rs",
+  "cpu": [
+    "x64"
+  ],
+  "main": "utilitycss-napi.win32-x64-msvc.node",
+  "files": [
+    "utilitycss-napi.win32-x64-msvc.node"
+  ],
+  "description": "Native N-API artifact for utilitycss; produced from the utilitycss-napi Rust crate.",
+  "os": [
+    "win32"
+  ]
+}

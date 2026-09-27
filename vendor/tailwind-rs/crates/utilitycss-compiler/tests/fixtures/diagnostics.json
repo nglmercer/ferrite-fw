@@ -1,0 +1,23 @@
+{
+  "sources": [
+    {
+      "id": "src/invalid.html",
+      "content": "<div class=\"p-[] p-[]\"></div>"
+    }
+  ],
+  "expected_css": "",
+  "expected_diagnostics": [
+    {
+      "code": "syntax.empty-arbitrary-value",
+      "source": "src/invalid.html",
+      "start": 12,
+      "end": 16
+    },
+    {
+      "code": "syntax.empty-arbitrary-value",
+      "source": "src/invalid.html",
+      "start": 17,
+      "end": 21
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+(* utilitycss native candidate grammar, version 1 *)
+
+candidate             = [ "!" ] , { variant , ":" } , utility , [ "!" ] ;
+variant               = identifier , [ "-" , value ]
+                      | "[" , arbitrary-selector , "]"
+                      | "[" , "@" , at-rule-name , at-rule-prelude , "]" ;
+utility               = arbitrary-property
+                      | [ "-" ] , utility-family , [ "-" , value ] , [ "/" , value ] ;
+arbitrary-property    = "[" , css-property , ":" , css-value , "]" ;
+value                 = identifier
+                      | fraction
+                      | arbitrary-value
+                      | typed-arbitrary-value ;
+fraction              = digit , { digit } , "/" , digit , { digit } ;
+arbitrary-value       = "[" , balanced-css , "]" ;
+typed-arbitrary-value = "[" , type-hint , ":" , balanced-css , "]" ;
+modifier              = "/" , value ;
+important             = "!" ;
+identifier            = identifier-character , { identifier-character } ;
+utility-family        = identifier , { "-" , identifier } ;
+css-property          = custom-property | identifier , { "-" , identifier } ;
+custom-property       = "--" , identifier , { "-" , identifier } ;
+at-rule-name          = identifier , { "-" , identifier } ;
+at-rule-prelude       = balanced-css ;
+type-hint             = "angle" | "color" | "image" | "length" | "number"
+                      | "percentage" | "position" | "ratio" | "url" ;
+identifier-character  = letter | digit | "_" | "-" | "\\" , any-character ;
+digit                 = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+letter                = "A".."Z" | "a".."z" ;
+balanced-css          = (* CSS text with balanced brackets, parentheses, and quoted strings *) ;
+arbitrary-selector    = balanced-css ;
+
+(* `:` and `/` split a candidate only at the top level. An escaped delimiter,
+   quoted delimiter, or delimiter inside brackets/parentheses is content. *)

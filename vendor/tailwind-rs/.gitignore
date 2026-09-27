@@ -1,0 +1,7 @@
+/target/
+/node_modules/
+/packages/*/dist/
+/packages/utilitycss-napi/*.node
+/crates/utilitycss-napi/*.node
+**.tmp
+/packages/utilitycss-napi/.napi-rs-filesystem-transaction.swp/

@@ -1,0 +1,29 @@
+{
+  "name": "@utilitycss/wasm",
+  "version": "0.1.0",
+  "description": "Thin Deno/browser-compatible wrapper for the utilitycss WASM binding.",
+  "license": "MIT OR Apache-2.0",
+  "repository": "https://github.com/nglmercer/tailwind-rs",
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test test/*.test.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0"
+  }
+}

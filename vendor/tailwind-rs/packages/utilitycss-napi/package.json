@@ -1,0 +1,36 @@
+{
+  "name": "@utilitycss/napi",
+  "version": "0.1.0",
+  "description": "Native N-API artifact for utilitycss; produced from the utilitycss-napi Rust crate.",
+  "license": "MIT OR Apache-2.0",
+  "repository": "https://github.com/nglmercer/tailwind-rs",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build:native": "napi build --manifest-path ../../crates/utilitycss-napi/Cargo.toml --output-dir . --platform --release",
+    "prepare:release": "napi pre-publish --cwd .",
+    "prepublishOnly": "napi pre-publish --cwd ."
+  },
+  "napi": {
+    "binaryName": "utilitycss-napi",
+    "packageName": "@utilitycss/napi",
+    "targets": [
+      "x86_64-pc-windows-msvc",
+      "x86_64-unknown-linux-gnu",
+      "aarch64-apple-darwin",
+      "x86_64-apple-darwin"
+    ]
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "3.8.6"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "*.node"
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "mode": "pretty",
+  "theme": {
+    "colors": {
+      "red-500": "#123456"
+    }
+  }
+}

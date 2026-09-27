@@ -209,6 +209,13 @@ imports — plus the items below.
   (`resolveId`/`load`/`transform(code, id)` Vite-like signatures, `null`
   = skip). Node is never spawned unless configured; guest throws,
   unknown plugins, and missing binaries all fail loudly.
+- **Markdown docs + vendored utility CSS.** `ferrite-docs` turns `.md`
+  files into JS modules exporting rendered HTML; `ferrite-tailwind`
+  compiles `ferrite:tailwind.css` from project content using the
+  vendored `tailwind-rs` tree (`vendor/`, see `vendor/README.md` for
+  the pin). The self-docs site in `site/` is built with Ferrite
+  itself and is the project's production-verification target:
+  `ferrite build site --standalone`, then serve the binary.
 
 ## Testing
 

@@ -1,0 +1,58 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/utilitycss-span",
+    "crates/utilitycss-diagnostics",
+    "crates/utilitycss-scanner",
+    "crates/utilitycss-extractor",
+    "crates/utilitycss-swc",
+    "crates/utilitycss-lsp",
+    "crates/utilitycss-syntax",
+    "crates/utilitycss-theme",
+    "crates/utilitycss-utilities",
+    "crates/utilitycss-variants",
+    "crates/utilitycss-config",
+    "crates/utilitycss-protocol",
+    "crates/utilitycss-napi",
+    "crates/utilitycss-wasm",
+    "crates/utilitycss-css-ir",
+    "crates/utilitycss-stylesheet",
+    "crates/utilitycss-compiler",
+    "crates/utilitycss-introspect",
+    "crates/utilitycss-compat",
+    "crates/utilitycss-cli",
+    "crates/utilitycss-bench",
+]
+default-members = [
+    "crates/utilitycss-span",
+    "crates/utilitycss-diagnostics",
+    "crates/utilitycss-scanner",
+    "crates/utilitycss-extractor",
+    "crates/utilitycss-swc",
+    "crates/utilitycss-syntax",
+    "crates/utilitycss-theme",
+    "crates/utilitycss-utilities",
+    "crates/utilitycss-variants",
+    "crates/utilitycss-css-ir",
+    "crates/utilitycss-stylesheet",
+    "crates/utilitycss-compiler",
+    "crates/utilitycss-introspect",
+    "crates/utilitycss-compat",
+]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.88"
+version = "0.1.0"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/nglmercer/tailwind-rs"
+homepage = "https://github.com/nglmercer/tailwind-rs"
+readme = "README.md"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+rust_2018_idioms = { level = "deny", priority = -1 }
+
+[workspace.lints.clippy]
+all = "warn"

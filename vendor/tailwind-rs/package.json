@@ -1,0 +1,25 @@
+{
+  "name": "utilitycss-workspace",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "node scripts/js-tasks.mjs build",
+    "build:native": "node scripts/js-tasks.mjs build:native",
+    "prepare:release": "node scripts/js-tasks.mjs prepare:release",
+    "validate:packages": "node scripts/validate-package-content.mjs",
+    "smoke:packed-node": "node scripts/smoke-packed-node.mjs",
+    "smoke:packed-bun": "node scripts/smoke-packed-bun.mjs",
+    "smoke:vite": "node scripts/vite-build-smoke.mjs",
+    "release:check": "node scripts/release-check.mjs",
+    "release:check:strict": "node scripts/release-check.mjs --strict",
+    "test:bun": "node scripts/js-tasks.mjs test:bun",
+    "lint": "node scripts/js-tasks.mjs lint",
+    "test": "node scripts/js-tasks.mjs test",
+    "typecheck": "node scripts/js-tasks.mjs typecheck"
+  },
+  "devDependencies": {
+    "vite": "8.2.2"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "sources": [
+    {
+      "id": "src/one.html",
+      "content": "<div class=\"p-4 p-4\"></div>"
+    },
+    {
+      "id": "src/two.html",
+      "content": "<div class=\"p-4\"></div>"
+    }
+  ],
+  "expected_css": ".p-4{padding:1rem;}",
+  "expected_diagnostics": []
+}

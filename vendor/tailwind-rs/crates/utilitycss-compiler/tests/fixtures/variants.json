@@ -1,0 +1,10 @@
+{
+  "sources": [
+    {
+      "id": "src/card.html",
+      "content": "<article class=\"hover:bg-red-500/50 md:grid w-[10rem]\"></article>"
+    }
+  ],
+  "expected_css": ".w-\\[10rem\\]{width:10rem;}.hover\\:bg-red-500\\/50:hover{background-color:color-mix(in srgb, #ef4444 50%, transparent);}@media (min-width: 768px){.md\\:grid{display:grid;}}",
+  "expected_diagnostics": []
+}

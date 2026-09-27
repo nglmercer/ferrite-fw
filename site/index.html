@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ferrite Docs — Rust-native web toolchain</title>
+    <meta
+      name="description"
+      content="Ferrite documentation: dev server, production builds, plugins, and deployment."
+    />
+    <script>
+      // Apply the saved theme before first paint (no flash).
+      try {
+        var saved = window.localStorage.getItem("ferrite-docs-theme");
+        if (
+          saved === "dark" ||
+          (saved !== "light" &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches)
+        ) {
+          document.documentElement.classList.add("dark");
+        }
+      } catch (e) {
+        /* private mode: stay light */
+      }
+    </script>
+  </head>
+  <body class="theme-body antialiased">
+    <div id="app" class="min-h-screen flex flex-col"></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

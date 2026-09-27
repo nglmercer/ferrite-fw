@@ -1,0 +1,60 @@
+[
+  {
+    "target": "safari-15",
+    "declarations": [
+      { "property": "color", "value": "oklch(62% 0.2 260)" },
+      { "property": "content-visibility", "value": "auto" },
+      { "property": "backdrop-filter", "value": "blur(4px)" },
+      { "property": "mask-image", "value": "linear-gradient(black, transparent)" }
+    ],
+    "expected_required": ["oklch", "content-visibility", "backdrop-filter", "masking"],
+    "expected_unsupported": ["oklch", "content-visibility", "backdrop-filter", "masking"]
+  },
+  {
+    "target": "safari-15",
+    "declarations": [
+      { "property": "color", "value": "color-mix(in srgb, red 50%, blue)" },
+      { "property": "color", "value": "light-dark(#000, #fff)" },
+      { "property": "field-sizing", "value": "content" }
+    ],
+    "expected_required": ["color-mix", "light-dark", "field-sizing"],
+    "expected_unsupported": ["color-mix", "light-dark", "field-sizing"]
+  },
+  {
+    "target": "modern",
+    "declarations": [
+      { "property": "color", "value": "color-mix(in srgb, red 50%, blue)" },
+      { "property": "color", "value": "light-dark(#000, #fff)" },
+      { "property": "color", "value": "oklch(62% 0.2 260)" },
+      { "property": "content-visibility", "value": "auto" },
+      { "property": "field-sizing", "value": "content" },
+      { "property": "backdrop-filter", "value": "blur(4px)" },
+      { "property": "mask-image", "value": "linear-gradient(black, transparent)" }
+    ],
+    "expected_required": [
+      "color-mix",
+      "light-dark",
+      "oklch",
+      "content-visibility",
+      "field-sizing",
+      "backdrop-filter",
+      "masking"
+    ],
+    "expected_unsupported": []
+  },
+  {
+    "target": "legacy",
+    "declarations": [
+      { "property": "color", "value": "color-mix(in srgb, red 50%, blue)" },
+      { "property": "content-visibility", "value": "auto" }
+    ],
+    "expected_required": ["color-mix", "content-visibility"],
+    "expected_unsupported": ["color-mix", "content-visibility"]
+  },
+  {
+    "target": "evergreen",
+    "declarations": [{ "property": "color", "value": "oklch(62% 0.2 260)" }],
+    "expected_required": ["oklch"],
+    "expected_unsupported": []
+  }
+]

@@ -1,0 +1,19 @@
+[package]
+name = "ferrite-docs"
+version = "0.1.0"
+edition = "2021"
+description = "Ferrite Markdown docs plugin: .md files become JS modules exporting HTML"
+
+[dependencies]
+async-trait = { workspace = true }
+ferrite-core = { workspace = true }
+ferrite-plugin = { workspace = true }
+ferrite-resolver = { workspace = true }
+pulldown-cmark = "0.13"
+serde_json = { workspace = true }
+
+[dev-dependencies]
+ferrite-config = { workspace = true }
+ferrite-graph = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }

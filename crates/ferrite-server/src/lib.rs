@@ -1178,6 +1178,30 @@ impl DevServer {
         defines
     }
 
+    /// Raw source for one module id: plugin `load` first, then fs.
+    ///
+    /// Build CSS extraction uses this so virtual stylesheets (e.g.
+    /// `ferrite:tailwind.css`) resolve through plugins instead of failing
+    /// on a missing file.
+    pub async fn load_raw_source(&self, id: &ModuleId, env: &str) -> Result<(String, ModuleType)> {
+        let environment = if env == "ssr" {
+            self.inner.config.ssr_env()
+        } else {
+            self.inner.config.client_env()
+        };
+        let ctx = self.plugin_context(&environment);
+        // Same `/@id/` → `\0` mapping as `pipeline_module` step 0 (§14).
+        let owned;
+        let id = match url_to_virtual(&id.0) {
+            Some(virtual_id) => {
+                owned = virtual_id;
+                &owned
+            }
+            None => id,
+        };
+        self.load_source(&ctx, id, &environment).await
+    }
+
     /// Map a module id to a file path.
     pub fn id_to_file(&self, id: &ModuleId) -> Result<PathBuf> {
         let (path, _) = id.split_query();

@@ -1,0 +1,5 @@
+{
+  "input": ".button { @apply p-8 p-4; }",
+  "expected": ".button{padding:1rem;padding:2rem;}",
+  "diagnostics": []
+}

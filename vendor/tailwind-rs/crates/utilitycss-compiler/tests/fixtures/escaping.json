@@ -1,0 +1,13 @@
+{
+  "sources": [
+    {
+      "id": "src/hero.html",
+      "content": "<div class=\"2xl:p-4 md:p-2\"></div>"
+    }
+  ],
+  "breakpoints": {
+    "2xl": "1536px"
+  },
+  "expected_css": "@media (min-width: 768px){.md\\:p-2{padding:0.5rem;}}@media (min-width: 1536px){.\\32 xl\\:p-4{padding:1rem;}}",
+  "expected_diagnostics": []
+}

@@ -1,0 +1,220 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust-stable:
+    name: Rust stable
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Run workspace tests
+        run: cargo test --workspace --all-features
+      - name: Run conformance tests
+        run: cargo test -p utilitycss-compiler --test conformance
+      - name: Run property-focused tests
+        run: cargo test -p utilitycss-scanner -p utilitycss-syntax -p utilitycss-extractor -p utilitycss-swc
+      - name: Record foundation benchmark
+        run: cargo bench -p utilitycss-bench
+      - name: Package every Rust crate
+        # Sibling crates are versioned together but are not published yet. Workspace tests and
+        # Clippy provide compilation coverage; package here validates manifests and tarballs.
+        run: cargo package --allow-dirty --workspace --no-verify
+      - name: Audit Rust dependencies
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit
+      - name: Check dependency policy and licenses
+        run: |
+          cargo install cargo-deny --locked
+          cargo deny check
+
+  rust-msrv:
+    name: Rust 1.88 MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@2eae45db285e407f22119950686d47e1101e071b # 1.88
+      - run: cargo check --workspace --all-targets --all-features
+      - run: cargo test --workspace --all-features
+
+  javascript:
+    name: JavaScript adapters
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Audit JavaScript dependencies
+        run: npm audit --audit-level=high
+      - name: Lint JavaScript adapters
+        run: npm run lint
+      - name: Typecheck JavaScript adapters
+        run: npm run typecheck
+      - name: Build JavaScript adapters
+        run: npm run build
+      - name: Test JavaScript adapters
+        run: npm test
+      - name: Validate package contents
+        run: npm run validate:packages
+
+  bun:
+    name: Bun bundler and fullstack integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - name: Install dependencies
+        run: npm ci
+      - name: Build current-platform native binding
+        run: bun run build:native
+      - name: Build JavaScript adapters
+        run: bun run build
+      - name: Install Bun example dependencies
+        run: bun install --cwd examples/bun --frozen-lockfile
+      - name: Typecheck Bun example
+        run: bun run --cwd examples/bun typecheck
+      - name: Test Bun adapter
+        run: bun run test:bun
+      - name: Verify Bun fullstack example
+        run: bun run --cwd examples/bun verify
+      - name: Verify Bun production build
+        run: bun run --cwd examples/bun build
+
+  wasm:
+    name: WASM build and runtime smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          targets: wasm32-unknown-unknown
+      - run: npm ci
+      - name: Build Rust WASM crate
+        run: cargo build -p utilitycss-wasm --release --target wasm32-unknown-unknown
+      - run: npm run build --workspace=@utilitycss/wasm
+      - name: Install matching wasm-bindgen CLI
+        run: cargo install wasm-bindgen-cli --version 0.2.127 --locked
+      - name: Generate JavaScript WASM bindings
+        run: |
+          wasm-bindgen target/wasm32-unknown-unknown/release/utilitycss_wasm.wasm \
+            --target nodejs --out-dir target/wasm-bindgen
+      - name: Run WASM runtime smoke test
+        run: node scripts/wasm-runtime-smoke.mjs
+
+  native-smoke:
+    name: Native ${{ matrix.name }} smoke
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - name: Windows x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - name: macOS ARM64
+            os: macos-15
+            target: aarch64-apple-darwin
+          - name: macOS x64
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - name: Install LLVM linker (Windows)
+        # .cargo/config.toml selects `lld-link` for MSVC targets; the
+        # windows-latest image does not ship it, so install LLVM explicitly.
+        if: matrix.os == 'windows-latest'
+        run: |
+          choco install llvm --no-progress -y
+          echo "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
+      - name: Install dependencies
+        run: npm ci
+      - name: Build native target
+        run: npm run build:native --workspace=@utilitycss/napi -- --target ${{ matrix.target }}
+      - name: Build Node adapter
+        run: npm run build --workspace=@utilitycss/node
+      - name: Build Vite adapter
+        run: npm run build --workspace=@utilitycss/vite
+      - name: Run native adapter smoke tests
+        run: npm test --workspace=@utilitycss/node
+      - name: Verify packed native artifacts
+        run: npm run smoke:packed-node
+      - name: Verify Vite production build
+        run: npm run smoke:vite
+      - name: Upload native release artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: utilitycss-native-${{ matrix.target }}
+          path: packages/utilitycss-napi/*.node
+          if-no-files-found: error
+
+  native-package:
+    name: Assemble N-API release packages
+    needs: native-smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Download all native release artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: utilitycss-native-*
+          path: packages/utilitycss-napi
+          merge-multiple: true
+      - name: Assemble platform packages
+        run: npm run prepare:release --workspace=@utilitycss/napi
+      - name: Validate assembled package contents
+        run: npm run validate:packages
+      - name: Smoke test assembled packed packages
+        run: npm run smoke:packed-node
+
+  license-validation:
+    name: License metadata
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - name: Check repository license files
+        run: test -s LICENSE-MIT && test -s LICENSE-APACHE && test -s .github/SECURITY.md
+      - name: Check npm package metadata and contents
+        run: npm run validate:packages

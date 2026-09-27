@@ -1,0 +1,17 @@
+{
+  "name": "utilitycss-bun-example",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "preact": "10.29.8"
+  },
+  "scripts": {
+    "setup": "node ../../scripts/js-tasks.mjs example-setup",
+    "build": "bun src/production-build.ts",
+    "typecheck": "node ../../scripts/js-tasks.mjs example-typecheck",
+    "verify": "bun src/verify.ts",
+    "test": "bun src/verify.ts",
+    "dev": "bun --hot src/server.ts"
+  }
+}

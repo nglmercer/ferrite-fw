@@ -1,0 +1,5 @@
+{
+  "input": ".button { @apply p-4 unknown-thing rounded; }",
+  "expected": ".button{padding:1rem;border-radius:0.25rem;}",
+  "diagnostics": ["apply.unknown-utility"]
+}

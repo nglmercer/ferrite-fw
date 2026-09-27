@@ -21,6 +21,8 @@ members = [
     "crates/ferrite-manifest",
     "crates/ferrite-wasm",
     "crates/ferrite-frameworks",
+    "crates/ferrite-tailwind",
+    "crates/ferrite-docs",
     "crates/ferrite-test",
     "crates/ferrite-cli",
 ]
@@ -119,6 +121,8 @@ ferrite-ssr = { path = "crates/ferrite-ssr" }
 ferrite-cache = { path = "crates/ferrite-cache" }
 ferrite-manifest = { path = "crates/ferrite-manifest" }
 ferrite-wasm = { path = "crates/ferrite-wasm" }
+ferrite-tailwind = { path = "crates/ferrite-tailwind" }
+ferrite-docs = { path = "crates/ferrite-docs" }
 ferrite-test = { path = "crates/ferrite-test" }
 
 [workspace.lints.rust]

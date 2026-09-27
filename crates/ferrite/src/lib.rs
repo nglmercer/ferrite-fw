@@ -32,6 +32,7 @@ pub use ferrite_cache as cache;
 pub use ferrite_config as config;
 pub use ferrite_core as core;
 pub use ferrite_css as css;
+pub use ferrite_docs as docs;
 pub use ferrite_frameworks as frameworks;
 pub use ferrite_graph as graph;
 pub use ferrite_hmr as hmr;
@@ -43,6 +44,7 @@ pub use ferrite_resolver as resolver;
 pub use ferrite_runtime as runtime;
 pub use ferrite_server as server;
 pub use ferrite_ssr as ssr;
+pub use ferrite_tailwind as tailwind;
 pub use ferrite_transform as transform;
 pub use ferrite_wasm as wasm;
 
@@ -688,9 +690,8 @@ impl BuildLoader {
     /// and reports relative `@import`s as deps; the bundler turns those
     /// into hashed `.css` files. Absolute `/` refs point at `public/` and
     /// pass through; remote refs stay untouched.
-    fn load_css(&self, id: &ModuleId) -> Result<LoadedModule> {
-        let file = self.server.id_to_file(id)?;
-        let source = std::fs::read_to_string(&file)?;
+    async fn load_css(&self, id: &ModuleId, env: &str) -> Result<LoadedModule> {
+        let (source, _) = self.server.load_raw_source(id, env).await?;
         let is_modules = id.0.contains(".module.css");
         let result = ferrite_css::transform_css(
             &id.0,
@@ -811,7 +812,7 @@ impl ModuleLoader for BuildLoader {
         // normal pipeline).
         let (path, query) = id.split_query();
         if query.is_none() && ModuleType::from_path(path) == ModuleType::Css {
-            return self.load_css(id);
+            return self.load_css(id, env).await;
         }
         let module = self.server.pipeline_module(id, None, env).await?;
         // Raw assets become hashed files + URL shims.

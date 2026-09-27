@@ -1,0 +1,27 @@
+# Fast linker configuration for this workspace.
+#
+# Windows (MSVC targets) uses LLVM LLD (`lld-link`), a drop-in replacement for
+# MSVC `link.exe` and the fastest linker available for Windows on stable Rust.
+#
+# mold and wild are Linux-only linkers and cannot link Windows COFF targets.
+# The bundled `rust-lld` shortcuts (`-C link-self-contained=+linker` and
+# `-C linker-features=+lld`) require nightly, so a system LLD is used here.
+#
+# Prerequisite: `lld-link` MUST be on PATH.
+#   winget install -e --id LLVM.LLVM
+# Select "Add LLVM to the system PATH" during install, then open a new
+# terminal. Without it, Windows builds fail with "linker `lld-link` not found".
+#
+# Linux contributors MAY use mold or wild instead; see the commented example
+# at the bottom of this file.
+
+[target.x86_64-pc-windows-msvc]
+linker = "lld-link"
+
+[target.aarch64-pc-windows-msvc]
+linker = "lld-link"
+
+# Uncomment for mold on Linux (requires `mold` and `clang` installed):
+# [target.x86_64-unknown-linux-gnu]
+# linker = "clang"
+# rustflags = ["-C", "link-arg=-fuse-ld=mold"]

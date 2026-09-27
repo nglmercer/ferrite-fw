@@ -1,0 +1,34 @@
+{
+  "name": "@utilitycss/bun",
+  "version": "0.1.0",
+  "description": "Bun bundler and fullstack adapter for utilitycss.",
+  "license": "MIT OR Apache-2.0",
+  "repository": "https://github.com/nglmercer/tailwind-rs",
+  "type": "module",
+  "engines": {
+    "bun": ">=1.4.0"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "bun test ./test",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@utilitycss/node": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.0",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}

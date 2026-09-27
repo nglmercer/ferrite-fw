@@ -1,0 +1,26 @@
+[package]
+name = "utilitycss-protocol"
+description = "Versioned JSON transport protocol for utilitycss compiler hosts."
+edition = "2021"
+rust-version = "1.88"
+version = "0.1.0"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/nglmercer/tailwind-rs"
+homepage = "https://github.com/nglmercer/tailwind-rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+utilitycss-compiler = { version = "0.1.0", path = "../utilitycss-compiler" }
+utilitycss-css-ir = { version = "0.1.0", path = "../utilitycss-css-ir" }
+utilitycss-diagnostics = { version = "0.1.0", path = "../utilitycss-diagnostics" }
+utilitycss-scanner = { version = "0.1.0", path = "../utilitycss-scanner" }
+utilitycss-span = { version = "0.1.0", path = "../utilitycss-span" }
+
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+rust_2018_idioms = { level = "deny", priority = -1 }
+
+[lints.clippy]
+all = "warn"

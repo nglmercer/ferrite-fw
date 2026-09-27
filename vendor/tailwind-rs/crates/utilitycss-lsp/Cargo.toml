@@ -1,0 +1,27 @@
+[package]
+name = "utilitycss-lsp"
+description = "Language Server Protocol adapter for utilitycss diagnostics and completions."
+edition = "2021"
+rust-version = "1.88"
+version = "0.1.0"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/nglmercer/tailwind-rs"
+homepage = "https://github.com/nglmercer/tailwind-rs"
+
+[dependencies]
+tokio = { version = "=1.53.1", features = ["io-std", "macros", "rt-multi-thread"] }
+tower-lsp = "=0.20.0"
+utilitycss-compiler = { version = "0.1.0", path = "../utilitycss-compiler" }
+utilitycss-diagnostics = { version = "0.1.0", path = "../utilitycss-diagnostics" }
+utilitycss-extractor = { version = "0.1.0", path = "../utilitycss-extractor" }
+utilitycss-span = { version = "0.1.0", path = "../utilitycss-span" }
+utilitycss-scanner = { version = "0.1.0", path = "../utilitycss-scanner" }
+utilitycss-swc = { version = "0.1.0", path = "../utilitycss-swc" }
+
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+rust_2018_idioms = { level = "deny", priority = -1 }
+
+[lints.clippy]
+all = "warn"

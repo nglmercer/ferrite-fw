@@ -1,0 +1,36 @@
+{
+  "name": "@utilitycss/vite",
+  "version": "0.1.0",
+  "description": "Thin Vite lifecycle adapter for utilitycss.",
+  "license": "MIT OR Apache-2.0",
+  "repository": "https://github.com/nglmercer/tailwind-rs",
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test test/*.test.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@utilitycss/node": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  },
+  "peerDependencies": {
+    "vite": ">=5"
+  }
+}
