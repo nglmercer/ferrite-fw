@@ -272,7 +272,7 @@ pub fn transform_module_swc(request: TransformRequest) -> Result<TransformResult
         )?;
         (code, map)
     } else {
-        crate::parse_module(&request.id, &request.code, &request.module_type)?;
+        crate::parse::parse_module(&request.id, &request.code, &request.module_type)?;
         (request.code.clone(), None)
     };
     if !request.define.is_empty() {
@@ -288,7 +288,7 @@ pub fn transform_module_swc(request: TransformRequest) -> Result<TransformResult
         code = minified.code;
         map = minified.map;
     }
-    let parsed = crate::parse_module(&request.id, &code, &ModuleType::Js)?;
+    let parsed = crate::parse::parse_module(&request.id, &code, &ModuleType::Js)?;
     Ok(TransformResult {
         code,
         map,
