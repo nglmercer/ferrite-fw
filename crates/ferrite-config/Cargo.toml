@@ -1,0 +1,12 @@
+[package]
+name = "ferrite-config"
+version = "0.1.0"
+edition = "2021"
+description = "Ferrite configuration: ferrite.toml loading and resolution"
+
+[dependencies]
+ferrite-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+camino = { workspace = true }

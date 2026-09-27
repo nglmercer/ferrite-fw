@@ -1,0 +1,11 @@
+[package]
+name = "ferrite-resolver"
+version = "0.1.0"
+edition = "2021"
+description = "Ferrite module resolver: aliases, npm, exports, conditions"
+
+[dependencies]
+ferrite-core = { workspace = true }
+ferrite-config = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

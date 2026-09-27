@@ -1,0 +1,30 @@
+[package]
+name = "ferrite-server"
+version = "0.1.0"
+edition = "2021"
+description = "Ferrite dev server: HTTP/WS, pipelines, watcher, middleware mode"
+
+[dependencies]
+ferrite-core = { workspace = true }
+ferrite-config = { workspace = true }
+ferrite-resolver = { workspace = true }
+ferrite-graph = { workspace = true }
+ferrite-transform = { workspace = true }
+ferrite-plugin = { workspace = true }
+ferrite-hmr = { workspace = true }
+ferrite-html = { workspace = true }
+ferrite-css = { workspace = true }
+ferrite-assets = { workspace = true }
+ferrite-cache = { workspace = true }
+ferrite-ssr = { workspace = true }
+axum = { workspace = true }
+tokio = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+notify = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+http = { workspace = true }
+regex = { workspace = true }

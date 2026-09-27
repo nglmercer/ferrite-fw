@@ -1,0 +1,18 @@
+[package]
+name = "ferrite-cli"
+version = "0.1.0"
+edition = "2021"
+description = "Ferrite command-line interface"
+
+[[bin]]
+name = "ferrite"
+path = "src/main.rs"
+
+[dependencies]
+ferrite = { workspace = true }
+ferrite-core = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde_json = { workspace = true }

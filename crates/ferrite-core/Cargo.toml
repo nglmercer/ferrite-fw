@@ -1,0 +1,11 @@
+[package]
+name = "ferrite-core"
+version = "0.1.0"
+edition = "2021"
+description = "Ferrite core types: errors, module ids, environments, hashing"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+blake3 = { workspace = true }

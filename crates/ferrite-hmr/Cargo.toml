@@ -1,0 +1,12 @@
+[package]
+name = "ferrite-hmr"
+version = "0.1.0"
+edition = "2021"
+description = "Ferrite HMR protocol, server broadcast, and browser client"
+
+[dependencies]
+ferrite-core = { workspace = true }
+ferrite-graph = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }

@@ -1,0 +1,12 @@
+[package]
+name = "ferrite-assets"
+version = "0.1.0"
+edition = "2021"
+description = "Ferrite static asset pipeline: queries, hashing, emission"
+
+[dependencies]
+ferrite-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = { workspace = true }
+mime_guess = { workspace = true }

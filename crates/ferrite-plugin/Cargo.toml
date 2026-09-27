@@ -1,0 +1,15 @@
+[package]
+name = "ferrite-plugin"
+version = "0.1.0"
+edition = "2021"
+description = "Ferrite Rust-native plugin API (Vite/Rollup semantics)"
+
+[dependencies]
+ferrite-core = { workspace = true }
+ferrite-config = { workspace = true }
+ferrite-graph = { workspace = true }
+ferrite-resolver = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+regex = { workspace = true }

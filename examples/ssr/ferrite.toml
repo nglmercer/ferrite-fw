@@ -1,0 +1,13 @@
+[server]
+port = 5174
+
+[build]
+out_dir = "dist"
+
+[ssr]
+external = ["pg"]
+no_external = ["my-esm-package"]
+
+[react]
+refresh = true
+runtime = "automatic"

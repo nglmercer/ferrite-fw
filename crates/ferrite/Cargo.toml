@@ -1,0 +1,33 @@
+[package]
+name = "ferrite"
+version = "0.1.0"
+edition = "2021"
+description = "Ferrite: Rust-native SSR web toolchain (public API facade)"
+license = "MIT"
+
+[dependencies]
+ferrite-core = { workspace = true }
+ferrite-config = { workspace = true }
+ferrite-resolver = { workspace = true }
+ferrite-graph = { workspace = true }
+ferrite-transform = { workspace = true }
+ferrite-plugin = { workspace = true }
+ferrite-server = { workspace = true }
+ferrite-hmr = { workspace = true }
+ferrite-html = { workspace = true }
+ferrite-css = { workspace = true }
+ferrite-assets = { workspace = true }
+ferrite-npm = { workspace = true }
+ferrite-bundler = { workspace = true }
+ferrite-runtime = { workspace = true }
+ferrite-ssr = { workspace = true }
+ferrite-cache = { workspace = true }
+ferrite-manifest = { workspace = true }
+ferrite-wasm = { workspace = true }
+async-trait = { workspace = true }
+axum = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }

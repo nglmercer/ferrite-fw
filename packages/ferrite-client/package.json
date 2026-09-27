@@ -1,0 +1,9 @@
+{
+  "name": "ferrite-client",
+  "version": "0.1.0",
+  "description": "Ferrite HMR browser client (served by the dev server at /@ferrite/client)",
+  "type": "module",
+  "main": "./src/client.ts",
+  "types": "./src/hot.d.ts",
+  "license": "MIT"
+}

@@ -1,0 +1,14 @@
+[package]
+name = "ferrite-runtime"
+version = "0.1.0"
+edition = "2021"
+description = "Ferrite JS execution abstraction: runtimes, values, pools"
+
+[dependencies]
+ferrite-core = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+indexmap = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }

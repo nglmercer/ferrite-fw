@@ -1,0 +1,10 @@
+[package]
+name = "ferrite-html"
+version = "0.1.0"
+edition = "2021"
+description = "Ferrite HTML transformation pipeline"
+
+[dependencies]
+ferrite-core = { workspace = true }
+ferrite-plugin = { workspace = true }
+serde = { workspace = true }

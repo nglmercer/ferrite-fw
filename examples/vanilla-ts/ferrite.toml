@@ -1,0 +1,11 @@
+[server]
+port = 5173
+
+[build]
+out_dir = "dist"
+sourcemap = true
+minify = true
+target = "es2022"
+
+[resolve]
+conditions = ["browser", "module", "import"]

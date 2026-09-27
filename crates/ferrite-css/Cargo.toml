@@ -1,0 +1,11 @@
+[package]
+name = "ferrite-css"
+version = "0.1.0"
+edition = "2021"
+description = "Ferrite CSS pipeline: imports, modules, injection, minification"
+
+[dependencies]
+ferrite-core = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

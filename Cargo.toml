@@ -1,0 +1,105 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ferrite",
+    "crates/ferrite-core",
+    "crates/ferrite-config",
+    "crates/ferrite-resolver",
+    "crates/ferrite-graph",
+    "crates/ferrite-transform",
+    "crates/ferrite-plugin",
+    "crates/ferrite-server",
+    "crates/ferrite-hmr",
+    "crates/ferrite-html",
+    "crates/ferrite-css",
+    "crates/ferrite-assets",
+    "crates/ferrite-npm",
+    "crates/ferrite-bundler",
+    "crates/ferrite-runtime",
+    "crates/ferrite-ssr",
+    "crates/ferrite-cache",
+    "crates/ferrite-manifest",
+    "crates/ferrite-wasm",
+    "crates/ferrite-test",
+    "crates/ferrite-cli",
+]
+
+[workspace.dependencies]
+anyhow = "1"
+async-trait = "0.1"
+axum = { version = "0.8", features = ["ws"] }
+base64 = "0.22"
+blake3 = "1"
+bytes = "1"
+camino = "1"
+clap = { version = "4", features = ["derive"] }
+dashmap = "6"
+flate2 = "1"
+futures = "0.3"
+globset = "0.4"
+hex = "0.4"
+http = "1"
+ignore = "0.4"
+indexmap = { version = "2", features = ["serde"] }
+json5 = "0.4"
+miette = "7"
+mime_guess = "2"
+notify = "8"
+parking_lot = "0.12"
+rayon = "1"
+regex = "1"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+semver = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tar = "0.4"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = "0.26"
+toml = { version = "0.9", features = ["parse"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["fs", "cors"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2"
+walkdir = "2"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+
+oxc_allocator = "0.151"
+oxc_ast = "0.151"
+oxc_codegen = "0.151"
+oxc_diagnostics = "0.151"
+oxc_minifier = "0.151"
+oxc_parser = "0.151"
+oxc_resolver = "11"
+oxc_semantic = "0.151"
+oxc_span = "0.151"
+oxc_syntax = "0.151"
+oxc_transformer = "0.151"
+
+ferrite = { path = "crates/ferrite" }
+ferrite-core = { path = "crates/ferrite-core" }
+ferrite-config = { path = "crates/ferrite-config" }
+ferrite-resolver = { path = "crates/ferrite-resolver" }
+ferrite-graph = { path = "crates/ferrite-graph" }
+ferrite-transform = { path = "crates/ferrite-transform" }
+ferrite-plugin = { path = "crates/ferrite-plugin" }
+ferrite-server = { path = "crates/ferrite-server" }
+ferrite-hmr = { path = "crates/ferrite-hmr" }
+ferrite-html = { path = "crates/ferrite-html" }
+ferrite-css = { path = "crates/ferrite-css" }
+ferrite-assets = { path = "crates/ferrite-assets" }
+ferrite-npm = { path = "crates/ferrite-npm" }
+ferrite-bundler = { path = "crates/ferrite-bundler" }
+ferrite-runtime = { path = "crates/ferrite-runtime" }
+ferrite-ssr = { path = "crates/ferrite-ssr" }
+ferrite-cache = { path = "crates/ferrite-cache" }
+ferrite-manifest = { path = "crates/ferrite-manifest" }
+ferrite-wasm = { path = "crates/ferrite-wasm" }
+ferrite-test = { path = "crates/ferrite-test" }
+
+[workspace.lints.rust]
+unsafe_code = "warn"
+missing_docs = "allow"

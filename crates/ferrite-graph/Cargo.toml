@@ -1,0 +1,11 @@
+[package]
+name = "ferrite-graph"
+version = "0.1.0"
+edition = "2021"
+description = "Ferrite environment-aware module graph"
+
+[dependencies]
+ferrite-core = { workspace = true }
+dashmap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
