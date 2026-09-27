@@ -31,12 +31,15 @@ utilidades de maquetación se compilan desde el workspace vendored
 ¿Nuevo en Ferrite? Lee [Primeros pasos](getting-started): instalación,
 tu primer proyecto y el ciclo dev. Después elige una ruta:
 
-| Ruta     | Páginas                                          |
-|----------|--------------------------------------------------|
-| Build    | [CLI](cli), [Configuración](configuration)      |
-| Extender | [Plugins](plugins)                               |
-| Ship     | [Producción](production)                         |
-| Vendored | [Vendor Tailwind](tailwind-vendor)               |
+| Ruta     | Páginas |
+|----------|---------|
+| Develop  | [Servidor dev](dev-server), [CSS](css), [Assets](assets) |
+| Depend   | [Paquetes y resolución](npm) |
+| Render   | [SSR](ssr), [Runtime](runtime), [Frameworks](frameworks), [WASM](wasm) |
+| Build    | [CLI](cli), [Configuración](configuration), [Pipeline de build](pipeline) |
+| Extender | [Plugins](plugins), [API Rust](api) |
+| Ship     | [Producción](production), [Solución de problemas](troubleshooting) |
+| Vendored | [Vendor Tailwind](tailwind-vendor) |
 
 > Estos docs viven en `site/pages/*/*.md` del repo de Ferrite y son el
 > objetivo de verificación de producción: si este sitio compila y sirve,
@@ -46,5 +49,5 @@ tu primer proyecto y el ciclo dev. Después elige una ruta:
 
 Usa los controles del header para cambiar entre modo claro y oscuro
 (se guarda en local, por defecto sigue tu SO) y entre inglés, español
-(`es`) y chino (`cn`). Cada idioma trae las mismas siete páginas bajo
+(`es`) y chino (`cn`). Cada idioma trae las mismas dieciocho páginas bajo
 `#/{idioma}/{pagina}`.

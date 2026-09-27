@@ -1,6 +1,6 @@
 ---
 title: Tailwind vendor
-order: 7
+order: 18
 ---
 
 # Tailwind vendor

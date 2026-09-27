@@ -19,22 +19,55 @@ import enOverview from "../pages/en/overview.md";
 import enGettingStarted from "../pages/en/getting-started.md";
 import enCli from "../pages/en/cli.md";
 import enConfiguration from "../pages/en/configuration.md";
+import enDevServer from "../pages/en/dev-server.md";
+import enCss from "../pages/en/css.md";
+import enAssets from "../pages/en/assets.md";
+import enNpm from "../pages/en/npm.md";
+import enPipeline from "../pages/en/pipeline.md";
+import enSsr from "../pages/en/ssr.md";
+import enRuntime from "../pages/en/runtime.md";
+import enFrameworks from "../pages/en/frameworks.md";
+import enWasm from "../pages/en/wasm.md";
 import enPlugins from "../pages/en/plugins.md";
+import enApi from "../pages/en/api.md";
 import enProduction from "../pages/en/production.md";
+import enTroubleshooting from "../pages/en/troubleshooting.md";
 import enTailwindVendor from "../pages/en/tailwind-vendor.md";
 import esOverview from "../pages/es/overview.md";
 import esGettingStarted from "../pages/es/getting-started.md";
 import esCli from "../pages/es/cli.md";
 import esConfiguration from "../pages/es/configuration.md";
+import esDevServer from "../pages/es/dev-server.md";
+import esCss from "../pages/es/css.md";
+import esAssets from "../pages/es/assets.md";
+import esNpm from "../pages/es/npm.md";
+import esPipeline from "../pages/es/pipeline.md";
+import esSsr from "../pages/es/ssr.md";
+import esRuntime from "../pages/es/runtime.md";
+import esFrameworks from "../pages/es/frameworks.md";
+import esWasm from "../pages/es/wasm.md";
 import esPlugins from "../pages/es/plugins.md";
+import esApi from "../pages/es/api.md";
 import esProduction from "../pages/es/production.md";
+import esTroubleshooting from "../pages/es/troubleshooting.md";
 import esTailwindVendor from "../pages/es/tailwind-vendor.md";
 import cnOverview from "../pages/cn/overview.md";
 import cnGettingStarted from "../pages/cn/getting-started.md";
 import cnCli from "../pages/cn/cli.md";
 import cnConfiguration from "../pages/cn/configuration.md";
+import cnDevServer from "../pages/cn/dev-server.md";
+import cnCss from "../pages/cn/css.md";
+import cnAssets from "../pages/cn/assets.md";
+import cnNpm from "../pages/cn/npm.md";
+import cnPipeline from "../pages/cn/pipeline.md";
+import cnSsr from "../pages/cn/ssr.md";
+import cnRuntime from "../pages/cn/runtime.md";
+import cnFrameworks from "../pages/cn/frameworks.md";
+import cnWasm from "../pages/cn/wasm.md";
 import cnPlugins from "../pages/cn/plugins.md";
+import cnApi from "../pages/cn/api.md";
 import cnProduction from "../pages/cn/production.md";
+import cnTroubleshooting from "../pages/cn/troubleshooting.md";
 import cnTailwindVendor from "../pages/cn/tailwind-vendor.md";
 
 const LOCALES: Locale[] = ["en", "es", "cn"];
@@ -104,8 +137,19 @@ const PAGES: Record<Locale, DocsPage[]> = {
     enGettingStarted,
     enCli,
     enConfiguration,
+    enDevServer,
+    enCss,
+    enAssets,
+    enNpm,
+    enPipeline,
+    enSsr,
+    enRuntime,
+    enFrameworks,
+    enWasm,
     enPlugins,
+    enApi,
     enProduction,
+    enTroubleshooting,
     enTailwindVendor,
   ],
   es: [
@@ -113,8 +157,19 @@ const PAGES: Record<Locale, DocsPage[]> = {
     esGettingStarted,
     esCli,
     esConfiguration,
+    esDevServer,
+    esCss,
+    esAssets,
+    esNpm,
+    esPipeline,
+    esSsr,
+    esRuntime,
+    esFrameworks,
+    esWasm,
     esPlugins,
+    esApi,
     esProduction,
+    esTroubleshooting,
     esTailwindVendor,
   ],
   cn: [
@@ -122,8 +177,19 @@ const PAGES: Record<Locale, DocsPage[]> = {
     cnGettingStarted,
     cnCli,
     cnConfiguration,
+    cnDevServer,
+    cnCss,
+    cnAssets,
+    cnNpm,
+    cnPipeline,
+    cnSsr,
+    cnRuntime,
+    cnFrameworks,
+    cnWasm,
     cnPlugins,
+    cnApi,
     cnProduction,
+    cnTroubleshooting,
     cnTailwindVendor,
   ],
 };

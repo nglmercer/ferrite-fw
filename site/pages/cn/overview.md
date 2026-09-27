@@ -28,12 +28,15 @@ Ferrite 是一个 Rust 原生 Web 工具链：开发服务器、生产打包器�
 初次接触 Ferrite？请读[快速上手](getting-started)：安装、第一个
 项目与开发循环。然后选择一条路线：
 
-| 路线     | 页面                                             |
-|----------|--------------------------------------------------|
-| 构建     | [CLI](cli)、[配置](configuration)                |
-| 扩展     | [插件](plugins)                                  |
-| 发布     | [生产环境](production)                           |
-| Vendored | [Tailwind Vendor](tailwind-vendor)               |
+| 路线     | 页面 |
+|----------|------|
+| 开发     | [开发服务器](dev-server)、[CSS](css)、[资源](assets) |
+| 依赖     | [包与解析](npm) |
+| 渲染     | [SSR](ssr)、[运行时](runtime)、[框架](frameworks)、[WASM](wasm) |
+| 构建     | [CLI](cli)、[配置](configuration)、[构建流水线](pipeline) |
+| 扩展     | [插件](plugins)、[Rust API](api) |
+| 发布     | [生产环境](production)、[排障](troubleshooting) |
+| Vendored | [Tailwind Vendor](tailwind-vendor) |
 
 > 本文档位于 Ferrite 仓库的 `site/pages/*/*.md`，也是项目的生产验证
 > 目标：本站能构建、能 serve，即代表框架集成状态为绿。
@@ -42,4 +45,4 @@ Ferrite 是一个 Rust 原生 Web 工具链：开发服务器、生产打包器�
 
 用页眉控件在浅色 / 深色间切换（存于本地，默认跟随系统），
 也可在英语、西班牙语（`es`）、中文（`cn`）间切换。每种语言都
-是相同的七个页面，路由为 `#/{语言}/{页面}`。
+是相同的十八个页面，路由为 `#/{语言}/{页面}`。

@@ -30,12 +30,15 @@ single binary.
 New to Ferrite? Read [Getting started](getting-started) for install, your
 first project, and the dev loop. Then pick a track:
 
-| Track    | Pages                                            |
-|----------|--------------------------------------------------|
-| Build    | [CLI](cli), [Configuration](configuration)      |
-| Extend   | [Plugins](plugins)                               |
-| Ship     | [Production](production)                         |
-| Vendored | [Tailwind vendor](tailwind-vendor)               |
+| Track   | Pages |
+|---------|-------|
+| Develop | [Dev server](dev-server), [CSS](css), [Assets](assets) |
+| Depend  | [Packages & resolution](npm) |
+| Render  | [SSR](ssr), [Runtime](runtime), [Frameworks](frameworks), [WASM](wasm) |
+| Build   | [CLI](cli), [Configuration](configuration), [Build pipeline](pipeline) |
+| Extend  | [Plugins](plugins), [Rust API](api) |
+| Ship    | [Production](production), [Troubleshooting](troubleshooting) |
+| Vendored| [Tailwind vendor](tailwind-vendor) |
 
 > These docs live in `site/pages/*/*.md` in the Ferrite repo and are
 > the project's production-verification target: if this site builds
@@ -45,5 +48,5 @@ first project, and the dev loop. Then pick a track:
 
 Use the header controls to switch between light and dark mode (saved
 locally, follows your OS setting by default) and between English,
-Spanish (`es`), and Chinese (`cn`). Every locale ships the same seven
+Spanish (`es`), and Chinese (`cn`). Every locale ships the same eighteen
 pages under `#/{locale}/{page}`.
