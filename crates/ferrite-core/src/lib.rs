@@ -551,6 +551,121 @@ pub fn url_to_file(root: &Path, url: &str) -> PathBuf {
     root.join(trimmed)
 }
 
+/// Normalize a path the way Vite's `normalizePath` does: forward slashes,
+/// lexically resolved `.`/`..`, no trailing slash (except the root itself).
+#[must_use]
+pub fn normalize_path(path: &Path) -> String {
+    let text = path.to_string_lossy().replace('\\', "/");
+    let (prefix, rest) = match text.split_once("://") {
+        Some((scheme, _)) => {
+            let end = scheme.len() + 3;
+            text.split_at(end)
+        }
+        None => ("", text.as_str()),
+    };
+    let absolute = rest.starts_with('/');
+    // Preserve a Windows drive prefix (`C:/...`) or UNC root (`//host/...`).
+    let (drive, rest) = match rest.split_once('/') {
+        Some((head, tail)) if head.len() == 2 && head.ends_with(':') => {
+            (format!("{head}/"), tail)
+        }
+        _ if rest.starts_with("//") => (String::from("//"), &rest[2..]),
+        _ => (String::new(), rest),
+    };
+    let mut parts: Vec<&str> = Vec::new();
+    for segment in rest.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                if parts.pop().is_none() && !absolute && drive.is_empty() {
+                    parts.push("..");
+                }
+            }
+            other => parts.push(other),
+        }
+    }
+    let mut out = String::from(prefix);
+    out.push_str(&drive);
+    if absolute && drive.is_empty() {
+        out.push('/');
+    }
+    out.push_str(&parts.join("/"));
+    if out.is_empty() {
+        return String::from(".");
+    }
+    out
+}
+
+/// Walk up from `start` looking for a workspace root, like Vite's
+/// `searchForWorkspaceRoot`: the nearest ancestor (or self) containing
+/// `pnpm-workspace.yaml`, `lerna.json`, a `.git` entry, or a `package.json`
+/// with a `workspaces` field. Falls back to `start` itself.
+#[must_use]
+pub fn search_for_workspace_root(start: &Path) -> PathBuf {
+    let mut current = if start.is_absolute() {
+        start.to_path_buf()
+    } else {
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(start)
+    };
+    if current.is_file() {
+        current.pop();
+    }
+    loop {
+        if current.join("pnpm-workspace.yaml").exists()
+            || current.join("pnpm-workspace.yml").exists()
+            || current.join("lerna.json").exists()
+            || current.join(".git").exists()
+            || has_package_workspaces(&current.join("package.json"))
+        {
+            return current;
+        }
+        if !current.pop() {
+            return start.to_path_buf();
+        }
+    }
+}
+
+/// True when `package.json` exists and declares a `workspaces` field.
+fn has_package_workspaces(path: &Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    // A full JSON parse is overkill for one probe; a quoted-key scan
+    // tolerates comments/trailing commas in lenient manifests.
+    let mut chars = text.chars().peekable();
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut current = String::new();
+    while let Some(char) = chars.next() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if char == '\\' {
+                escaped = true;
+            } else if char == '"' {
+                in_string = false;
+                if current == "workspaces" {
+                    // The key must be followed by a colon.
+                    for next in chars.by_ref() {
+                        if next.is_whitespace() {
+                            continue;
+                        }
+                        return next == ':';
+                    }
+                    return false;
+                }
+                current.clear();
+            } else {
+                current.push(char);
+            }
+        } else if char == '"' {
+            in_string = true;
+            current.clear();
+        }
+    }
+    false
+}
+
 /// Monotonic instant helper (re-exported so all crates share one clock type).
 #[must_use]
 pub fn now() -> Instant {
@@ -583,5 +698,51 @@ mod tests {
         let frame = code_frame("a\nb\nc", 2, 1);
         assert!(frame.contains('>'));
         assert!(frame.contains('^'));
+    }
+
+    #[test]
+    fn normalize_path_shapes() {
+        assert_eq!(normalize_path(Path::new("/a/b/../c/./d/")), "/a/c/d");
+        assert_eq!(normalize_path(Path::new("a/./b")), "a/b");
+        assert_eq!(normalize_path(Path::new("../a")), "../a");
+        assert_eq!(normalize_path(Path::new("/../a")), "/a");
+        assert_eq!(normalize_path(Path::new("")), ".");
+        assert_eq!(normalize_path(Path::new("C:\\a\\b\\..\\c")), "C:/a/c");
+        assert_eq!(normalize_path(Path::new("file:///a/./b")), "file:///a/b");
+    }
+
+    #[test]
+    fn workspace_root_search() {
+        let root = std::env::temp_dir().join(format!("ferrite-wsroot-{}", std::process::id()));
+        let nested = root.join("packages/app/src");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&nested).unwrap();
+        // Fallback: no markers anywhere up to / (or a real ancestor root).
+        // With markers present, the nearest one wins.
+        std::fs::write(root.join("pnpm-workspace.yaml"), "packages:\n  - packages/*\n").unwrap();
+        assert_eq!(search_for_workspace_root(&nested), root);
+        assert_eq!(
+            search_for_workspace_root(&nested.join("index.ts")),
+            root
+        );
+        std::fs::write(
+            root.join("packages/app/package.json"),
+            "{\"name\": \"app\", \"workspaces\": [\"x\"]}",
+        )
+        .unwrap();
+        assert_eq!(
+            search_for_workspace_root(&nested),
+            root.join("packages/app")
+        );
+        // A package.json without workspaces is not a root.
+        std::fs::remove_file(root.join("pnpm-workspace.yaml")).unwrap();
+        std::fs::write(
+            root.join("packages/app/package.json"),
+            "{\"name\": \"app\"}",
+        )
+        .unwrap();
+        let fallback = search_for_workspace_root(&nested);
+        assert!(nested.starts_with(&fallback), "{fallback:?}");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

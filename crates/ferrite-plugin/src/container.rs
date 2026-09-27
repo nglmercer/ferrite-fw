@@ -100,6 +100,50 @@ impl PluginContainer {
         Ok(())
     }
 
+    /// Run `configure_preview` hooks in order (after the legacy
+    /// `configure_preview_server` hooks, which take a `&mut dyn ServerControl`).
+    pub async fn hook_configure_preview(&self, preview: &mut PreviewControl) -> Result<()> {
+        self.hook_configure_preview_server(preview as &mut dyn ServerControl)
+            .await?;
+        for plugin in &self.plugins {
+            plugin
+                .configure_preview(preview)
+                .await
+                .map_err(|error| wrap(plugin, "configure_preview", error))?;
+        }
+        Ok(())
+    }
+
+    /// Run `options` hooks in order.
+    pub async fn hook_options(
+        &self,
+        ctx: &PluginContext<'_>,
+        options: &mut BundleOptions,
+    ) -> Result<()> {
+        for plugin in &self.plugins {
+            plugin
+                .options(ctx, options)
+                .await
+                .map_err(|error| wrap(plugin, "options", error))?;
+        }
+        Ok(())
+    }
+
+    /// Run `output_options` hooks in order.
+    pub async fn hook_output_options(
+        &self,
+        ctx: &PluginContext<'_>,
+        options: &mut OutputOptions,
+    ) -> Result<()> {
+        for plugin in &self.plugins {
+            plugin
+                .output_options(ctx, options)
+                .await
+                .map_err(|error| wrap(plugin, "output_options", error))?;
+        }
+        Ok(())
+    }
+
     /// Run `build_start` hooks in order.
     pub async fn hook_build_start(&self, ctx: &PluginContext<'_>) -> Result<()> {
         for plugin in &self.plugins {
@@ -237,6 +281,94 @@ impl PluginContainer {
         Ok(None)
     }
 
+    /// Run `hot_update` hooks, falling back to `handle_hot_update`.
+    pub async fn hook_hot_update(
+        &self,
+        ctx: &PluginContext<'_>,
+        event: HotUpdateEvent,
+    ) -> Result<Option<HotUpdateResult>> {
+        for plugin in &self.plugins {
+            let result = plugin
+                .hot_update(ctx, event.clone())
+                .await
+                .map_err(|error| wrap(plugin, "hot_update", error))?;
+            if result.is_some() {
+                return Ok(result);
+            }
+        }
+        self.hook_handle_hot_update(ctx, event).await
+    }
+
+    /// Run `resolve_dynamic_import` hooks; first `Some` wins.
+    pub async fn hook_resolve_dynamic_import(
+        &self,
+        ctx: &PluginContext<'_>,
+        request: DynamicImportRequest,
+    ) -> Result<Option<ResolvedId>> {
+        for plugin in &self.plugins {
+            let result = plugin
+                .resolve_dynamic_import(ctx, request.clone())
+                .await
+                .map_err(|error| wrap(plugin, "resolve_dynamic_import", error))?;
+            if result.is_some() {
+                return Ok(result);
+            }
+        }
+        Ok(None)
+    }
+
+    /// Run `should_transform_cached_module` hooks; true when any hook
+    /// forces a re-transform.
+    pub async fn hook_should_transform_cached_module(
+        &self,
+        ctx: &PluginContext<'_>,
+        module: CachedModuleInfo,
+    ) -> Result<bool> {
+        for plugin in &self.plugins {
+            let result = plugin
+                .should_transform_cached_module(ctx, module.clone())
+                .await
+                .map_err(|error| wrap(plugin, "should_transform_cached_module", error))?;
+            if result == Some(true) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Run `watch_change` hooks in order.
+    pub async fn hook_watch_change(
+        &self,
+        ctx: &PluginContext<'_>,
+        event: WatchEvent,
+    ) -> Result<()> {
+        for plugin in &self.plugins {
+            plugin
+                .watch_change(ctx, event.clone())
+                .await
+                .map_err(|error| wrap(plugin, "watch_change", error))?;
+        }
+        Ok(())
+    }
+
+    /// Run `resolve_file_url` hooks; first `Some` wins.
+    pub async fn hook_resolve_file_url(
+        &self,
+        ctx: &PluginContext<'_>,
+        request: ResolveFileUrlRequest,
+    ) -> Result<Option<String>> {
+        for plugin in &self.plugins {
+            let result = plugin
+                .resolve_file_url(ctx, request.clone())
+                .await
+                .map_err(|error| wrap(plugin, "resolve_file_url", error))?;
+            if result.is_some() {
+                return Ok(result);
+            }
+        }
+        Ok(None)
+    }
+
     /// Run `generate_bundle` hooks in order.
     pub async fn hook_generate_bundle(
         &self,
@@ -302,6 +434,77 @@ impl PluginContainer {
                 .map_err(|error| wrap(plugin, "build_end", error))?;
         }
         Ok(())
+    }
+
+    /// Run `render_start` hooks in order.
+    pub async fn hook_render_start(
+        &self,
+        ctx: &PluginContext<'_>,
+        start: RenderStart,
+    ) -> Result<()> {
+        for plugin in &self.plugins {
+            plugin
+                .render_start(ctx, start.clone())
+                .await
+                .map_err(|error| wrap(plugin, "render_start", error))?;
+        }
+        Ok(())
+    }
+
+    /// Collect `banner` / `intro` / `outro` / `footer` pieces, joined in
+    /// hook order per piece.
+    pub async fn hook_chunk_wrapper(
+        &self,
+        ctx: &PluginContext<'_>,
+        chunk: RenderChunk,
+    ) -> Result<ChunkWrapper> {
+        let mut banners = Vec::new();
+        let mut intros = Vec::new();
+        let mut outros = Vec::new();
+        let mut footers = Vec::new();
+        for plugin in &self.plugins {
+            if let Some(text) = plugin
+                .banner(ctx, chunk.clone())
+                .await
+                .map_err(|error| wrap(plugin, "banner", error))?
+            {
+                banners.push(text);
+            }
+            if let Some(text) = plugin
+                .intro(ctx, chunk.clone())
+                .await
+                .map_err(|error| wrap(plugin, "intro", error))?
+            {
+                intros.push(text);
+            }
+            if let Some(text) = plugin
+                .outro(ctx, chunk.clone())
+                .await
+                .map_err(|error| wrap(plugin, "outro", error))?
+            {
+                outros.push(text);
+            }
+            if let Some(text) = plugin
+                .footer(ctx, chunk.clone())
+                .await
+                .map_err(|error| wrap(plugin, "footer", error))?
+            {
+                footers.push(text);
+            }
+        }
+        let join = |parts: Vec<String>| {
+            if parts.is_empty() {
+                None
+            } else {
+                Some(parts.join("\n"))
+            }
+        };
+        Ok(ChunkWrapper {
+            banner: join(banners),
+            intro: join(intros),
+            outro: join(outros),
+            footer: join(footers),
+        })
     }
 
     /// Run `render_chunk` hooks in sequence.

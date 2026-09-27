@@ -60,6 +60,9 @@ impl DevServer {
         let addr = listener
             .local_addr()
             .map_err(|error| FerriteError::Other(format!("cannot read bound address: {error}")))?;
+        if let Ok(mut bound) = self.inner.bound_addr.lock() {
+            *bound = Some(addr);
+        }
         tracing::info!("ferrite dev server on http://{addr}");
         axum::serve(listener, self.router())
             .with_graceful_shutdown(shutdown_signal())
@@ -73,6 +76,11 @@ impl DevServer {
         if let Ok(mut watcher) = self.watcher.lock() {
             *watcher = None;
         }
+    }
+
+    /// Print Local/Network URLs, the `printUrls` equivalent.
+    pub fn print_urls(&self) {
+        ferrite_plugin::ServerControl::print_urls(self);
     }
 
     /// Transform a dev request URL (`/src/main.ts`) into a response.

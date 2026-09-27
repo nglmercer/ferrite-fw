@@ -3,6 +3,7 @@
 use crate::loader::*;
 use crate::report::*;
 use ferrite_bundler::BuildBundleConfig;
+use ferrite_bundler::BundleHooks;
 use ferrite_bundler::BundleRequest;
 use ferrite_bundler::Bundler as _;
 use ferrite_bundler::FerriteBundler;
@@ -45,6 +46,12 @@ impl Builder {
     }
 
     /// Build one environment (`client` / `ssr`).
+    ///
+    /// Lifecycle: `options` → `buildStart` → bundle (`renderStart` /
+    /// `renderChunk` / `augmentChunkHash` / wrappers) → `generateBundle` →
+    /// write → `writeBundle` → `closeBundle` → `buildEnd`. On failure,
+    /// `buildEnd` runs with the error, then `closeBundle`, and the original
+    /// error is returned.
     pub async fn build(&self, env: &str) -> Result<BuildReport> {
         let config = self.config.clone();
         let server = DevServer::new_without_watcher(config.clone(), self.plugins.clone()).await?;
@@ -53,7 +60,6 @@ impl Builder {
         } else {
             config.client_env()
         };
-        // Lifecycle: buildStart (§78).
         let ctx = ferrite_plugin::PluginContext {
             graph: &server.inner().graph,
             resolver: &server.inner().client_resolver,
@@ -63,9 +69,79 @@ impl Builder {
             warnings: &server.inner().warnings,
         };
         let container = PluginContainer::new(self.plugins.clone(), Apply::Build);
+        // Input/output options (Rollup `options` / `outputOptions`).
+        let mut options = ferrite_plugin::BundleOptions {
+            entries: self.default_entries(env),
+            treeshake: config.build.minify,
+            minify: config.build.minify,
+            sourcemap: config.build.sourcemap.enabled(),
+            scope_hoist: config.build.scope_hoist,
+        };
+        container.hook_options(&ctx, &mut options).await?;
+        let defaults = BuildBundleConfig::from_resolved(&config);
+        let mut output_options = ferrite_plugin::OutputOptions {
+            chunk_pattern: defaults.chunk_pattern.clone(),
+            css_pattern: defaults.css_pattern.clone(),
+            asset_pattern: defaults.asset_pattern.clone(),
+        };
+        container
+            .hook_output_options(&ctx, &mut output_options)
+            .await?;
+        // Lifecycle: buildStart (§78).
         container.hook_build_start(&ctx).await?;
-        // Entries.
-        let entries = self.discover_entries(&server, env).await?;
+        match self
+            .build_inner(&server, &container, &ctx, &config, env, &options, &output_options)
+            .await
+        {
+            Ok(report) => {
+                container.hook_close_bundle().await?;
+                container
+                    .hook_build_end(&ctx, ferrite_plugin::BuildEnd { error: None })
+                    .await?;
+                Ok(report)
+            }
+            Err(error) => {
+                let message = error.to_string();
+                if let Err(hook_error) = container
+                    .hook_build_end(&ctx, ferrite_plugin::BuildEnd {
+                        error: Some(message),
+                    })
+                    .await
+                {
+                    tracing::warn!("build_end hook failed on the error path: {hook_error}");
+                }
+                if let Err(hook_error) = container.hook_close_bundle().await {
+                    tracing::warn!("close_bundle hook failed on the error path: {hook_error}");
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// Default `options.entries` seed for `env` (HTML entries for client,
+    /// SSR entry candidate for SSR).
+    fn default_entries(&self, env: &str) -> Vec<String> {
+        if env == "ssr" {
+            self.ssr_entry().into_iter().collect()
+        } else {
+            self.config.build.entries.clone()
+        }
+    }
+
+    /// Inner build: entries → bundle → generate/write → manifests → HTML.
+    #[allow(clippy::too_many_arguments)]
+    async fn build_inner(
+        &self,
+        server: &DevServer,
+        container: &PluginContainer,
+        ctx: &ferrite_plugin::PluginContext<'_>,
+        config: &ResolvedConfig,
+        env: &str,
+        options: &ferrite_plugin::BundleOptions,
+        output_options: &ferrite_plugin::OutputOptions,
+    ) -> Result<BuildReport> {
+        // Entries (honoring hooked `options.entries`).
+        let entries = self.discover_entries(server, env, &options.entries).await?;
         if entries.is_empty() {
             return Err(FerriteError::Build(format!(
                 "no entries found for env `{env}`"
@@ -75,8 +151,8 @@ impl Builder {
         let base = with_trailing_slash(&config.base);
         let loader = Arc::new(BuildLoader {
             server: server.clone(),
-            minify: config.build.minify,
-            sourcemap: config.build.sourcemap.enabled(),
+            minify: options.minify,
+            sourcemap: options.sourcemap,
             base,
             assets: Mutex::new(HashMap::new()),
         });
@@ -86,10 +162,20 @@ impl Builder {
         } else {
             config.out_dir()
         };
-        let bundle_config = BuildBundleConfig {
+        let mut bundle_config = BuildBundleConfig {
             out_dir: out_dir.clone(),
-            ..BuildBundleConfig::from_resolved(&config)
+            ..BuildBundleConfig::from_resolved(config)
         };
+        if !output_options.chunk_pattern.is_empty() {
+            bundle_config.chunk_pattern = output_options.chunk_pattern.clone();
+        }
+        if !output_options.css_pattern.is_empty() {
+            bundle_config.css_pattern = output_options.css_pattern.clone();
+        }
+        if !output_options.asset_pattern.is_empty() {
+            bundle_config.asset_pattern = output_options.asset_pattern.clone();
+        }
+        let render_hooks = ContainerRenderHooks { container, ctx };
         let mut output = bundler
             .bundle(
                 &server.inner().graph,
@@ -98,13 +184,14 @@ impl Builder {
                     entries: entries.clone(),
                     env: env.to_string(),
                     minify: false, // loader minifies per-module
-                    sourcemap: config.build.sourcemap.enabled(),
+                    sourcemap: options.sourcemap,
                     map_comment: !config.build.sourcemap.hidden(),
                     // Statement shake rides the production minify flag.
-                    treeshake: config.build.minify,
+                    treeshake: options.treeshake,
                     engine: config.compiler.engine.clone(),
-                    scope_hoist: config.build.scope_hoist,
+                    scope_hoist: options.scope_hoist,
                 },
+                &render_hooks,
             )
             .await?;
         // Merge loader-emitted assets.
@@ -115,9 +202,10 @@ impl Builder {
                 is_entry: false,
             });
         }
-        // generateBundle → write → writeBundle → closeBundle (§78).
+        // generateBundle → write → writeBundle (§78; closeBundle/buildEnd
+        // run in the `build` wrapper so failures also notify hooks).
         container
-            .hook_generate_bundle(&ctx, &mut output.bundle)
+            .hook_generate_bundle(ctx, &mut output.bundle)
             .await?;
         std::fs::create_dir_all(&out_dir)?;
         for file in output.bundle.files.values() {
@@ -127,11 +215,7 @@ impl Builder {
             }
             std::fs::write(&target, &file.contents)?;
         }
-        container.hook_write_bundle(&ctx, &output.bundle).await?;
-        container.hook_close_bundle().await?;
-        container
-            .hook_build_end(&ctx, ferrite_plugin::BuildEnd { error: None })
-            .await?;
+        container.hook_write_bundle(ctx, &output.bundle).await?;
         // Manifests (§40).
         if env == "ssr" {
             output
@@ -142,8 +226,8 @@ impl Builder {
         }
         // HTML entries + public/.
         if env == "client" {
-            self.write_html(&config, &output.manifest)?;
-            copy_public(&config)?;
+            self.write_html(config, &output.manifest)?;
+            copy_public(config)?;
         }
         // Standalone single binary (§51–§54; blocking cargo builds run
         // off the async runtime).
@@ -186,26 +270,46 @@ impl Builder {
         })
     }
 
-    /// Discover entry module ids for `env` (§77).
-    async fn discover_entries(&self, server: &DevServer, env: &str) -> Result<Vec<ModuleId>> {
+    /// Discover entry module ids for `env` (§77), honoring hooked
+    /// `options.entries` (HTML files or module specifiers).
+    async fn discover_entries(
+        &self,
+        server: &DevServer,
+        env: &str,
+        hooked: &[String],
+    ) -> Result<Vec<ModuleId>> {
         if env == "ssr" {
-            if let Some(entry) = self.ssr_entry() {
+            let mut entries = Vec::new();
+            for entry in hooked {
                 let spec = format!("/{}", entry.trim_start_matches('/'));
+                entries.push(server.resolve_entry(&spec, env).await?);
+            }
+            return Ok(entries);
+        }
+        // Library mode (§55): the lib entry wins unless hooks replaced it.
+        if let Some(lib) = &self.config.build.lib {
+            if hooked == self.config.build.entries.as_slice() {
+                let spec = format!("/{}", lib.entry.trim_start_matches('/'));
                 return Ok(vec![server.resolve_entry(&spec, env).await?]);
             }
-            return Ok(Vec::new());
+            let mut entries = Vec::new();
+            for entry in hooked {
+                let spec = format!("/{}", entry.trim_start_matches('/'));
+                entries.push(server.resolve_entry(&spec, env).await?);
+            }
+            return Ok(entries);
         }
-        // Library mode (§55).
-        if let Some(lib) = &self.config.build.lib {
-            let spec = format!("/{}", lib.entry.trim_start_matches('/'));
-            return Ok(vec![server.resolve_entry(&spec, env).await?]);
-        }
-        // HTML entries (§77).
+        // HTML entries (§77); missing files fall back to module resolution
+        // so hooked entries may name modules directly.
         let mut entries = Vec::new();
-        for html_entry in &self.config.build.entries {
+        for html_entry in hooked {
             let file = self.config.root.join(html_entry);
             if !file.exists() {
-                tracing::warn!("entry `{html_entry}` not found; skipping");
+                let spec = format!("/{}", html_entry.trim_start_matches('/'));
+                match server.resolve_entry(&spec, env).await {
+                    Ok(id) => entries.push(id),
+                    Err(_) => tracing::warn!("entry `{html_entry}` not found; skipping"),
+                }
                 continue;
             }
             let html = std::fs::read_to_string(&file)?;
@@ -310,5 +414,80 @@ pub(crate) fn inject_stylesheets(html: &str, hrefs: &[String]) -> String {
     match html.find("</head>") {
         Some(pos) => format!("{}{links}\n{}", &html[..pos], &html[pos..]),
         None => format!("{links}\n{html}"),
+    }
+}
+
+/// [`BundleHooks`] over a [`PluginContainer`]: the builder side of the
+/// render pipeline (`renderStart` / `renderChunk` / `augmentChunkHash` /
+/// `banner` / `intro` / `outro` / `footer`).
+struct ContainerRenderHooks<'a> {
+    container: &'a PluginContainer,
+    ctx: &'a ferrite_plugin::PluginContext<'a>,
+}
+
+#[async_trait::async_trait]
+impl BundleHooks for ContainerRenderHooks<'_> {
+    async fn render_start(&self, entries: &[ModuleId]) -> Result<()> {
+        self.container
+            .hook_render_start(
+                self.ctx,
+                ferrite_plugin::RenderStart {
+                    entries: entries.to_vec(),
+                },
+            )
+            .await
+    }
+
+    async fn render_chunk(
+        &self,
+        id: &str,
+        code: String,
+        is_entry: bool,
+    ) -> Result<Option<String>> {
+        if self.container.is_empty() {
+            return Ok(None);
+        }
+        let result = self
+            .container
+            .hook_render_chunk(
+                self.ctx,
+                ferrite_plugin::RenderChunk {
+                    id: id.to_string(),
+                    code,
+                    is_entry,
+                },
+            )
+            .await?;
+        Ok(result.code)
+    }
+
+    async fn chunk_hash_extra(&self, chunk_id: &str) -> Result<Vec<String>> {
+        if self.container.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.container
+            .hook_augment_chunk_hash(self.ctx, chunk_id)
+            .await
+    }
+
+    async fn chunk_wrapper(
+        &self,
+        id: &str,
+        code: &str,
+        is_entry: bool,
+    ) -> Result<ferrite_plugin::ChunkWrapper> {
+        if self.container.is_empty() {
+            return Ok(ferrite_plugin::ChunkWrapper::default());
+        }
+        self.container
+            .hook_chunk_wrapper(
+                self.ctx,
+                ferrite_plugin::RenderChunk {
+                    id: id.to_string(),
+                    code: code.to_string(),
+                    is_entry,
+                },
+            )
+            .await
     }
 }

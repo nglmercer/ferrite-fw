@@ -7,14 +7,18 @@ mod env;
 mod loader;
 mod pipeline_context;
 mod pipeline_transform;
+mod proxy;
 mod routes;
 mod server;
+mod ssr_tools;
 mod state;
 mod types;
 mod util;
 mod watcher;
 
-pub use env::{load_env_files, parse_dotenv};
+pub use env::{expand_vars, load_env, load_env_files, parse_dotenv};
+pub use proxy::{forward as forward_proxy, match_proxy, rules_from_config};
+pub use ssr_tools::{ModuleRunner, SsrTransformResult};
 pub use state::{DevServer, DevServerInner};
 pub use types::{CachedTransform, PipelineModule, PipelineResponse};
 pub use util::{default_compiler, url_to_virtual, virtual_url};
@@ -27,6 +31,7 @@ mod tests {
     use ferrite_plugin::{HtmlTransformContext, Plugin, PluginContext};
     use std::collections::HashMap;
     use std::sync::Arc;
+    use std::sync::Mutex;
     use std::time::Duration;
 
     #[test]
@@ -34,6 +39,58 @@ mod tests {
         let pairs = parse_dotenv("A=1\n# comment\nexport B=\"two\"\nEMPTY=\n");
         assert!(pairs.contains(&("A".to_string(), "1".to_string())));
         assert!(pairs.contains(&("B".to_string(), "two".to_string())));
+    }
+
+    #[test]
+    fn dotenv_quotes_comments_escapes() {
+        let pairs = parse_dotenv(
+            "PLAIN=hi # trailing\nSINGLE='a#b' # kept\nESC=\"a\\n\\\"b\\\"\"\nHASH=\"a#b\"\n",
+        );
+        let get = |key: &str| {
+            pairs
+                .iter()
+                .find(|(candidate, _)| candidate == key)
+                .map(|(_, value)| value.clone())
+                .unwrap()
+        };
+        assert_eq!(get("PLAIN"), "hi");
+        assert_eq!(get("SINGLE"), "a#b");
+        assert_eq!(get("ESC"), "a\n\"b\"");
+        assert_eq!(get("HASH"), "a#b");
+    }
+
+    #[test]
+    fn env_expansion_forms() {
+        let loaded = HashMap::from([("BASE".to_string(), "/srv".to_string())]);
+        assert_eq!(expand_vars("$BASE/x", &loaded), "/srv/x");
+        assert_eq!(expand_vars("${BASE}/x", &loaded), "/srv/x");
+        assert_eq!(expand_vars("${MISSING:-dflt}", &loaded), "dflt");
+        assert_eq!(expand_vars("$$BASE", &loaded), "$BASE");
+        assert_eq!(expand_vars("${MISSING}", &loaded), "");
+        // Process environment wins over loaded values for references.
+        let unique = format!("FERRITE_TEST_EXPAND_{}", std::process::id());
+        std::env::set_var(&unique, "proc");
+        let loaded = HashMap::from([(unique.clone(), "file".to_string())]);
+        assert_eq!(expand_vars(&format!("${{{unique}}}"), &loaded), "proc");
+        std::env::remove_var(&unique);
+    }
+
+    #[test]
+    fn load_env_layers_and_filters() {
+        let dir = std::env::temp_dir().join(format!("ferrite-loadenv-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(".env"), "FERRITE_A=1\nSECRET=no\n").unwrap();
+        std::fs::write(dir.join(".env.production"), "FERRITE_A=2\nFERRITE_B=\"${FERRITE_A}/b\"\n")
+            .unwrap();
+        let prefixes = vec!["FERRITE_".to_string()];
+        let values = load_env("production", &dir, &prefixes);
+        assert_eq!(values.get("FERRITE_A").unwrap(), "2");
+        assert_eq!(values.get("FERRITE_B").unwrap(), "2/b");
+        assert!(!values.contains_key("SECRET"));
+        let dev = load_env("development", &dir, &prefixes);
+        assert_eq!(dev.get("FERRITE_A").unwrap(), "1");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -462,6 +519,393 @@ mod tests {
         }
         task.abort();
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    struct RetransformPlugin {
+        transforms: Arc<Mutex<usize>>,
+        checks: Arc<Mutex<usize>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Plugin for RetransformPlugin {
+        fn name(&self) -> &'static str {
+            "retransform"
+        }
+
+        async fn transform(
+            &self,
+            _ctx: &PluginContext,
+            request: ferrite_plugin::TransformRequest,
+        ) -> ferrite_core::Result<Option<ferrite_plugin::TransformResult>> {
+            *self.transforms.lock().unwrap() += 1;
+            Ok(Some(ferrite_plugin::TransformResult {
+                code: format!("{}\n// touched\n", request.code),
+                map: None,
+                dependencies: Vec::new(),
+            }))
+        }
+
+        async fn should_transform_cached_module(
+            &self,
+            _ctx: &PluginContext,
+            _module: ferrite_plugin::CachedModuleInfo,
+        ) -> ferrite_core::Result<Option<bool>> {
+            let mut checks = self.checks.lock().unwrap();
+            *checks += 1;
+            Ok(Some(*checks == 1))
+        }
+    }
+
+    #[tokio::test]
+    async fn should_transform_cached_module_forces_retransform() {
+        let dir = std::env::temp_dir().join(format!("ferrite-retransform-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/main.js"), "console.log(1);\n").unwrap();
+        let config = ferrite_config::resolve_config(
+            ferrite_config::UserConfig::default(),
+            Some(dir.clone()),
+            ferrite_config::CliOverrides::default(),
+        )
+        .unwrap();
+        let transforms = Arc::new(Mutex::new(0));
+        let checks = Arc::new(Mutex::new(0));
+        let server = DevServer::new_without_watcher(
+            config,
+            vec![Arc::new(RetransformPlugin {
+                transforms: transforms.clone(),
+                checks: checks.clone(),
+            })],
+        )
+        .await
+        .unwrap();
+        let id = ModuleId::new("/src/main.js");
+        server.pipeline_module(&id, None, "client").await.unwrap();
+        server.pipeline_module(&id, None, "client").await.unwrap();
+        server.pipeline_module(&id, None, "client").await.unwrap();
+        // Miss, forced re-transform, cached.
+        assert_eq!(*transforms.lock().unwrap(), 2);
+        assert_eq!(*checks.lock().unwrap(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    struct DynamicPlugin;
+
+    #[async_trait::async_trait]
+    impl Plugin for DynamicPlugin {
+        fn name(&self) -> &'static str {
+            "dynamic"
+        }
+
+        async fn resolve_dynamic_import(
+            &self,
+            _ctx: &PluginContext,
+            request: ferrite_plugin::DynamicImportRequest,
+        ) -> ferrite_core::Result<Option<ferrite_resolver::ResolvedId>> {
+            if request.specifier == "virtual:dyn" {
+                return Ok(Some(ferrite_resolver::ResolvedId::new("/src/dep.js")));
+            }
+            Ok(None)
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_dynamic_import_hook_wins() {
+        let dir = std::env::temp_dir().join(format!("ferrite-dynhook-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("src/main.js"),
+            "const m = await import(\"virtual:dyn\");\nconsole.log(m);\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("src/dep.js"), "export const x = 1;\n").unwrap();
+        let config = ferrite_config::resolve_config(
+            ferrite_config::UserConfig::default(),
+            Some(dir.clone()),
+            ferrite_config::CliOverrides::default(),
+        )
+        .unwrap();
+        let server = DevServer::new_without_watcher(config, vec![Arc::new(DynamicPlugin)])
+            .await
+            .unwrap();
+        let module = server
+            .pipeline_module(&ModuleId::new("/src/main.js"), None, "client")
+            .await
+            .unwrap();
+        assert!(
+            module.imports.iter().any(|(_, dep, kind)| {
+                dep.0 == "/src/dep.js" && *kind == ferrite_graph::ImportKind::Dynamic
+            }),
+            "{:?}",
+            module.imports
+        );
+        assert!(module.code.contains("/src/dep.js"), "{}", module.code);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    struct FileUrlPlugin;
+
+    #[async_trait::async_trait]
+    impl Plugin for FileUrlPlugin {
+        fn name(&self) -> &'static str {
+            "file-url"
+        }
+
+        async fn resolve_file_url(
+            &self,
+            _ctx: &PluginContext,
+            _request: ferrite_plugin::ResolveFileUrlRequest,
+        ) -> ferrite_core::Result<Option<String>> {
+            Ok(Some("https://cdn.example/x.png?v=1".to_string()))
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_file_url_rewrites_dev_url_shim() {
+        let dir = std::env::temp_dir().join(format!("ferrite-fileurl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("logo.png"), b"fakepng").unwrap();
+        let config = ferrite_config::resolve_config(
+            ferrite_config::UserConfig::default(),
+            Some(dir.clone()),
+            ferrite_config::CliOverrides::default(),
+        )
+        .unwrap();
+        let server = DevServer::new_without_watcher(config, vec![Arc::new(FileUrlPlugin)])
+            .await
+            .unwrap();
+        let module = server
+            .pipeline_module(&ModuleId::new("/logo.png?url"), None, "client")
+            .await
+            .unwrap();
+        assert!(module.code.contains("https://cdn.example/x.png?v=1"), "{}", module.code);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn ssr_transform_reports_deps_without_graph() {
+        let dir = std::env::temp_dir().join(format!("ferrite-ssr-t-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/dep.js"), "export const x = 1;\n").unwrap();
+        let config = ferrite_config::resolve_config(
+            ferrite_config::UserConfig::default(),
+            Some(dir.clone()),
+            ferrite_config::CliOverrides::default(),
+        )
+        .unwrap();
+        let server = DevServer::new_without_watcher(config, Vec::new())
+            .await
+            .unwrap();
+        let result = server
+            .ssr_transform(
+                "import { x } from \"./dep.js\";\nexport const y = x + 1;\n",
+                "/src/main.js",
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.deps, vec!["/src/dep.js".to_string()]);
+        assert!(result.dynamic_deps.is_empty());
+        assert!(!result.code.contains("/@ferrite/client"), "{}", result.code);
+        assert!(server.inner().graph.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn ssr_fix_stacktrace_normalizes_and_maps() {
+        let dir = std::env::temp_dir().join(format!("ferrite-ssr-fix-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/a.js"), "export function boom() {\n  throw new Error(\"x\");\n}\n")
+            .unwrap();
+        let config = ferrite_config::resolve_config(
+            ferrite_config::UserConfig::default(),
+            Some(dir.clone()),
+            ferrite_config::CliOverrides::default(),
+        )
+        .unwrap();
+        let server = DevServer::new_without_watcher(config, Vec::new())
+            .await
+            .unwrap();
+        // Populate the SSR transform cache with a map.
+        server
+            .pipeline_module(&ModuleId::new("/src/a.js"), None, "ssr")
+            .await
+            .unwrap();
+        let stack = "Error: x\n    at boom (http://127.0.0.1:5173/src/a.js:2:9)\n    at /src/a.js:1:1";
+        let fixed = server.ssr_fix_stacktrace(stack).await;
+        assert!(!fixed.contains("http://127.0.0.1:5173"), "{fixed}");
+        assert!(fixed.contains("/src/a.js:"), "{fixed}");
+        assert!(fixed.contains("Error: x"), "{fixed}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn module_runner_caches_and_invalidates() {
+        let dir = std::env::temp_dir().join(format!("ferrite-runner-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/main.js"), "export const x = 1;\n").unwrap();
+        let config = ferrite_config::resolve_config(
+            ferrite_config::UserConfig::default(),
+            Some(dir.clone()),
+            ferrite_config::CliOverrides::default(),
+        )
+        .unwrap();
+        let server = DevServer::new_without_watcher(config, Vec::new())
+            .await
+            .unwrap();
+        let runner = server.module_runner();
+        let first = runner.import("/src/main.js").await.unwrap();
+        let second = runner.import("/src/main.js").await.unwrap();
+        assert_eq!(first.code, second.code);
+        assert_eq!(runner.cached_urls(), vec!["/src/main.js".to_string()]);
+        runner.invalidate("/src/main.js");
+        assert!(runner.cached_urls().is_empty());
+        runner.import("/src/main.js").await.unwrap();
+        runner.close().await;
+        assert!(runner.cached_urls().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    struct WatchPlugin {
+        events: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Plugin for WatchPlugin {
+        fn name(&self) -> &'static str {
+            "watch"
+        }
+
+        async fn watch_change(
+            &self,
+            _ctx: &PluginContext,
+            event: ferrite_plugin::WatchEvent,
+        ) -> ferrite_core::Result<()> {
+            self.events.lock().unwrap().push(format!(
+                "{}:{:?}",
+                event.path.display(),
+                event.kind
+            ));
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn watch_change_fires_on_edit() {
+        let dir = std::env::temp_dir().join(format!("ferrite-watchhook-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/main.js"), "console.log(1);\n").unwrap();
+        let config = ferrite_config::resolve_config(
+            ferrite_config::UserConfig::default(),
+            Some(dir.clone()),
+            ferrite_config::CliOverrides::default(),
+        )
+        .unwrap();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let server = DevServer::new(
+            config,
+            vec![Arc::new(WatchPlugin {
+                events: events.clone(),
+            })],
+        )
+        .await
+        .unwrap();
+        assert!(ferrite_plugin::ServerControl::watcher_alive(&server));
+        std::fs::write(dir.join("src/main.js"), "console.log(2);\n").unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if !events.lock().unwrap().is_empty() || std::time::Instant::now() > deadline {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let seen = events.lock().unwrap().join("\n");
+        assert!(seen.contains("main.js"), "{seen}");
+        server.close();
+        assert!(!ferrite_plugin::ServerControl::watcher_alive(&server));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn server_handles_and_urls() {
+        let dir = std::env::temp_dir().join(format!("ferrite-handles-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut user = ferrite_config::UserConfig::default();
+        user.server.port = 5199;
+        let config = ferrite_config::resolve_config(
+            user,
+            Some(dir.clone()),
+            ferrite_config::CliOverrides::default(),
+        )
+        .unwrap();
+        let server = DevServer::new_without_watcher(config, Vec::new())
+            .await
+            .unwrap();
+        assert!(ferrite_plugin::ServerControl::module_graph(&server).is_some());
+        assert!(ferrite_plugin::ServerControl::local_addr(&server).is_none());
+        assert_eq!(ferrite_plugin::ServerControl::hmr_clients(&server), 0);
+        let urls = ferrite_plugin::ServerControl::server_urls(&server);
+        assert!(urls.local.contains("5199"), "{}", urls.local);
+        server.print_urls();
+        // Extra watch paths are recorded even without a running watcher.
+        server.watch_extra(&dir.join("extra"));
+        assert!(
+            server
+                .inner()
+                .watch_files
+                .lock()
+                .map(|files| files.iter().any(|file| file.contains("extra")))
+                .unwrap_or(false)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn proxy_forwards_to_origin() {
+        let app = axum::Router::new().route(
+            "/api/echo",
+            axum::routing::post(|headers: axum::http::HeaderMap, body: String| async move {
+                let tag = headers
+                    .get("x-tag")
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("-")
+                    .to_string();
+                format!("{tag}:{body}")
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-tag", axum::http::HeaderValue::from_static("t1"));
+        let client = reqwest::Client::new();
+        let response = forward_proxy(
+            &client,
+            &axum::http::Method::POST,
+            &format!("http://{addr}/api/echo"),
+            &headers,
+            axum::body::Bytes::from("hello"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
+        assert_eq!(&bytes[..], b"t1:hello");
+
+        let rules = rules_from_config(&HashMap::from([(
+            "/api".to_string(),
+            format!("http://{addr}"),
+        )]));
+        assert!(match_proxy(&rules, "/api/echo").is_some());
+        assert!(match_proxy(&rules, "/other").is_none());
+        task.abort();
     }
 
     #[tokio::test]

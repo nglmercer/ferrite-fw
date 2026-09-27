@@ -8,6 +8,10 @@ use std::path::{Path, PathBuf};
 
 use ferrite_core::{Environment, EnvironmentKind, FerriteError, Result, Target};
 
+mod js_config;
+
+pub use js_config::{load_config_from_file, LoadedConfigFile};
+
 /// Top-level user configuration (`ferrite.toml`).
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -62,6 +66,9 @@ pub struct ServerConfig {
     pub hmr: bool,
     /// Serve in middleware mode (no listener owned by Ferrite).
     pub middleware_mode: bool,
+    /// Dev/preview proxy rules: path prefix → target origin
+    /// (`/api` → `http://localhost:3000`), Vite `server.proxy` shorthand.
+    pub proxy: HashMap<String, String>,
 }
 
 impl Default for ServerConfig {
@@ -73,6 +80,7 @@ impl Default for ServerConfig {
             open: false,
             hmr: true,
             middleware_mode: false,
+            proxy: HashMap::new(),
         }
     }
 }
@@ -490,15 +498,27 @@ pub struct CliOverrides {
 }
 
 /// Load `ferrite.toml` + `ferrite.local.toml` from `dir` (both optional).
+///
+/// When neither TOML file exists, falls back to a statically parsed
+/// `ferrite.config.*` / `vite.config.*` (see [`load_config_from_file`]);
+/// TOML always wins when both exist. JS-config warnings are dropped here —
+/// call [`load_config_from_file`] directly to surface them.
 pub fn load_user_config(dir: &Path) -> Result<UserConfig> {
     let mut merged = UserConfig::default();
+    let mut found_toml = false;
     for file in ["ferrite.toml", "ferrite.local.toml"] {
         let path = dir.join(file);
         if path.exists() {
+            found_toml = true;
             let text = std::fs::read_to_string(&path)?;
             let parsed: UserConfig = toml::from_str(&text)
                 .map_err(|error| FerriteError::Config(format!("{file}: {error}")))?;
             merged = merge_user_config(merged, parsed);
+        }
+    }
+    if !found_toml {
+        if let Some(js) = load_config_from_file(dir)? {
+            merged = merge_user_config(merged, js.config);
         }
     }
     Ok(merged)
@@ -568,6 +588,7 @@ fn merge_server(mut base: ServerConfig, over: ServerConfig) -> ServerConfig {
     base.open |= over.open;
     base.hmr &= over.hmr;
     base.middleware_mode |= over.middleware_mode;
+    base.proxy.extend(over.proxy);
     base
 }
 
@@ -634,6 +655,43 @@ fn merge_npm(mut base: NpmConfig, over: NpmConfig) -> NpmConfig {
         base.dev_strategy = over.dev_strategy;
     }
     base
+}
+
+/// Identity helper, the `defineConfig` equivalent: pins the programmatic
+/// config type so a misplaced field fails to compile at the call site.
+///
+/// ```rust
+/// use ferrite_config::{define_config, UserConfig};
+/// let config = define_config(UserConfig {
+///     base: Some("/app/".to_string()),
+///     ..Default::default()
+/// });
+/// ```
+#[must_use]
+pub fn define_config(config: UserConfig) -> UserConfig {
+    config
+}
+
+/// Deep-merge two user configs, the `mergeConfig` equivalent.
+///
+/// Objects merge per key, `over` winning on conflict; maps (`alias`,
+/// `define`, `proxy`) merge per entry; `env.prefix` concatenates and
+/// dedupes; scalars and remaining arrays take `over` when it differs from
+/// the default.
+#[must_use]
+pub fn merge_config(base: UserConfig, over: UserConfig) -> UserConfig {
+    let mut merged = merge_user_config(base.clone(), over.clone());
+    // `merge_user_config` replaces prefixes; `mergeConfig` unions them.
+    if !over.env.prefix.is_empty() && !base.env.prefix.is_empty() {
+        let mut prefixes = base.env.prefix.clone();
+        for prefix in &over.env.prefix {
+            if !prefixes.contains(prefix) {
+                prefixes.push(prefix.clone());
+            }
+        }
+        merged.env.prefix = prefixes;
+    }
+    merged
 }
 
 /// Resolve a user config into a concrete config.
@@ -798,5 +856,47 @@ mod tests {
         )
         .unwrap();
         assert_eq!(resolved.runtime.backend, "none");
+    }
+
+    #[test]
+    fn merge_config_unions_prefixes_and_proxies() {
+        let mut base = UserConfig::default();
+        base.server.proxy.insert("/a".to_string(), "http://a".to_string());
+        let mut over = UserConfig::default();
+        over.env.prefix = vec!["APP_".to_string()];
+        over.server.proxy.insert("/b".to_string(), "http://b".to_string());
+        let merged = merge_config(base, over);
+        assert!(merged.env.prefix.contains(&"APP_".to_string()));
+        assert!(merged.env.prefix.contains(&"FERRITE_".to_string()));
+        assert_eq!(merged.server.proxy.len(), 2);
+    }
+
+    #[test]
+    fn define_config_is_identity() {
+        let user = UserConfig {
+            base: Some("/x/".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(define_config(user.clone()).base, user.base);
+    }
+
+    #[test]
+    fn toml_wins_over_js_config() {
+        let dir = std::env::temp_dir().join(format!("ferrite-cfgprec-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("vite.config.js"),
+            "export default { server: { port: 1111 } };",
+        )
+        .unwrap();
+        // No TOML: JS config applies.
+        let user = load_user_config(&dir).unwrap();
+        assert_eq!(user.server.port, 1111);
+        // TOML present: TOML wins, JS ignored.
+        std::fs::write(dir.join("ferrite.toml"), "[server]\nport = 2222\n").unwrap();
+        let user = load_user_config(&dir).unwrap();
+        assert_eq!(user.server.port, 2222);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

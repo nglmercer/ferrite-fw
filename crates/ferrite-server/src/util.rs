@@ -199,6 +199,19 @@ pub(crate) fn now_millis() -> u64 {
 
 /// Default compiler: Oxc (spec §5).
 #[must_use]
+/// Best-effort LAN IP for Network URLs: the source address the kernel
+/// would use toward the public internet (no packets are sent).
+pub(crate) fn lan_ip() -> Option<std::net::IpAddr> {
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    // `connect` on UDP only selects a route; nothing is transmitted.
+    socket.connect("8.8.8.8:80").ok()?;
+    let ip = socket.local_addr().ok()?.ip();
+    if ip.is_loopback() || ip.is_unspecified() {
+        return None;
+    }
+    Some(ip)
+}
+
 pub fn default_compiler() -> Arc<dyn JsCompiler> {
     Arc::new(OxcCompiler::new(OxcOptions::default()))
 }

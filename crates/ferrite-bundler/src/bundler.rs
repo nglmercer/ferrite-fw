@@ -43,6 +43,7 @@ impl<L: ModuleLoader + 'static> Bundler for FerriteBundler<L> {
         graph: &ModuleGraph,
         config: &BuildBundleConfig,
         request: BundleRequest,
+        hooks: &(dyn crate::BundleHooks + Send + Sync),
     ) -> Result<BundleOutput> {
         // 1. Traverse from entries (parallel load).
         let mut modules = self.traverse(&request).await?;
@@ -54,6 +55,8 @@ impl<L: ModuleLoader + 'static> Bundler for FerriteBundler<L> {
         if request.treeshake {
             shake_statements(&mut modules, &live, &request)?;
         }
+        // 2c. Render start (entries + live set known).
+        hooks.render_start(&request.entries).await?;
         // 3. Chunk: one file per module; entries + dynamic boundaries marked.
         let dynamic_entries: HashSet<ModuleId> = modules
             .values()
@@ -127,13 +130,33 @@ impl<L: ModuleLoader + 'static> Bundler for FerriteBundler<L> {
                 },
             );
         }
+        // 3b. `renderChunk` replacements apply before hashing so the
+        //     content hash covers hooked code; wrappers are collected now
+        //     (folded into the hash below) and applied at emit time.
+        let mut wrappers: HashMap<String, ferrite_plugin::ChunkWrapper> = HashMap::new();
+        for chunk in chunks.values_mut() {
+            if let Some(code) = hooks
+                .render_chunk(&chunk.id, chunk.code.clone(), chunk.entry)
+                .await?
+            {
+                chunk.code = code;
+            }
+            wrappers.insert(
+                chunk.id.clone(),
+                hooks
+                    .chunk_wrapper(&chunk.id, &chunk.code, chunk.entry)
+                    .await?,
+            );
+        }
         // 4. Hash + file names. Each name embeds a content hash of the
         //    chunk's own code plus every transitively reachable chunk's
         //    content hash, so a change anywhere in the dependency cone
         //    renames the file (no stale caches). The hash intentionally
         //    covers pre-rewrite code: rewritten code embeds file names, so
         //    hashing emitted bytes would be circular (a file cannot contain
-        //    its own hash).
+        //    its own hash). Hook contributions (`renderChunk` output,
+        //    wrapper text, `augmentChunkHash` parts) are part of the
+        //    material.
         let content_hashes: HashMap<String, String> = chunks
             .iter()
             .map(|(id, chunk)| (id.clone(), Hash::of_str(&chunk.code).0))
@@ -144,6 +167,17 @@ impl<L: ModuleLoader + 'static> Bundler for FerriteBundler<L> {
             for hash in reachable_content_hashes(chunk, &chunks, &content_hashes) {
                 material.push('\0');
                 material.push_str(hash);
+            }
+            if let Some(text) = wrappers
+                .get(&chunk.id)
+                .and_then(wrapper_hash_text)
+            {
+                material.push('\0');
+                material.push_str(&text);
+            }
+            for extra in hooks.chunk_hash_extra(&chunk.id).await? {
+                material.push('\0');
+                material.push_str(&extra);
             }
             let hash = Hash::of_str(&material).short(8);
             let file_name = config
@@ -236,6 +270,10 @@ impl<L: ModuleLoader + 'static> Bundler for FerriteBundler<L> {
                 rewrite_imports_text(&chunk.code, &import_map)
             };
             let code = strip_bare_imports(&code, &stripped_css);
+            let code = match wrappers.get(&chunk_id) {
+                Some(wrapper) => wrapper.apply(&code),
+                None => code,
+            };
             bytes += code.len();
             let mut code_with_map = code.clone();
             if request.sourcemap {
@@ -307,6 +345,26 @@ impl<L: ModuleLoader + 'static> Bundler for FerriteBundler<L> {
             },
         })
     }
+}
+
+/// Wrapper text folded into a chunk's hash material.
+fn wrapper_hash_text(wrapper: &ferrite_plugin::ChunkWrapper) -> Option<String> {
+    if wrapper.is_empty() {
+        return None;
+    }
+    let mut parts = Vec::new();
+    for text in [
+        &wrapper.banner,
+        &wrapper.intro,
+        &wrapper.outro,
+        &wrapper.footer,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        parts.push(text.as_str());
+    }
+    Some(parts.join("\n"))
 }
 
 impl<L: ModuleLoader> FerriteBundler<L> {

@@ -11,6 +11,8 @@ use ferrite_hmr::plan_update;
 use ferrite_hmr::HmrPlan;
 use ferrite_plugin::HotUpdateEvent;
 use ferrite_plugin::PluginContext;
+use ferrite_plugin::WatchEvent;
+use ferrite_plugin::WatchKind;
 use notify::Event;
 use notify::EventKind;
 use notify::RecursiveMode;
@@ -35,6 +37,11 @@ impl DevServer {
                 ) {
                     return;
                 }
+                let watch_kind = match event.kind {
+                    EventKind::Create(_) => WatchKind::Create,
+                    EventKind::Remove(_) => WatchKind::Remove,
+                    _ => WatchKind::Modify,
+                };
                 for path in event.paths {
                     // Debounce.
                     let now = Instant::now();
@@ -57,24 +64,20 @@ impl DevServer {
                     }
                     let url = ferrite_core::file_to_url(&inner.config.root, &path);
                     let id = ModuleId::new(url.clone());
-                    if !inner.graph.contains(&id) {
-                        // Untracked file (e.g. new CSS referenced later): if it is
-                        // tracked by importers, full-reload is safest.
-                        continue;
+                    let tracked = inner.graph.contains(&id);
+                    if tracked {
+                        inner.graph.invalidate_tree(&id);
                     }
-                    inner.graph.invalidate_tree(&id);
                     let timestamp = now_millis();
-                    // Plugin `handleHotUpdate` hooks run on the async runtime.
+                    // Plugin `watchChange` + `hotUpdate` hooks run on the
+                    // async runtime. `watchChange` fires for every accepted
+                    // event (tracked or not); HMR planning only for tracked
+                    // modules.
                     let inner_clone = inner.clone();
                     let file = url.clone();
+                    let watch_path = path.clone();
                     let runtime = runtime.clone();
                     runtime.spawn(async move {
-                        let modules = vec![id.clone()];
-                        let event = HotUpdateEvent {
-                            file,
-                            modules,
-                            timestamp,
-                        };
                         let environment = inner_clone.config.client_env();
                         let ctx = PluginContext {
                             graph: &inner_clone.graph,
@@ -84,9 +87,33 @@ impl DevServer {
                             watch_files: &inner_clone.watch_files,
                             warnings: &inner_clone.warnings,
                         };
+                        if let Err(error) = inner_clone
+                            .plugins
+                            .hook_watch_change(
+                                &ctx,
+                                WatchEvent {
+                                    path: watch_path,
+                                    kind: watch_kind,
+                                },
+                            )
+                            .await
+                        {
+                            tracing::warn!("watch_change hook failed: {error}");
+                        }
+                        if !tracked {
+                            // Untracked file (e.g. new CSS referenced later):
+                            // nothing to push until an importer pulls it.
+                            return;
+                        }
+                        let modules = vec![id.clone()];
+                        let event = HotUpdateEvent {
+                            file,
+                            modules,
+                            timestamp,
+                        };
                         if let Ok(Some(custom)) = inner_clone
                             .plugins
-                            .hook_handle_hot_update(&ctx, event)
+                            .hook_hot_update(&ctx, event)
                             .await
                         {
                             if custom.full_reload {

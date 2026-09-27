@@ -102,8 +102,9 @@ pub async fn build(config: Config) -> Result<Vec<BuildReport>> {
     create_builder(config).await?.build_app().await
 }
 
-/// Preview a production build (spec §9).
+/// Preview a production build (spec §9), running `configResolved` and
+/// the preview-server hooks.
 pub async fn preview(config: Config) -> Result<()> {
-    let (resolved, _) = config.resolve().await?;
-    preview_dir(&resolved.out_dir(), resolved.server.port).await
+    let (resolved, plugins) = config.resolve().await?;
+    preview_with_plugins(&resolved, &plugins).await
 }

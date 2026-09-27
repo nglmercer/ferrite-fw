@@ -1,6 +1,7 @@
 //! Dev server shared state and constructors.
 
 use crate::env::*;
+use crate::util::lan_ip;
 use ferrite_cache::MemoryCache;
 use ferrite_config::ResolvedConfig;
 use ferrite_core::EnvironmentKind;
@@ -16,8 +17,10 @@ use ferrite_ssr::RpcRegistry;
 use ferrite_ssr::SsrAdapter;
 use ferrite_transform::compiler_for_engine;
 use ferrite_transform::JsCompiler;
+use notify::Watcher as _;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -41,6 +44,53 @@ impl ServerControl for DevServer {
 
     fn root(&self) -> &Path {
         &self.inner.config.root
+    }
+
+    fn module_graph(&self) -> Option<&ModuleGraph> {
+        Some(&self.inner.graph)
+    }
+
+    fn local_addr(&self) -> Option<SocketAddr> {
+        self.inner.bound_addr.lock().ok().and_then(|addr| *addr)
+    }
+
+    fn server_urls(&self) -> ferrite_plugin::ServerUrls {
+        let (host, port) = match ServerControl::local_addr(self) {
+            Some(addr) => (addr.ip().to_string(), addr.port()),
+            None => (
+                self.inner.config.server.host.clone(),
+                self.inner.config.server.port,
+            ),
+        };
+        let display = if host == "0.0.0.0" || host == "::" {
+            "127.0.0.1".to_string()
+        } else {
+            host
+        };
+        let local = format!("http://{display}:{port}/");
+        let network = lan_ip()
+            .map(|ip| format!("http://{ip}:{port}/"))
+            .filter(|url| *url != local);
+        ferrite_plugin::ServerUrls { local, network }
+    }
+
+    fn hmr_clients(&self) -> usize {
+        self.inner.hmr.receivers()
+    }
+
+    fn send_full_reload(&self, path: Option<&str>) {
+        self.inner.hmr.send_full_reload(path.map(str::to_string));
+    }
+
+    fn watcher_alive(&self) -> bool {
+        self.watcher
+            .lock()
+            .map(|watcher| watcher.is_some())
+            .unwrap_or(false)
+    }
+
+    fn watcher_add(&self, path: &Path) {
+        self.watch_extra(path);
     }
 }
 
@@ -80,6 +130,10 @@ pub struct DevServerInner {
     pub rpc: tokio::sync::RwLock<RpcRegistry>,
     /// Debounce map for watcher events.
     pub(crate) debounce: Mutex<HashMap<PathBuf, Instant>>,
+    /// Bound socket address (set by `listen`, `httpServer` equivalent).
+    pub bound_addr: Mutex<Option<SocketAddr>>,
+    /// Shared HTTP client (remote imports, proxy forwarding).
+    pub http_client: reqwest::Client,
 }
 
 impl DevServer {
@@ -137,6 +191,11 @@ impl DevServer {
             ssr_adapter: tokio::sync::RwLock::new(None),
             rpc: tokio::sync::RwLock::new(RpcRegistry::new()),
             debounce: Mutex::new(HashMap::new()),
+            bound_addr: Mutex::new(None),
+            http_client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
         });
         let server = Self {
             inner,
@@ -178,6 +237,26 @@ impl DevServer {
     /// Set the SSR adapter.
     pub async fn set_ssr_adapter(&self, adapter: Arc<dyn SsrAdapter>) {
         *self.inner.ssr_adapter.write().await = Some(adapter);
+    }
+
+    /// Watch an extra path at runtime (`server.watcher.add`).
+    ///
+    /// The path is recorded in `watch_files` and, when the watcher is
+    /// running, added to the notify watch so `watchChange` fires for it.
+    pub fn watch_extra(&self, path: &Path) {
+        let text = path.to_string_lossy().into_owned();
+        if let Ok(mut watch) = self.inner.watch_files.lock() {
+            if !watch.iter().any(|entry| entry == &text) {
+                watch.push(text);
+            }
+        }
+        if let Ok(mut slot) = self.watcher.lock() {
+            if let Some(watcher) = slot.as_mut() {
+                if let Err(error) = watcher.watch(path, notify::RecursiveMode::Recursive) {
+                    tracing::warn!("cannot watch extra path `{}`: {error}", path.display());
+                }
+            }
+        }
     }
 
     /// Access shared state (router handlers, middleware mode).

@@ -12,6 +12,7 @@ use ferrite_core::Result;
 use ferrite_server::DevServer;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::Mutex;
 
 /// [`ModuleLoader`] over the dev-server pipeline (build mode).
@@ -39,14 +40,46 @@ impl BuildLoader {
     }
 
     /// Emit raw bytes as a hashed asset; returns the public URL.
-    fn emit_bytes(&self, file_name: &str, bytes: Vec<u8>) -> String {
+    ///
+    /// Runs `resolveFileUrl` hooks over the default URL; the first `Some`
+    /// wins, otherwise the hashed `assets/` URL is used.
+    async fn emit_url(&self, file_name: &str, bytes: Vec<u8>, env: &str) -> Result<String> {
         let hashed = ferrite_assets::hashed_name(file_name, &bytes);
         let name = format!("assets/{hashed}");
-        let url = format!("{}{name}", self.base);
+        let default_url = format!("{}{name}", self.base);
         if let Ok(mut assets) = self.assets.lock() {
-            assets.insert(name, bytes);
+            assets.insert(name.clone(), bytes);
         }
-        url
+        let inner = self.server.inner();
+        let environment = if env == "ssr" {
+            inner.config.ssr_env()
+        } else {
+            inner.config.client_env()
+        };
+        let resolver = if environment.kind.is_ssr() {
+            &inner.ssr_resolver
+        } else {
+            &inner.client_resolver
+        };
+        let ctx = ferrite_plugin::PluginContext {
+            graph: &inner.graph,
+            resolver,
+            environment: &environment,
+            emitted: &inner.emitted,
+            watch_files: &inner.watch_files,
+            warnings: &inner.warnings,
+        };
+        if let Some(url) = inner
+            .plugins
+            .hook_resolve_file_url(
+                &ctx,
+                ferrite_plugin::ResolveFileUrlRequest { file_name: name },
+            )
+            .await?
+        {
+            return Ok(url);
+        }
+        Ok(default_url)
     }
 
     /// Load a stylesheet for extraction (§29).
@@ -67,14 +100,14 @@ impl BuildLoader {
                 dev: false,
             },
         );
-        let env = self.server.inner().config.client_env();
+        let resolve_env = self.server.inner().config.client_env();
         let mut url_mapping: HashMap<String, String> = HashMap::new();
         for found in &result.urls {
             let spec = &found.url;
             if !spec.starts_with("./") && !spec.starts_with("../") {
                 continue;
             }
-            match self.resolve_css_ref(id, spec, &env) {
+            match self.resolve_css_ref(id, spec, &resolve_env) {
                 Ok(dep) => match self.server.id_to_file(&dep).and_then(|file| {
                     let bytes = std::fs::read(&file)?;
                     let name = file
@@ -84,7 +117,8 @@ impl BuildLoader {
                     Ok((name, bytes))
                 }) {
                     Ok((name, bytes)) => {
-                        url_mapping.insert(spec.clone(), self.emit_bytes(&name, bytes));
+                        let url = self.emit_url(&name, bytes, env).await?;
+                        url_mapping.insert(spec.clone(), url);
                     }
                     Err(error) => {
                         tracing::warn!("cannot emit CSS asset `{spec}` from `{id}`: {error}");
@@ -103,7 +137,7 @@ impl BuildLoader {
             if !spec.starts_with("./") && !spec.starts_with("../") {
                 continue;
             }
-            match self.resolve_css_ref(id, spec, &env) {
+            match self.resolve_css_ref(id, spec, &resolve_env) {
                 Ok(dep) => imports.push((spec.clone(), dep, ferrite_graph::ImportKind::Static)),
                 Err(error) => {
                     tracing::warn!("cannot resolve CSS @import `{spec}` from `{id}`: {error}");
@@ -188,7 +222,7 @@ impl ModuleLoader for BuildLoader {
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "asset".to_string());
-            let url = self.emit_bytes(&name, bytes);
+            let url = self.emit_url(&name, bytes, env).await?;
             return Ok(LoadedModule {
                 id: id.clone(),
                 code: ferrite_assets::asset_to_js(&url),
@@ -224,7 +258,7 @@ impl ModuleLoader for BuildLoader {
                     Ok((name, bytes))
                 }) {
                     Ok((name, bytes)) => {
-                        let url = self.emit_bytes(&name, bytes);
+                        let url = self.emit_url(&name, bytes, env).await?;
                         for quote in ['"', '\'', '`'] {
                             code = code.replace(
                                 &format!("{quote}{}{quote}", dep.0),
@@ -286,27 +320,76 @@ impl ModuleLoader for BuildLoader {
 
 // --- preview -------------------------------------------------------------------
 
+/// Preview a resolved config with plugin hooks (`configResolved` →
+/// `configurePreviewServer` / `configurePreview`), serving the output dir
+/// with proxy rules, plugin mounts/headers, and SPA fallback.
+pub async fn preview_with_plugins(
+    config: &ResolvedConfig,
+    plugins: &[Arc<dyn ferrite_plugin::Plugin>],
+) -> Result<()> {
+    let container =
+        ferrite_plugin::PluginContainer::new(plugins.to_vec(), ferrite_plugin::Apply::All);
+    container.hook_config_resolved(config).await?;
+    let mut control = ferrite_plugin::PreviewControl::new(config.clone());
+    container.hook_configure_preview(&mut control).await?;
+    preview_with_control(&config.out_dir(), config.server.port, &control).await
+}
+
 /// Serve `dir` statically with SPA fallback (`preview`, §83 light).
+///
+/// Plugin-less shorthand; use [`preview_with_plugins`] for hooks, proxy
+/// rules, mounts, and extra headers.
 pub async fn preview_dir(dir: &std::path::Path, port: u16) -> Result<()> {
+    preview_with_parts(dir, port, &[], &[], &[]).await
+}
+
+/// Serve `dir` with an explicit preview control surface.
+async fn preview_with_control(
+    dir: &std::path::Path,
+    port: u16,
+    control: &ferrite_plugin::PreviewControl,
+) -> Result<()> {
+    preview_with_parts(dir, port, &control.headers, &control.mounts, &control.proxies).await
+}
+
+/// Shared preview server: proxies → mounts → static + SPA fallback.
+async fn preview_with_parts(
+    dir: &std::path::Path,
+    port: u16,
+    headers: &[(String, String)],
+    mounts: &[ferrite_plugin::PreviewMount],
+    proxies: &[ferrite_plugin::ProxyRule],
+) -> Result<()> {
     use axum::extract::State;
-    use axum::http::{StatusCode, Uri};
+    use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
     use axum::response::IntoResponse as _;
     #[derive(Clone)]
     struct PreviewState {
         dir: PathBuf,
+        headers: Vec<(HeaderName, HeaderValue)>,
+        mounts: Vec<ferrite_plugin::PreviewMount>,
+        proxies: Vec<ferrite_plugin::ProxyRule>,
+        http_client: reqwest::Client,
     }
-    async fn handler(
-        State(state): State<PreviewState>,
-        uri: Uri,
-    ) -> impl axum::response::IntoResponse {
-        let path = uri.path().trim_start_matches('/');
-        let file = state.dir.join(path);
-        let file = if file.is_file() {
-            file
-        } else {
-            state.dir.join("index.html")
-        };
-        match std::fs::read(&file) {
+
+    fn parsed_headers(headers: &[(String, String)]) -> Vec<(HeaderName, HeaderValue)> {
+        headers
+            .iter()
+            .filter_map(|(name, value)| match (name.parse(), value.parse()) {
+                (Ok(name), Ok(value)) => Some((name, value)),
+                _ => {
+                    tracing::warn!("ignoring invalid preview header `{name}`");
+                    None
+                }
+            })
+            .collect()
+    }
+
+    fn file_response(
+        file: &std::path::Path,
+        headers: &[(HeaderName, HeaderValue)],
+    ) -> axum::response::Response {
+        match std::fs::read(file) {
             Ok(bytes) => {
                 let content_type = ferrite_assets::content_type(file.to_string_lossy().as_ref());
                 let immutable = file
@@ -318,30 +401,91 @@ pub async fn preview_dir(dir: &std::path::Path, port: u16) -> Result<()> {
                 } else {
                     "no-cache"
                 };
-                (
-                    StatusCode::OK,
-                    [
-                        (axum::http::header::CONTENT_TYPE, content_type),
-                        (axum::http::header::CACHE_CONTROL, cache.to_string()),
-                    ],
-                    bytes,
-                )
-                    .into_response()
+                let mut map = HeaderMap::new();
+                map.insert(axum::http::header::CONTENT_TYPE, content_type.parse().unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")));
+                map.insert(axum::http::header::CACHE_CONTROL, HeaderValue::from_static(cache));
+                for (name, value) in headers {
+                    map.insert(name, value.clone());
+                }
+                (StatusCode::OK, map, bytes).into_response()
             }
             Err(_) => (StatusCode::NOT_FOUND, "not found").into_response(),
         }
     }
+
+    async fn handler(
+        State(state): State<PreviewState>,
+        method: Method,
+        uri: Uri,
+        headers: HeaderMap,
+        body: axum::body::Bytes,
+    ) -> axum::response::Response {
+        let path = uri.path().to_string();
+        let url = match uri.query() {
+            Some(query) => format!("{path}?{query}"),
+            None => path.clone(),
+        };
+        // 1. Proxy rules (longest prefix first).
+        if let Some(rule) = state.proxies.iter().find(|rule| rule.matches(&path)) {
+            let target = rule.forward_url(&url);
+            return match ferrite_server::forward_proxy(
+                &state.http_client,
+                &method,
+                &target,
+                &headers,
+                body,
+            )
+            .await
+            {
+                Ok(response) => response,
+                Err(error) => (
+                    StatusCode::BAD_GATEWAY,
+                    format!("proxy to `{target}` failed: {error}"),
+                )
+                    .into_response(),
+            };
+        }
+        // 2. Plugin static mounts.
+        for mount in &state.mounts {
+            let prefix = mount.prefix.trim_end_matches('/');
+            let relative = if path == mount.prefix || path == prefix {
+                Some("")
+            } else {
+                path.strip_prefix(&format!("{prefix}/"))
+            };
+            if let Some(relative) = relative {
+                let file = mount.dir.join(relative);
+                if file.is_file() {
+                    return file_response(&file, &state.headers);
+                }
+            }
+        }
+        // 3. Output dir with SPA fallback.
+        let file = state.dir.join(path.trim_start_matches('/'));
+        let file = if file.is_file() {
+            file
+        } else {
+            state.dir.join("index.html")
+        };
+        file_response(&file, &state.headers)
+    }
+
     if !dir.exists() {
         return Err(FerriteError::Build(format!(
             "`{}` does not exist; run `ferrite build` first",
             dir.display()
         )));
     }
-    let router = axum::Router::new()
-        .fallback(handler)
-        .with_state(PreviewState {
-            dir: dir.to_path_buf(),
-        });
+    let router = axum::Router::new().fallback(handler).with_state(PreviewState {
+        dir: dir.to_path_buf(),
+        headers: parsed_headers(headers),
+        mounts: mounts.to_vec(),
+        proxies: proxies.to_vec(),
+        http_client: reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new()),
+    });
     let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}"))
         .await
         .map_err(|error| FerriteError::Other(format!("cannot bind preview:{port}: {error}")))?;

@@ -161,10 +161,32 @@ impl DevServer {
             if import.is_type {
                 continue;
             }
-            match self
-                .resolve_id(ctx, &import.specifier, Some(&module.id), environment)
-                .await
-            {
+            let dynamic =
+                import.kind == ferrite_transform::ParsedImportKind::Dynamic;
+            // Dynamic imports consult `resolveDynamicImport` first.
+            let hooked = if dynamic {
+                self.inner
+                    .plugins
+                    .hook_resolve_dynamic_import(
+                        ctx,
+                        ferrite_plugin::DynamicImportRequest {
+                            specifier: import.specifier.clone(),
+                            importer: module.id.clone(),
+                            environment: environment.kind.clone(),
+                        },
+                    )
+                    .await?
+            } else {
+                None
+            };
+            let resolved = match hooked {
+                Some(resolved) => Ok(resolved),
+                None => {
+                    self.resolve_id(ctx, &import.specifier, Some(&module.id), environment)
+                        .await
+                }
+            };
+            match resolved {
                 Ok(resolved) => {
                     let mut url = resolved.id.0.clone();
                     if url.starts_with('\0') {
@@ -296,6 +318,7 @@ impl DevServer {
     /// Asset query shims (`?raw`, `?url`, `?inline`, `?worker`, `?wasm`).
     pub(crate) async fn asset_query_shim(
         &self,
+        ctx: &PluginContext<'_>,
         id: &ModuleId,
         path_part: &str,
         query: &str,
@@ -308,11 +331,25 @@ impl DevServer {
                 raw_to_js(source),
                 ModuleType::Js,
             ))),
-            "url" => Ok(Some(PipelineModule::code_only(
-                id.clone(),
-                asset_to_js(path_part),
-                ModuleType::Js,
-            ))),
+            "url" => {
+                // `resolveFileUrl` may rewrite the public URL.
+                let url = self
+                    .inner
+                    .plugins
+                    .hook_resolve_file_url(
+                        ctx,
+                        ferrite_plugin::ResolveFileUrlRequest {
+                            file_name: path_part.to_string(),
+                        },
+                    )
+                    .await?
+                    .unwrap_or_else(|| path_part.to_string());
+                Ok(Some(PipelineModule::code_only(
+                    id.clone(),
+                    asset_to_js(&url),
+                    ModuleType::Js,
+                )))
+            }
             "inline" => {
                 let file = self
                     .id_to_file(id)

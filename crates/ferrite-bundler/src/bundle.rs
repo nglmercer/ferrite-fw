@@ -104,12 +104,15 @@ pub struct BundleStats {
 /// The bundler trait (§37).
 #[async_trait::async_trait]
 pub trait Bundler: Send + Sync {
-    /// Bundle entries into an output bundle.
+    /// Bundle entries into an output bundle, consulting `hooks` for the
+    /// render pipeline (`renderStart` / `renderChunk` / `augmentChunkHash` /
+    /// `banner` / `intro` / `outro` / `footer`).
     async fn bundle(
         &self,
         graph: &ModuleGraph,
         config: &BuildBundleConfig,
         request: BundleRequest,
+        hooks: &(dyn crate::BundleHooks + Send + Sync),
     ) -> Result<BundleOutput>;
 }
 

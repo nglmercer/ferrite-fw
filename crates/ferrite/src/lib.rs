@@ -48,14 +48,22 @@ pub mod package;
 
 // --- re-exported vocabulary --------------------------------------------------
 pub use ferrite_config::{
-    load_user_config, merge_user_config, resolve_config, CliOverrides, ResolvedConfig, UserConfig,
+    define_config, load_config_from_file, load_user_config, merge_config, merge_user_config,
+    resolve_config, CliOverrides, LoadedConfigFile, ResolvedConfig, UserConfig,
 };
 pub use ferrite_core::{
-    Environment, EnvironmentKind, FerriteError, Hash, ModuleId, ModuleType, Result, SourceMap,
-    Target, VERSION,
+    normalize_path, search_for_workspace_root, Environment, EnvironmentKind, FerriteError, Hash,
+    ModuleId, ModuleType, Result, SourceMap, Target, VERSION,
 };
-pub use ferrite_plugin::{Apply, Enforce, Plugin, PluginContainer};
-pub use ferrite_server::DevServer;
+pub use ferrite_plugin::{
+    Apply, BundleOptions, CachedModuleInfo, ChunkWrapper, DynamicImportRequest, Enforce,
+    OutputOptions, Plugin, PluginContainer, PreviewControl, PreviewMount, ProxyRule,
+    ResolveFileUrlRequest, ServerControl, ServerUrls, WatchEvent, WatchKind,
+};
+pub use ferrite_server::{
+    expand_vars, forward_proxy, load_env, match_proxy, rules_from_config, DevServer, ModuleRunner,
+    SsrTransformResult,
+};
 
 mod api;
 mod app;
@@ -66,15 +74,15 @@ mod report;
 pub use api::{build, create_builder, create_server, preview, Config};
 pub use app::{Ferrite, ModuleRequest};
 pub use builder::Builder;
-pub use loader::{preview_dir, BuildLoader};
+pub use loader::{preview_dir, preview_with_plugins, BuildLoader};
 pub use report::BuildReport;
 
 /// Prelude for framework and plugin authors.
 pub mod prelude {
     pub use crate::{
-        Apply, Config, Enforce, Environment, EnvironmentKind, FerriteError, Hash, ModuleId,
-        ModuleType, Plugin, PluginContainer, ResolvedConfig, Result, SourceMap, Target, UserConfig,
-        VERSION,
+        define_config, load_env, merge_config, normalize_path, search_for_workspace_root, Apply,
+        Config, Enforce, Environment, EnvironmentKind, FerriteError, Hash, ModuleId, ModuleType,
+        Plugin, PluginContainer, ResolvedConfig, Result, SourceMap, Target, UserConfig, VERSION,
     };
     pub use async_trait::async_trait;
 }

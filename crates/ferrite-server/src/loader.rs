@@ -68,20 +68,34 @@ impl DevServer {
         // 6. `?raw` / `?url` / `?inline` / `?worker` / `?wasm`.
         if let Some(q) = query {
             if let Some(shim) = self
-                .asset_query_shim(&resolved_id, path_part, q, &source)
+                .asset_query_shim(&ctx, &resolved_id, path_part, q, &source)
                 .await?
             {
                 return Ok(shim);
             }
         }
-        // 7. Cache lookup.
+        // 7. Cache lookup (`shouldTransformCachedModule` may force a
+        //    re-transform; by default the cached entry wins).
         let defines = self.transform_defines(&environment);
         let cache_key = self.cache_key(&resolved_id, &source, env, &defines);
         if let Some(cached) = self.inner.cache.get(&cache_key.0) {
             if let Ok(cached) = serde_json::from_slice::<CachedTransform>(&cached) {
-                let module = PipelineModule::from_cached(resolved_id.clone(), cached);
-                self.update_graph(&module, env);
-                return Ok(module);
+                let retransform = self
+                    .inner
+                    .plugins
+                    .hook_should_transform_cached_module(
+                        &ctx,
+                        ferrite_plugin::CachedModuleInfo {
+                            id: resolved_id.clone(),
+                            environment: environment.kind.clone(),
+                        },
+                    )
+                    .await?;
+                if !retransform {
+                    let module = PipelineModule::from_cached(resolved_id.clone(), cached);
+                    self.update_graph(&module, env);
+                    return Ok(module);
+                }
             }
         }
         // 8. Core transform.

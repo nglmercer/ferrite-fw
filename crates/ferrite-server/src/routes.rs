@@ -129,8 +129,10 @@ pub(crate) async fn rpc_handler(
 
 pub(crate) async fn fallback_handler(
     State(inner): State<Arc<DevServerInner>>,
+    method: axum::http::Method,
     uri: Uri,
-    _headers: HeaderMap,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
 ) -> Response {
     let path = uri.path().to_string();
     let query = uri
@@ -138,6 +140,28 @@ pub(crate) async fn fallback_handler(
         .map(|query| format!("?{query}"))
         .unwrap_or_default();
     let url = format!("{path}{query}");
+    // Proxy rules run before the pipeline (Vite middleware order).
+    if !inner.config.server.proxy.is_empty() {
+        let rules = crate::proxy::rules_from_config(&inner.config.server.proxy);
+        if let Some(rule) = crate::proxy::match_proxy(&rules, &path) {
+            let target = rule.forward_url(&url);
+            match crate::proxy::forward(&inner.http_client, &method, &target, &headers, body).await
+            {
+                Ok(response) => return response,
+                Err(error) => {
+                    let body = serde_json::json!({
+                        "error": format!("proxy to `{target}` failed: {error}"),
+                    });
+                    return (
+                        StatusCode::BAD_GATEWAY,
+                        [(axum::http::header::CONTENT_TYPE, "application/json")],
+                        body.to_string(),
+                    )
+                        .into_response();
+                }
+            }
+        }
+    }
     // Assemble a lightweight server handle for the pipeline.
     let server = DevServerRef {
         inner: inner.clone(),

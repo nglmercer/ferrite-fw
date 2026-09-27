@@ -12,8 +12,11 @@ use ferrite_graph::ModuleNode;
 use ferrite_resolver::ResolveKind;
 use ferrite_resolver::ResolvedId;
 use ferrite_resolver::Resolver;
+use std::cmp::Reverse;
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 /// Hook ordering (§11).
@@ -55,6 +58,52 @@ pub trait ServerControl: Send + Sync {
     fn resolved_config(&self) -> &ResolvedConfig;
     /// Project root.
     fn root(&self) -> &Path;
+    /// Module graph handle (`server.moduleGraph`), when available.
+    fn module_graph(&self) -> Option<&ModuleGraph> {
+        None
+    }
+    /// Bound socket address (`server.httpServer` equivalent), when listening.
+    fn local_addr(&self) -> Option<SocketAddr> {
+        None
+    }
+    /// Display URLs for this server.
+    fn server_urls(&self) -> ServerUrls {
+        let config = self.resolved_config();
+        ServerUrls {
+            local: format!("http://{}:{}/", config.server.host, config.server.port),
+            network: None,
+        }
+    }
+    /// Print Local/Network URLs, the `printUrls` equivalent.
+    fn print_urls(&self) {
+        let urls = self.server_urls();
+        println!("  Local:   {}", urls.local);
+        match &urls.network {
+            Some(network) => println!("  Network: {network}"),
+            None => println!("  Network: use --host to expose"),
+        }
+    }
+    /// Connected HMR clients (`server.ws` equivalent count).
+    fn hmr_clients(&self) -> usize {
+        0
+    }
+    /// Broadcast a full reload to HMR clients.
+    fn send_full_reload(&self, _path: Option<&str>) {}
+    /// True when the file watcher is running.
+    fn watcher_alive(&self) -> bool {
+        false
+    }
+    /// Watch an extra path, the `server.watcher.add` equivalent.
+    fn watcher_add(&self, _path: &Path) {}
+}
+
+/// Display URLs for a server.
+#[derive(Debug, Clone)]
+pub struct ServerUrls {
+    /// Local URL (`http://127.0.0.1:5173/`).
+    pub local: String,
+    /// LAN URL, when the host is reachable off-machine.
+    pub network: Option<String>,
 }
 
 /// Plugin hook context (§13).
@@ -335,6 +384,242 @@ pub struct RenderChunkResult {
     pub code: Option<String>,
     /// Replacement map.
     pub map: Option<SourceMap>,
+}
+
+/// Input options for the `options` hook (Rollup `options` equivalent).
+#[derive(Debug, Clone)]
+pub struct BundleOptions {
+    /// Entry specifiers (HTML files or module ids).
+    pub entries: Vec<String>,
+    /// Drop unused export statements, then re-minify.
+    pub treeshake: bool,
+    /// Minify output.
+    pub minify: bool,
+    /// Emit source maps.
+    pub sourcemap: bool,
+    /// Scope-hoist each entry closure into one file.
+    pub scope_hoist: bool,
+}
+
+/// Output options for the `output_options` hook (Rollup equivalent).
+#[derive(Debug, Clone)]
+pub struct OutputOptions {
+    /// Chunk file pattern (`[name]` / `[hash]` placeholders).
+    pub chunk_pattern: String,
+    /// Extracted CSS file pattern.
+    pub css_pattern: String,
+    /// Asset file pattern (`[name]` / `[hash]` / `[ext]`).
+    pub asset_pattern: String,
+}
+
+/// `resolveDynamicImport` hook request (Rollup equivalent).
+#[derive(Debug, Clone)]
+pub struct DynamicImportRequest {
+    /// Raw dynamic specifier.
+    pub specifier: String,
+    /// Importer module.
+    pub importer: ModuleId,
+    /// Environment.
+    pub environment: EnvironmentKind,
+}
+
+/// `shouldTransformCachedModule` hook payload (Vite equivalent).
+#[derive(Debug, Clone)]
+pub struct CachedModuleInfo {
+    /// Cached module id.
+    pub id: ModuleId,
+    /// Environment the cache entry was built for.
+    pub environment: EnvironmentKind,
+}
+
+/// File-watcher event for the `watchChange` hook (Vite equivalent).
+#[derive(Debug, Clone)]
+pub struct WatchEvent {
+    /// Changed path (absolute).
+    pub path: PathBuf,
+    /// Change kind.
+    pub kind: WatchKind,
+}
+
+/// Watcher change kinds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WatchKind {
+    /// File created.
+    Create,
+    /// File modified.
+    Modify,
+    /// File removed.
+    Remove,
+}
+
+/// `resolveFileUrl` hook request (Vite equivalent): map an emitted file to
+/// its public URL.
+#[derive(Debug, Clone)]
+pub struct ResolveFileUrlRequest {
+    /// Output-relative file name (`assets/logo-abc123.png`).
+    pub file_name: String,
+}
+
+/// Chunk wrapper pieces from `banner` / `intro` / `outro` / `footer` hooks
+/// (Rollup equivalents).
+#[derive(Debug, Clone, Default)]
+pub struct ChunkWrapper {
+    /// Prepended before everything (e.g. license comments).
+    pub banner: Option<String>,
+    /// Prepended inside the chunk, after the banner.
+    pub intro: Option<String>,
+    /// Appended inside the chunk, before the footer.
+    pub outro: Option<String>,
+    /// Appended after everything.
+    pub footer: Option<String>,
+}
+
+impl ChunkWrapper {
+    /// True when no piece is set.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.banner.is_none()
+            && self.intro.is_none()
+            && self.outro.is_none()
+            && self.footer.is_none()
+    }
+
+    /// Wrap `code` in the configured pieces.
+    #[must_use]
+    pub fn apply(&self, code: &str) -> String {
+        if self.is_empty() {
+            return code.to_string();
+        }
+        let mut out = String::with_capacity(code.len() + 256);
+        for text in [&self.banner, &self.intro].into_iter().flatten() {
+            out.push_str(text);
+            if !text.ends_with('\n') {
+                out.push('\n');
+            }
+        }
+        out.push_str(code);
+        if !code.ends_with('\n') {
+            out.push('\n');
+        }
+        for text in [&self.outro, &self.footer].into_iter().flatten() {
+            out.push_str(text);
+            if !text.ends_with('\n') {
+                out.push('\n');
+            }
+        }
+        out
+    }
+}
+
+/// A dev/preview proxy rule: path prefix → target origin.
+#[derive(Debug, Clone)]
+pub struct ProxyRule {
+    /// Path prefix (`/api`).
+    pub prefix: String,
+    /// Target origin (`http://localhost:3000`).
+    pub target: String,
+}
+
+impl ProxyRule {
+    /// True when `path` falls under this rule (segment-boundary match).
+    #[must_use]
+    pub fn matches(&self, path: &str) -> bool {
+        path == self.prefix
+            || path.starts_with(&format!("{}/", self.prefix.trim_end_matches('/')))
+    }
+
+    /// Target URL for `path_and_query` (path preserved, Vite default).
+    #[must_use]
+    pub fn forward_url(&self, path_and_query: &str) -> String {
+        format!("{}{path_and_query}", self.target.trim_end_matches('/'))
+    }
+}
+
+/// An extra static directory mounted into the preview server.
+#[derive(Debug, Clone)]
+pub struct PreviewMount {
+    /// URL prefix (`/docs`).
+    pub prefix: String,
+    /// Directory served there.
+    pub dir: PathBuf,
+}
+
+/// Control surface for the `configure_preview` hook.
+///
+/// Collects plugin contributions (extra headers, static mounts, proxy
+/// rules) that the preview server applies around its static + SPA-fallback
+/// handler.
+#[derive(Debug, Clone)]
+pub struct PreviewControl {
+    /// Resolved configuration.
+    pub config: ResolvedConfig,
+    /// Extra response headers for every preview response.
+    pub headers: Vec<(String, String)>,
+    /// Extra static mounts (checked before the output dir).
+    pub mounts: Vec<PreviewMount>,
+    /// Proxy rules (checked before static files).
+    pub proxies: Vec<ProxyRule>,
+}
+
+impl PreviewControl {
+    /// Empty control for `config` (seeded with `[server] proxy` rules).
+    #[must_use]
+    pub fn new(config: ResolvedConfig) -> Self {
+        let mut proxies: Vec<ProxyRule> = config
+            .server
+            .proxy
+            .iter()
+            .map(|(prefix, target)| ProxyRule {
+                prefix: prefix.clone(),
+                target: target.clone(),
+            })
+            .collect();
+        proxies.sort_by_key(|rule| Reverse(rule.prefix.len()));
+        Self {
+            config,
+            headers: Vec::new(),
+            mounts: Vec::new(),
+            proxies,
+        }
+    }
+
+    /// Add a response header.
+    pub fn add_header(&mut self, name: impl Into<String>, value: impl Into<String>) {
+        self.headers.push((name.into(), value.into()));
+    }
+
+    /// Mount `dir` at `prefix`.
+    pub fn add_mount(&mut self, prefix: impl Into<String>, dir: PathBuf) {
+        self.mounts.push(PreviewMount {
+            prefix: prefix.into(),
+            dir,
+        });
+    }
+
+    /// Add a proxy rule (longest prefix wins at match time).
+    pub fn add_proxy(&mut self, prefix: impl Into<String>, target: impl Into<String>) {
+        self.proxies.push(ProxyRule {
+            prefix: prefix.into(),
+            target: target.into(),
+        });
+        self.proxies.sort_by_key(|rule| Reverse(rule.prefix.len()));
+    }
+
+    /// First matching proxy rule for `path`, if any.
+    #[must_use]
+    pub fn match_proxy(&self, path: &str) -> Option<&ProxyRule> {
+        self.proxies.iter().find(|rule| rule.matches(path))
+    }
+}
+
+impl ServerControl for PreviewControl {
+    fn resolved_config(&self) -> &ResolvedConfig {
+        &self.config
+    }
+
+    fn root(&self) -> &Path {
+        &self.config.root
+    }
 }
 
 /// Hook filter (§12): skip hooks cheaply before invoking them.

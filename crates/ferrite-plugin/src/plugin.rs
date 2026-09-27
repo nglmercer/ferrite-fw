@@ -42,8 +42,30 @@ pub trait Plugin: Send + Sync {
         Ok(())
     }
 
-    /// Configure the preview server.
+    /// Configure the preview server (legacy control surface).
     async fn configure_preview_server(&self, _server: &mut dyn ServerControl) -> Result<()> {
+        Ok(())
+    }
+
+    /// Configure the preview server: extra headers, static mounts, proxies.
+    ///
+    /// Runs after [`Plugin::configure_preview_server`]; new plugins should
+    /// implement this hook instead.
+    async fn configure_preview(&self, _preview: &mut PreviewControl) -> Result<()> {
+        Ok(())
+    }
+
+    /// Mutate input options before the build starts (Rollup `options`).
+    async fn options(&self, _ctx: &PluginContext, _options: &mut BundleOptions) -> Result<()> {
+        Ok(())
+    }
+
+    /// Mutate output options before chunks are named (Rollup `outputOptions`).
+    async fn output_options(
+        &self,
+        _ctx: &PluginContext,
+        _options: &mut OutputOptions,
+    ) -> Result<()> {
         Ok(())
     }
 
@@ -57,6 +79,17 @@ pub trait Plugin: Send + Sync {
         &self,
         _ctx: &PluginContext,
         _request: ResolveHookRequest<'_>,
+    ) -> Result<Option<ResolvedId>> {
+        Ok(None)
+    }
+
+    /// Resolve a dynamic `import()` specifier (Rollup `resolveDynamicImport`).
+    ///
+    /// Falls back to [`Plugin::resolve_id`] when every hook returns `None`.
+    async fn resolve_dynamic_import(
+        &self,
+        _ctx: &PluginContext,
+        _request: DynamicImportRequest,
     ) -> Result<Option<ResolvedId>> {
         Ok(None)
     }
@@ -88,12 +121,50 @@ pub trait Plugin: Send + Sync {
         Ok(None)
     }
 
-    /// Custom hot-update handling.
+    /// Custom hot-update handling (Vite `handleHotUpdate`, legacy).
     async fn handle_hot_update(
         &self,
         _ctx: &PluginContext,
         _event: HotUpdateEvent,
     ) -> Result<Option<HotUpdateResult>> {
+        Ok(None)
+    }
+
+    /// Custom hot-update handling (Vite 6 `hotUpdate`).
+    ///
+    /// Runs before [`Plugin::handle_hot_update`]; the first `Some` across
+    /// both hooks wins.
+    async fn hot_update(
+        &self,
+        _ctx: &PluginContext,
+        _event: HotUpdateEvent,
+    ) -> Result<Option<HotUpdateResult>> {
+        Ok(None)
+    }
+
+    /// Decide whether a cached module must be re-transformed (Vite
+    /// `shouldTransformCachedModule`). `Some(true)` forces a re-transform;
+    /// `None`/`Some(false)` keeps the cached transform.
+    async fn should_transform_cached_module(
+        &self,
+        _ctx: &PluginContext,
+        _module: CachedModuleInfo,
+    ) -> Result<Option<bool>> {
+        Ok(None)
+    }
+
+    /// Observe a file-watcher event (Vite `watchChange`).
+    async fn watch_change(&self, _ctx: &PluginContext, _event: WatchEvent) -> Result<()> {
+        Ok(())
+    }
+
+    /// Map an emitted file to its public URL (Vite `resolveFileUrl`).
+    /// First `Some` wins; `None` keeps the default URL.
+    async fn resolve_file_url(
+        &self,
+        _ctx: &PluginContext,
+        _request: ResolveFileUrlRequest,
+    ) -> Result<Option<String>> {
         Ok(None)
     }
 
@@ -118,6 +189,34 @@ pub trait Plugin: Send + Sync {
         _ctx: &PluginContext,
         _chunk: RenderChunk,
     ) -> Result<Option<RenderChunkResult>> {
+        Ok(None)
+    }
+
+    /// Prepend a banner to a chunk (Rollup `banner`).
+    async fn banner(
+        &self,
+        _ctx: &PluginContext,
+        _chunk: RenderChunk,
+    ) -> Result<Option<String>> {
+        Ok(None)
+    }
+
+    /// Prepend an intro inside a chunk (Rollup `intro`).
+    async fn intro(&self, _ctx: &PluginContext, _chunk: RenderChunk) -> Result<Option<String>> {
+        Ok(None)
+    }
+
+    /// Append an outro inside a chunk (Rollup `outro`).
+    async fn outro(&self, _ctx: &PluginContext, _chunk: RenderChunk) -> Result<Option<String>> {
+        Ok(None)
+    }
+
+    /// Append a footer to a chunk (Rollup `footer`).
+    async fn footer(
+        &self,
+        _ctx: &PluginContext,
+        _chunk: RenderChunk,
+    ) -> Result<Option<String>> {
         Ok(None)
     }
 

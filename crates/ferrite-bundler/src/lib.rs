@@ -13,6 +13,7 @@ mod bundle;
 mod bundler;
 mod chunks;
 mod emit;
+mod hooks;
 mod loader;
 mod shake;
 
@@ -20,6 +21,7 @@ pub use bundle::{BuildBundleConfig, BundleOutput, BundleRequest, BundleStats, Bu
 pub use bundler::FerriteBundler;
 pub use chunks::{chunk_name, relative_url};
 pub use emit::rewrite_imports_text;
+pub use hooks::{BundleHooks, NoHooks};
 pub use loader::{CssExtract, LoadedModule, ModuleLoader};
 pub use shake::{shake_statements, tree_shake, used_exports, UsedExports};
 
@@ -173,6 +175,7 @@ mod tests {
                     engine: "oxc".to_string(),
                     scope_hoist: false,
                 },
+                &NoHooks,
             )
             .await
             .unwrap();
@@ -269,6 +272,7 @@ mod tests {
                     engine: "oxc".to_string(),
                     scope_hoist: false,
                 },
+                &NoHooks,
             )
             .await
             .unwrap_err();
@@ -347,6 +351,7 @@ mod tests {
                         engine: "oxc".to_string(),
                         scope_hoist: false,
                     },
+                    &NoHooks,
                 )
                 .await
                 .unwrap()
@@ -728,6 +733,7 @@ mod tests {
                 &ModuleGraph::new(),
                 &test_config(),
                 hoist_request(vec![ModuleId::new("/e.js")]),
+                &NoHooks,
             )
             .await
             .unwrap();
@@ -802,6 +808,7 @@ mod tests {
                 &ModuleGraph::new(),
                 &test_config(),
                 hoist_request(vec![ModuleId::new("/a.js"), ModuleId::new("/b.js")]),
+                &NoHooks,
             )
             .await
             .unwrap();
@@ -852,6 +859,7 @@ mod tests {
                 &ModuleGraph::new(),
                 &test_config(),
                 hoist_request(vec![ModuleId::new("/e.js")]),
+                &NoHooks,
             )
             .await
             .unwrap();
@@ -910,5 +918,103 @@ mod tests {
         assert!(live.contains(&ModuleId::new("/a.js")));
         assert!(live.contains(&ModuleId::new("/b.js")));
         assert!(!live.contains(&ModuleId::new("/z.js")));
+    }
+
+    struct RecordingHooks {
+        started: std::sync::Mutex<Vec<String>>,
+        extra: String,
+        banner: Option<String>,
+    }
+
+    #[async_trait::async_trait]
+    impl BundleHooks for RecordingHooks {
+        async fn render_start(&self, entries: &[ModuleId]) -> Result<()> {
+            *self.started.lock().unwrap() =
+                entries.iter().map(|id| id.0.clone()).collect();
+            Ok(())
+        }
+
+        async fn render_chunk(
+            &self,
+            _id: &str,
+            code: String,
+            _is_entry: bool,
+        ) -> Result<Option<String>> {
+            Ok(Some(format!("{code}\n// rendered\n")))
+        }
+
+        async fn chunk_hash_extra(&self, _chunk_id: &str) -> Result<Vec<String>> {
+            Ok(vec![self.extra.clone()])
+        }
+
+        async fn chunk_wrapper(
+            &self,
+            _id: &str,
+            _code: &str,
+            _is_entry: bool,
+        ) -> Result<ferrite_plugin::ChunkWrapper> {
+            Ok(ferrite_plugin::ChunkWrapper {
+                banner: self.banner.clone(),
+                ..Default::default()
+            })
+        }
+    }
+
+    fn hook_modules() -> HashMap<ModuleId, LoadedModule> {
+        HashMap::from([(
+            ModuleId::new("/main.js"),
+            js_module("/main.js", "console.log(1);\n", vec![]),
+        )])
+    }
+
+    fn hook_request() -> BundleRequest {
+        BundleRequest {
+            entries: vec![ModuleId::new("/main.js")],
+            env: "client".to_string(),
+            minify: false,
+            sourcemap: false,
+            map_comment: false,
+            treeshake: false,
+            engine: "oxc".to_string(),
+            scope_hoist: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn render_hooks_shape_output_and_hash() {
+        let hooks = RecordingHooks {
+            started: std::sync::Mutex::new(Vec::new()),
+            extra: "v1".to_string(),
+            banner: Some("/* banner */".to_string()),
+        };
+        let bundler = FerriteBundler::new(std::sync::Arc::new(MapLoader {
+            modules: hook_modules(),
+        }));
+        let output = bundler
+            .bundle(&ModuleGraph::new(), &test_config(), hook_request(), &hooks)
+            .await
+            .unwrap();
+        assert_eq!(*hooks.started.lock().unwrap(), vec!["/main.js"]);
+        let entry = output.manifest.entries.get("/main.js").expect("entry");
+        let code =
+            String::from_utf8(output.bundle.files[&entry.file].contents.clone()).unwrap();
+        assert!(code.starts_with("/* banner */\n"), "{code}");
+        assert!(code.contains("// rendered"), "{code}");
+
+        // Different hash extras rename the chunk.
+        let other = RecordingHooks {
+            started: std::sync::Mutex::new(Vec::new()),
+            extra: "v2".to_string(),
+            banner: None,
+        };
+        let bundler = FerriteBundler::new(std::sync::Arc::new(MapLoader {
+            modules: hook_modules(),
+        }));
+        let output2 = bundler
+            .bundle(&ModuleGraph::new(), &test_config(), hook_request(), &other)
+            .await
+            .unwrap();
+        let entry2 = output2.manifest.entries.get("/main.js").expect("entry");
+        assert_ne!(entry.file, entry2.file);
     }
 }
