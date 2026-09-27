@@ -30,6 +30,10 @@ pub trait JsCompiler: Send + Sync {
     fn transform(&self, request: TransformRequest) -> Result<TransformResult>;
     /// Minify a module.
     fn minify(&self, request: MinifyRequest) -> Result<MinifyResult>;
+    /// Compiler version string for cache keys.
+    fn version(&self) -> &'static str {
+        "custom-0"
+    }
 }
 
 /// Compiler engine selection (§5).
@@ -261,12 +265,6 @@ impl OxcCompiler {
     pub fn new(options: OxcOptions) -> Self {
         Self { options }
     }
-
-    /// Compiler version string for cache keys.
-    #[must_use]
-    pub fn version(&self) -> &'static str {
-        "oxc-0.151"
-    }
 }
 
 impl JsCompiler for OxcCompiler {
@@ -280,6 +278,10 @@ impl JsCompiler for OxcCompiler {
 
     fn minify(&self, request: MinifyRequest) -> Result<MinifyResult> {
         minify_module(&request)
+    }
+
+    fn version(&self) -> &'static str {
+        "oxc-0.151"
     }
 }
 
@@ -324,6 +326,11 @@ impl JsCompiler for SwcCompiler {
                 "the SWC minify backend is not compiled into this build; rebuild with `--features swc` or set `[compiler] engine = \"oxc\"` (default)".to_string(),
             ))
         }
+    }
+
+    fn version(&self) -> &'static str {
+        // Tracks the workspace `swc_core` major version.
+        "swc-81"
     }
 }
 
@@ -1104,33 +1111,50 @@ pub fn rewrite_specifiers(
 /// Apply compile-time defines with word-boundary safety (§43).
 ///
 /// The `regex` crate has no look-around, so boundaries are consumable groups
-/// (`(^|[^word])KEY([^word]|$)`); replacement runs to fixpoint (bounded) so
-/// adjacent occurrences are all rewritten.
+/// (`(^|[^word])KEY([^word]|$)`). All keys are rewritten in a single manual
+/// scan: after each match the scan resumes at the trailing boundary (so it
+/// can serve as the next leading boundary for adjacent occurrences) and
+/// replacement text is never re-scanned, so a define value containing a key
+/// is left alone.
 pub fn apply_define(code: &str, define: &HashMap<String, String>) -> String {
-    let mut output = code.to_string();
-    let mut keys: Vec<&String> = define.keys().collect();
+    let mut keys: Vec<&String> = define.keys().filter(|key| !key.is_empty()).collect();
+    if keys.is_empty() {
+        return code.to_string();
+    }
+    // Longest first so the alternation prefers the longest key at each spot.
     keys.sort_by_key(|key| std::cmp::Reverse(key.len()));
-    for key in keys {
-        let value = &define[key];
-        let pattern = format!(
-            r"(^|[^A-Za-z0-9_$.]){}([^A-Za-z0-9_$]|$)",
-            regex::escape(key)
-        );
-        let Ok(regex) = regex::Regex::new(&pattern) else {
-            continue;
+    let alternation = keys
+        .iter()
+        .map(|key| regex::escape(key))
+        .collect::<Vec<_>>()
+        .join("|");
+    let pattern = format!(r"(^|[^A-Za-z0-9_$.])({alternation})([^A-Za-z0-9_$]|$)");
+    let Ok(regex) = regex::Regex::new(&pattern) else {
+        return code.to_string();
+    };
+    let mut output = String::with_capacity(code.len());
+    let mut pos = 0;
+    while pos <= code.len() {
+        let Some(captures) = regex.captures_at(code, pos) else {
+            break;
         };
-        for _ in 0..8 {
-            let next = regex
-                .replace_all(&output, |captures: &regex::Captures| {
-                    format!("{}{}{}", &captures[1], value, &captures[2])
-                })
-                .into_owned();
-            if next == output {
-                break;
-            }
-            output = next;
+        let matched = captures.get(0).expect("regex match");
+        let key = &captures[2];
+        let Some(value) = define.get(key) else {
+            break;
+        };
+        output.push_str(&code[pos..matched.start()]);
+        output.push_str(&captures[1]);
+        output.push_str(value);
+        // Resume at the trailing boundary: it is re-emitted verbatim (or
+        // reused as the next leading boundary) and the match always
+        // consumes the non-empty key, so this always advances.
+        pos = captures.get(3).expect("trailing boundary").start();
+        if pos == code.len() {
+            break;
         }
     }
+    output.push_str(&code[pos..]);
     output
 }
 
@@ -1264,6 +1288,33 @@ mod tests {
         let output = apply_define("const v = __VERSION__; const w = __VERSION__X;", &define);
         assert!(output.contains("\"1.2.3\";"));
         assert!(output.contains("__VERSION__X"));
+    }
+
+    #[test]
+    fn define_values_are_not_reexpanded() {
+        let mut define = HashMap::new();
+        define.insert("A".to_string(), "B".to_string());
+        define.insert("B".to_string(), "1".to_string());
+        // `A` expands to `B`, but the inserted `B` must not expand again.
+        assert_eq!(apply_define("const v = A;", &define), "const v = B;");
+        assert_eq!(apply_define("const v = B;", &define), "const v = 1;");
+    }
+
+    #[test]
+    fn define_rewrites_adjacent_occurrences() {
+        let mut define = HashMap::new();
+        define.insert("A".to_string(), "1".to_string());
+        assert_eq!(apply_define("f(A,A);", &define), "f(1,1);");
+        assert_eq!(apply_define("A+A", &define), "1+1");
+    }
+
+    #[test]
+    fn compiler_versions_differ_by_backend() {
+        let oxc = compiler_for_engine("oxc").unwrap();
+        let swc = compiler_for_engine("swc").unwrap();
+        assert_ne!(oxc.version(), swc.version());
+        assert!(oxc.version().starts_with("oxc-"));
+        assert!(swc.version().starts_with("swc-"));
     }
 
     #[test]

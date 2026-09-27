@@ -305,6 +305,7 @@ impl DevServer {
         let rewritten = ferrite_html::apply_core_rewrites(&html, &self.inner.config.base, true);
         // Rewrite module script sources to resolved URLs.
         let rewritten = self.rewrite_html_scripts(&rewritten).await;
+        let fallback = rewritten.clone();
         let result = self
             .inner
             .plugins
@@ -317,7 +318,8 @@ impl DevServer {
                 },
             )
             .await?;
-        let html = result.html.unwrap_or(html);
+        // A tags-only hook must keep the core rewrites, not the raw file.
+        let html = result.html.unwrap_or(fallback);
         let html = ferrite_html::inject_tags(&html, &result.tags);
         if self.inner.config.npm.dev_strategy == "import-map" {
             self.collect_import_map(&html).await;
@@ -429,11 +431,7 @@ impl DevServer {
 
     /// Resolve an entry specifier to a module id (build entry discovery).
     pub async fn resolve_entry(&self, specifier: &str, env: &str) -> Result<ModuleId> {
-        let environment = if env == "ssr" {
-            self.inner.config.ssr_env()
-        } else {
-            self.inner.config.client_env()
-        };
+        let environment = self.environment_for(env);
         let ctx = self.plugin_context(&environment);
         Ok(self
             .resolve_id(&ctx, specifier, None, &environment)
@@ -464,21 +462,10 @@ impl DevServer {
         env: &str,
     ) -> Result<PipelineModule> {
         let ssr = env == "ssr";
-        let environment = if ssr {
-            self.inner.config.ssr_env()
-        } else {
-            self.inner.config.client_env()
-        };
+        let environment = self.environment_for(env);
         let ctx = self.plugin_context(&environment);
         // 0. `/@id/` URLs map back to internal `\0` virtual ids (§14).
-        let id_owned;
-        let id = match url_to_virtual(&id.0) {
-            Some(virtual_id) => {
-                id_owned = virtual_id;
-                &id_owned
-            }
-            None => id,
-        };
+        let id = unvirtualize(id);
         // 1. Resolve (plugin first, then resolver).
         let resolved = self.resolve_id(&ctx, &id.0, importer, &environment).await?;
         if resolved.external {
@@ -519,11 +506,12 @@ impl DevServer {
             }
         }
         // 7. Cache lookup.
-        let cache_key = self.cache_key(&resolved_id, &source, env);
+        let defines = self.transform_defines(&environment);
+        let cache_key = self.cache_key(&resolved_id, &source, env, &defines);
         if let Some(cached) = self.inner.cache.get(&cache_key.0) {
             if let Ok(cached) = serde_json::from_slice::<CachedTransform>(&cached) {
                 let module = PipelineModule::from_cached(resolved_id.clone(), cached);
-                self.update_graph(&module);
+                self.update_graph(&module, env);
                 return Ok(module);
             }
         }
@@ -567,7 +555,7 @@ impl DevServer {
             module.code = with_hmr_client(&module.code);
         }
         // 13. Graph update + hooks + cache.
-        self.update_graph(&module);
+        self.update_graph(&module, env);
         let parsed_id = module.id.clone();
         self.inner
             .plugins
@@ -854,8 +842,7 @@ impl DevServer {
                 Ok(module)
             }
             _ if module_type.is_js_like() || *module_type == ModuleType::Json => {
-                let mut define = environment.define.clone();
-                define.extend(self.env_defines(environment.kind.is_ssr()));
+                let define = self.transform_defines(environment);
                 let result = self.inner.compiler.transform(TransformRequest {
                     id: id.0.clone(),
                     code: source.to_string(),
@@ -1184,22 +1171,10 @@ impl DevServer {
     /// `ferrite:tailwind.css`) resolve through plugins instead of failing
     /// on a missing file.
     pub async fn load_raw_source(&self, id: &ModuleId, env: &str) -> Result<(String, ModuleType)> {
-        let environment = if env == "ssr" {
-            self.inner.config.ssr_env()
-        } else {
-            self.inner.config.client_env()
-        };
+        let environment = self.environment_for(env);
         let ctx = self.plugin_context(&environment);
-        // Same `/@id/` → `\0` mapping as `pipeline_module` step 0 (§14).
-        let owned;
-        let id = match url_to_virtual(&id.0) {
-            Some(virtual_id) => {
-                owned = virtual_id;
-                &owned
-            }
-            None => id,
-        };
-        self.load_source(&ctx, id, &environment).await
+        self.load_source(&ctx, &unvirtualize(id), &environment)
+            .await
     }
 
     /// Map a module id to a file path.
@@ -1231,21 +1206,48 @@ impl DevServer {
     }
 
     /// Cache key for a transform.
-    fn cache_key(&self, id: &ModuleId, source: &str, env: &str) -> Hash {
+    fn cache_key(
+        &self,
+        id: &ModuleId,
+        source: &str,
+        env: &str,
+        defines: &HashMap<String, String>,
+    ) -> Hash {
         let pipeline = self.inner.plugins.names().join(",");
+        let mut pairs: Vec<(&str, &str)> = defines
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect();
+        pairs.sort();
+        let defines = pairs
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect::<Vec<_>>()
+            .join("\0");
         ferrite_cache::transform_key(&ferrite_cache::TransformKeyInput {
             source,
             module_id: &id.0,
-            compiler_version: "oxc-0.151",
+            compiler_version: self.inner.compiler.version(),
             pipeline_hash: &Hash::of_str(&pipeline).0,
             environment: env,
             target: &self.inner.config.build.target,
             mode: &self.inner.config.mode,
+            defines: &defines,
         })
     }
 
+    /// Compile-time defines for an environment (§42–§43).
+    fn transform_defines(
+        &self,
+        environment: &ferrite_core::Environment,
+    ) -> HashMap<String, String> {
+        let mut define = environment.define.clone();
+        define.extend(self.env_defines(environment.kind.is_ssr()));
+        define
+    }
+
     /// Record a module in the graph.
-    fn update_graph(&self, module: &PipelineModule) {
+    fn update_graph(&self, module: &PipelineModule, env: &str) {
         let mut node = self.inner.graph.get(&module.id).unwrap_or_else(|| {
             ModuleNode::new(
                 module.id.clone(),
@@ -1272,10 +1274,19 @@ impl DevServer {
         self.inner.graph.set_imports(&module.id, edges);
         self.inner.graph.set_transformed(
             &module.id,
-            "client",
+            env,
             module.code.clone(),
             &Hash::of_str(&module.code),
         );
+    }
+
+    /// Environment for an env name (`ssr`, or anything else → client).
+    fn environment_for(&self, env: &str) -> ferrite_core::Environment {
+        if env == "ssr" {
+            self.inner.config.ssr_env()
+        } else {
+            self.inner.config.client_env()
+        }
     }
 
     /// Build a plugin context for `environment`.
@@ -1876,6 +1887,12 @@ pub fn url_to_virtual(url: &str) -> Option<ModuleId> {
         .map(|rest| ModuleId::new(format!("\0{rest}")))
 }
 
+/// Resolve a possibly-virtual module id (§14): `/@id/` URLs map back to
+/// their internal `\0` ids, everything else borrows as-is.
+fn unvirtualize(id: &ModuleId) -> std::borrow::Cow<'_, ModuleId> {
+    url_to_virtual(&id.0).map_or(std::borrow::Cow::Borrowed(id), std::borrow::Cow::Owned)
+}
+
 /// True when an imported URL should go through the `?asset-shim` path.
 fn should_shim_asset(url: &str) -> bool {
     let path = url.split('?').next().unwrap_or(url);
@@ -2109,6 +2126,126 @@ mod tests {
             .unwrap();
         assert!(module.code.contains("from \"my-lib\""), "{}", module.code);
         assert!(!module.code.contains("./other.js"), "{}", module.code);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn graph_keeps_ssr_and_client_envs_separate() {
+        let dir = std::env::temp_dir().join(format!("ferrite-envsep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/main.js"), "export const x = 1;\n").unwrap();
+        let config = ferrite_config::resolve_config(
+            ferrite_config::UserConfig::default(),
+            Some(dir.clone()),
+            ferrite_config::CliOverrides::default(),
+        )
+        .unwrap();
+        let server = DevServer::new_without_watcher(config, Vec::new())
+            .await
+            .unwrap();
+        let id = ModuleId::new("/src/main.js");
+        let client = server.pipeline_module(&id, None, "client").await.unwrap();
+        let ssr = server.pipeline_module(&id, None, "ssr").await.unwrap();
+        assert_ne!(client.code, ssr.code);
+        let node = server.inner().graph.get(&id).unwrap();
+        let graph_client = node
+            .env("client")
+            .and_then(|data| data.code.clone())
+            .unwrap();
+        let graph_ssr = node.env("ssr").and_then(|data| data.code.clone()).unwrap();
+        assert_eq!(graph_client, client.code);
+        assert_eq!(graph_ssr, ssr.code);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn cache_key_tracks_backend_and_defines() {
+        let dir = std::env::temp_dir().join(format!("ferrite-cachekey-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = ferrite_config::resolve_config(
+            ferrite_config::UserConfig::default(),
+            Some(dir.clone()),
+            ferrite_config::CliOverrides::default(),
+        )
+        .unwrap();
+        let mut swc_user = ferrite_config::UserConfig::default();
+        swc_user.compiler.engine = "swc".to_string();
+        let swc_config = ferrite_config::resolve_config(
+            swc_user,
+            Some(dir.clone()),
+            ferrite_config::CliOverrides::default(),
+        )
+        .unwrap();
+        let server = DevServer::new_without_watcher(config, Vec::new())
+            .await
+            .unwrap();
+        let swc_server = DevServer::new_without_watcher(swc_config, Vec::new())
+            .await
+            .unwrap();
+        let id = ModuleId::new("/src/a.js");
+        let defines = HashMap::from([("A".to_string(), "1".to_string())]);
+        let key_oxc = server.cache_key(&id, "const a = 1;", "client", &defines);
+        let key_swc = swc_server.cache_key(&id, "const a = 1;", "client", &defines);
+        assert_ne!(key_oxc, key_swc);
+        let other_defines = HashMap::from([("A".to_string(), "2".to_string())]);
+        let key_changed = server.cache_key(&id, "const a = 1;", "client", &other_defines);
+        assert_ne!(key_oxc, key_changed);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    struct TagsOnlyPlugin;
+
+    #[async_trait::async_trait]
+    impl Plugin for TagsOnlyPlugin {
+        fn name(&self) -> &'static str {
+            "tags-only"
+        }
+
+        async fn transform_index_html(
+            &self,
+            _ctx: &PluginContext,
+            _html: HtmlTransformContext,
+        ) -> ferrite_core::Result<Option<ferrite_plugin::HtmlTransformResult>> {
+            Ok(Some(ferrite_plugin::HtmlTransformResult {
+                html: None,
+                tags: vec![ferrite_plugin::HtmlTag {
+                    tag: "meta".to_string(),
+                    attrs: HashMap::from([("name".to_string(), "tags-only".to_string())]),
+                    children: None,
+                    inject_to: ferrite_plugin::HtmlInjectTo::Head,
+                }],
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn tags_only_hook_keeps_core_rewrites() {
+        let dir = std::env::temp_dir().join(format!("ferrite-tagsonly-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("index.html"),
+            "<!doctype html><html><head></head><body>\
+             <script type=\"module\" src=\"/src/main.js\"></script></body></html>",
+        )
+        .unwrap();
+        std::fs::write(dir.join("src/main.js"), "console.log(1);\n").unwrap();
+        let config = ferrite_config::resolve_config(
+            ferrite_config::UserConfig::default(),
+            Some(dir.clone()),
+            ferrite_config::CliOverrides::default(),
+        )
+        .unwrap();
+        let server = DevServer::new_without_watcher(config, vec![Arc::new(TagsOnlyPlugin)])
+            .await
+            .unwrap();
+        let html = server.transform_index_html("/index.html").await.unwrap();
+        // Core rewrite (dev client injection) survives the tags-only hook.
+        assert!(html.contains("/@ferrite/client"), "{html}");
+        assert!(html.contains("/src/main.js"), "{html}");
+        assert!(html.contains("tags-only"), "{html}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

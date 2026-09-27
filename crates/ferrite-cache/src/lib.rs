@@ -63,12 +63,14 @@ pub struct TransformKeyInput<'a> {
     pub target: &'a str,
     /// Mode string.
     pub mode: &'a str,
+    /// Canonicalized compile-time defines (`k=v` pairs, sorted, `\0`-joined).
+    pub defines: &'a str,
 }
 
 /// Compute the transform cache key:
 ///
 /// `blake3(source + module id + compiler version + pipeline hash +
-/// environment + target + mode)`.
+/// environment + target + mode + defines)`.
 #[must_use]
 pub fn transform_key(input: &TransformKeyInput<'_>) -> Hash {
     let mut hasher = blake3::Hasher::new();
@@ -86,6 +88,8 @@ pub fn transform_key(input: &TransformKeyInput<'_>) -> Hash {
         input.target,
         "\0",
         input.mode,
+        "\0",
+        input.defines,
     ] {
         hasher.update(part.as_bytes());
     }
@@ -228,6 +232,7 @@ mod tests {
             environment: "client",
             target: "es2022",
             mode: "development",
+            defines: "",
         };
         let key_client = transform_key(&base);
         let key_ssr = transform_key(&TransformKeyInput {
@@ -235,6 +240,31 @@ mod tests {
             ..base
         });
         assert_ne!(key_client, key_ssr);
+    }
+
+    #[test]
+    fn transform_keys_differ_by_compiler_and_defines() {
+        let base = TransformKeyInput {
+            source: "const a = 1;",
+            module_id: "/src/a.ts",
+            compiler_version: "oxc-0.151",
+            pipeline_hash: "abc",
+            environment: "client",
+            target: "es2022",
+            mode: "development",
+            defines: "A=1",
+        };
+        let key_oxc = transform_key(&base);
+        let key_swc = transform_key(&TransformKeyInput {
+            compiler_version: "swc-81",
+            ..base
+        });
+        assert_ne!(key_oxc, key_swc);
+        let key_defines = transform_key(&TransformKeyInput {
+            defines: "A=2",
+            ..base
+        });
+        assert_ne!(key_oxc, key_defines);
     }
 
     #[test]

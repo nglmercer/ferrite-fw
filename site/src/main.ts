@@ -1,6 +1,8 @@
 import "ferrite:tailwind.css";
 import "./docs.css";
 
+import type { DocsPage, DocsStrings, Locale } from "./docs-types";
+
 import enOverview from "../pages/en/overview.md";
 import enGettingStarted from "../pages/en/getting-started.md";
 import enCli from "../pages/en/cli.md";
@@ -23,11 +25,11 @@ import cnPlugins from "../pages/cn/plugins.md";
 import cnProduction from "../pages/cn/production.md";
 import cnTailwindVendor from "../pages/cn/tailwind-vendor.md";
 
-const LOCALES = ["en", "es", "cn"];
-const LOCALE_NAMES = { en: "EN", es: "ES", cn: "中文" };
-const DEFAULT_LOCALE = "en";
+const LOCALES: Locale[] = ["en", "es", "cn"];
+const LOCALE_NAMES: Record<Locale, string> = { en: "EN", es: "ES", cn: "中文" };
+const DEFAULT_LOCALE: Locale = "en";
 
-const STRINGS = {
+const STRINGS: Record<Locale, DocsStrings> = {
   en: {
     docs: "docs",
     tagline: "Rust-native SSR toolchain · built with itself",
@@ -84,7 +86,7 @@ const STRINGS = {
   },
 };
 
-const PAGES = {
+const PAGES: Record<Locale, DocsPage[]> = {
   en: [
     enOverview,
     enGettingStarted,
@@ -118,20 +120,30 @@ for (const locale of LOCALES) {
   PAGES[locale].sort((a, b) => (a.order ?? 99) - (b.order ?? 99));
 }
 
-const bySlug = {};
+const bySlug: Record<Locale, Map<string, DocsPage>> = {
+  en: new Map(),
+  es: new Map(),
+  cn: new Map(),
+};
 for (const locale of LOCALES) {
-  bySlug[locale] = new Map(PAGES[locale].map((page) => [slugOf(page.path), page]));
+  bySlug[locale] = new Map(
+    PAGES[locale].map((page): [string, DocsPage] => [slugOf(page.path), page]),
+  );
 }
 
-function slugOf(path) {
+function slugOf(path: string): string {
   const base = path.split("/").pop() || "overview";
   return base.replace(/\.md$/, "");
 }
 
-function storedLocale() {
+function isLocale(value: unknown): value is Locale {
+  return value === "en" || value === "es" || value === "cn";
+}
+
+function storedLocale(): Locale {
   try {
-    const saved = window.localStorage.getItem("ferrite-docs-locale");
-    if (LOCALES.includes(saved)) return saved;
+    const saved: unknown = window.localStorage.getItem("ferrite-docs-locale");
+    if (isLocale(saved)) return saved;
     const nav = (window.navigator.language || "en").toLowerCase();
     if (nav.startsWith("es")) return "es";
     if (nav.startsWith("zh")) return "cn";
@@ -141,21 +153,26 @@ function storedLocale() {
   return DEFAULT_LOCALE;
 }
 
-function currentRoute() {
+interface Route {
+  locale: Locale;
+  slug: string;
+}
+
+function currentRoute(): Route {
   const hash = window.location.hash.replace(/^#\/?/, "");
   const [maybeLocale, maybeSlug] = hash.split("/");
-  if (LOCALES.includes(maybeLocale)) {
+  if (isLocale(maybeLocale)) {
     const pages = bySlug[maybeLocale];
-    const slug = pages.has(maybeSlug) ? maybeSlug : "overview";
+    const slug = maybeSlug !== undefined && pages.has(maybeSlug) ? maybeSlug : "overview";
     return { locale: maybeLocale, slug };
   }
   // Legacy `#/slug` links resolve against the stored locale.
   const locale = storedLocale();
-  const slug = bySlug[locale].has(maybeLocale) ? maybeLocale : "overview";
+  const slug = maybeLocale !== undefined && bySlug[locale].has(maybeLocale) ? maybeLocale : "overview";
   return { locale, slug };
 }
 
-function setLocale(locale) {
+function setLocale(locale: Locale): void {
   try {
     window.localStorage.setItem("ferrite-docs-locale", locale);
   } catch {
@@ -165,11 +182,13 @@ function setLocale(locale) {
   window.location.hash = `#/${locale}/${slug}`;
 }
 
-function theme() {
+type Theme = "dark" | "light";
+
+function theme(): Theme {
   return document.documentElement.classList.contains("dark") ? "dark" : "light";
 }
 
-function setTheme(next) {
+function setTheme(next: Theme): void {
   document.documentElement.classList.toggle("dark", next === "dark");
   try {
     window.localStorage.setItem("ferrite-docs-theme", next);
@@ -179,11 +198,12 @@ function setTheme(next) {
   const button = document.getElementById("theme-toggle");
   if (button) {
     button.setAttribute("aria-pressed", String(next === "dark"));
-    button.querySelector(".theme-btn-label").textContent = themeLabel(next);
+    const label = button.querySelector(".theme-btn-label");
+    if (label) label.textContent = themeLabel(next);
   }
 }
 
-function themeLabel(next) {
+function themeLabel(next: Theme): string {
   const { locale } = currentRoute();
   return next === "dark" ? STRINGS[locale].dark : STRINGS[locale].light;
 }
@@ -201,7 +221,7 @@ const ICON_BURGER =
 const ICON_CLOSE =
   '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>';
 
-function sidebar(locale, active) {
+function sidebar(locale: Locale, active: string): string {
   return PAGES[locale]
     .map(
       (page) => `
@@ -215,7 +235,7 @@ function sidebar(locale, active) {
     .join("");
 }
 
-function toc(page, strings) {
+function toc(page: DocsPage, strings: DocsStrings): string {
   const items = (page.headings || []).filter((h) => h.level <= 3);
   if (items.length === 0) return "";
   return `
@@ -237,7 +257,7 @@ function toc(page, strings) {
     </nav>`;
 }
 
-function escapeHtml(text) {
+function escapeHtml(text: unknown): string {
   return String(text)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -245,7 +265,7 @@ function escapeHtml(text) {
     .replace(/"/g, "&quot;");
 }
 
-function rewriteRelativeLinks(root, locale) {
+function rewriteRelativeLinks(root: Element, locale: Locale): void {
   for (const anchor of root.querySelectorAll("a[href]")) {
     const href = anchor.getAttribute("href");
     if (!href || href.startsWith("#") || /^[a-z]+:/i.test(href)) continue;
@@ -254,17 +274,18 @@ function rewriteRelativeLinks(root, locale) {
   }
 }
 
-async function copyText(text) {
+async function copyText(text: string | null): Promise<boolean> {
+  const value = text ?? "";
   if (window.navigator.clipboard && window.isSecureContext !== false) {
     try {
-      await window.navigator.clipboard.writeText(text);
+      await window.navigator.clipboard.writeText(value);
       return true;
     } catch {
       /* fall through to the legacy path */
     }
   }
   const area = document.createElement("textarea");
-  area.value = text;
+  area.value = value;
   area.style.position = "fixed";
   area.style.opacity = "0";
   document.body.appendChild(area);
@@ -279,7 +300,7 @@ async function copyText(text) {
   return ok;
 }
 
-function addCopyButtons(article, strings) {
+function addCopyButtons(article: Element, strings: DocsStrings): void {
   for (const pre of article.querySelectorAll("pre")) {
     const wrapper = document.createElement("div");
     wrapper.className = "codeblock";
@@ -291,7 +312,7 @@ function addCopyButtons(article, strings) {
     button.innerHTML = ICON_COPY;
     button.setAttribute("data-tip", strings.copy);
     button.setAttribute("aria-label", strings.copy);
-    let timer = null;
+    let timer: number | null = null;
     button.addEventListener("click", async () => {
       const code = pre.querySelector("code");
       const ok = await copyText((code || pre).textContent);
@@ -309,19 +330,24 @@ function addCopyButtons(article, strings) {
   }
 }
 
-function pageNeighbors(locale, slug) {
+interface PageNeighbors {
+  prev: DocsPage | null;
+  next: DocsPage | null;
+}
+
+function pageNeighbors(locale: Locale, slug: string): PageNeighbors {
   const pages = PAGES[locale];
   const index = pages.findIndex((page) => slugOf(page.path) === slug);
   return {
-    prev: index > 0 ? pages[index - 1] : null,
-    next: index >= 0 && index < pages.length - 1 ? pages[index + 1] : null,
+    prev: index > 0 ? (pages[index - 1] ?? null) : null,
+    next: index >= 0 && index < pages.length - 1 ? (pages[index + 1] ?? null) : null,
   };
 }
 
-function pageNav(locale, slug, strings) {
+function pageNav(locale: Locale, slug: string, strings: DocsStrings): string {
   const { prev, next } = pageNeighbors(locale, slug);
   if (!prev && !next) return "";
-  const link = (page, cls, kicker, arrow) => `
+  const link = (page: DocsPage, cls: string, kicker: string, arrow: string): string => `
     <a href="#/${locale}/${slugOf(page.path)}" class="${cls}">
       <span class="page-nav-kicker">${arrow} ${escapeHtml(kicker)}</span>
       <span class="page-nav-title">${escapeHtml(page.title || slugOf(page.path))}</span>
@@ -334,17 +360,24 @@ function pageNav(locale, slug, strings) {
     </nav>`;
 }
 
-function closeDrawer() {
+function closeDrawer(): void {
   document.body.classList.remove("drawer-open");
 }
 
-function render() {
+function getElement(id: string): HTMLElement {
+  const node = document.getElementById(id);
+  if (!node) throw new Error(`missing #${id}`);
+  return node;
+}
+
+function render(): void {
   const { locale, slug } = currentRoute();
   const strings = STRINGS[locale];
   const page = bySlug[locale].get(slug);
+  if (!page) return;
   document.documentElement.lang = locale === "cn" ? "zh-CN" : locale;
   document.title = `${page.title || slug} · ${strings.title}`;
-  const app = document.getElementById("app");
+  const app = getElement("app");
   const dark = theme() === "dark";
   app.innerHTML = `
     <header class="theme-header">
@@ -389,20 +422,23 @@ function render() {
       <nav class="space-y-0.5">${sidebar(locale, slug)}</nav>
     </div>`;
   rewriteRelativeLinks(app, locale);
-  addCopyButtons(app.querySelector("article"), strings);
-  document.getElementById("locale-select").addEventListener("change", (event) => {
-    setLocale(event.target.value);
+  const article = app.querySelector("article");
+  if (article) addCopyButtons(article, strings);
+  getElement("locale-select").addEventListener("change", (event) => {
+    const target = event.target;
+    if (target instanceof HTMLSelectElement && isLocale(target.value)) {
+      setLocale(target.value);
+    }
   });
-  document.getElementById("theme-toggle").addEventListener("click", () => {
+  getElement("theme-toggle").addEventListener("click", () => {
     setTheme(theme() === "dark" ? "light" : "dark");
   });
-  document.getElementById("nav-toggle").addEventListener("click", () => {
+  getElement("nav-toggle").addEventListener("click", () => {
     document.body.classList.add("drawer-open");
   });
-  document.getElementById("drawer-close").addEventListener("click", closeDrawer);
-  document.getElementById("drawer-backdrop").addEventListener("click", closeDrawer);
-  document
-    .getElementById("mobile-drawer")
+  getElement("drawer-close").addEventListener("click", closeDrawer);
+  getElement("drawer-backdrop").addEventListener("click", closeDrawer);
+  getElement("mobile-drawer")
     .querySelectorAll("a[href]")
     .forEach((link) => link.addEventListener("click", closeDrawer));
 }

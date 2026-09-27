@@ -18,7 +18,7 @@ use ferrite_core::{FerriteError, Hash, ModuleId, ModuleType, Result};
 use ferrite_graph::{ImportKind, ModuleGraph};
 use ferrite_manifest::{BuildManifest, ManifestEntry, SsrManifest};
 use ferrite_plugin::{EmittedFile, OutputBundle};
-use ferrite_transform::{ImportBinding, MinifyRequest, ShakeInfo};
+use ferrite_transform::{rewrite_specifiers, ImportBinding, MinifyRequest, ShakeInfo};
 
 /// Extracted CSS carried by a module (§29).
 #[derive(Debug, Clone)]
@@ -292,10 +292,25 @@ impl<L: ModuleLoader + 'static> Bundler for FerriteBundler<L> {
                 },
             );
         }
-        // 4. Hash + file names (two passes: names first, then import rewrite).
+        // 4. Hash + file names. Each name embeds a content hash of the
+        //    chunk's own code plus every transitively reachable chunk's
+        //    content hash, so a change anywhere in the dependency cone
+        //    renames the file (no stale caches). The hash intentionally
+        //    covers pre-rewrite code: rewritten code embeds file names, so
+        //    hashing emitted bytes would be circular (a file cannot contain
+        //    its own hash).
+        let content_hashes: HashMap<String, String> = chunks
+            .iter()
+            .map(|(id, chunk)| (id.clone(), Hash::of_str(&chunk.code).0))
+            .collect();
         let mut file_names: HashMap<String, String> = HashMap::new();
         for chunk in chunks.values() {
-            let hash = Hash::of_str(&chunk.code).short(8);
+            let mut material = chunk.code.clone();
+            for hash in reachable_content_hashes(chunk, &chunks, &content_hashes) {
+                material.push('\0');
+                material.push_str(hash);
+            }
+            let hash = Hash::of_str(&material).short(8);
             let file_name = config
                 .chunk_pattern
                 .replace("[name]", &chunk.name)
@@ -919,6 +934,32 @@ pub fn chunk_name(id: &ModuleId) -> String {
     }
 }
 
+/// Full content hashes of every chunk reachable from `root` (inclusive),
+/// sorted for determinism. Cycle-safe via a visited set.
+fn reachable_content_hashes<'a>(
+    root: &Chunk,
+    chunks: &'a HashMap<String, Chunk>,
+    content_hashes: &'a HashMap<String, String>,
+) -> Vec<&'a str> {
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut stack: Vec<&str> = vec![root.id.as_str()];
+    let mut hashes: Vec<&'a str> = Vec::new();
+    while let Some(id) = stack.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        if let Some(hash) = content_hashes.get(id) {
+            hashes.push(hash.as_str());
+        }
+        if let Some(chunk) = chunks.get(id) {
+            stack.extend(chunk.imports.iter().map(String::as_str));
+            stack.extend(chunk.dynamic_imports.iter().map(String::as_str));
+        }
+    }
+    hashes.sort_unstable();
+    hashes
+}
+
 /// Relative URL from `from_file` to `to_file` (both under `assets/`).
 #[must_use]
 pub fn relative_url(from_file: &str, to_file: &str) -> String {
@@ -1101,7 +1142,23 @@ fn match_bare_import(text: &str, specs: &[&str]) -> Option<usize> {
     None
 }
 
+/// Rewrite import specifiers in `code` using parsed import ranges.
+///
+/// Only real import specifiers are replaced: identical text inside plain
+/// strings or comments is left alone. Falls back to quoted-text replacement
+/// when `code` does not parse.
 pub fn rewrite_imports_text(code: &str, mapping: &HashMap<String, String>) -> String {
+    if mapping.is_empty() {
+        return code.to_string();
+    }
+    match rewrite_specifiers(code, &ModuleType::Js, mapping) {
+        Ok((rewritten, _)) => rewritten,
+        Err(_) => blind_rewrite_imports_text(code, mapping),
+    }
+}
+
+/// Quoted-text fallback for unparseable inputs.
+fn blind_rewrite_imports_text(code: &str, mapping: &HashMap<String, String>) -> String {
     let mut output = code.to_string();
     let mut pairs: Vec<(&String, &String)> = mapping.iter().collect();
     pairs.sort_by_key(|(spec, _)| std::cmp::Reverse(spec.len()));
@@ -1384,7 +1441,73 @@ mod tests {
         let code = "import x from \"./a\";\nconst s = \"./a\";\n";
         let mapping = HashMap::from([("./a".to_string(), "./a-1.js".to_string())]);
         let output = rewrite_imports_text(code, &mapping);
-        assert!(output.contains("\"./a-1.js\""));
+        assert!(output.contains("from \"./a-1.js\""), "{output}");
+    }
+
+    #[test]
+    fn rewrite_leaves_strings_and_comments_alone() {
+        let code = "import x from \"./a\";\nconst s = \"./a\";\n// see \"./a\" docs\n";
+        let mapping = HashMap::from([("./a".to_string(), "./a-1.js".to_string())]);
+        let output = rewrite_imports_text(code, &mapping);
+        assert!(output.contains("from \"./a-1.js\""), "{output}");
+        assert!(output.contains("const s = \"./a\";"), "{output}");
+        assert!(output.contains("// see \"./a\" docs"), "{output}");
+    }
+
+    #[tokio::test]
+    async fn chunk_names_follow_transitive_content() {
+        async fn bundle_with(dep_code: &str) -> BundleOutput {
+            let modules = HashMap::from([
+                (
+                    ModuleId::new("/main.js"),
+                    js_module(
+                        "/main.js",
+                        "import { x } from \"/dep.js\";\nconsole.log(x);\n",
+                        vec![(
+                            "/dep.js".to_string(),
+                            ModuleId::new("/dep.js"),
+                            ImportKind::Static,
+                        )],
+                    ),
+                ),
+                (
+                    ModuleId::new("/dep.js"),
+                    js_module("/dep.js", dep_code, vec![]),
+                ),
+            ]);
+            let bundler = FerriteBundler::new(Arc::new(MapLoader { modules }));
+            bundler
+                .bundle(
+                    &ModuleGraph::new(),
+                    &test_config(),
+                    BundleRequest {
+                        entries: vec![ModuleId::new("/main.js")],
+                        env: "client".to_string(),
+                        minify: false,
+                        sourcemap: false,
+                        map_comment: false,
+                        treeshake: false,
+                        engine: "oxc".to_string(),
+                        scope_hoist: false,
+                    },
+                )
+                .await
+                .unwrap()
+        }
+
+        let before = bundle_with("export const x = 1;\n").await;
+        let after = bundle_with("export const x = 2;\n").await;
+        let main_before = &before.manifest.entries["/main.js"].file;
+        let main_after = &after.manifest.entries["/main.js"].file;
+        let dep_before = &before.manifest.entries["/dep.js"].file;
+        let dep_after = &after.manifest.entries["/dep.js"].file;
+        // Both the changed chunk and its importer are renamed.
+        assert_ne!(dep_before, dep_after);
+        assert_ne!(main_before, main_after);
+        // The importer's emitted code points at the new dependency file.
+        let main_code = String::from_utf8(after.bundle.files[main_after].contents.clone()).unwrap();
+        let dep_file = dep_after.rsplit('/').next().unwrap();
+        assert!(main_code.contains(dep_file), "{main_code}");
     }
 
     fn named(name: &str) -> Vec<ImportBinding> {

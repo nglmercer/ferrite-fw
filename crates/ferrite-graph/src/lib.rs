@@ -112,12 +112,15 @@ impl ModuleNode {
     }
 
     /// Environment data accessor (`client`/`ssr`/custom).
+    ///
+    /// Returns `None` for unknown custom environments instead of aliasing
+    /// `client`, so reads agree with what [`ModuleNode::env_mut`] wrote.
     #[must_use]
-    pub fn env(&self, name: &str) -> &ModuleEnvironmentData {
+    pub fn env(&self, name: &str) -> Option<&ModuleEnvironmentData> {
         match name {
-            "client" => &self.client,
-            "ssr" => &self.ssr,
-            other => self.extra_envs.get(other).unwrap_or(&self.client),
+            "client" => Some(&self.client),
+            "ssr" => Some(&self.ssr),
+            other => self.extra_envs.get(other),
         }
     }
 
@@ -321,7 +324,9 @@ impl ModuleGraph {
                 return Some(chain);
             }
             if node.importers.is_empty() {
-                return None; // reached an entry without a boundary
+                // Dead-end branch: keep searching the remaining branches for
+                // the nearest boundary instead of aborting the whole walk.
+                continue;
             }
             for importer in node.importers {
                 queue.push_back((importer, chain.clone()));
@@ -401,6 +406,44 @@ mod tests {
         let graph = ModuleGraph::new();
         graph.add_edge(&ModuleId::new("/entry.ts"), edge("/leaf.ts"));
         assert!(graph.hmr_boundaries(&ModuleId::new("/leaf.ts")).is_none());
+    }
+
+    #[test]
+    fn hmr_dead_end_branch_does_not_hide_boundary() {
+        let graph = ModuleGraph::new();
+        let mut boundary = ModuleNode::new(
+            ModuleId::new("/boundary.ts"),
+            "/boundary.ts".to_string(),
+            ModuleType::Ts,
+        );
+        boundary.hmr.self_accepting = true;
+        graph.upsert(boundary);
+        // The boundary sits one level up so the direct-importer fast path
+        // does not trigger; the dead-end branch is queued first, so the
+        // BFS must skip it and still find the boundary.
+        graph.add_edge(&ModuleId::new("/entry.ts"), edge("/leaf.ts"));
+        graph.add_edge(&ModuleId::new("/mid.ts"), edge("/leaf.ts"));
+        graph.add_edge(&ModuleId::new("/boundary.ts"), edge("/mid.ts"));
+        let chain = graph.hmr_boundaries(&ModuleId::new("/leaf.ts")).unwrap();
+        assert_eq!(chain.first(), Some(&ModuleId::new("/boundary.ts")));
+    }
+
+    #[test]
+    fn env_read_write_consistency() {
+        let mut node = ModuleNode::new(ModuleId::new("/a.ts"), "/a.ts".to_string(), ModuleType::Ts);
+        assert!(node.env("worker").is_none());
+        node.env_mut("worker").code = Some("worker code".to_string());
+        assert_eq!(
+            node.env("worker").and_then(|data| data.code.clone()),
+            Some("worker code".to_string())
+        );
+        // Custom-env writes must not leak into `client`, and unknown envs
+        // must not alias it either.
+        assert!(node
+            .env("client")
+            .and_then(|data| data.code.clone())
+            .is_none());
+        assert!(node.env("typo-env").is_none());
     }
 
     #[test]

@@ -33,3 +33,6 @@ http = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
 url = { workspace = true }
+
+[dev-dependencies]
+async-trait = { workspace = true }

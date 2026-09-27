@@ -389,6 +389,8 @@ impl Resolver {
     ) -> Result<Option<ResolvedId>> {
         let mut dir = base_dir.to_path_buf();
         loop {
+            // Like Node, keep walking up past a package.json that lacks a
+            // matching `imports` entry instead of stopping at the first one.
             let candidate = dir.join("package.json");
             if candidate.exists() {
                 if let Ok(text) = std::fs::read_to_string(&candidate) {
@@ -403,7 +405,6 @@ impl Resolver {
                         }
                     }
                 }
-                return Ok(None);
             }
             if !dir.pop() {
                 return Ok(None);
@@ -784,7 +785,11 @@ fn resolve_exports_inner(
             })
         }
         serde_json::Value::Object(map) => {
-            let has_subpath_keys = map.keys().any(|key| key.starts_with('.'));
+            // `#`-prefixed keys are `imports` subpath keys; condition names
+            // (`import`, `default`, ...) never start with `.` or `#`.
+            let has_subpath_keys = map
+                .keys()
+                .any(|key| key.starts_with('.') || key.starts_with('#'));
             if top && has_subpath_keys {
                 // Subpath map: exact match, then `*` patterns (longest first).
                 if let Some(target) = map.get(subpath) {
@@ -835,6 +840,11 @@ fn match_pattern(pattern: &str, subpath: &str) -> Option<String> {
     let (prefix, suffix) = pattern.split_once('*')?;
     if subpath.starts_with(prefix) && subpath.ends_with(suffix) {
         let end = subpath.len() - suffix.len();
+        // Prefix and suffix may overlap (e.g. `abc*abc` vs `abc`), which
+        // would make the capture range `prefix.len()..end` inverted.
+        if prefix.len() > end {
+            return None;
+        }
         Some(subpath[prefix.len()..end].to_string())
     } else {
         None
@@ -1043,5 +1053,42 @@ mod tests {
         assert!(glob_match("*.css", "style.css"));
         assert!(glob_match("./src/**", "src/a/b.ts"));
         assert!(!glob_match("*.css", "style.ts"));
+    }
+
+    #[test]
+    fn pattern_overlap_does_not_panic() {
+        // `abc` both starts with `abc` and ends with `abc`; the capture
+        // range would be `3..0` without the overlap guard.
+        assert_eq!(match_pattern("abc*abc", "abc"), None);
+        assert_eq!(
+            match_pattern("./features/*.js", "./features/a.js"),
+            Some("a".to_string())
+        );
+    }
+
+    #[test]
+    fn package_imports_walk_past_bare_package_json() {
+        let dir = std::env::temp_dir().join(format!("ferrite-imports-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("nested")).unwrap();
+        std::fs::write(
+            dir.join("package.json"),
+            r##"{"imports": {"#dep": "./dep.js"}}"##,
+        )
+        .unwrap();
+        std::fs::write(dir.join("nested/package.json"), r#"{"name": "inner"}"#).unwrap();
+        std::fs::write(dir.join("dep.js"), "export const x = 1;").unwrap();
+        std::fs::write(dir.join("nested/a.js"), "import '#dep';").unwrap();
+        let resolver = test_resolver(dir.clone());
+        let importer = ModuleId::new("/nested/a.js");
+        let request = ResolveRequest {
+            specifier: "#dep",
+            importer: Some(&importer),
+            environment: EnvironmentKind::Client,
+            kind: ResolveKind::Import,
+        };
+        let resolved = resolver.resolve(&request).unwrap();
+        assert_eq!(resolved.id.0, "/dep.js");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
