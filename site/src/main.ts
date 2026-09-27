@@ -6,6 +6,7 @@ import { el, getElement, setTrustedMarkdown } from "./dom";
 import {
   enhanceCodeBlocks,
   Header,
+  homeLink,
   isLocale,
   MobileDrawer,
   PageNav,
@@ -14,6 +15,7 @@ import {
   slugOf,
   Toc,
 } from "./components";
+import { renderLanding } from "./landing";
 
 import enOverview from "../pages/en/overview.md";
 import enGettingStarted from "../pages/en/getting-started.md";
@@ -92,6 +94,8 @@ const STRINGS: Record<Locale, DocsStrings> = {
     menu: "Menu",
     close: "Close",
     title: "Ferrite Docs — Rust-native web toolchain",
+    home: "Home",
+    docsLink: "Docs",
   },
   es: {
     docs: "docs",
@@ -110,6 +114,8 @@ const STRINGS: Record<Locale, DocsStrings> = {
     menu: "Menú",
     close: "Cerrar",
     title: "Docs Ferrite — toolchain web nativa de Rust",
+    home: "Inicio",
+    docsLink: "Docs",
   },
   cn: {
     docs: "文档",
@@ -128,6 +134,8 @@ const STRINGS: Record<Locale, DocsStrings> = {
     menu: "菜单",
     close: "关闭",
     title: "Ferrite 文档 —— Rust 原生 Web 工具链",
+    home: "首页",
+    docsLink: "文档",
   },
 };
 
@@ -231,14 +239,19 @@ function currentRoute(): Route {
   const hash = window.location.hash.replace(/^#\/?/, "");
   const [maybeLocale, maybeSlug] = hash.split("/");
   if (isLocale(maybeLocale)) {
+    if (maybeSlug === undefined || maybeSlug === "home") {
+      return { locale: maybeLocale, slug: "home" };
+    }
     const pages = bySlug[maybeLocale];
-    const slug = maybeSlug !== undefined && pages.has(maybeSlug) ? maybeSlug : "overview";
+    const slug = pages.has(maybeSlug) ? maybeSlug : "home";
     return { locale: maybeLocale, slug };
   }
   // Legacy `#/slug` links resolve against the stored locale.
   const locale = storedLocale();
-  const slug =
-    maybeLocale !== undefined && bySlug[locale].has(maybeLocale) ? maybeLocale : "overview";
+  if (maybeLocale === undefined || maybeLocale === "" || maybeLocale === "home") {
+    return { locale, slug: "home" };
+  }
+  const slug = bySlug[locale].has(maybeLocale) ? maybeLocale : "home";
   return { locale, slug };
 }
 
@@ -282,8 +295,45 @@ function closeDrawer(): void {
   document.body.classList.remove("drawer-open");
 }
 
+/// Landing layout: header + full-width sections, no sidebar/TOC.
+function renderHome(locale: Locale): void {
+  const strings = STRINGS[locale];
+  document.documentElement.lang = locale === "cn" ? "zh-CN" : locale;
+  document.title = strings.title;
+  const dark = theme() === "dark";
+  const landing = renderLanding(locale, PAGES[locale]);
+  const [backdrop, drawer] = MobileDrawer({
+    locale,
+    slug: "home",
+    pages: PAGES[locale],
+    strings,
+    onClose: closeDrawer,
+  });
+  const app = getElement("app");
+  app.replaceChildren(
+    Header({
+      locale,
+      locales: LOCALES,
+      localeNames: LOCALE_NAMES,
+      strings,
+      dark,
+      onLocaleChange: setLocale,
+      onThemeToggle: () => setTheme(theme() === "dark" ? "light" : "dark"),
+      onOpenDrawer: () => document.body.classList.add("drawer-open"),
+    }),
+    landing,
+    backdrop,
+    drawer,
+  );
+  enhanceCodeBlocks(landing, strings);
+}
+
 function render(): void {
   const { locale, slug } = currentRoute();
+  if (slug === "home") {
+    renderHome(locale);
+    return;
+  }
   const strings = STRINGS[locale];
   const page = bySlug[locale].get(slug);
   if (!page) return;
@@ -321,6 +371,7 @@ function render(): void {
         el(
           "nav",
           { "aria-label": strings.pages, class: "sticky top-8 space-y-0.5" },
+          homeLink(locale, slug, strings.home),
           ...SidebarLinks({ locale, slug, pages }),
         ),
       ),
@@ -366,6 +417,6 @@ window.addEventListener("hashchange", () => {
 });
 
 if (!window.location.hash) {
-  window.location.hash = `#/${storedLocale()}/overview`;
+  window.location.hash = `#/${storedLocale()}/home`;
 }
 render();

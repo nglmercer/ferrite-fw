@@ -15,6 +15,27 @@ export function isLocale(value: unknown): value is Locale {
   return value === "en" || value === "es" || value === "cn";
 }
 
+/// Landing link heading the nav lists (shared by sidebar and drawer).
+export function homeLink(
+  locale: Locale,
+  slug: string,
+  label: string,
+  onNavigate?: () => void,
+): HTMLAnchorElement {
+  const link = el(
+    "a",
+    {
+      href: `#/${locale}/home`,
+      class: `nav-link block rounded-md px-3 py-2 text-sm leading-6 no-underline ${
+        slug === "home" ? "nav-link-active font-semibold" : ""
+      }`,
+    },
+    `← ${label}`,
+  );
+  if (onNavigate) link.addEventListener("click", onNavigate);
+  return link;
+}
+
 interface SidebarProps {
   locale: Locale;
   slug: string;
@@ -191,12 +212,17 @@ export function Header(props: HeaderProps): HTMLElement {
       el(
         "a",
         {
-          href: `#/${props.locale}/overview`,
+          href: `#/${props.locale}/home`,
           class: "theme-title text-base font-semibold tracking-tight no-underline",
         },
         "Ferrite",
       ),
       el("span", { class: "theme-pill rounded px-2 py-0.5 text-xs" }, props.strings.docs),
+      el(
+        "a",
+        { href: `#/${props.locale}/overview`, class: "theme-doclink text-sm no-underline" },
+        props.strings.docsLink,
+      ),
       el(
         "span",
         { class: "theme-tagline ml-auto hidden text-xs sm:inline" },
@@ -248,6 +274,7 @@ export function MobileDrawer(props: DrawerProps): [HTMLDivElement, HTMLDivElemen
     el(
       "nav",
       { class: "space-y-0.5" },
+      homeLink(props.locale, props.slug, props.strings.home, props.onClose),
       ...SidebarLinks({
         locale: props.locale,
         slug: props.slug,

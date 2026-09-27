@@ -37,4 +37,6 @@ export interface DocsStrings {
   menu: string;
   close: string;
   title: string;
+  home: string;
+  docsLink: string;
 }
