@@ -21,7 +21,6 @@ copy of [tailwind-rs](https://github.com/nglmercer/tailwind-rs)
 ```text
 vendor/
   README.md                     # origin, pin, update procedure
-  materialize-tailwind-manifests.py  # inlines workspace inheritance
   tailwind-rs/                  # pristine upstream + materialized manifests
     crates/utilitycss-compiler  # the API ferrite-tailwind uses
     crates/utilitycss-span      # SourceId
@@ -50,7 +49,7 @@ once upstream emits it.
 
 Cargo resolves `*.workspace = true` against the *outer* workspace for
 path dependencies, so the vendored crates' inherited `[package]` keys
-would fail to load. The materialize script inlines the seven package
+would fail to load. The `xtask materialize-tailwind` task inlines the seven package
 keys plus the `[lints]` tables — the same transform `cargo vendor`
 performs. It also drops the inherited `readme` key (per-crate READMEs
 do not exist upstream). Re-run it after every re-vendor.
@@ -62,7 +61,7 @@ rm -rf vendor/tailwind-rs
 git clone https://github.com/nglmercer/tailwind-rs /tmp/tailwind-rs
 cp -r /tmp/tailwind-rs vendor/tailwind-rs
 rm -rf vendor/tailwind-rs/.git
-python3 vendor/materialize-tailwind-manifests.py
+cargo run -p xtask -- materialize-tailwind
 # record the new HEAD in vendor/README.md
 cargo test -p ferrite-tailwind
 ```

@@ -23,13 +23,14 @@ path dependencies, so the vendored crates would fail to load. After
 (re-)vendoring, run:
 
 ```bash
-python3 vendor/materialize-tailwind-manifests.py
+cargo run -p xtask -- materialize-tailwind
 ```
 
 It inlines the seven inherited `[package]` keys, the `[lints]` tables,
 and drops the inherited `readme` key (per-crate READMEs do not exist
 upstream) — the same transform `cargo vendor` performs. It refuses to
-run when the inner root's pinned values drift.
+run when the inner root's pinned values drift. Use `--check` to verify
+without writing.
 
 Update:
 
@@ -38,7 +39,7 @@ rm -rf vendor/tailwind-rs
 git clone https://github.com/nglmercer/tailwind-rs /tmp/tailwind-rs
 cp -r /tmp/tailwind-rs vendor/tailwind-rs
 rm -rf vendor/tailwind-rs/.git
-python3 vendor/materialize-tailwind-manifests.py
+cargo run -p xtask -- materialize-tailwind
 # record the new HEAD above
 cargo test -p ferrite-tailwind
 ```

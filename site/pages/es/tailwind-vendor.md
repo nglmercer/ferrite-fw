@@ -21,7 +21,6 @@ copia vendored de [tailwind-rs](https://github.com/nglmercer/tailwind-rs)
 ```text
 vendor/
   README.md                     # origen, pin, procedimiento de update
-  materialize-tailwind-manifests.py  # inlina herencia del workspace
   tailwind-rs/                  # upstream prístino + manifests materializados
     crates/utilitycss-compiler  # la API que usa ferrite-tailwind
     crates/utilitycss-span      # SourceId
@@ -53,7 +52,7 @@ rm -rf vendor/tailwind-rs
 git clone https://github.com/nglmercer/tailwind-rs /tmp/tailwind-rs
 cp -r /tmp/tailwind-rs vendor/tailwind-rs
 rm -rf vendor/tailwind-rs/.git
-python3 vendor/materialize-tailwind-manifests.py
+cargo run -p xtask -- materialize-tailwind
 # registra el nuevo HEAD en vendor/README.md
 cargo test -p ferrite-tailwind
 ```

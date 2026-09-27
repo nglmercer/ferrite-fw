@@ -25,6 +25,7 @@ members = [
     "crates/ferrite-docs",
     "crates/ferrite-test",
     "crates/ferrite-cli",
+    "xtask",
 ]
 
 [workspace.dependencies]

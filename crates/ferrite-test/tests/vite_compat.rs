@@ -1189,13 +1189,20 @@ fn docs_site_shell_wires_theme_and_locales() {
     for needle in [
         "ferrite-docs-theme",
         "ferrite-docs-locale",
-        "data-locale",
+        "locale-select",
         "theme-toggle",
         "\"en\", \"es\", \"cn\"",
         "#/${locale}/${slug}",
         "copy-btn",
         "writeText",
         "toc-list",
+        "nav-toggle",
+        "mobile-drawer",
+        "drawer-open",
+        "page-prev",
+        "page-next",
+        "data-tip",
+        "theme-btn-label",
     ] {
         assert!(main.contains(needle), "main.js lost `{needle}`");
     }
@@ -1217,6 +1224,13 @@ fn docs_site_shell_wires_theme_and_locales() {
         ".copy-btn",
         "prefers-reduced-motion",
         ".theme-header .theme-btn",
+        ".drawer",
+        ".drawer-backdrop",
+        ".page-nav",
+        ".theme-select",
+        "#nav-toggle",
+        ".theme-btn-label",
+        "overflow-wrap",
     ] {
         assert!(css.contains(needle), "docs.css lost `{needle}`");
     }

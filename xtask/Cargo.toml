@@ -1,0 +1,13 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+edition = "2021"
+description = "Ferrite repo maintenance tasks (vendoring, codegen)"
+license = "MIT"
+
+[[bin]]
+name = "xtask"
+path = "src/main.rs"
+
+[dev-dependencies]
+tempfile = { workspace = true }

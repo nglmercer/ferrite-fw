@@ -1296,6 +1296,9 @@ impl DevServer {
     /// Start the file watcher (§60 HMR invalidation).
     fn start_watcher(&self) -> Result<()> {
         let inner = self.inner.clone();
+        // The notify callback runs off-runtime: capture a handle here
+        // (constructor runs on the runtime) instead of `tokio::spawn`.
+        let runtime = tokio::runtime::Handle::current();
         let debounce_window = Duration::from_millis(80);
         let mut watcher = notify::recommended_watcher(
             move |result: std::result::Result<Event, notify::Error>| {
@@ -1338,7 +1341,8 @@ impl DevServer {
                     // Plugin `handleHotUpdate` hooks run on the async runtime.
                     let inner_clone = inner.clone();
                     let file = url.clone();
-                    tokio::spawn(async move {
+                    let runtime = runtime.clone();
+                    runtime.spawn(async move {
                         let modules = vec![id.clone()];
                         let event = HotUpdateEvent {
                             file,
@@ -2105,6 +2109,43 @@ mod tests {
             .unwrap();
         assert!(module.code.contains("from \"my-lib\""), "{}", module.code);
         assert!(!module.code.contains("./other.js"), "{}", module.code);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn watcher_pushes_hmr_update_on_change() {
+        // Regression: the watcher callback used `tokio::spawn` with no
+        // runtime context, panicking the notify thread on first change.
+        let dir = std::env::temp_dir().join(format!(
+            "ferrite-hmrpush-{}-{}",
+            std::process::id(),
+            now_millis()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/main.js"), "console.log(1);\n").unwrap();
+        let config = ferrite_config::resolve_config(
+            ferrite_config::UserConfig::default(),
+            Some(dir.clone()),
+            ferrite_config::CliOverrides::default(),
+        )
+        .unwrap();
+        let server = DevServer::new(config, Vec::new()).await.unwrap();
+        server
+            .pipeline_module(&ModuleId::new("/src/main.js"), None, "client")
+            .await
+            .unwrap();
+        let mut updates = server.inner().hmr.subscribe();
+        std::fs::write(dir.join("src/main.js"), "console.log(2);\n").unwrap();
+        let message = tokio::time::timeout(Duration::from_secs(10), updates.recv())
+            .await
+            .expect("hmr push arrives")
+            .expect("message");
+        assert!(
+            message.contains("update") || message.contains("reload"),
+            "{message}"
+        );
+        server.close();
         let _ = std::fs::remove_dir_all(&dir);
     }
 

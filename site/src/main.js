@@ -40,6 +40,10 @@ const STRINGS = {
     language: "Language",
     copy: "Copy",
     copied: "Copied",
+    previous: "Previous",
+    next: "Next",
+    menu: "Menu",
+    close: "Close",
     title: "Ferrite Docs — Rust-native web toolchain",
   },
   es: {
@@ -54,6 +58,10 @@ const STRINGS = {
     language: "Idioma",
     copy: "Copiar",
     copied: "Copiado",
+    previous: "Anterior",
+    next: "Siguiente",
+    menu: "Menú",
+    close: "Cerrar",
     title: "Docs Ferrite — toolchain web nativa de Rust",
   },
   cn: {
@@ -68,6 +76,10 @@ const STRINGS = {
     language: "语言",
     copy: "复制",
     copied: "已复制",
+    previous: "上一页",
+    next: "下一页",
+    menu: "菜单",
+    close: "关闭",
     title: "Ferrite 文档 —— Rust 原生 Web 工具链",
   },
 };
@@ -167,7 +179,7 @@ function setTheme(next) {
   const button = document.getElementById("theme-toggle");
   if (button) {
     button.setAttribute("aria-pressed", String(next === "dark"));
-    button.querySelector("span").textContent = themeLabel(next);
+    button.querySelector(".theme-btn-label").textContent = themeLabel(next);
   }
 }
 
@@ -180,6 +192,14 @@ const ICON_SUN =
   '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>';
 const ICON_MOON =
   '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg>';
+const ICON_COPY =
+  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+const ICON_CHECK =
+  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
+const ICON_BURGER =
+  '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/></svg>';
+const ICON_CLOSE =
+  '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>';
 
 function sidebar(locale, active) {
   return PAGES[locale]
@@ -268,22 +288,54 @@ function addCopyButtons(article, strings) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "copy-btn";
-    button.textContent = strings.copy;
+    button.innerHTML = ICON_COPY;
+    button.setAttribute("data-tip", strings.copy);
     button.setAttribute("aria-label", strings.copy);
     let timer = null;
     button.addEventListener("click", async () => {
       const code = pre.querySelector("code");
       const ok = await copyText((code || pre).textContent);
-      button.textContent = ok ? strings.copied : strings.copy;
+      button.innerHTML = ok ? ICON_CHECK : ICON_COPY;
+      button.setAttribute("data-tip", ok ? strings.copied : strings.copy);
       button.classList.toggle("copied", ok);
       if (timer) window.clearTimeout(timer);
       timer = window.setTimeout(() => {
-        button.textContent = strings.copy;
+        button.innerHTML = ICON_COPY;
+        button.setAttribute("data-tip", strings.copy);
         button.classList.remove("copied");
       }, 1600);
     });
     wrapper.appendChild(button);
   }
+}
+
+function pageNeighbors(locale, slug) {
+  const pages = PAGES[locale];
+  const index = pages.findIndex((page) => slugOf(page.path) === slug);
+  return {
+    prev: index > 0 ? pages[index - 1] : null,
+    next: index >= 0 && index < pages.length - 1 ? pages[index + 1] : null,
+  };
+}
+
+function pageNav(locale, slug, strings) {
+  const { prev, next } = pageNeighbors(locale, slug);
+  if (!prev && !next) return "";
+  const link = (page, cls, kicker, arrow) => `
+    <a href="#/${locale}/${slugOf(page.path)}" class="${cls}">
+      <span class="page-nav-kicker">${arrow} ${escapeHtml(kicker)}</span>
+      <span class="page-nav-title">${escapeHtml(page.title || slugOf(page.path))}</span>
+    </a>`;
+  // Empty span keeps a lone next-link pinned right.
+  return `
+    <nav class="page-nav" aria-label="${escapeHtml(slug)}">
+      ${prev ? link(prev, "page-prev", strings.previous, "←") : "<span></span>"}
+      ${next ? link(next, "page-next", strings.next, "→") : ""}
+    </nav>`;
+}
+
+function closeDrawer() {
+  document.body.classList.remove("drawer-open");
 }
 
 function render() {
@@ -297,18 +349,19 @@ function render() {
   app.innerHTML = `
     <header class="theme-header">
       <div class="mx-auto flex max-w-6xl items-center gap-3 px-6 py-3">
+        <button type="button" id="nav-toggle" class="theme-btn md:hidden" aria-label="${escapeHtml(strings.menu)}">${ICON_BURGER}</button>
         <span class="theme-badge inline-flex h-8 w-8 items-center justify-center rounded-md text-lg font-bold">F</span>
         <a href="#/${locale}/overview" class="theme-title text-base font-semibold tracking-tight no-underline">Ferrite</a>
         <span class="theme-pill rounded px-2 py-0.5 text-xs">${escapeHtml(strings.docs)}</span>
         <span class="theme-tagline ml-auto hidden text-xs sm:inline">${escapeHtml(strings.tagline)}</span>
-        <div class="flex items-center gap-2" role="group" aria-label="${escapeHtml(strings.language)}">
+        <select id="locale-select" class="theme-select" aria-label="${escapeHtml(strings.language)}">
           ${LOCALES.map(
             (code) =>
-              `<button type="button" class="theme-btn" data-locale="${code}" aria-pressed="${String(code === locale)}">${LOCALE_NAMES[code]}</button>`,
+              `<option value="${code}"${code === locale ? " selected" : ""}>${LOCALE_NAMES[code]}</option>`,
           ).join("")}
-        </div>
+        </select>
         <button type="button" id="theme-toggle" class="theme-btn" aria-pressed="${String(dark)}" title="${escapeHtml(strings.theme)}">
-          ${dark ? ICON_MOON : ICON_SUN}<span>${dark ? escapeHtml(strings.dark) : escapeHtml(strings.light)}</span>
+          ${dark ? ICON_MOON : ICON_SUN}<span class="theme-btn-label">${dark ? escapeHtml(strings.dark) : escapeHtml(strings.light)}</span>
         </button>
       </div>
     </header>
@@ -317,11 +370,8 @@ function render() {
         <nav aria-label="${escapeHtml(strings.pages)}" class="sticky top-8 space-y-0.5">${sidebar(locale, slug)}</nav>
       </aside>
       <main class="min-w-0 flex-1">
-        <details class="theme-border mb-6 rounded-lg border p-3 md:hidden">
-          <summary class="cursor-pointer text-sm font-medium">${escapeHtml(strings.pages)}</summary>
-          <nav class="mt-2 space-y-0.5">${sidebar(locale, slug)}</nav>
-        </details>
         <article class="docs-body">${page.html}</article>
+        ${pageNav(locale, slug, strings)}
         <footer class="theme-footer theme-border mt-12 border-t pt-4 text-xs">
           Ferrite ${escapeHtml(slug)} · ${escapeHtml(strings.renderedFrom)}
         </footer>
@@ -329,20 +379,42 @@ function render() {
       <aside class="hidden w-52 shrink-0 lg:block">
         <div class="sticky top-8">${toc(page, strings)}</div>
       </aside>
+    </div>
+    <div class="drawer-backdrop md:hidden" id="drawer-backdrop"></div>
+    <div class="drawer md:hidden" id="mobile-drawer" role="dialog" aria-label="${escapeHtml(strings.pages)}">
+      <div class="flex items-center justify-between pb-3">
+        <span class="text-sm font-semibold">${escapeHtml(strings.pages)}</span>
+        <button type="button" id="drawer-close" class="theme-btn" aria-label="${escapeHtml(strings.close)}">${ICON_CLOSE}</button>
+      </div>
+      <nav class="space-y-0.5">${sidebar(locale, slug)}</nav>
     </div>`;
   rewriteRelativeLinks(app, locale);
   addCopyButtons(app.querySelector("article"), strings);
-  for (const button of app.querySelectorAll("[data-locale]")) {
-    button.addEventListener("click", () => setLocale(button.getAttribute("data-locale")));
-  }
+  document.getElementById("locale-select").addEventListener("change", (event) => {
+    setLocale(event.target.value);
+  });
   document.getElementById("theme-toggle").addEventListener("click", () => {
     setTheme(theme() === "dark" ? "light" : "dark");
   });
+  document.getElementById("nav-toggle").addEventListener("click", () => {
+    document.body.classList.add("drawer-open");
+  });
+  document.getElementById("drawer-close").addEventListener("click", closeDrawer);
+  document.getElementById("drawer-backdrop").addEventListener("click", closeDrawer);
+  document
+    .getElementById("mobile-drawer")
+    .querySelectorAll("a[href]")
+    .forEach((link) => link.addEventListener("click", closeDrawer));
 }
+
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeDrawer();
+});
 
 window.addEventListener("hashchange", () => {
   // Anchor jumps inside a page (TOC) must not re-render.
   if (window.location.hash.startsWith("#/") || window.location.hash === "") {
+    closeDrawer();
     render();
     window.scrollTo(0, 0);
   }

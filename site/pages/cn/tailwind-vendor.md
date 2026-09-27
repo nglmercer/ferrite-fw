@@ -21,7 +21,6 @@ vendored 来的工具类 CSS（`utilitycss`：Rust 写的运行时无关工具�
 ```text
 vendor/
   README.md                     # 来源、pin、更新流程
-  materialize-tailwind-manifests.py  # 内联 workspace 继承
   tailwind-rs/                  # 纯净上游 + 已物化的 manifest
     crates/utilitycss-compiler  # ferrite-tailwind 用的 API
     crates/utilitycss-span      # SourceId
@@ -50,7 +49,7 @@ rm -rf vendor/tailwind-rs
 git clone https://github.com/nglmercer/tailwind-rs /tmp/tailwind-rs
 cp -r /tmp/tailwind-rs vendor/tailwind-rs
 rm -rf vendor/tailwind-rs/.git
-python3 vendor/materialize-tailwind-manifests.py
+cargo run -p xtask -- materialize-tailwind
 # 在 vendor/README.md 记录新的 HEAD
 cargo test -p ferrite-tailwind
 ```
