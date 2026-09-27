@@ -8,3 +8,4 @@ description = "Ferrite HTML transformation pipeline"
 ferrite-core = { workspace = true }
 ferrite-plugin = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }

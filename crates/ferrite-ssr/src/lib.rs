@@ -6,12 +6,17 @@
 //! `/_ferrite/rpc/` server-function transport.
 
 use std::collections::HashMap;
+#[cfg(feature = "napi-vm")]
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use ferrite_config::SsrConfig;
+use ferrite_config::{ResolvedConfig, SsrConfig};
 use ferrite_core::{FerriteError, Result};
+use ferrite_runtime::{
+    runtime_for_backend, CompiledModule, JsRuntime, JsValue, RuntimeEnvironment,
+};
 use futures::Stream;
 
 /// An SSR HTTP request (framework-agnostic).
@@ -155,19 +160,140 @@ pub struct StaticShellAdapter {
 #[async_trait::async_trait]
 impl SsrAdapter for StaticShellAdapter {
     async fn render(&self, _request: SsrHttpRequest, context: SsrContext) -> Result<SsrResponse> {
-        let mut preload = String::new();
-        for file in &context.preload {
-            if file.ends_with(".css") {
-                preload.push_str(&format!("<link rel=\"stylesheet\" href=\"{file}\">\n"));
-            } else if file.ends_with(".js") {
-                preload.push_str(&format!("<link rel=\"modulepreload\" href=\"{file}\">\n"));
-            }
+        Ok(SsrResponse::html(inject_shell(
+            &self.shell,
+            "",
+            &context.preload,
+        )))
+    }
+}
+
+/// Inject a rendered body plus preload tags into an HTML shell.
+fn inject_shell(shell: &str, body: &str, preload_files: &[String]) -> String {
+    let mut preload = String::new();
+    for file in preload_files {
+        if file.ends_with(".css") {
+            preload.push_str(&format!("<link rel=\"stylesheet\" href=\"{file}\">\n"));
+        } else if file.ends_with(".js") {
+            preload.push_str(&format!("<link rel=\"modulepreload\" href=\"{file}\">\n"));
         }
-        let html = self
-            .shell
-            .replace("<!--ssr-outlet-->", "")
-            .replace("</head>", &format!("{preload}</head>"));
-        Ok(SsrResponse::html(html))
+    }
+    shell
+        .replace("<!--ssr-outlet-->", body)
+        .replace("</head>", &format!("{preload}</head>"))
+}
+
+/// SSR adapter backed by an embedded JS runtime (§20, §46).
+///
+/// Evaluates the entry module, calls its `render` export with the request
+/// URL, and serves the returned HTML string — injected into `shell` when
+/// set. Evaluation runs per request (dev usage); production SSR should
+/// cache or pre-render. Build with [`JsSsrAdapter::from_resolved`] so the
+/// `[runtime]` backend, budgets, and native allowlist are honored.
+pub struct JsSsrAdapter {
+    runtime: Arc<dyn JsRuntime>,
+    module: CompiledModule,
+    export: String,
+    shell: Option<String>,
+}
+
+impl JsSsrAdapter {
+    /// Wrap an explicit runtime and entry module.
+    #[must_use]
+    pub fn new(runtime: Arc<dyn JsRuntime>, module: CompiledModule) -> Self {
+        Self {
+            runtime,
+            module,
+            export: "render".to_string(),
+            shell: None,
+        }
+    }
+
+    /// Build from resolved config.
+    ///
+    /// The `napi-vm` backend maps fuel/loop budgets plus the native
+    /// allowlist/integrity pins onto the worker; every other name goes
+    /// through [`runtime_for_backend`] (unknown or unavailable backends
+    /// fail loudly at render, never silently).
+    #[must_use]
+    pub fn from_resolved(resolved: &ResolvedConfig, module: CompiledModule) -> Self {
+        #[cfg(feature = "napi-vm")]
+        if resolved.runtime.backend == "napi-vm" {
+            let mut options = ferrite_runtime::napi_vm::NapiVmOptions {
+                roots: vec![resolved.root.clone()],
+                fuel_budget: resolved.runtime.fuel_budget,
+                loop_budget: resolved.runtime.loop_budget,
+                ..Default::default()
+            };
+            for entry in &resolved.runtime.native_allow {
+                options
+                    .native_allow
+                    .push(ferrite_runtime::napi_vm::NativeAddonAllow {
+                        path: PathBuf::from(entry),
+                        sha256_hex: resolved.runtime.native_integrity.get(entry).cloned(),
+                    });
+            }
+            let runtime: Arc<dyn JsRuntime> =
+                Arc::new(ferrite_runtime::napi_vm::NapiVmRuntime::new(options));
+            return Self {
+                runtime,
+                module,
+                export: "render".to_string(),
+                shell: None,
+            };
+        }
+        Self::new(runtime_for_backend(&resolved.runtime.backend), module)
+    }
+
+    /// Call a different export instead of `render`.
+    #[must_use]
+    pub fn with_export(mut self, export: impl Into<String>) -> Self {
+        self.export = export.into();
+        self
+    }
+
+    /// Inject rendered HTML into a shell (`<!--ssr-outlet-->` outlet).
+    #[must_use]
+    pub fn with_shell(mut self, shell: impl Into<String>) -> Self {
+        self.shell = Some(shell.into());
+        self
+    }
+}
+
+#[async_trait::async_trait]
+impl SsrAdapter for JsSsrAdapter {
+    async fn render(&self, request: SsrHttpRequest, context: SsrContext) -> Result<SsrResponse> {
+        let url = if context.url.is_empty() {
+            request.uri.clone()
+        } else {
+            context.url.clone()
+        };
+        let namespace = self
+            .runtime
+            .evaluate_module(
+                self.module.clone(),
+                RuntimeEnvironment {
+                    ssr: true,
+                    request_id: None,
+                },
+            )
+            .await?;
+        let handle = namespace.get_function(&self.export)?.clone();
+        let result = self
+            .runtime
+            .call(&handle, vec![JsValue::String(url)])
+            .await?;
+        let JsValue::String(html) = result else {
+            return Err(FerriteError::Ssr(format!(
+                "`{}` export must return an HTML string",
+                self.export
+            )));
+        };
+        let body = match &self.shell {
+            Some(shell) => inject_shell(shell, &html, &context.preload),
+            None => html,
+        };
+        Ok(SsrResponse::html(body))
     }
 }
 
@@ -182,9 +308,26 @@ pub struct SsrModule {
     pub dependencies: Vec<String>,
 }
 
+/// True when `specifier` names a native `.node` binary (query stripped).
+#[must_use]
+pub fn is_native_specifier(specifier: &str) -> bool {
+    specifier
+        .split('?')
+        .next()
+        .unwrap_or(specifier)
+        .ends_with(".node")
+}
+
 /// True when `id` (bare specifier or path) is SSR-external (§23).
+///
+/// Native `.node` binaries are always external: they cannot be bundled.
+/// Load them at runtime through an embedded backend (see
+/// [`native_shim_module`]).
 #[must_use]
 pub fn is_external(specifier: &str, config: &SsrConfig) -> bool {
+    if is_native_specifier(specifier) {
+        return true;
+    }
     if config.bundle_all {
         return false;
     }
@@ -206,6 +349,45 @@ pub fn is_external(specifier: &str, config: &SsrConfig) -> bool {
         && !specifier.starts_with('/')
         && !specifier.starts_with("virtual:")
         && is_server_only(specifier)
+}
+
+/// SSR placeholder for a native `.node` binary (§22–§23).
+///
+/// Bundlers and `ssrLoadModule` implementations must substitute this for
+/// any [`is_native_specifier`] import instead of reading the binary: the
+/// stub throws on evaluation with an actionable message telling the user
+/// to allowlist the file under `[runtime]` and select the `napi-vm`
+/// backend (feature `napi-vm`, disabled by default).
+#[must_use]
+pub fn native_shim_module(specifier: &str) -> SsrModule {
+    let literal = js_single_quoted(specifier);
+    SsrModule {
+        id: specifier.to_string(),
+        code: format!(
+            "throw new Error(\"[ferrite] cannot bundle native module {literal}: \
+             .node binaries stay external in SSR. Allowlist the file under [runtime] \
+             native_allow (+ native_integrity) and run with `--runtime napi-vm` \
+             (build with `--features napi-vm`).\");\n"
+        ),
+        dependencies: Vec::new(),
+    }
+}
+
+/// Render a Rust string as a JS single-quoted literal.
+fn js_single_quoted(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('\'');
+    for ch in text.chars() {
+        match ch {
+            '\'' => out.push_str("\\'"),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            other => out.push(other),
+        }
+    }
+    out.push('\'');
+    out
 }
 
 /// Known server-only packages (kept external unless `noExternal`).
@@ -261,15 +443,68 @@ pub fn island_hydration_script() -> &'static str {
 /// Server-function RPC transport (§50).
 pub const RPC_ROUTE_PREFIX: &str = "/_ferrite/rpc/";
 
-/// RPC encodings.
+/// RPC encodings (§50).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RpcEncoding {
-    /// JSON (v0.1).
+    /// JSON (default).
     Json,
-    /// MessagePack (roadmap).
+    /// MessagePack.
     MessagePack,
-    /// CBOR (roadmap).
+    /// CBOR.
     Cbor,
+}
+
+impl RpcEncoding {
+    /// Wire content type.
+    #[must_use]
+    pub fn content_type(self) -> &'static str {
+        match self {
+            Self::Json => "application/json",
+            Self::MessagePack => "application/msgpack",
+            Self::Cbor => "application/cbor",
+        }
+    }
+
+    /// Detect the encoding from a `Content-Type` header value (parameters
+    /// ignored). Missing or unknown types fall back to JSON.
+    #[must_use]
+    pub fn from_content_type(content_type: Option<&str>) -> Self {
+        match content_type.map(|raw| raw.split(';').next().unwrap_or("").trim()) {
+            Some("application/msgpack" | "application/x-msgpack") => Self::MessagePack,
+            Some("application/cbor") => Self::Cbor,
+            _ => Self::Json,
+        }
+    }
+
+    /// Decode RPC arguments from wire bytes.
+    pub fn decode(self, bytes: &[u8]) -> Result<serde_json::Value> {
+        match self {
+            Self::Json => serde_json::from_slice(bytes)
+                .map_err(|error| FerriteError::Ssr(format!("bad JSON rpc args: {error}"))),
+            Self::MessagePack => rmp_serde::from_slice(bytes)
+                .map_err(|error| FerriteError::Ssr(format!("bad MessagePack rpc args: {error}"))),
+            Self::Cbor => ciborium::from_reader(bytes)
+                .map_err(|error| FerriteError::Ssr(format!("bad CBOR rpc args: {error}"))),
+        }
+    }
+
+    /// Encode an RPC result to wire bytes.
+    pub fn encode(self, value: &serde_json::Value) -> Result<Vec<u8>> {
+        match self {
+            Self::Json => serde_json::to_vec(value)
+                .map_err(|error| FerriteError::Ssr(format!("cannot encode JSON rpc: {error}"))),
+            Self::MessagePack => rmp_serde::to_vec(value).map_err(|error| {
+                FerriteError::Ssr(format!("cannot encode MessagePack rpc: {error}"))
+            }),
+            Self::Cbor => {
+                let mut bytes = Vec::new();
+                ciborium::into_writer(value, &mut bytes).map_err(|error| {
+                    FerriteError::Ssr(format!("cannot encode CBOR rpc: {error}"))
+                })?;
+                Ok(bytes)
+            }
+        }
+    }
 }
 
 /// An RPC invocation.
@@ -440,6 +675,15 @@ pub fn match_route(pattern: &str, path: &str) -> Option<HashMap<String, String>>
 mod tests {
     use super::*;
 
+    fn test_resolved() -> ResolvedConfig {
+        ferrite_config::resolve_config(
+            ferrite_config::UserConfig::default(),
+            Some(std::env::temp_dir()),
+            ferrite_config::CliOverrides::default(),
+        )
+        .expect("resolve test config")
+    }
+
     #[test]
     fn external_matching() {
         let config = SsrConfig {
@@ -451,6 +695,231 @@ mod tests {
         assert!(is_external("pg/lib", &config));
         assert!(!is_external("my-esm-package", &config));
         assert!(!is_external("./local.ts", &config));
+    }
+
+    #[test]
+    fn native_binaries_are_always_external() {
+        let config = SsrConfig {
+            bundle_all: true,
+            no_external: vec!["./addon.node".to_string()],
+            ..Default::default()
+        };
+        assert!(is_native_specifier("./addon.node"));
+        assert!(is_native_specifier("./addon.node?v=1"));
+        assert!(is_native_specifier("pkg/prebuilds/a.node"));
+        assert!(!is_native_specifier("./addon.js"));
+        assert!(is_external("./addon.node", &config));
+        assert!(is_external("./addon.node?v=1", &SsrConfig::default()));
+    }
+
+    #[test]
+    fn native_shim_throws_actionable_error() {
+        let module = native_shim_module("./na'tive\\addon.node");
+        assert_eq!(module.id, "./na'tive\\addon.node");
+        assert!(module.dependencies.is_empty());
+        assert!(
+            module.code.starts_with("throw new Error("),
+            "{}",
+            module.code
+        );
+        assert!(module.code.contains("native_allow"), "{}", module.code);
+        assert!(
+            module.code.contains("--features napi-vm"),
+            "{}",
+            module.code
+        );
+        // Escaped literal: no raw quote or backslash breaks the JS string.
+        assert!(
+            module.code.contains("./na\\'tive\\\\addon.node"),
+            "{}",
+            module.code
+        );
+    }
+
+    #[test]
+    fn inject_shell_combines_body_and_preloads() {
+        let shell = "<html><head></head><body><!--ssr-outlet--></body></html>";
+        let html = inject_shell(
+            shell,
+            "<h1>hi</h1>",
+            &[
+                "/a.css".to_string(),
+                "/b.js".to_string(),
+                "/c.png".to_string(),
+            ],
+        );
+        assert!(html.contains("<h1>hi</h1>"), "{html}");
+        assert!(
+            html.contains("<link rel=\"stylesheet\" href=\"/a.css\">"),
+            "{html}"
+        );
+        assert!(
+            html.contains("<link rel=\"modulepreload\" href=\"/b.js\">"),
+            "{html}"
+        );
+        assert!(!html.contains("c.png"), "{html}");
+        assert!(!html.contains("<!--ssr-outlet-->"), "{html}");
+    }
+
+    #[tokio::test]
+    async fn unknown_backend_errors_loudly() {
+        let mut resolved = test_resolved();
+        resolved.runtime.backend = "does-not-exist".to_string();
+        let adapter = JsSsrAdapter::from_resolved(
+            &resolved,
+            CompiledModule {
+                id: "entry".to_string(),
+                code: "export function render() { return \"x\"; }".to_string(),
+                url: None,
+            },
+        );
+        let error = adapter
+            .render(
+                SsrHttpRequest {
+                    method: "GET".to_string(),
+                    uri: "/".to_string(),
+                    headers: Vec::new(),
+                    body: Vec::new(),
+                },
+                SsrContext::default(),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("does-not-exist"), "{error}");
+    }
+
+    #[cfg(feature = "napi-vm")]
+    #[tokio::test]
+    async fn renders_through_napi_vm() {
+        let mut resolved = test_resolved();
+        resolved.runtime.backend = "napi-vm".to_string();
+        let adapter = JsSsrAdapter::from_resolved(
+            &resolved,
+            CompiledModule {
+                id: "entry".to_string(),
+                code: "export function render(url) { return `<h1>hello from ${url}</h1>`; }\n"
+                    .to_string(),
+                url: None,
+            },
+        )
+        .with_shell("<html><head></head><body><!--ssr-outlet--></body></html>");
+        let response = adapter
+            .render(
+                SsrHttpRequest {
+                    method: "GET".to_string(),
+                    uri: "/about".to_string(),
+                    headers: Vec::new(),
+                    body: Vec::new(),
+                },
+                SsrContext {
+                    preload: vec!["/app.js".to_string()],
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("render");
+        let html = response.into_string().await.expect("body");
+        assert!(html.contains("<h1>hello from /about</h1>"), "{html}");
+        assert!(
+            html.contains("<link rel=\"modulepreload\" href=\"/app.js\">"),
+            "{html}"
+        );
+    }
+
+    #[cfg(feature = "napi-vm")]
+    #[tokio::test]
+    async fn bad_allowlist_mapping_fails_loudly() {
+        let mut resolved = test_resolved();
+        resolved.runtime.backend = "napi-vm".to_string();
+        resolved.runtime.native_allow = vec!["/nonexistent-ferrite/missing.node".to_string()];
+        let adapter = JsSsrAdapter::from_resolved(
+            &resolved,
+            CompiledModule {
+                id: "entry".to_string(),
+                code: "export function render() { return \"x\"; }".to_string(),
+                url: None,
+            },
+        );
+        let error = adapter
+            .render(
+                SsrHttpRequest {
+                    method: "GET".to_string(),
+                    uri: "/".to_string(),
+                    headers: Vec::new(),
+                    body: Vec::new(),
+                },
+                SsrContext::default(),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("missing.node"), "{error}");
+    }
+
+    #[test]
+    fn rpc_encodings_roundtrip() {
+        let value = serde_json::json!({"id": 1, "tags": ["a", "b"], "nested": {"ok": true}});
+        for encoding in [
+            RpcEncoding::Json,
+            RpcEncoding::MessagePack,
+            RpcEncoding::Cbor,
+        ] {
+            let bytes = encoding.encode(&value).expect("encode");
+            assert!(!bytes.is_empty());
+            let back = encoding.decode(&bytes).expect("decode");
+            assert_eq!(back, value, "{encoding:?}");
+        }
+        // Binary encodings are more compact than JSON here.
+        let json_len = RpcEncoding::Json.encode(&value).unwrap().len();
+        assert!(RpcEncoding::MessagePack.encode(&value).unwrap().len() < json_len);
+        assert!(RpcEncoding::Cbor.encode(&value).unwrap().len() < json_len);
+    }
+
+    #[test]
+    fn rpc_content_type_detection() {
+        assert_eq!(RpcEncoding::from_content_type(None), RpcEncoding::Json);
+        assert_eq!(
+            RpcEncoding::from_content_type(Some("application/json")),
+            RpcEncoding::Json
+        );
+        assert_eq!(
+            RpcEncoding::from_content_type(Some("application/json; charset=utf-8")),
+            RpcEncoding::Json
+        );
+        assert_eq!(
+            RpcEncoding::from_content_type(Some("application/msgpack")),
+            RpcEncoding::MessagePack
+        );
+        assert_eq!(
+            RpcEncoding::from_content_type(Some("application/x-msgpack")),
+            RpcEncoding::MessagePack
+        );
+        assert_eq!(
+            RpcEncoding::from_content_type(Some("application/cbor")),
+            RpcEncoding::Cbor
+        );
+        assert_eq!(
+            RpcEncoding::from_content_type(Some("text/plain")),
+            RpcEncoding::Json
+        );
+        assert_eq!(
+            RpcEncoding::MessagePack.content_type(),
+            "application/msgpack"
+        );
+        assert_eq!(RpcEncoding::Cbor.content_type(), "application/cbor");
+    }
+
+    #[test]
+    fn rpc_decode_rejects_garbage() {
+        // Invalid UTF-8 (JSON), 0xc1 never-used byte (msgpack), tag(1)
+        // followed by break (CBOR): all three must fail.
+        for encoding in [
+            RpcEncoding::Json,
+            RpcEncoding::MessagePack,
+            RpcEncoding::Cbor,
+        ] {
+            assert!(encoding.decode(b"\xc1\xff").is_err(), "{encoding:?}");
+            assert!(encoding.decode(b"").is_err(), "{encoding:?} empty");
+        }
     }
 
     #[tokio::test]

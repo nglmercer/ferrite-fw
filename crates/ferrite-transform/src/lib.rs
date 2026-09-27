@@ -168,6 +168,10 @@ pub struct MinifyRequest {
     pub id: String,
     /// Source code.
     pub code: String,
+    /// Emit a source map (chained through `input_map` when present).
+    pub sourcemap: bool,
+    /// Map from a previous step (`code` → original); chained, not dropped.
+    pub input_map: Option<SourceMap>,
 }
 
 /// Minify result.
@@ -225,7 +229,7 @@ impl JsCompiler for OxcCompiler {
     }
 
     fn minify(&self, request: MinifyRequest) -> Result<MinifyResult> {
-        minify_module(&request.id, &request.code)
+        minify_module(&request)
     }
 }
 
@@ -476,7 +480,7 @@ fn transform_module(request: TransformRequest) -> Result<TransformResult> {
         request.module_type,
         ModuleType::Ts | ModuleType::Tsx | ModuleType::Jsx
     );
-    let (mut code, map) = if needs_transform {
+    let (mut code, mut map) = if needs_transform {
         transform_js_like(&request)?
     } else {
         // Plain JS: validate with the parser, keep original formatting.
@@ -488,8 +492,14 @@ fn transform_module(request: TransformRequest) -> Result<TransformResult> {
         code = apply_define(&code, &request.define);
     }
     if request.minify {
-        let minified = minify_module(&request.id, &code)?;
+        let minified = minify_module(&MinifyRequest {
+            id: request.id.clone(),
+            code,
+            sourcemap: request.sourcemap,
+            input_map: map,
+        })?;
         code = minified.code;
+        map = minified.map;
     }
     // Fresh import spans from the final code (§28: AST ranges, not regex).
     let parsed = parse_module(&request.id, &code, &ModuleType::Js)?;
@@ -566,29 +576,140 @@ fn transform_js_like(request: &TransformRequest) -> Result<(String, Option<Sourc
 }
 
 /// Minify a module with Oxc.
-fn minify_module(id: &str, code: &str) -> Result<MinifyResult> {
+fn minify_module(request: &MinifyRequest) -> Result<MinifyResult> {
     let allocator = Allocator::default();
     let source_type = SourceType::mjs();
-    let parsed = Parser::new(&allocator, code, source_type).parse();
+    let parsed = Parser::new(&allocator, &request.code, source_type).parse();
     if parsed.fatal_error {
         return Err(FerriteError::Parse {
-            id: id.to_string(),
+            id: request.id.clone(),
             message: "syntax error".to_string(),
-            frame: Some(ferrite_core::code_frame(code, 0, 2)),
+            frame: Some(ferrite_core::code_frame(&request.code, 0, 2)),
         });
     }
     let mut program = parsed.program;
     Minifier::new(MinifierOptions::default()).minify(&allocator, &mut program);
+    let path = PathBuf::from(request.id.split('?').next().unwrap_or(&request.id));
     let generated = Codegen::new()
         .with_options(CodegenOptions {
             minify: true,
+            source_map_path: request.sourcemap.then_some(path),
             ..Default::default()
         })
         .build(&program);
+    let map = match (request.sourcemap, generated.map) {
+        (true, Some(outer)) => {
+            let json = outer.to_json_string();
+            let chained = match &request.input_map {
+                Some(input) if !input.inline => Some(chain_source_maps(&json, &input.mappings)?),
+                Some(_) => {
+                    return Err(FerriteError::Other(format!(
+                        "cannot chain an inline source map for {}",
+                        request.id
+                    )));
+                }
+                None => Some(json),
+            };
+            chained.map(SourceMap::external)
+        }
+        _ => None,
+    };
     Ok(MinifyResult {
         code: generated.code,
-        map: None,
+        map,
     })
+}
+
+/// Chain two source maps (§41): `outer` maps generated→intermediate and
+/// `inner` maps intermediate→original; returns generated→original JSON.
+///
+/// Positions the inner map cannot resolve pass through sourceless rather
+/// than failing the build; unparseable inputs are a loud error.
+pub fn chain_source_maps(outer_json: &str, inner_json: &str) -> Result<String> {
+    let outer = oxc_sourcemap::SourceMap::from_json_string(outer_json)
+        .map_err(|error| FerriteError::Other(format!("bad outer source map: {error}")))?;
+    let inner = oxc_sourcemap::SourceMap::from_json_string(inner_json)
+        .map_err(|error| FerriteError::Other(format!("bad inner source map: {error}")))?;
+    // Index inner tokens by intermediate (generated) line → columns.
+    // Entry: (dst_col, src_line, src_col, source_id, name_id).
+    type LineIndex =
+        std::collections::BTreeMap<u32, Vec<(u32, u32, u32, Option<u32>, Option<u32>)>>;
+    let mut index: LineIndex = std::collections::BTreeMap::new();
+    for token in inner.get_tokens() {
+        index.entry(token.get_dst_line()).or_default().push((
+            token.get_dst_col(),
+            token.get_src_line(),
+            token.get_src_col(),
+            token.get_source_id(),
+            token.get_name_id(),
+        ));
+    }
+    for tokens in index.values_mut() {
+        tokens.sort_by_key(|entry| entry.0);
+    }
+    let mut builder = oxc_sourcemap::SourceMapBuilder::default();
+    // Preserve the inner source table (ids stay identical); contents are
+    // fixed up after the build because the builder only takes `&str`.
+    for source in inner.get_sources() {
+        builder.set_source_and_content(source, "");
+    }
+    let outer_names: Vec<&str> = outer.get_names().collect();
+    let inner_names: Vec<&str> = inner.get_names().collect();
+    let mut name_cache: HashMap<(bool, u32), u32> = HashMap::new();
+    for token in outer.get_tokens() {
+        let (dst_line, dst_col) = (token.get_dst_line(), token.get_dst_col());
+        let mut hit: Option<(u32, u32, Option<u32>, Option<u32>)> = None;
+        if token.get_source_id().is_some() {
+            let (line, col) = (token.get_src_line(), token.get_src_col());
+            if let Some(candidates) = index.get(&line) {
+                if let Some(entry) = candidates
+                    .iter()
+                    .rev()
+                    .find(|entry| entry.0 <= col && entry.3.is_some())
+                {
+                    hit = Some((entry.1, entry.2, entry.3, entry.4));
+                }
+            }
+        }
+        match hit {
+            Some((src_line, src_col, src_id, inner_name)) => {
+                let name_id = match (token.get_name_id(), inner_name) {
+                    (Some(id), _) => {
+                        intern_chain_name(&mut builder, &mut name_cache, &outer_names, true, id)
+                    }
+                    (None, Some(id)) => {
+                        intern_chain_name(&mut builder, &mut name_cache, &inner_names, false, id)
+                    }
+                    (None, None) => None,
+                };
+                builder.add_token(dst_line, dst_col, src_line, src_col, src_id, name_id);
+            }
+            None => builder.add_token(dst_line, dst_col, 0, 0, None, None),
+        }
+    }
+    let mut chained = builder.into_sourcemap();
+    chained.set_source_contents(inner.get_source_contents().collect());
+    if let Some(file) = outer.get_file() {
+        chained.set_file(file);
+    }
+    Ok(chained.to_json_string())
+}
+
+/// Intern a chain-local name id (outer names win over inner names).
+fn intern_chain_name<'a>(
+    builder: &mut oxc_sourcemap::SourceMapBuilder<'a>,
+    cache: &mut HashMap<(bool, u32), u32>,
+    names: &[&'a str],
+    is_outer: bool,
+    id: u32,
+) -> Option<u32> {
+    if let Some(cached) = cache.get(&(is_outer, id)) {
+        return Some(*cached);
+    }
+    let name = names.get(id as usize).copied()?;
+    let interned = builder.add_name(name);
+    cache.insert((is_outer, id), interned);
+    Some(interned)
 }
 
 /// Rewrite specifiers in `code` using AST ranges (§28).
@@ -804,9 +925,100 @@ mod tests {
             .minify(MinifyRequest {
                 id: "/a.js".to_string(),
                 code: "const  longName  =  1 + 2;\nconsole.log(longName);\n".to_string(),
+                sourcemap: false,
+                input_map: None,
             })
             .unwrap();
         assert!(result.code.len() < 60, "{}", result.code);
+    }
+
+    #[test]
+    fn minify_chains_through_transform_map() {
+        let compiler = compiler();
+        let transformed = compiler
+            .transform({
+                let mut request = TransformRequest::new(
+                    "/src/a.ts",
+                    "const greeting: string = \"hi\";\nconsole.log(greeting);\n",
+                    ModuleType::Ts,
+                );
+                request.sourcemap = true;
+                request
+            })
+            .unwrap();
+        let input_map = transformed.map.expect("transform map");
+        let minified = compiler
+            .minify(MinifyRequest {
+                id: "/gen/a.js".to_string(),
+                code: transformed.code,
+                sourcemap: true,
+                input_map: Some(input_map),
+            })
+            .unwrap();
+        let chained = minified.map.expect("chained map");
+        let decoded =
+            oxc_sourcemap::SourceMap::from_json_string(&chained.mappings).expect("decode chain");
+        // Chained sources are the ORIGINAL .ts file, not the intermediate.
+        let sources: Vec<&str> = decoded.get_sources().collect();
+        assert_eq!(sources, vec!["/src/a.ts"]);
+        // Minified output maps back to original lines (no dangling refs).
+        let mut mapped = 0;
+        for token in decoded.get_tokens() {
+            if let Some(source_id) = token.get_source_id() {
+                assert!(decoded.get_source(source_id).is_some());
+                mapped += 1;
+            }
+        }
+        assert!(mapped > 0, "expected mapped tokens");
+    }
+
+    #[test]
+    fn chain_unmapped_positions_pass_through_sourceless() {
+        fn build(source: &str, tokens: &[(u32, u32, u32, u32, bool)]) -> String {
+            let mut builder = oxc_sourcemap::SourceMapBuilder::default();
+            builder.set_source_and_content(source, "content");
+            for (dst_line, dst_col, src_line, src_col, mapped) in tokens {
+                let (src_line, src_col, src_id) = if *mapped {
+                    (*src_line, *src_col, Some(0))
+                } else {
+                    (0, 0, None)
+                };
+                builder.add_token(*dst_line, *dst_col, src_line, src_col, src_id, None);
+            }
+            builder.into_sourcemap().to_json_string()
+        }
+        // inner: intermediate (0,0) → original (7,3).
+        let inner = build("orig.ts", &[(0, 0, 7, 3, true)]);
+        // outer: hit at intermediate (0,0), miss at (5,0), sourceless.
+        let outer = build(
+            "mid.js",
+            &[(0, 2, 0, 0, true), (0, 9, 5, 0, true), (0, 12, 0, 0, false)],
+        );
+        let chained = chain_source_maps(&outer, &inner).unwrap();
+        let decoded = oxc_sourcemap::SourceMap::from_json_string(&chained).unwrap();
+        assert_eq!(decoded.get_sources().collect::<Vec<_>>(), vec!["orig.ts"]);
+        let tokens: Vec<_> = decoded.get_tokens().collect();
+        assert_eq!(tokens.len(), 3);
+        // Hit remaps to the original position.
+        assert_eq!(
+            (
+                tokens[0].get_src_line(),
+                tokens[0].get_src_col(),
+                tokens[0].get_source_id()
+            ),
+            (7, 3, Some(0))
+        );
+        // Miss and sourceless stay sourceless.
+        assert_eq!(tokens[1].get_source_id(), None);
+        assert_eq!(tokens[2].get_source_id(), None);
+    }
+
+    #[test]
+    fn chain_rejects_bad_json() {
+        assert!(chain_source_maps("nope", "{\"version\":3}").is_err());
+        let inner = "{\"version\":3,\"sources\":[],\"names\":[],\"mappings\":\"\"}";
+        assert!(chain_source_maps("nope", inner).is_err());
+        assert!(chain_source_maps(inner, "nope").is_err());
     }
 
     #[test]

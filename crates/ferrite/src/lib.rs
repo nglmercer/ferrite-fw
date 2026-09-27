@@ -677,9 +677,11 @@ impl ModuleLoader for BuildLoader {
                     .minify(ferrite_transform::MinifyRequest {
                         id: id.0.clone(),
                         code: code.clone(),
+                        sourcemap: self.sourcemap,
+                        input_map: map.clone().map(ferrite_core::SourceMap::external),
                     })?;
             code = minified.code;
-            map = None; // minification invalidates the transform map (chain roadmap §41)
+            map = minified.map.map(|chained| chained.mappings);
         }
         Ok(LoadedModule {
             id: id.clone(),

@@ -63,16 +63,16 @@ let app = my_router.merge(server.router());
 | `ferrite-resolver` | Aliases, npm, exports/imports, conditions (§15) |
 | `ferrite-graph` | Environment-aware module graph, HMR boundaries (§7, §34) |
 | `ferrite-transform` | `JsCompiler` trait + Oxc backend (§5, §90) |
-| `ferrite-plugin` | Rust plugin API, container, hook filters (§11–§14) |
+| `ferrite-plugin` | Rust plugin API, container, hook filters, tier-2 JS host (§11–§14, §56–§57) |
 | `ferrite-server` | Dev server: HTTP/WS, pipelines, watcher (§24–§26) |
 | `ferrite-hmr` | HMR protocol + browser client (§32–§35) |
-| `ferrite-html` | Entry discovery, core rewrites, tag injection (§31) |
+| `ferrite-html` | Entry discovery, core rewrites, tag injection, import maps (§31) |
 | `ferrite-css` | Imports, modules, injection, minify (§29) |
 | `ferrite-assets` | `?raw`/`?url`/`?inline`/`?worker`/`?wasm`, hashing (§30) |
 | `ferrite-npm` | Registry, semver, tarballs, `ferrite.lock` (§16) |
 | `ferrite-bundler` | Chunks, hashing, manifests, source maps (§37–§39) |
-| `ferrite-runtime` | `JsRuntime` trait, value bridge, pool (§20, §84–§87) |
-| `ferrite-ssr` | Adapters, externals, streaming, islands, RPC (§21–§23, §46–§50) |
+| `ferrite-runtime` | `JsRuntime` trait, value bridge, pool, opt-in napi-vm backend (§20, §84–§87) |
+| `ferrite-ssr` | Adapters, externals, `.node` shims, streaming, islands, RPC (§21–§23, §46–§50) |
 | `ferrite-cache` | Memory/disk caches, transform keys (§59–§61) |
 | `ferrite-manifest` | Client + SSR manifest schemas (§40) |
 | `ferrite-wasm` | `rust:` packages, WASM loader (§45, §74) |
@@ -82,9 +82,79 @@ let app = my_router.merge(server.router());
 Plus `packages/ferrite-client` (typed HMR client reference) and
 `examples/{vanilla-ts,react,rust-wasm,ssr}`.
 
+## Embedded runtime, `.node`, and import maps
+
+The embedded JS runtime is **disabled by default**: plain builds have no JS
+engine and no Node dependency. Opt in with the `napi-vm` cargo feature
+(pure-Rust [napi-vm](https://github.com/nglmercer/napi-vm) core, no Node):
+
+```bash
+cargo build -p ferrite-cli --features napi-vm
+ferrite ssr --runtime napi-vm     # SSR via src/entry-server.* `render(url)`
+```
+
+```toml
+# ferrite.toml
+[runtime]
+backend = "napi-vm"              # auto | none | napi-vm
+fuel_budget = 10_000_000         # 0 = engine default
+native_allow = ["native/addon.node"]
+
+[runtime.native_integrity]
+"native/addon.node" = "<64 hex chars>"
+```
+
+`.node` binaries are always SSR-external (never bundled); without an
+allowlist entry they resolve to a stub that throws an actionable error.
+With the backend enabled, guest `require("./addon.node")` loads real
+Node-API binaries through napi-vm's in-process host (Node-API C ABI;
+V8/NAN/libuv addons stay on napi-vm's Node sidecar and fail loudly).
+
+```toml
+# ferrite.toml — dev-only import maps (build keeps hashed rewrites)
+[npm]
+dev_strategy = "import-map"      # rewrite (default) | import-map
+```
+
+With `import-map`, dev leaves bare specifiers untouched and injects an
+inline `<script type="importmap">` (collected from the entry closure)
+before the first module script. SSR keeps server-side rewriting.
+
+JS (Vite/Rollup-style) plugins can run tier-2 through
+`ferrite_plugin::js_host::{JsPluginHost, ForeignPluginHost}` on any
+`JsRuntime` (hooks `resolveId`/`load`/`transform`, JSON bridge, no
+filesystem/network/process access by default).
+
+## Remote imports, RPC encodings, source maps
+
+```toml
+# ferrite.toml — remote imports (§72, disabled by default)
+[remote]
+enabled = true
+allow = ["esm.example", "*.cdn.example"]
+```
+
+Allowed `https://` imports (plain `http` only for loopback) resolve to
+virtual modules, fetch once, and cache by URL hash under
+`.ferrite/cache/remote/`. Relative imports inside remote modules rebase
+onto the remote origin. Fresh checkouts refetch; `ferrite clean` drops
+the cache.
+
+Server functions (`/_ferrite/rpc/…`) negotiate the encoding via
+`Content-Type`: `application/json` (default), `application/msgpack`
+(`application/x-msgpack` accepted), or `application/cbor`. Responses
+mirror the request encoding. Malformed bodies are a loud RPC error,
+never silent `null` args.
+
+Production minification preserves source maps: the minify step emits
+its own map and chains it through the transform map
+(`ferrite_transform::chain_source_maps`, §41), so minified builds still
+point at original sources. Positions that cannot be resolved pass
+through sourceless instead of failing the build.
+
 ## Conventions
 
-- Dev serves native ESM per module; bare imports rewrite to `/@npm/<pkg>@<ver>/…`.
+- Dev serves native ESM per module; bare imports rewrite to `/@npm/<pkg>@<ver>/…` (or stay bare under `[npm] dev_strategy = "import-map"`).
 - Virtual modules resolve to `\0…` internally and serve at `/@id/…`.
 - Asset imports rewrite to `…?asset-shim` (JS URL export); plain URLs serve raw bytes.
 - Stylesheet `<link>`s rewrite to `…?direct` (CSS, not the JS wrapper).
@@ -100,8 +170,11 @@ externals, streaming, islands, RPC), and the `ferrite` CLI.
 
 Explicitly roadmap (documented at each site): SWC backend, scope-hoisted
 concatenation / Rolldown backend, statement-level tree-shaking, CSS file
-extraction, embedded QuickJS/V8 backend, JS plugin hosting, single-binary
-asset embedding, cross-target builds, remote imports, Vue/Svelte plugins.
+extraction, single-binary asset embedding, cross-target builds, automatic
+WASM `cargo build` orchestration, Vue/Svelte plugins. Shipped since v0.1:
+opt-in napi-vm embedded backend (no Node), tier-2 JS plugin hosting
+(`ferrite_plugin::js_host`), dev import maps, `.node` SSR shims,
+MessagePack/CBOR RPC encodings, source-map chaining, remote imports.
 
 ## Testing
 

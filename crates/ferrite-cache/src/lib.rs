@@ -25,6 +25,8 @@ pub enum CacheLayer {
     Bundle,
     /// SSR modules.
     Ssr,
+    /// Fetched remote modules (§72).
+    Remote,
 }
 
 impl CacheLayer {
@@ -39,6 +41,7 @@ impl CacheLayer {
             Self::Deps => "deps",
             Self::Bundle => "bundle",
             Self::Ssr => "ssr",
+            Self::Remote => "remote",
         }
     }
 }

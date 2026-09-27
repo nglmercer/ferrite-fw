@@ -28,3 +28,5 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 http = { workspace = true }
 regex = { workspace = true }
+reqwest = { workspace = true }
+url = { workspace = true }

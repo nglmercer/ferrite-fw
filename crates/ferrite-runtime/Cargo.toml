@@ -12,3 +12,11 @@ serde_json = { workspace = true }
 indexmap = { workspace = true }
 tokio = { workspace = true }
 futures = { workspace = true }
+# Opt-in embedded JS + Node-API runtime. Pinned git rev; pure-Rust core only
+# (no N-API build layer) plus the in-process Node-API addon host.
+napi-vm = { git = "https://github.com/nglmercer/napi-vm", rev = "0fa987d8860d620cd1008a84f2a17c9b67c495cd", default-features = false, features = ["node-api-host"], optional = true }
+
+[features]
+default = []
+# Disabled by default: embedded JS execution + in-process `.node` loading.
+napi-vm = ["dep:napi-vm"]

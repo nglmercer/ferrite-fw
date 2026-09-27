@@ -10,6 +10,10 @@ use std::sync::Arc;
 
 use ferrite_core::{FerriteError, Result};
 
+/// napi-vm embedded backend (feature `napi-vm`, disabled by default).
+#[cfg(feature = "napi-vm")]
+pub mod napi_vm;
+
 /// A value crossing the Rust ↔ JS boundary (§87).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum JsValue {
@@ -89,6 +93,46 @@ pub struct RuntimeEnvironment {
     pub request_id: Option<String>,
 }
 
+/// Convert a bridge value to its plain-JSON equivalent for guest calls.
+///
+/// Explicit untagged mapping (the derived `Serialize` form is externally
+/// tagged and would cross as `{"String": ...}` instead of `"..."`).
+/// Handles cannot cross and are an error.
+pub fn js_value_to_json(value: &JsValue) -> Result<serde_json::Value> {
+    match value {
+        JsValue::Undefined | JsValue::Null => Ok(serde_json::Value::Null),
+        JsValue::Bool(value) => Ok(serde_json::Value::Bool(*value)),
+        JsValue::Number(value) => Ok(serde_json::Number::from_f64(*value)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null)),
+        JsValue::String(value) => Ok(serde_json::Value::String(value.clone())),
+        JsValue::Array(items) => Ok(serde_json::Value::Array(
+            items
+                .iter()
+                .map(js_value_to_json)
+                .collect::<Result<Vec<_>>>()?,
+        )),
+        JsValue::Object(map) => {
+            let mut object = serde_json::Map::with_capacity(map.len());
+            for (key, item) in map {
+                object.insert(key.clone(), js_value_to_json(item)?);
+            }
+            Ok(serde_json::Value::Object(object))
+        }
+        // Bytes cross as number arrays (lossless plain JSON).
+        JsValue::Bytes(bytes) => Ok(serde_json::Value::Array(
+            bytes
+                .iter()
+                .map(|byte| serde_json::Value::Number((*byte).into()))
+                .collect(),
+        )),
+        JsValue::Handle(handle) => Err(FerriteError::Runtime(format!(
+            "cannot pass guest handle {} as a call argument",
+            handle.id
+        ))),
+    }
+}
+
 /// An evaluated module namespace.
 #[derive(Debug, Clone, Default)]
 pub struct ModuleNamespace {
@@ -163,6 +207,25 @@ impl JsRuntime for UnavailableRuntime {
              use a Rust SSR adapter (pure Rust SSR) or enable a JS engine backend",
             module.id, self.backend
         )))
+    }
+}
+
+/// Build the runtime for a backend name (`auto`/`none` need no engine).
+///
+/// `napi-vm` requires the `napi-vm` cargo feature; without it the returned
+/// runtime explains how to enable it instead of failing at call time.
+#[must_use]
+pub fn runtime_for_backend(backend: &str) -> Arc<dyn JsRuntime> {
+    match backend {
+        #[cfg(feature = "napi-vm")]
+        "napi-vm" => Arc::new(napi_vm::NapiVmRuntime::with_defaults()),
+        #[cfg(not(feature = "napi-vm"))]
+        "napi-vm" => Arc::new(UnavailableRuntime {
+            backend: "napi-vm (rebuild with `--features napi-vm`)".to_string(),
+        }),
+        _ => Arc::new(UnavailableRuntime {
+            backend: backend.to_string(),
+        }),
     }
 }
 

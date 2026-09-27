@@ -3,7 +3,7 @@
 //! Native-ESM dev mode: resolve → load → transform → rewrite imports →
 //! serve, with file watching, HMR broadcast, and middleware embedding.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -26,7 +26,7 @@ use ferrite_plugin::{
 };
 use ferrite_resolver::{ResolveKind, ResolveRequest, ResolvedId, Resolver};
 use ferrite_ssr::{
-    RpcRegistry, SsrAdapter, SsrContext, SsrHttpRequest, SsrModule, RPC_ROUTE_PREFIX,
+    RpcEncoding, RpcRegistry, SsrAdapter, SsrContext, SsrHttpRequest, SsrModule, RPC_ROUTE_PREFIX,
 };
 use ferrite_transform::{
     compiler_for_engine, rewrite_import_meta_hot, rewrite_specifiers, with_hmr_client, JsCompiler,
@@ -72,6 +72,8 @@ pub struct DevServerInner {
     pub hmr: HmrServer,
     /// Emitted files shared with plugins.
     pub emitted: Mutex<HashMap<String, ferrite_plugin::EmittedFile>>,
+    /// Bare-specifier → dev-URL map (`import-map` dev strategy).
+    pub import_map: Mutex<BTreeMap<String, String>>,
     /// Extra watch files.
     pub watch_files: Mutex<Vec<String>>,
     /// Collected warnings.
@@ -136,6 +138,7 @@ impl DevServer {
             compiler,
             hmr: HmrServer::default(),
             emitted: Mutex::new(HashMap::new()),
+            import_map: Mutex::new(BTreeMap::new()),
             watch_files: Mutex::new(Vec::new()),
             warnings: Mutex::new(Vec::new()),
             cache: MemoryCache::new(),
@@ -152,10 +155,11 @@ impl DevServer {
         if watch {
             server.start_watcher()?;
         }
-        // The import-map dev strategy is roadmap (§71); warn, keep rewrite.
-        if server.inner.config.npm.dev_strategy == "import-map" {
+        // Unknown dev strategies fall back to `rewrite` with a warning.
+        if !["rewrite", "import-map"].contains(&server.inner.config.npm.dev_strategy.as_str()) {
             tracing::warn!(
-                "`[npm] dev_strategy = \"import-map\"` is not implemented yet; using `rewrite`"
+                "unknown `[npm] dev_strategy = \"{}\"`; using `rewrite`",
+                server.inner.config.npm.dev_strategy
             );
         }
         // `configure_server` hooks.
@@ -314,7 +318,65 @@ impl DevServer {
             )
             .await?;
         let html = result.html.unwrap_or(html);
-        Ok(ferrite_html::inject_tags(&html, &result.tags))
+        let html = ferrite_html::inject_tags(&html, &result.tags);
+        if self.inner.config.npm.dev_strategy == "import-map" {
+            self.collect_import_map(&html).await;
+            let map = self
+                .inner
+                .import_map
+                .lock()
+                .map(|guard| guard.clone())
+                .unwrap_or_default();
+            if !map.is_empty() {
+                let script = ferrite_html::import_map_script(&map);
+                return Ok(ferrite_html::inject_import_map(&html, &script));
+            }
+        }
+        Ok(html)
+    }
+
+    /// Walk the client module closure reachable from `html` entries so the
+    /// `import-map` store covers every statically reachable bare import.
+    ///
+    /// Only statically analyzable imports (static + dynamic-with-literal)
+    /// are collected; runtime-computed specifiers keep the rewrite
+    /// strategy's behavior of failing at fetch time.
+    async fn collect_import_map(&self, html: &str) {
+        let environment = self.inner.config.client_env();
+        let ctx = self.plugin_context(&environment);
+        let mut seen = std::collections::HashSet::new();
+        let mut stack = Vec::new();
+        for entry in ferrite_html::discover_entries(html) {
+            if !entry.is_module {
+                continue;
+            }
+            let spec = entry.src.as_str();
+            if spec.starts_with("/@")
+                || spec.starts_with("http")
+                || spec.starts_with("data:")
+                || spec.starts_with("blob:")
+            {
+                continue;
+            }
+            match self.resolve_id(&ctx, spec, None, &environment).await {
+                Ok(resolved) if !resolved.external => stack.push(resolved.id),
+                Ok(_) => {}
+                Err(error) => tracing::warn!("cannot resolve entry `{spec}`: {error}"),
+            }
+        }
+        while let Some(id) = stack.pop() {
+            if !seen.insert(id.0.clone()) {
+                continue;
+            }
+            match self.pipeline_module(&id, None, "client").await {
+                Ok(module) => {
+                    for (_, dependency, _) in &module.imports {
+                        stack.push(dependency.clone());
+                    }
+                }
+                Err(error) => tracing::warn!("cannot load `{}` for import map: {error}", id.0),
+            }
+        }
     }
 
     /// Load an SSR module graph (`ssrLoadModule`, §22).
@@ -555,6 +617,21 @@ impl DevServer {
                 )));
             }
         }
+        // Remote imports (§72): absolute URLs plus relative imports from a
+        // remote module (rebased onto the remote base URL).
+        if specifier.starts_with("https://") || specifier.starts_with("http://") {
+            return self.resolve_remote(specifier);
+        }
+        if specifier.starts_with("./") || specifier.starts_with("../") {
+            if let Some(base) = importer.and_then(|importer| importer.0.strip_prefix("\0remote:")) {
+                let joined = url::Url::parse(base)
+                    .and_then(|base| base.join(specifier))
+                    .map_err(|error| {
+                        FerriteError::Resolve(format!("bad remote import `{specifier}`: {error}"))
+                    })?;
+                return self.resolve_remote(joined.as_str());
+            }
+        }
         let resolver = if environment.kind.is_ssr() {
             &self.inner.ssr_resolver
         } else {
@@ -566,6 +643,64 @@ impl DevServer {
             environment: environment.kind.clone(),
             kind: ResolveKind::Import,
         })
+    }
+
+    /// Resolve a remote URL against `[remote]` (§72).
+    fn resolve_remote(&self, specifier: &str) -> Result<ResolvedId> {
+        let parsed = url::Url::parse(specifier).map_err(|error| {
+            FerriteError::Resolve(format!("bad remote URL `{specifier}`: {error}"))
+        })?;
+        let host = parsed.host_str().unwrap_or("").to_string();
+        let loopback = host == "localhost" || host == "127.0.0.1" || host == "::1";
+        if parsed.scheme() != "https" && !(parsed.scheme() == "http" && loopback) {
+            return Err(FerriteError::Resolve(format!(
+                "remote imports must use https (`{specifier}`); plain http is only allowed for loopback"
+            )));
+        }
+        if !self.inner.config.remote.enabled {
+            return Err(FerriteError::Resolve(format!(
+                "remote import `{specifier}` is disabled (enable `[remote]`)"
+            )));
+        }
+        if !remote_host_allowed(&host, &self.inner.config.remote.allow) {
+            return Err(FerriteError::Resolve(format!(
+                "remote host `{host}` is not in `[remote] allow`"
+            )));
+        }
+        Ok(ResolvedId::new(format!("\0remote:{specifier}"))
+            .with_meta(serde_json::json!({"remote": true})))
+    }
+
+    /// Fetch a remote module (disk-cached by URL hash, §72).
+    async fn fetch_remote(&self, url: &str) -> Result<String> {
+        let cache = ferrite_cache::DiskCache::new(self.inner.config.root.join(".ferrite"))?;
+        let key = ferrite_core::Hash::of_bytes(url.as_bytes());
+        if let Some(bytes) = cache.get(ferrite_cache::CacheLayer::Remote, &key) {
+            return String::from_utf8(bytes).map_err(|error| {
+                FerriteError::Resolve(format!("cached remote `{url}` is not UTF-8: {error}"))
+            });
+        }
+        let response = reqwest::get(url).await.map_err(|error| {
+            FerriteError::Resolve(format!("cannot fetch remote `{url}`: {error}"))
+        })?;
+        if !response.status().is_success() {
+            return Err(FerriteError::Resolve(format!(
+                "remote `{url}` responded with {}",
+                response.status()
+            )));
+        }
+        let bytes = response.bytes().await.map_err(|error| {
+            FerriteError::Resolve(format!("cannot read remote `{url}`: {error}"))
+        })?;
+        if bytes.len() > MAX_REMOTE_BYTES {
+            return Err(FerriteError::Resolve(format!(
+                "remote `{url}` exceeds the {} byte cap",
+                MAX_REMOTE_BYTES
+            )));
+        }
+        cache.insert(ferrite_cache::CacheLayer::Remote, &key, &bytes)?;
+        String::from_utf8(bytes.to_vec())
+            .map_err(|error| FerriteError::Resolve(format!("remote `{url}` is not UTF-8: {error}")))
     }
 
     /// Load source through plugins, built-in virtuals, then the fs.
@@ -597,6 +732,11 @@ impl DevServer {
         // `node:` shims.
         if let Some(name) = id.0.strip_prefix("\0node:") {
             return Ok((node_shim(name), ModuleType::Js));
+        }
+        // Remote modules (§72).
+        if let Some(url) = id.0.strip_prefix("\0remote:") {
+            let source = self.fetch_remote(url).await?;
+            return Ok((source, ModuleType::Js));
         }
         if id.is_virtual() {
             return Err(FerriteError::Resolve(format!(
@@ -765,6 +905,9 @@ impl DevServer {
             code: module.code.clone(),
             module_type: ModuleType::Js,
         })?;
+        // `import-map` is client-only: SSR has no browser to resolve maps.
+        let use_import_map =
+            self.inner.config.npm.dev_strategy == "import-map" && !environment.kind.is_ssr();
         let mut mapping: HashMap<String, String> = HashMap::new();
         let mut imports = Vec::new();
         for import in &parsed.imports {
@@ -782,15 +925,22 @@ impl DevServer {
                     } else if should_shim_asset(&url) {
                         url = format!("{url}?asset-shim");
                     }
+                    let kind = match import.kind {
+                        ferrite_transform::ParsedImportKind::Static => ImportKind::Static,
+                        ferrite_transform::ParsedImportKind::Dynamic => ImportKind::Dynamic,
+                    };
+                    // Bare specifiers stay for the browser; record the URL
+                    // for the inline map instead of rewriting.
+                    if use_import_map && !resolved.external && is_bare_specifier(&import.specifier)
+                    {
+                        if let Ok(mut map) = self.inner.import_map.lock() {
+                            map.insert(import.specifier.clone(), url.clone());
+                        }
+                        imports.push((import.specifier.clone(), ModuleId::new(url), kind));
+                        continue;
+                    }
                     mapping.insert(import.specifier.clone(), url.clone());
-                    imports.push((
-                        import.specifier.clone(),
-                        ModuleId::new(url),
-                        match import.kind {
-                            ferrite_transform::ParsedImportKind::Static => ImportKind::Static,
-                            ferrite_transform::ParsedImportKind::Dynamic => ImportKind::Dynamic,
-                        },
-                    ));
+                    imports.push((import.specifier.clone(), ModuleId::new(url), kind));
                 }
                 Err(error) => {
                     tracing::warn!(
@@ -1399,25 +1549,37 @@ async fn inspect_handler(State(inner): State<Arc<DevServerInner>>) -> impl IntoR
 async fn rpc_handler(
     State(inner): State<Arc<DevServerInner>>,
     uri: Uri,
-    body: String,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
 ) -> impl IntoResponse {
     let hash = uri
         .path()
         .strip_prefix(RPC_ROUTE_PREFIX)
         .unwrap_or("")
         .to_string();
-    let args: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+    let encoding = RpcEncoding::from_content_type(
+        headers
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+    );
+    let args = match encoding.decode(&body) {
+        Ok(args) => args,
+        Err(error) => return error_response(&error),
+    };
     let registry = inner.rpc.read().await;
     match registry
         .invoke(&ferrite_ssr::RpcRequest { hash, args })
         .await
     {
-        Ok(value) => (
-            StatusCode::OK,
-            [(axum::http::header::CONTENT_TYPE, "application/json")],
-            value.to_string(),
-        )
-            .into_response(),
+        Ok(value) => match encoding.encode(&value) {
+            Ok(bytes) => (
+                StatusCode::OK,
+                [(axum::http::header::CONTENT_TYPE, encoding.content_type())],
+                bytes,
+            )
+                .into_response(),
+            Err(error) => error_response(&error),
+        },
         Err(error) => error_response(&error),
     }
 }
@@ -1713,6 +1875,42 @@ fn node_shim(name: &str) -> String {
     }
 }
 
+/// Maximum fetched remote module size (§72).
+const MAX_REMOTE_BYTES: usize = 8 * 1024 * 1024;
+
+/// True when `host` matches the `[remote] allow` list (exact or `*.` suffix).
+fn remote_host_allowed(host: &str, allow: &[String]) -> bool {
+    let host = host.strip_suffix('.').unwrap_or(host).to_ascii_lowercase();
+    allow.iter().any(|entry| {
+        let entry = entry
+            .strip_suffix('.')
+            .unwrap_or(entry)
+            .to_ascii_lowercase();
+        entry == host
+            || entry
+                .strip_prefix("*.")
+                .is_some_and(|suffix| !suffix.is_empty() && host.ends_with(&format!(".{suffix}")))
+    })
+}
+
+/// True for bare npm-style specifiers (resolver step 11): anything that is
+/// not virtual, builtin, remote, absolute, relative, or a `#` import.
+fn is_bare_specifier(specifier: &str) -> bool {
+    !(specifier.starts_with('\0')
+        || specifier.starts_with("node:")
+        || specifier.starts_with("rust:")
+        || specifier.starts_with("https://")
+        || specifier.starts_with("http://")
+        || specifier.starts_with("data:")
+        || specifier.starts_with("blob:")
+        || specifier.starts_with('/')
+        || specifier.starts_with("./")
+        || specifier.starts_with("../")
+        || specifier == "."
+        || specifier == ".."
+        || specifier.starts_with('#'))
+}
+
 /// Rewrite `<link rel="stylesheet" href>` to `?direct` URLs.
 fn rewrite_link_direct(html: &str) -> String {
     let pattern = regex::Regex::new(r#"<link([^>]*?)href="([^"]+)"([^>]*?)>"#).unwrap();
@@ -1765,5 +1963,296 @@ mod tests {
         let code = "const a = require(\"./a\"); const b = require('./b');";
         let requires = collect_requires(code);
         assert_eq!(requires.len(), 2);
+    }
+
+    #[test]
+    fn bare_specifier_classification() {
+        for bare in ["react", "lodash-es", "@scope/name", "my-lib/sub"] {
+            assert!(is_bare_specifier(bare), "{bare}");
+        }
+        for resolved in [
+            "/src/a.js",
+            "./a.js",
+            "../a.js",
+            ".",
+            "..",
+            "#internal",
+            "node:path",
+            "rust:serde",
+            "https://x/y.js",
+            "data:text/javascript,1",
+            "blob:xyz",
+            "\0virtual",
+        ] {
+            assert!(!is_bare_specifier(resolved), "{resolved}");
+        }
+    }
+
+    #[tokio::test]
+    async fn import_map_strategy_leaves_bare_imports() {
+        let dir = std::env::temp_dir().join(format!("ferrite-importmap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("index.html"),
+            "<!doctype html><html><head></head><body>\
+             <script type=\"module\" src=\"/src/main.js\"></script></body></html>",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("src/main.js"),
+            "import { x } from \"my-lib\";\nimport { y } from \"./other.js\";\nconsole.log(x, y);\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("src/other.js"), "export const y = 2;\n").unwrap();
+        std::fs::write(dir.join("src/lib.js"), "export const x = 1;\n").unwrap();
+        let mut user = ferrite_config::UserConfig::default();
+        user.npm.dev_strategy = "import-map".to_string();
+        user.resolve
+            .alias
+            .insert("my-lib".to_string(), "./src/lib.js".to_string());
+        let config = ferrite_config::resolve_config(
+            user,
+            Some(dir.clone()),
+            ferrite_config::CliOverrides::default(),
+        )
+        .unwrap();
+        let server = DevServer::new_without_watcher(config, Vec::new())
+            .await
+            .unwrap();
+        let html = server.transform_index_html("/index.html").await.unwrap();
+        assert!(html.contains("<script type=\"importmap\">"), "{html}");
+        assert!(html.contains("\"my-lib\""), "{html}");
+        assert!(html.contains("/src/lib.js"), "{html}");
+        let map_pos = html.find("importmap").expect("map");
+        let module_pos = html.find("type=\"module\"").expect("module script");
+        assert!(map_pos < module_pos, "{html}");
+        let module = server
+            .pipeline_module(&ModuleId::new("/src/main.js"), None, "client")
+            .await
+            .unwrap();
+        assert!(module.code.contains("from \"my-lib\""), "{}", module.code);
+        assert!(!module.code.contains("./other.js"), "{}", module.code);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn remote_allow_matching() {
+        let allow = ["esm.example".to_string(), "*.cdn.example".to_string()];
+        assert!(remote_host_allowed("esm.example", &allow));
+        assert!(remote_host_allowed("ESM.EXAMPLE.", &allow));
+        assert!(remote_host_allowed("a.cdn.example", &allow));
+        assert!(!remote_host_allowed("cdn.example", &allow));
+        assert!(!remote_host_allowed("evil.com", &allow));
+        assert!(!remote_host_allowed("a.cdn.example.evil.com", &allow));
+        assert!(!remote_host_allowed("esm.example", &[]));
+    }
+
+    #[tokio::test]
+    async fn remote_import_allowed_and_cached() {
+        let app = axum::Router::new()
+            .route(
+                "/pkg.js",
+                axum::routing::get(|| async {
+                    "import { d } from \"./dep.js\";\nexport const v = d + 1;\n"
+                }),
+            )
+            .route(
+                "/dep.js",
+                axum::routing::get(|| async { "export const d = 41;\n" }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let dir = std::env::temp_dir().join(format!("ferrite-remote-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut user = ferrite_config::UserConfig::default();
+        user.remote.enabled = true;
+        user.remote.allow = vec!["127.0.0.1".to_string()];
+        let config = ferrite_config::resolve_config(
+            user,
+            Some(dir.clone()),
+            ferrite_config::CliOverrides::default(),
+        )
+        .unwrap();
+        let server = DevServer::new_without_watcher(config, Vec::new())
+            .await
+            .unwrap();
+        let url = format!("http://{addr}/pkg.js");
+        let id = ModuleId::new(format!("\0remote:{url}"));
+        let module = server.pipeline_module(&id, None, "client").await.unwrap();
+        // Relative dep rebased onto the remote origin, served virtually.
+        assert!(!module.code.contains("./dep.js"), "{}", module.code);
+        assert!(module.code.contains("/@id/"), "{}", module.code);
+        // Kill the origin: a fresh server on the same root serves from disk.
+        task.abort();
+        let mut user = ferrite_config::UserConfig::default();
+        user.remote.enabled = true;
+        user.remote.allow = vec!["127.0.0.1".to_string()];
+        let config = ferrite_config::resolve_config(
+            user,
+            Some(dir.clone()),
+            ferrite_config::CliOverrides::default(),
+        )
+        .unwrap();
+        let offline = DevServer::new_without_watcher(config, Vec::new())
+            .await
+            .unwrap();
+        let cached = offline.pipeline_module(&id, None, "client").await.unwrap();
+        assert_eq!(cached.code, module.code);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn remote_import_denied_loudly() {
+        let dir = std::env::temp_dir().join(format!("ferrite-remote-deny-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Disabled by default.
+        let config = ferrite_config::resolve_config(
+            ferrite_config::UserConfig::default(),
+            Some(dir.clone()),
+            ferrite_config::CliOverrides::default(),
+        )
+        .unwrap();
+        let server = DevServer::new_without_watcher(config, Vec::new())
+            .await
+            .unwrap();
+        let error = server
+            .pipeline_module(&ModuleId::new("https://esm.example/pkg.js"), None, "client")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("[remote]"), "{error}");
+        // Wrong host.
+        let mut user = ferrite_config::UserConfig::default();
+        user.remote.enabled = true;
+        user.remote.allow = vec!["esm.example".to_string()];
+        let config = ferrite_config::resolve_config(
+            user,
+            Some(dir.clone()),
+            ferrite_config::CliOverrides::default(),
+        )
+        .unwrap();
+        let server = DevServer::new_without_watcher(config, Vec::new())
+            .await
+            .unwrap();
+        let error = server
+            .pipeline_module(&ModuleId::new("https://evil.example/x.js"), None, "client")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("evil.example"), "{error}");
+        // Plain http outside loopback, even when allowlisted.
+        let mut user = ferrite_config::UserConfig::default();
+        user.remote.enabled = true;
+        user.remote.allow = vec!["esm.example".to_string()];
+        let config = ferrite_config::resolve_config(
+            user,
+            Some(dir.clone()),
+            ferrite_config::CliOverrides::default(),
+        )
+        .unwrap();
+        let server = DevServer::new_without_watcher(config, Vec::new())
+            .await
+            .unwrap();
+        let error = server
+            .pipeline_module(&ModuleId::new("http://esm.example/x.js"), None, "client")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("https"), "{error}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn rpc_handler_negotiates_binary_encoding() {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let dir = std::env::temp_dir().join(format!("ferrite-rpc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = ferrite_config::resolve_config(
+            ferrite_config::UserConfig::default(),
+            Some(dir.clone()),
+            ferrite_config::CliOverrides::default(),
+        )
+        .unwrap();
+        let server = DevServer::new_without_watcher(config, Vec::new())
+            .await
+            .unwrap();
+        server
+            .inner()
+            .rpc
+            .write()
+            .await
+            .register("echo1", |args| async move { Ok(args) });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move { axum::serve(listener, server.router()).await });
+
+        for encoding in [
+            ferrite_ssr::RpcEncoding::MessagePack,
+            ferrite_ssr::RpcEncoding::Cbor,
+            ferrite_ssr::RpcEncoding::Json,
+        ] {
+            let body = encoding.encode(&serde_json::json!({"n": 2})).unwrap();
+            let head = format!(
+                "POST /_ferrite/rpc/echo1 HTTP/1.1\r\nhost: x\r\ncontent-type: {}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                encoding.content_type(),
+                body.len()
+            );
+            let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+            stream.write_all(head.as_bytes()).await.unwrap();
+            stream.write_all(&body).await.unwrap();
+            let mut raw = Vec::new();
+            stream.read_to_end(&mut raw).await.unwrap();
+            let text = String::from_utf8_lossy(&raw).into_owned();
+            let split = text.find("\r\n\r\n").expect("header/body split");
+            let (head, _) = text.split_at(split);
+            assert!(head.contains("200"), "{head:?}");
+            assert!(head.contains(encoding.content_type()), "{head:?}");
+            // Body bytes follow the header block verbatim.
+            let body_bytes = &raw[split + 4..];
+            assert_eq!(
+                encoding.decode(body_bytes).unwrap(),
+                serde_json::json!({"n": 2}),
+                "{encoding:?}"
+            );
+        }
+        task.abort();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn rewrite_strategy_still_rewrites_bare_imports() {
+        let dir = std::env::temp_dir().join(format!("ferrite-rewrite-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("src/main.js"),
+            "import { x } from \"my-lib\";\nconsole.log(x);\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("src/lib.js"), "export const x = 1;\n").unwrap();
+        let mut user = ferrite_config::UserConfig::default();
+        user.resolve
+            .alias
+            .insert("my-lib".to_string(), "./src/lib.js".to_string());
+        let config = ferrite_config::resolve_config(
+            user,
+            Some(dir.clone()),
+            ferrite_config::CliOverrides::default(),
+        )
+        .unwrap();
+        let server = DevServer::new_without_watcher(config, Vec::new())
+            .await
+            .unwrap();
+        let module = server
+            .pipeline_module(&ModuleId::new("/src/main.js"), None, "client")
+            .await
+            .unwrap();
+        assert!(!module.code.contains("from \"my-lib\""), "{}", module.code);
+        assert!(module.code.contains("/src/lib.js"), "{}", module.code);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

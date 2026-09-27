@@ -17,3 +17,4 @@ oxc_syntax = { workspace = true }
 oxc_transformer = { workspace = true }
 oxc_codegen = { workspace = true }
 oxc_minifier = { workspace = true }
+oxc_sourcemap = { workspace = true }

@@ -12,6 +12,9 @@ use ferrite_core::{Environment, EnvironmentKind, ModuleId, ModuleType, Result, S
 use ferrite_graph::{ModuleGraph, ModuleNode};
 use ferrite_resolver::{ResolveKind, ResolvedId, Resolver};
 
+/// Tier-2 JS plugin host (spec §56–§57).
+pub mod js_host;
+
 /// Hook ordering (§11).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Enforce {

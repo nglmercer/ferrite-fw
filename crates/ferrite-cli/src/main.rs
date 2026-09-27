@@ -75,6 +75,9 @@ struct DevArgs {
     /// Disable HMR.
     #[arg(long)]
     no_hmr: bool,
+    /// Embedded runtime backend (`auto`, `none`, `napi-vm`).
+    #[arg(long)]
+    runtime: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -261,6 +264,7 @@ async fn dev(
             mode,
             host: args.host.clone(),
             port: args.port,
+            runtime: args.runtime,
             ..Default::default()
         },
         ..Default::default()
@@ -275,16 +279,37 @@ async fn dev(
         config.user.server.open = true;
     }
     let server = ferrite::create_server(config).await?;
+    let resolved = server.inner().config.clone();
+    let mut ssr_mode = String::from("client only");
     if ssr {
-        // Demo SSR adapter: serve index.html shell with preload injection.
+        // SSR adapter: napi-vm entry-server when that backend is selected,
+        // else the index.html shell with preload injection.
         let shell = std::fs::read_to_string(root.join("index.html")).unwrap_or_else(|_| {
             "<!doctype html><html><head></head><body><!--ssr-outlet--></body></html>".to_string()
         });
-        server
-            .set_ssr_adapter(Arc::new(ferrite::ssr::StaticShellAdapter { shell }))
-            .await;
+        if resolved.runtime.backend == "napi-vm" {
+            // Resolved root is absolute; embedded runtimes cannot `import`
+            // relative module ids.
+            match js_ssr_adapter(&server, &resolved, &resolved.root, &shell) {
+                Ok(adapter) => {
+                    server.set_ssr_adapter(adapter).await;
+                    ssr_mode = String::from("enabled (napi-vm entry-server)");
+                }
+                Err(note) => {
+                    println!("note: {note}; using static shell");
+                    server
+                        .set_ssr_adapter(Arc::new(ferrite::ssr::StaticShellAdapter { shell }))
+                        .await;
+                    ssr_mode = String::from("enabled (static shell)");
+                }
+            }
+        } else {
+            server
+                .set_ssr_adapter(Arc::new(ferrite::ssr::StaticShellAdapter { shell }))
+                .await;
+            ssr_mode = String::from("enabled (static shell)");
+        }
     }
-    let resolved = server.inner().config.clone();
     println!();
     println!("  FERRITE v{}", ferrite::VERSION);
     println!();
@@ -293,7 +318,7 @@ async fn dev(
         resolved.server.host, resolved.server.port
     );
     println!("  Network: use --host to expose");
-    println!("  SSR:     {}", if ssr { "enabled" } else { "client only" });
+    println!("  SSR:     {ssr_mode}");
     println!(
         "  HMR:     {}",
         if resolved.server.hmr {
@@ -346,6 +371,56 @@ fn spawn_key_handler(server: ferrite::DevServer, port: u16) {
             }
         }
     });
+}
+
+/// Build a napi-vm SSR adapter from `src/entry-server.*` (§46).
+///
+/// Returns a human-readable reason (not a hard error) when no entry exists
+/// or cannot load, so the caller can fall back to the static shell.
+fn js_ssr_adapter(
+    server: &ferrite::DevServer,
+    resolved: &ferrite::ResolvedConfig,
+    root: &std::path::Path,
+    shell: &str,
+) -> Result<Arc<dyn ferrite::ssr::SsrAdapter>, String> {
+    const CANDIDATES: [&str; 8] = ["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"];
+    let mut found = None;
+    for ext in CANDIDATES {
+        let path = root.join(format!("src/entry-server.{ext}"));
+        if path.is_file() {
+            found = Some(path);
+            break;
+        }
+    }
+    let path = found.ok_or_else(|| "no src/entry-server.* found".to_string())?;
+    let code = std::fs::read_to_string(&path)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    let ssr_env = resolved.ssr_env();
+    let result = server
+        .inner()
+        .compiler
+        .transform(ferrite::transform::TransformRequest {
+            id: path.to_string_lossy().into_owned(),
+            code,
+            module_type: ferrite::ModuleType::from_path(&path),
+            environment: ferrite::EnvironmentKind::Ssr,
+            ssr: true,
+            target: ssr_env.target.clone(),
+            minify: false,
+            sourcemap: false,
+            define: ssr_env.define.clone(),
+            jsx_runtime: resolved.react.runtime.clone(),
+            development: !resolved.is_production,
+        })
+        .map_err(|error| format!("cannot transform {}: {error}", path.display()))?;
+    let module = ferrite::runtime::CompiledModule {
+        id: path.to_string_lossy().into_owned(),
+        code: result.code,
+        url: None,
+    };
+    Ok(Arc::new(
+        ferrite::ssr::JsSsrAdapter::from_resolved(resolved, module).with_shell(shell.to_string()),
+    ))
 }
 
 // --- build -------------------------------------------------------------------
@@ -689,7 +764,7 @@ async fn migrate(args: MigrateArgs) -> ferrite::Result<()> {
         out.push_str(&format!("sourcemap = {map}\n"));
     }
     if text.contains("plugins") {
-        warnings.push("plugins: Vite plugins need Rust equivalents; JS plugin hosting is roadmap (§56 tier 2)");
+        warnings.push("plugins: prefer Rust equivalents; JS plugins can run through the tier-2 host (`ferrite_plugin::js_host`, `--features napi-vm`, hooks resolveId/load/transform)");
     }
     if text.contains("defineConfig") {
         // fine

@@ -4,7 +4,7 @@
 //! Hook ordering is handled by [`ferrite_plugin::PluginContainer`]; this
 //! crate owns entry discovery, core rewrites, and tag injection.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use ferrite_plugin::{HtmlInjectTo, HtmlTag};
 
@@ -96,6 +96,59 @@ pub fn render_tag(tag: &HtmlTag) -> String {
 }
 
 /// Rewrite `<script type="module">` sources via `rewrite`.
+/// Build an inline import-map script tag (dev `import-map` strategy).
+///
+/// Keys are emitted in sorted order for deterministic output. Values are
+/// dev URLs (absolute paths or `/@npm/...`).
+#[must_use]
+pub fn import_map_script(imports: &BTreeMap<String, String>) -> String {
+    let mut map = String::from("{\"imports\":{");
+    for (index, (specifier, url)) in imports.iter().enumerate() {
+        if index > 0 {
+            map.push(',');
+        }
+        map.push_str(&serde_json::to_string(specifier).unwrap_or_default());
+        map.push(':');
+        map.push_str(&serde_json::to_string(url).unwrap_or_default());
+    }
+    map.push_str("}}");
+    format!("<script type=\"importmap\">\n{map}\n</script>")
+}
+
+/// Inject an import-map script before the first module script.
+///
+/// The spec requires the map to precede any module load; when the page
+/// has no module script the map goes right after `<head>`, else at the
+/// start of the document.
+#[must_use]
+pub fn inject_import_map(html: &str, script: &str) -> String {
+    let lower = html.to_lowercase();
+    let mut cursor = 0;
+    while let Some(start) = lower[cursor..].find("<script") {
+        let tag_start = cursor + start;
+        let Some(end) = lower[tag_start..].find('>') else {
+            break;
+        };
+        let tag = &html[tag_start..tag_start + end];
+        if tag.contains("type=\"module\"") || tag.contains("type='module'") {
+            return format!("{}{script}\n{}", &html[..tag_start], &html[tag_start..]);
+        }
+        cursor = tag_start + end + 1;
+    }
+    if let Some(head_end) = find_head_end(html) {
+        return format!("{}{script}\n{}", &html[..head_end], &html[head_end..]);
+    }
+    format!("{script}\n{html}")
+}
+
+/// Byte offset just past the opening `<head...>` tag, if any.
+fn find_head_end(html: &str) -> Option<usize> {
+    let lower = html.to_lowercase();
+    let start = lower.find("<head")?;
+    let end = lower[start..].find('>')?;
+    Some(start + end + 1)
+}
+
 pub fn rewrite_module_scripts(html: &str, rewrite: impl Fn(&str) -> String) -> String {
     let mut output = html.to_string();
     // Collect spans first (match positions), then edit from the end.
@@ -324,5 +377,52 @@ mod tests {
         }];
         let output = inject_tags(HTML, &tags);
         assert!(output.contains("<meta name=\"x\">"));
+    }
+
+    #[test]
+    fn import_map_script_sorts_and_escapes() {
+        let imports = BTreeMap::from([
+            ("z-lib".to_string(), "/@npm/z-lib/index.js".to_string()),
+            ("a\"b".to_string(), "/x.js".to_string()),
+        ]);
+        let script = import_map_script(&imports);
+        assert!(
+            script.starts_with("<script type=\"importmap\">"),
+            "{script}"
+        );
+        assert!(script.ends_with("</script>"), "{script}");
+        let a_pos = script.find("a\\\"b").expect("escaped key");
+        let z_pos = script.find("z-lib").expect("z key");
+        assert!(a_pos < z_pos, "{script}");
+        let json_text = script
+            .strip_prefix("<script type=\"importmap\">\n")
+            .and_then(|rest| rest.strip_suffix("\n</script>"))
+            .expect("script wrapper");
+        let json: serde_json::Value = serde_json::from_str(json_text).expect("valid json");
+        assert_eq!(json["imports"]["z-lib"], "/@npm/z-lib/index.js");
+    }
+
+    #[test]
+    fn inject_import_map_precedes_first_module_script() {
+        let html = "<html><head><script src=\"/classic.js\"></script></head>\
+            <body><script type=\"module\" src=\"/a.js\"></script></body></html>";
+        let output = inject_import_map(html, "<script type=\"importmap\"></script>");
+        assert!(
+            output.starts_with("<html><head><script src=\"/classic.js\"></script></head>"),
+            "{output}"
+        );
+        let map_pos = output.find("importmap").expect("map");
+        let mod_pos = output.find("type=\"module\"").expect("module");
+        assert!(map_pos < mod_pos, "{output}");
+    }
+
+    #[test]
+    fn inject_import_map_falls_back_to_head_then_start() {
+        let html = "<html><head><title>t</title></head><body>hi</body></html>";
+        let output = inject_import_map(html, "<!--map-->");
+        assert!(output.contains("<head><!--map-->\n<title>"), "{output}");
+        let bare = "<p>no head</p>";
+        let output = inject_import_map(bare, "<!--map-->");
+        assert!(output.starts_with("<!--map-->\n<p>"), "{output}");
     }
 }

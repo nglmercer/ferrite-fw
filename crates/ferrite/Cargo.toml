@@ -31,3 +31,10 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+
+[features]
+napi-vm = [
+    "ferrite-runtime/napi-vm",
+    "ferrite-ssr/napi-vm",
+    "ferrite-plugin/napi-vm",
+]

@@ -42,6 +42,8 @@ pub struct UserConfig {
     pub package: PackageConfig,
     /// React plugin options.
     pub react: ReactConfig,
+    /// Embedded runtime options.
+    pub runtime: RuntimeConfig,
 }
 
 /// Dev server options.
@@ -339,6 +341,38 @@ impl Default for ReactConfig {
     }
 }
 
+/// Embedded JS runtime options (§20).
+///
+/// The runtime is **disabled by default**: `backend = "auto"` means pure-Rust
+/// SSR with no JS engine. Set `backend = "napi-vm"` (and build with
+/// `--features napi-vm`) for in-process JS evaluation and `.node` loading.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct RuntimeConfig {
+    /// Backend name (`auto`, `none`, `napi-vm`).
+    pub backend: String,
+    /// Guest fuel budget (0 = engine default).
+    pub fuel_budget: u64,
+    /// Guest loop budget (0 = engine default).
+    pub loop_budget: u64,
+    /// Allowlisted `.node` paths (root-relative or absolute).
+    pub native_allow: Vec<String>,
+    /// Expected SHA-256 (hex) per allowlisted path.
+    pub native_integrity: HashMap<String, String>,
+}
+
+impl Default for RuntimeConfig {
+    fn default() -> Self {
+        Self {
+            backend: "auto".to_string(),
+            fuel_budget: 0,
+            loop_budget: 0,
+            native_allow: Vec::new(),
+            native_integrity: HashMap::new(),
+        }
+    }
+}
+
 /// Fully resolved configuration.
 #[derive(Debug, Clone)]
 pub struct ResolvedConfig {
@@ -374,6 +408,8 @@ pub struct ResolvedConfig {
     pub package: PackageConfig,
     /// React options.
     pub react: ReactConfig,
+    /// Runtime options.
+    pub runtime: RuntimeConfig,
     /// Configured environments.
     pub environments: HashMap<String, Environment>,
 }
@@ -439,6 +475,8 @@ pub struct CliOverrides {
     pub minify: Option<bool>,
     /// Override standalone.
     pub standalone: Option<bool>,
+    /// Override runtime backend.
+    pub runtime: Option<String>,
 }
 
 /// Load `ferrite.toml` + `ferrite.local.toml` from `dir` (both optional).
@@ -484,6 +522,27 @@ pub fn merge_user_config(mut base: UserConfig, over: UserConfig) -> UserConfig {
     base.remote = over.remote;
     base.package = over.package;
     base.react = over.react;
+    base.runtime = merge_runtime(base.runtime, over.runtime);
+    base
+}
+
+fn merge_runtime(mut base: RuntimeConfig, over: RuntimeConfig) -> RuntimeConfig {
+    let defaults = RuntimeConfig::default();
+    if over.backend != defaults.backend {
+        base.backend = over.backend;
+    }
+    if over.fuel_budget != 0 {
+        base.fuel_budget = over.fuel_budget;
+    }
+    if over.loop_budget != 0 {
+        base.loop_budget = over.loop_budget;
+    }
+    if !over.native_allow.is_empty() {
+        base.native_allow = over.native_allow;
+    }
+    if !over.native_integrity.is_empty() {
+        base.native_integrity = over.native_integrity;
+    }
     base
 }
 
@@ -638,6 +697,13 @@ pub fn resolve_config(
         remote: user.remote.clone(),
         package,
         react: user.react.clone(),
+        runtime: {
+            let mut runtime = user.runtime.clone();
+            if let Some(backend) = overrides.runtime {
+                runtime.backend = backend;
+            }
+            runtime
+        },
         environments,
     })
 }
@@ -666,5 +732,52 @@ mod tests {
         over.server.port = 3000;
         let merged = merge_user_config(base, over);
         assert_eq!(merged.server.port, 3000);
+    }
+
+    #[test]
+    fn runtime_toml_shape_parses() {
+        let user: UserConfig = toml::from_str(
+            "[runtime]\n\
+             backend = \"napi-vm\"\n\
+             fuel_budget = 10000000\n\
+             native_allow = [\"native/addon.node\"]\n\
+             [runtime.native_integrity]\n\
+             \"native/addon.node\" = \"ab12\"\n",
+        )
+        .unwrap();
+        assert_eq!(user.runtime.backend, "napi-vm");
+        assert_eq!(user.runtime.fuel_budget, 10_000_000);
+        assert_eq!(user.runtime.native_allow, vec!["native/addon.node"]);
+        assert_eq!(
+            user.runtime
+                .native_integrity
+                .get("native/addon.node")
+                .unwrap(),
+            "ab12"
+        );
+        // Disabled by default.
+        assert_eq!(UserConfig::default().runtime.backend, "auto");
+    }
+
+    #[test]
+    fn runtime_merge_and_cli_override() {
+        let base = UserConfig::default();
+        let mut over = UserConfig::default();
+        over.runtime.backend = "napi-vm".to_string();
+        over.runtime.loop_budget = 5;
+        let merged = merge_user_config(base, over);
+        assert_eq!(merged.runtime.backend, "napi-vm");
+        assert_eq!(merged.runtime.loop_budget, 5);
+
+        let resolved = resolve_config(
+            UserConfig::default(),
+            Some(PathBuf::from("/tmp/x")),
+            CliOverrides {
+                runtime: Some("none".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(resolved.runtime.backend, "none");
     }
 }
