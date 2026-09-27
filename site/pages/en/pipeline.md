@@ -39,6 +39,27 @@ ferrite transform src/app.tsx --out /tmp/app.js --sourcemap
 5. Extract CSS (one hashed `.css` per stylesheet, `@import` order).
 6. Emit the manifest + source maps.
 
+## Render pipeline
+
+Between transform and emit, the builder runs the Rollup-style render
+phase through plugin hooks (`ferrite-bundler` stays plugin-agnostic
+behind its `BundleHooks` trait; unit tests drive it with `NoHooks`):
+
+1. `options` mutates the input options; `output_options` mutates the
+   chunk/CSS/asset patterns (`[name]` / `[hash]` / `[ext]`).
+2. `render_start` fires with the entry module ids.
+3. Per chunk: `render_chunk` (pre-rewrite replacement),
+   `augment_chunk_hash` (extra hash input), import rewriting, then
+   the `banner` / `intro` / `outro` / `footer` wrapper.
+4. `generate_bundle` / `write_bundle`, then `build_end` (carrying
+   `Some(message)` on failure) and `close_bundle`, which always runs.
+
+`render_chunk` runs pre-rewrite — unlike Rollup — so the content hash
+covers the hooked code; hooks therefore see module-resolved (dev-URL)
+specifiers. Wrapper text is folded into the hash and applied after
+rewriting, so wrappers never break specifiers. See
+[Plugins](plugins) for the hook table.
+
 ## Tree-shaking
 
 On by default in production (`BundleRequest.treeshake`). Unused exports

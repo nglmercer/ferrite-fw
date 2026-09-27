@@ -7,12 +7,15 @@ order: 4
 
 项目用根目录的 `ferrite.toml` 配置 Ferrite，另有可选的、git 忽略的
 `ferrite.local.toml` 放本机覆盖。所有文件都可选；空项目按默认构建。
+没有任何 TOML 时回退到静态解析的 `ferrite.config.*`
+（或 `vite.config.*`）；两者并存时 TOML 永远优先。
 优先级：
 
 1. CLI flags（`--host`、`--port`、`--out-dir` 等）
 2. `ferrite.local.toml`
 3. `ferrite.toml`
-4. 内置默认
+4. `ferrite.config.*` / `vite.config.*`（仅无 TOML 时）
+5. 内置默认
 
 `ferrite inspect` 打印合并结果；`ferrite inspect --json` 输出供脚本用。
 
@@ -37,6 +40,40 @@ dev_strategy = "rewrite" # 或 "import-map"
 refresh = true
 ```
 
+## JS 配置文件
+
+`ferrite.config.mts|.cts|.ts|.tsx|.mjs|.cjs|.js|.jsx`
+（回退到同等扩展名的 `vite.config.*`）无需 JS 运行时即可加载：
+Ferrite 用 Oxc 解析文件并静态求值。只读纯数据——字符串/数字/
+布尔字面量、数组与对象字面量，可包一层 `defineConfig(...)`，
+顶层 `const` 经 `export default NAME` 或 `module.exports = { ... }`
+追踪。
+
+```js
+// ferrite.config.ts
+export default {
+  base: "/",
+  server: { port: 5173, proxy: { "/api": "http://localhost:3000" } },
+  resolve: { alias: { "@": "./src" } },
+};
+```
+
+支持的键与下述 TOML 小节对应：`root`、`base`、`mode`、
+`define`（标量）、`server`（`host`、`port`、`strictPort`、`open`、
+`hmr`、`middlewareMode`、`proxy` 为前缀 → URL 或 `{ target }`
+对象）、`build`（`outDir`、`sourcemap`、`minify`、`target`、
+`lib`）、`resolve`（对象或 `[{ find, replacement }]` 别名——
+alias 是字面量前缀，长得像正则的 `find` 会告警——另加
+`conditions`、`extensions`、`preserveSymlinks`）、
+`envPrefix` / `env.prefix`、`ssr`（`external`、`noExternal`；
+`noExternal: true` 打包全部）、`npm`、`compiler`。动态内容——
+其他函数调用、不可解析的标识符、展开、`plugins: [react()]`——
+逐键跳过并告警；default export 非对象则是可操作的错误。调
+`ferrite::load_config_from_file(dir)`（`loadConfigFromFile`
+等价）以 `LoadedConfigFile { path, config, warnings }` 取出告警；
+`define_config` / `merge_config` 对应 `defineConfig` /
+`mergeConfig`。新项目首选 TOML：它是文档化的接口且永远优先。
+
 ## 顶层
 
 | 键 | 默认 | 用途 |
@@ -56,8 +93,14 @@ refresh = true
 | `open` | `false` | 启动时打开浏览器。 |
 | `hmr` | `true` | 启用 HMR（`--no-hmr` 关闭）。 |
 | `middleware_mode` | `false` | 经 `server.router()` 嵌入，不自己 listen。 |
+| `proxy` | `{}` | dev/preview 代理规则：路径前缀 → 目标源。 |
 
-见[开发服务器](dev-server)。
+```toml
+[server.proxy]
+"/api" = "http://localhost:3000"
+```
+
+最长前缀获胜；转发时保留路径。见[开发服务器](dev-server)。
 
 ## [build]
 

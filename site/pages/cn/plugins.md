@@ -47,6 +47,48 @@ import "ferrite:tailwind.css";
 的 `tailwind-rs` 编译发现的工具类。导入该 specifier 是唯一的
 opt-in；从不导入的项目零开销。
 
+## 钩子参考
+
+除 `resolve_id` / `load` / `transform` /
+`transform_index_html` 外，插件还有 Vite/Rollup 对等钩子：
+
+| 钩子 | 触发时机 |
+|---|---|
+| `options` | 构建开始前修改输入选项（`BundleOptions`：entries、treeshake、minify、sourcemap、scope-hoist）。 |
+| `output_options` | chunk 命名前修改输出模式（`OutputOptions`：`chunk_pattern`、`css_pattern`、`asset_pattern`，含 `[name]` / `[hash]` / `[ext]`）。 |
+| `resolve_dynamic_import` | 解析动态 `import()`；全部返回 `None` 时回退到 `resolve_id`。 |
+| `should_transform_cached_module` | `Some(true)` 强制重变换缓存模块；`None` / `Some(false)` 保留缓存。 |
+| `watch_change` | 观察文件监听事件（`WatchEvent { path, kind }`：create / modify / remove）。 |
+| `resolve_file_url` | 把产物文件映射到公开 URL；首个 `Some` 获胜（也重写 dev 的 `?url` shim）。 |
+| `hot_update` | Vite 6 `hotUpdate`；先于旧 `handle_hot_update`，两者间首个 `Some` 获胜。 |
+| `render_start` | 渲染开始：entry 已知，chunk 尚未规划。 |
+| `render_chunk` | 重写前替换单个 chunk 代码（替换结果参与哈希与重写；钩子看到 dev URL specifier）。 |
+| `augment_chunk_hash` | 贡献额外的 chunk 哈希输入。 |
+| `banner` / `intro` / `outro` / `footer` | 包裹 chunk；计入哈希，重写后应用。 |
+| `build_end` / `close_bundle` | 构建结束；失败时 `build_end` 携带 `Some(消息)`，`close_bundle` 照样执行。 |
+
+渲染阶段顺序见[构建流水线](pipeline)。
+
+## Preview 钩子
+
+`ferrite preview` 先跑 `configResolved`，再跑旧的
+`configure_preview_server` 与新的 `configure_preview`
+（新插件实现后者）。`PreviewControl` 收集：
+
+- 额外的响应 header（`add_header`），
+- 输出目录之前命中的静态挂载
+  （`add_mount("/docs", dir)`），
+- 代理规则（`add_proxy("/api", "http://localhost:3000")`，
+  最长前缀获胜，初始来自 `[server] proxy`）。
+
+## 服务器句柄
+
+dev 服务器钩子收到 `ServerControl`，含 Vite 等价物：
+`module_graph()`（`server.moduleGraph`）、`local_addr()`、
+`server_urls()` / `print_urls()`、`hmr_clients()` /
+`send_full_reload(path)`，以及 `watcher_alive()` /
+`watcher_add(path)`（`server.watcher.add`）。
+
 ## 写自己的插件
 
 新的原生插件放入 workspace crate，从 `ferrite` 门面 re-export，

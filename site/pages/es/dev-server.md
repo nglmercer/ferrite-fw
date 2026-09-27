@@ -61,9 +61,38 @@ resuelva los desnudos (shims de CDN, debug de externals).
 
 ## Variables de entorno
 
-Los `.env` cargan por modo (`.env`, `.env.[mode]`, `.env.local`);
-solo `FERRITE_*` / `PUBLIC_*` (configurable en `[env] prefix`) llegan a
-`import.meta.env`. El resto queda en servidor. Los `define` aplican encima.
+Los `.env` cargan por modo, ganando el último (estilo `loadEnv` de
+Vite): `.env`, `.env.local`, `.env.{mode}`, `.env.{mode}.local`. Los
+valores soportan `$VAR`, `${VAR}`, `${VAR:-default}` y escapes `$$`,
+expandidos en una pasada contra el entorno del proceso primero y los
+valores ya cargados después (lo desconocido sin default queda vacío).
+Las líneas aceptan `export KEY=value`, comentarios `#`, comillas
+simples/dobles (las dobles interpretan `\"` `\\` `\n` `\r` `\t`) y
+` # comentario` tras valores sin comillas.
+
+Solo `FERRITE_*` / `PUBLIC_*` (configurable en `[env] prefix`) llegan a
+`import.meta.env`; el resto queda en servidor, y solo se devuelven
+variables de archivo — el entorno del proceso alimenta la expansión,
+nunca el resultado. Los `define` de compilación aplican encima. La
+forma programática es `ferrite::load_env(mode, root, prefixes)` más
+`ferrite::expand_vars(value, loaded)`.
+
+## Proxy
+
+```toml
+[server.proxy]
+"/api" = "http://localhost:3000"
+```
+
+Las reglas de prefijo reenvían los requests coincidentes de dev y
+preview al origen destino preservando path y query (el shorthand
+`server.proxy` de Vite). Gana el prefijo más largo; el match es por
+frontera de segmento, así que `/api` cubre `/api/users` pero no
+`/apix`. Status, headers y bytes pasan intactos; los headers hop-by-hop
+(`connection`, `upgrade`, `transfer-encoding`, …) se quitan en ambas
+direcciones. La config JS usa `server.proxy` con los mismos strings u
+objetos `{ target }`; los plugins de preview pueden añadir reglas vía
+`configure_preview` (ver [Plugins](plugins)).
 
 ## Modo middleware
 

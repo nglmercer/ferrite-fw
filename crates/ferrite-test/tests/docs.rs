@@ -101,7 +101,12 @@ fn docs_site_locales_are_complete() {
 #[test]
 fn docs_site_shell_wires_theme_and_locales() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../site");
-    let main = std::fs::read_to_string(root.join("src/main.js")).expect("main.js");
+    // Shell sources (TypeScript): router in main.ts, widgets in components.ts.
+    let main = ["src/main.ts", "src/components.ts"]
+        .iter()
+        .map(|rel| std::fs::read_to_string(root.join(rel)).expect("shell source"))
+        .collect::<Vec<_>>()
+        .join("\n");
     for needle in [
         "ferrite-docs-theme",
         "ferrite-docs-locale",
@@ -120,7 +125,7 @@ fn docs_site_shell_wires_theme_and_locales() {
         "data-tip",
         "theme-btn-label",
     ] {
-        assert!(main.contains(needle), "main.js lost `{needle}`");
+        assert!(main.contains(needle), "site shell lost `{needle}`");
     }
     let html = std::fs::read_to_string(root.join("index.html")).expect("index.html");
     for needle in ["ferrite-docs-theme", "prefers-color-scheme"] {

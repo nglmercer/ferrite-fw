@@ -26,7 +26,8 @@ builder.build_app().await?; // client (+ ssr when an entry exists)
 ```
 
 One-shots: `ferrite::build(config)` returns every `BuildReport`;
-`ferrite::preview(config)` serves the output dir. `Config` merges file
+`ferrite::preview(config)` serves the output dir through
+`configResolved` and the preview-server hooks. `Config` merges file
 config under programmatic values, then CLI overrides on top:
 
 ```rust
@@ -58,12 +59,42 @@ join `default_plugins` (CLI) or `Config::plugin` (API). Rules: return
 `None` for ids you do not own, fail with `FerriteError::Build` instead
 of guessing. See [Plugins](plugins).
 
+## Helpers
+
+Vite-parity utilities, re-exported from the facade:
+
+- Config: `load_config_from_file(dir)` reads `ferrite.config.*` /
+  `vite.config.*` statically (`LoadedConfigFile { path, config,
+  warnings }`); `define_config` / `merge_config` match
+  `defineConfig` / `mergeConfig`. See
+  [Configuration](configuration).
+- Env: `load_env(mode, root, prefixes)` implements the `.env*`
+  layering with `$VAR` / `${VAR:-default}` expansion;
+  `expand_vars(value, loaded)` expands one value. See [Dev
+  server](dev-server).
+- Paths: `normalize_path(path)` (forward slashes, lexical
+  `.`/`..`, Vite `normalizePath`) and
+  `search_for_workspace_root(start)` (nearest `pnpm-workspace.yaml`,
+  `lerna.json`, `.git`, or `package.json` with `workspaces`).
+- SSR: `server.ssr_transform(code, url)`,
+  `server.ssr_fix_stacktrace(stack)`, `server.module_runner()`.
+  See [SSR](ssr).
+- Preview/proxy: `PreviewControl` (headers, mounts, proxy rules),
+  `PreviewMount`, `ProxyRule`, `match_proxy`, `rules_from_config`.
+- Render pipeline: `BundleOptions`, `OutputOptions`, `ChunkWrapper`,
+  `CachedModuleInfo`, `DynamicImportRequest`,
+  `ResolveFileUrlRequest`, `WatchEvent`, `WatchKind`,
+  `ServerControl`, `ServerUrls`. See [Plugins](plugins) and [Build
+  pipeline](pipeline).
+
 ## Errors and types
 
 The prelude has the vocabulary: `Config`, `Environment`,
 `EnvironmentKind`, `ModuleId`, `ModuleType`, `ResolvedConfig`,
 `UserConfig`, `Target`, `Hash`, `SourceMap`, `VERSION`, plus `Plugin`,
-`PluginContainer`, `Apply`, `Enforce`.
+`PluginContainer`, `Apply`, `Enforce`, and the helpers
+`define_config`, `merge_config`, `load_env`, `normalize_path`,
+`search_for_workspace_root`.
 
 ```rust
 use ferrite::prelude::*;

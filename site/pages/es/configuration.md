@@ -8,12 +8,14 @@ order: 4
 Los proyectos configuran Ferrite con `ferrite.toml` en la raíz, más un
 opcional `ferrite.local.toml` ignorado por git para overrides locales.
 Todos los archivos son opcionales; los proyectos vacíos compilan con defaults.
-Precedencia:
+Sin ningún TOML, Ferrite usa un `ferrite.config.*` (o `vite.config.*`)
+parseado estáticamente; el TOML siempre gana si hay ambos. Precedencia:
 
 1. Flags CLI (`--host`, `--port`, `--out-dir`, …)
 2. `ferrite.local.toml`
 3. `ferrite.toml`
-4. Defaults internos
+4. `ferrite.config.*` / `vite.config.*` (solo sin TOML)
+5. Defaults internos
 
 `ferrite inspect` imprime el resultado mezclado; `ferrite inspect --json`
 lo emite para scripts.
@@ -39,6 +41,43 @@ dev_strategy = "rewrite" # o "import-map"
 refresh = true
 ```
 
+## Archivos de config JS
+
+`ferrite.config.mts|.cts|.ts|.tsx|.mjs|.cjs|.js|.jsx` (o `vite.config.*`
+con las mismas extensiones) carga sin runtime JS: Ferrite parsea el
+archivo con Oxc y lo evalúa estáticamente. Solo se leen datos planos —
+literales string/número/booleano, arrays y objetos, opcionalmente
+envueltos en `defineConfig(...)`, siguiendo los `const` de nivel
+superior en `export default NAME` o `module.exports = { ... }`.
+
+```js
+// ferrite.config.ts
+export default {
+  base: "/",
+  server: { port: 5173, proxy: { "/api": "http://localhost:3000" } },
+  resolve: { alias: { "@": "./src" } },
+};
+```
+
+Las claves soportadas reflejan las secciones TOML: `root`, `base`,
+`mode`, `define` (escalares), `server` (`host`, `port`,
+`strictPort`, `open`, `hmr`, `middlewareMode`, `proxy` como prefijo →
+URL u objetos `{ target }`), `build` (`outDir`, `sourcemap`,
+`minify`, `target`, `lib`), `resolve` (alias como objeto o
+`[{ find, replacement }]` — un `find` con pinta de regex avisa porque
+los alias son prefijos literales — más `conditions`, `extensions`,
+`preserveSymlinks`), `envPrefix` / `env.prefix`, `ssr` (`external`,
+`noExternal`; `noExternal: true` empaqueta todo), `npm`, `compiler`.
+Lo dinámico — otras llamadas, identificadores irresolubles, spreads,
+`plugins: [react()]` — se salta con un warning por clave; un default
+export que no sea objeto es un error accionable. Llama a
+`ferrite::load_config_from_file(dir)` (el equivalente a
+`loadConfigFromFile`) para ver los warnings como `LoadedConfigFile {
+path, config, warnings }`; los helpers `define_config` /
+`merge_config` equivalen a `defineConfig` / `mergeConfig`. Para
+proyectos nuevos prefiere TOML: es la superficie documentada y
+siempre gana.
+
 ## Nivel superior
 
 | Clave | Default | Propósito |
@@ -58,8 +97,15 @@ refresh = true
 | `open` | `false` | Abrir un navegador al arrancar. |
 | `hmr` | `true` | Habilitar HMR (`--no-hmr` lo apaga). |
 | `middleware_mode` | `false` | Embeber vía `server.router()` sin listen propio. |
+| `proxy` | `{}` | Reglas de proxy dev/preview: prefijo de path → origen destino. |
 
-Ver [Servidor dev](dev-server).
+```toml
+[server.proxy]
+"/api" = "http://localhost:3000"
+```
+
+Gana el prefijo más largo; el path se preserva al reenviar. Ver
+[Servidor dev](dev-server).
 
 ## [build]
 

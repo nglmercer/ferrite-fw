@@ -39,6 +39,26 @@ ferrite transform src/app.tsx --out /tmp/app.js --sourcemap
 5. 抽取 CSS（每样式一个哈希 `.css`，`@import` 顺序）。
 6. 输出清单 + source map。
 
+## 渲染流水线
+
+transform 与输出之间，builder 经插件钩子跑 Rollup 风格的渲染阶段
+（`ferrite-bundler` 隔在 `BundleHooks` trait 后保持插件无关；
+单测用 `NoHooks` 驱动）：
+
+1. `options` 改输入选项；`output_options` 改 chunk/CSS/asset
+   模式（`[name]` / `[hash]` / `[ext]`）。
+2. `render_start` 携带 entry 模块 id 触发。
+3. 逐 chunk：`render_chunk`（重写前替换）、
+   `augment_chunk_hash`（额外哈希输入）、导入重写，
+   再套 `banner` / `intro` / `outro` / `footer` 包裹。
+4. `generate_bundle` / `write_bundle`，然后是 `build_end`
+   （失败时携带 `Some(消息)`）与必定执行的 `close_bundle`。
+
+`render_chunk` 跑在重写之前——与 Rollup 相反——以便内容哈希覆盖
+钩子改后的代码；钩子因此看到模块解析后（dev URL）的 specifier。
+包裹文本计入哈希、重写后应用，永不破坏 specifier。
+钩子表见[插件](plugins)。
+
 ## Tree-shaking
 
 生产默认开（`BundleRequest.treeshake`）。无用导出按语句删除，

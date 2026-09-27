@@ -88,6 +88,26 @@ rpc.register("add", |args: serde_json::Value| async move {
 });
 ```
 
+## 编程式工具
+
+`DevServer` 向工具与测试暴露 Vite SSR 助手：
+
+- `server.ssr_transform(code, url)`（`ssrTransform`）：核心 SSR
+  变换 → 插件变换 → CJS 互操作 → 导入重写，不碰图与缓存。
+  返回 `SsrTransformResult { code, map, deps, dynamic_deps }`。
+- `server.ssr_fix_stacktrace(stack)`（`ssrFixStacktrace`）：经缓存
+  的 SSR 变换 map 重写堆栈帧；无缓存 map 的帧只做归一化
+  （去源、解码 `/@id/` URL），保留位置。
+- `server.module_runner()`（`server.moduleRunner`）：带缓存的
+  `ssrLoadModule`，含 `import(url)`、`invalidate(url)`
+  （清缓存条目及其图子树）、`clear()`、`cached_urls()` 与
+  `close()`。执行加载的图走配置的 `SsrAdapter`。
+
+```rust
+let runner = server.module_runner();
+let module = runner.import("/src/entry-server.js").await?;
+```
+
 ## 路由
 
 `SsrRouter` 把模式（`/users/:id`）匹配到 handler 并抽取参数

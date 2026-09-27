@@ -60,9 +60,34 @@ SSR 保持服务端重写。想让浏览器自己解析裸导入
 
 ## 环境变量
 
-`.env` 按 mode 加载（`.env`、`.env.[mode]`、`.env.local`）；
+`.env` 按 mode 分层加载，后者覆盖前者（Vite `loadEnv` 风格）：
+`.env`、`.env.local`、`.env.{mode}`、`.env.{mode}.local`。
+值支持 `$VAR`、`${VAR}`、`${VAR:-default}` 与 `$$` 转义，
+单遍展开，先查进程环境，再查已加载的文件值
+（无默认值且未知则为空）。行支持 `export KEY=value`、`#`
+注释、单/双引号（双引号解释 `\"` `\\` `\n` `\r` `\t`）
+与未引号值后的 ` # 注释`。
+
 只有 `FERRITE_*` / `PUBLIC_*`（`[env] prefix` 可配）能进入
-`import.meta.env`，其余留在服务端。编译期 `define` 在其上生效。
+`import.meta.env`，其余留在服务端；且只返回文件变量——
+进程环境只参与展开，不进入结果。编译期 `define` 在其上生效。
+编程式接口是 `ferrite::load_env(mode, root, prefixes)` 加
+`ferrite::expand_vars(value, loaded)`。
+
+## 代理
+
+```toml
+[server.proxy]
+"/api" = "http://localhost:3000"
+```
+
+前缀规则把命中的 dev/preview 请求转发到目标源，保留路径与
+query（Vite `server.proxy` 简写）。最长前缀获胜；按分段边界
+匹配，`/api` 覆盖 `/api/users` 而不覆盖 `/apix`。状态码、
+header、字节原样透传；hop-by-hop 头（`connection`、`upgrade`、
+`transfer-encoding` 等）双向剥离。JS 配置用 `server.proxy`，
+字符串或 `{ target }` 对象均可；preview 插件可经
+`configure_preview` 追加规则（见[插件](plugins)）。
 
 ## 中间件模式
 

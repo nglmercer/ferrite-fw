@@ -91,6 +91,29 @@ rpc.register("add", |args: serde_json::Value| async move {
 });
 ```
 
+## Programmatic tools
+
+`DevServer` exposes the Vite SSR helpers for tooling and tests:
+
+- `server.ssr_transform(code, url)` (`ssrTransform`): core SSR
+  transform → plugin transforms → CJS interop → import rewriting,
+  without touching the graph or caches. Returns `SsrTransformResult
+  { code, map, deps, dynamic_deps }`.
+- `server.ssr_fix_stacktrace(stack)` (`ssrFixStacktrace`): rewrites
+  frames through cached SSR transform maps; frames without a cached
+  map are normalized (origin stripped, `/@id/` URLs decoded) with
+  positions kept.
+- `server.module_runner()` (`server.moduleRunner`): a cached
+  `ssrLoadModule` with `import(url)`, `invalidate(url)` (drops the
+  cache entry plus its graph subtree), `clear()`, `cached_urls()`,
+  and `close()`. Executing the loaded graph goes through the
+  configured `SsrAdapter`.
+
+```rust
+let runner = server.module_runner();
+let module = runner.import("/src/entry-server.js").await?;
+```
+
 ## Routing
 
 `SsrRouter` matches patterns (`/users/:id`) to handlers and extracts

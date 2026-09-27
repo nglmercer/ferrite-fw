@@ -83,8 +83,11 @@ ferrite build --scope-hoist
 ferrite preview [--port 4173]
 ```
 
-经 HTTP serve 上一次 `dist/`，做生产级检查。
-只 serve 静态文件；SSR 路由需要 standalone 二进制或 `ferrite ssr`。
+经 HTTP serve 上一次 `dist/`，做生产级检查：静态文件、SPA 回退、
+`[server] proxy` 规则，以及默认插件集的 preview 钩子
+（`configResolved`、`configure_preview_server`、
+`configure_preview`）——额外 header、挂载、代理规则都生效。
+见[插件](plugins)。SSR 路由仍需 standalone 二进制或 `ferrite ssr`。
 
 ## npm：add / remove / update / install
 
@@ -135,6 +138,8 @@ ferrite migrate vite.config.ts --out ferrite.toml
 best-effort 的 Vite → `ferrite.toml` 翻译（host/port、`outDir`、
 `sourcemap`、alias、define）。输出带注释，务必人工复核；
 未知键只告警，永不静默丢弃。见[排障](troubleshooting)。
+静态 `vite.config.*` 无需迁移即可直接加载（见[配置](configuration)）；
+想要 TOML 时再用 `migrate`。
 
 ## compat / clean / create
 

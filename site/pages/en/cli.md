@@ -84,9 +84,12 @@ ferrite build --scope-hoist
 ferrite preview [--port 4173]
 ```
 
-Serves the last `dist/` over HTTP for a production-fidelity check.
-It serves static files only; SSR routes need the standalone binary or
-`ferrite ssr`.
+Serves the last `dist/` over HTTP for a production-fidelity check:
+static files, SPA fallback, `[server] proxy` rules, and the plugin
+preview hooks (`configResolved`, `configure_preview_server`, then
+`configure_preview`) with the default plugin set — extra headers,
+mounts, and proxy rules included. See [Plugins](plugins). SSR routes
+still need the standalone binary or `ferrite ssr`.
 
 ## npm: add / remove / update / install
 
@@ -139,7 +142,9 @@ ferrite migrate vite.config.ts --out ferrite.toml
 Best-effort Vite → `ferrite.toml` translation (server host/port, `outDir`,
 `sourcemap`, aliases, defines). Output is commented and always needs a
 human review; unknown keys produce warnings, never silent drops. See
-[Troubleshooting](troubleshooting).
+[Troubleshooting](troubleshooting). Static `vite.config.*` files also
+load directly without migrating (see
+[Configuration](configuration)); use `migrate` when you want TOML.
 
 ## compat / clean / create
 

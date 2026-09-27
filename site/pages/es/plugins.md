@@ -48,6 +48,49 @@ Markdown, Vue/Svelte/Astro; nunca `node_modules`, `dist`, `target`,
 vendored `tailwind-rs`. Importar el specifier es el único opt-in; los
 proyectos que nunca lo importan no pagan nada.
 
+## Referencia de hooks
+
+Además de `resolve_id` / `load` / `transform` /
+`transform_index_html`, los plugins tienen los hooks de paridad
+Vite/Rollup:
+
+| Hook | Cuándo corre |
+|---|---|
+| `options` | Muta las opciones de entrada (`BundleOptions`: entries, treeshake, minify, sourcemap, scope-hoist) antes del build. |
+| `output_options` | Muta los patrones de salida (`OutputOptions`: `chunk_pattern`, `css_pattern`, `asset_pattern` con `[name]` / `[hash]` / `[ext]`) antes de nombrar chunks. |
+| `resolve_dynamic_import` | Resuelve un `import()` dinámico; si todos devuelven `None` se usa `resolve_id`. |
+| `should_transform_cached_module` | `Some(true)` fuerza re-transformar un módulo cacheado; `None` / `Some(false)` conserva la caché. |
+| `watch_change` | Observa un evento del watcher (`WatchEvent { path, kind }`: create / modify / remove). |
+| `resolve_file_url` | Mapea un archivo emitido a su URL pública; gana el primer `Some` (también reescribe el shim `?url` de dev). |
+| `hot_update` | `hotUpdate` de Vite 6; corre antes del legacy `handle_hot_update`, gana el primer `Some` entre ambos. |
+| `render_start` | Empieza el render: entries conocidos, chunks aún sin planear. |
+| `render_chunk` | Reemplaza el código de un chunk pre-reescritura (el reemplazo es lo que se hashea y reescribe; los hooks ven specifiers de dev). |
+| `augment_chunk_hash` | Aporta input extra al hash del chunk. |
+| `banner` / `intro` / `outro` / `footer` | Envuelven un chunk; entran en el hash y se aplican post-reescritura. |
+| `build_end` / `close_bundle` | Fin del build; `build_end` trae `Some(mensaje)` si falla y `close_bundle` corre igual. |
+
+Ver [Pipeline de build](pipeline) para el orden de la fase de render.
+
+## Hooks de preview
+
+`ferrite preview` corre `configResolved`, luego el legacy
+`configure_preview_server` y el nuevo `configure_preview` (implementa
+este último). El `PreviewControl` junta:
+
+- headers extra de respuesta (`add_header`),
+- mounts estáticos que se consultan antes del out dir
+  (`add_mount("/docs", dir)`),
+- reglas de proxy (`add_proxy("/api", "http://localhost:3000")`, gana
+  el prefijo más largo, precargadas desde `[server] proxy`).
+
+## Handles del servidor
+
+Los hooks del servidor dev reciben un `ServerControl` con los
+equivalentes de Vite: `module_graph()` (`server.moduleGraph`),
+`local_addr()`, `server_urls()` / `print_urls()`, `hmr_clients()` /
+`send_full_reload(path)` y `watcher_alive()` / `watcher_add(path)`
+(`server.watcher.add`).
+
 ## Escribe el tuyo
 
 Los plugins nativos nuevos van en un crate del workspace, se
