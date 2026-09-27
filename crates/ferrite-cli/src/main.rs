@@ -100,6 +100,9 @@ struct BuildArgs {
     /// Only build one environment.
     #[arg(long)]
     env: Option<String>,
+    /// Scope-hoist each entry closure into one file.
+    #[arg(long)]
+    scope_hoist: bool,
 }
 
 #[derive(Debug, Args)]
@@ -228,10 +231,13 @@ fn init_logging(level: &str) {
 }
 
 /// Default plugin set for CLI-driven runs.
-fn default_plugins() -> Vec<Arc<dyn Plugin>> {
+fn default_plugins(root: &std::path::Path) -> Vec<Arc<dyn Plugin>> {
     vec![
         Arc::new(ferrite::plugin::RawTextPlugin),
         Arc::new(ferrite::wasm::RustWasmPlugin::new(None)),
+        Arc::new(ferrite::frameworks::ReactPlugin::new()),
+        Arc::new(ferrite::frameworks::VuePlugin::new(root.to_path_buf())),
+        Arc::new(ferrite::frameworks::SveltePlugin::new(root.to_path_buf())),
     ]
 }
 
@@ -269,7 +275,7 @@ async fn dev(
         },
         ..Default::default()
     };
-    for plugin in default_plugins() {
+    for plugin in default_plugins(&root) {
         config.plugins.push(plugin);
     }
     if args.no_hmr {
@@ -432,21 +438,23 @@ async fn build(
 ) -> ferrite::Result<()> {
     let root = root_of(&config_arg, args.root);
     let mut config = ferrite::Config {
-        root: Some(root),
+        root: Some(root.clone()),
         overrides: ferrite::CliOverrides {
             mode,
             out_dir: args.out_dir,
             minify: Some(args.minify),
             standalone: Some(args.standalone),
+            target: args.target.clone(),
+            scope_hoist: args.scope_hoist.then_some(true),
             ..Default::default()
         },
         ..Default::default()
     };
-    for plugin in default_plugins() {
+    for plugin in default_plugins(&root) {
         config.plugins.push(plugin);
     }
-    if let Some(target) = args.target {
-        println!("note: cross-compilation target `{target}` applies to the standalone scaffold (`cargo build --target {target}`); web assets are target-independent.");
+    if args.target.is_some() && !args.standalone {
+        println!("note: `--target` only affects `--standalone` builds; web assets are target-independent.");
     }
     let builder = ferrite::create_builder(config).await?;
     let reports = match args.env.as_deref() {
@@ -464,6 +472,9 @@ async fn build(
             report.out_dir.display()
         );
         println!("  entries: {}", report.entries.join(", "));
+        if let Some(binary) = &report.standalone_binary {
+            println!("  standalone: {}", binary.display());
+        }
     }
     Ok(())
 }
@@ -627,7 +638,7 @@ async fn inspect(
             ..Default::default()
         },
     )?;
-    let plugins: Vec<String> = default_plugins()
+    let plugins: Vec<String> = default_plugins(&root)
         .iter()
         .map(|p| p.name().to_string())
         .collect();
@@ -697,7 +708,7 @@ async fn transform(
         )));
     }
     let url = ferrite::core::file_to_url(&root, &file);
-    let server = ferrite::DevServer::new_without_watcher(resolved, default_plugins()).await?;
+    let server = ferrite::DevServer::new_without_watcher(resolved, default_plugins(&root)).await?;
     let module = server
         .pipeline_module(&ferrite::ModuleId::new(url), None, "client")
         .await?;

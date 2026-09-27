@@ -4,12 +4,17 @@ version = "0.1.0"
 edition = "2021"
 description = "Ferrite production bundler: chunks, hashing, manifest, source maps"
 
+[features]
+swc = ["ferrite-transform/swc"]
+
 [dependencies]
 ferrite-core = { workspace = true }
 ferrite-config = { workspace = true }
+ferrite-css = { workspace = true }
 ferrite-graph = { workspace = true }
 ferrite-manifest = { workspace = true }
 ferrite-plugin = { workspace = true }
+ferrite-transform = { workspace = true }
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

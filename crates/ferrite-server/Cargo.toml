@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2021"
 description = "Ferrite dev server: HTTP/WS, pipelines, watcher, middleware mode"
 
+[features]
+swc = ["ferrite-transform/swc"]
+
 [dependencies]
 ferrite-core = { workspace = true }
 ferrite-config = { workspace = true }

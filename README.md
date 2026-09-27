@@ -168,13 +168,47 @@ transforms, npm ESM packages, module graph, core plugin hooks, HMR,
 production bundle + manifest, SSR foundations (adapters, `ssrLoadModule`,
 externals, streaming, islands, RPC), and the `ferrite` CLI.
 
-Explicitly roadmap (documented at each site): SWC backend, scope-hoisted
-concatenation / Rolldown backend, statement-level tree-shaking, CSS file
-extraction, single-binary asset embedding, cross-target builds, automatic
-WASM `cargo build` orchestration, Vue/Svelte plugins. Shipped since v0.1:
-opt-in napi-vm embedded backend (no Node), tier-2 JS plugin hosting
-(`ferrite_plugin::js_host`), dev import maps, `.node` SSR shims,
-MessagePack/CBOR RPC encodings, source-map chaining, remote imports.
+Explicitly roadmap (documented at each site): Rolldown backend.
+Shipped since v0.1: opt-in napi-vm embedded backend (no Node), tier-2 JS
+plugin hosting (`ferrite_plugin::js_host`), dev import maps, `.node` SSR
+shims, MessagePack/CBOR RPC encodings, source-map chaining, remote
+imports — plus the items below.
+
+## Production build features
+
+- **CSS extraction.** Production builds emit one hashed `.css` file per
+  stylesheet module (preserving `@import` order) and inject `<link>` tags
+  into the built HTML. Bare `import "./a.css"` statements are stripped
+  from the JS; CSS-only modules produce no JS chunk.
+- **WASM `cargo build` orchestration.** `ferrite_wasm::ensure_glue` runs
+  `cargo build --target wasm32-unknown-unknown` + `wasm-bindgen` when the
+  glue is stale (mtime-based), so `.wasm` imports work without manual
+  steps. Missing toolchains fail with a loud hint, never silently.
+- **Statement-level tree-shaking.** `BundleRequest.treeshake` (on by
+  default in production builds) drops unused exports per statement with a
+  used-exports fixpoint across the graph, then re-minifies. Barrel
+  re-exports survive when any downstream consumer needs them.
+- **Single-binary packaging + cross-target builds.** `ferrite build
+  --target <triple>` embeds `dist/` into a standalone server binary
+  (`BuildReport.standalone_binary`) via `include_bytes!` + gzip, and
+  cross-compiles with `cargo build --target` (validated triples only).
+- **SWC backend.** Opt-in `swc` cargo feature (`--features swc`) swaps
+  the transform/minify engine to `swc_core` (TS strip, JSX
+  auto/classic, es2015–2022 lowering, top-level DCE). Default builds
+  keep the zero-cost Oxc frontend.
+- **Scope-hoisted concatenation.** `ferrite build --scope-hoist` (or
+  `BuildConfig.scope_hoist`) concatenates each entry closure into one
+  module with `$f{index}$`-prefixed locals, bailing out to chunked
+  output for graphs it cannot prove safe (namespaces, `eval`, etc.).
+- **React / Vue / Svelte.** `ferrite-frameworks` ships a React plugin
+  (dev-only refresh preamble/footer) plus experimental Vue/Svelte
+  single-file-component splitting (script/style blocks; template
+  compilation is an explicit stub). Enabled by default in the CLI.
+- **Tier-3 Node adapter.** `ferrite_plugin::NodeAdapterHost` hosts
+  foreign ESM plugins in a real Node.js over JSON-lines stdio
+  (`resolveId`/`load`/`transform(code, id)` Vite-like signatures, `null`
+  = skip). Node is never spawned unless configured; guest throws,
+  unknown plugins, and missing binaries all fail loudly.
 
 ## Testing
 

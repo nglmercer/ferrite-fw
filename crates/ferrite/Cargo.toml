@@ -23,9 +23,11 @@ ferrite-runtime = { workspace = true }
 ferrite-ssr = { workspace = true }
 ferrite-cache = { workspace = true }
 ferrite-manifest = { workspace = true }
+ferrite-frameworks = { workspace = true }
 ferrite-wasm = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
+flate2 = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -37,4 +39,9 @@ napi-vm = [
     "ferrite-runtime/napi-vm",
     "ferrite-ssr/napi-vm",
     "ferrite-plugin/napi-vm",
+]
+swc = [
+    "ferrite-bundler/swc",
+    "ferrite-server/swc",
+    "ferrite-transform/swc",
 ]

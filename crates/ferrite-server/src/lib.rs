@@ -832,6 +832,7 @@ impl DevServer {
                         has_module_syntax: false,
                         uses_import_meta_hot: false,
                         is_raw_bytes: false,
+                        shake: Some(ferrite_transform::ShakeInfo::default()),
                     });
                 }
                 // Production builds emit self-contained JS (no /@ferrite/client
@@ -883,6 +884,7 @@ impl DevServer {
                     has_module_syntax: parsed.has_module_syntax,
                     uses_import_meta_hot: parsed.uses_import_meta_hot,
                     is_raw_bytes: false,
+                    shake: None, // filled during rewriting
                 })
             }
             _ => Ok(PipelineModule::code_only(
@@ -910,6 +912,7 @@ impl DevServer {
             self.inner.config.npm.dev_strategy == "import-map" && !environment.kind.is_ssr();
         let mut mapping: HashMap<String, String> = HashMap::new();
         let mut imports = Vec::new();
+        let mut import_bindings = Vec::new();
         for import in &parsed.imports {
             if import.is_type {
                 continue;
@@ -937,10 +940,12 @@ impl DevServer {
                             map.insert(import.specifier.clone(), url.clone());
                         }
                         imports.push((import.specifier.clone(), ModuleId::new(url), kind));
+                        import_bindings.push(import.bindings.clone());
                         continue;
                     }
                     mapping.insert(import.specifier.clone(), url.clone());
                     imports.push((import.specifier.clone(), ModuleId::new(url), kind));
+                    import_bindings.push(import.bindings.clone());
                 }
                 Err(error) => {
                     tracing::warn!(
@@ -955,7 +960,22 @@ impl DevServer {
             let (code, _) = rewrite_specifiers(&module.code, &ModuleType::Js, &mapping)?;
             module.code = code;
         }
+        // Resolve re-export sources to module ids (specifier matching would
+        // not survive the resolved-URL rewriting below; `mapping` misses
+        // the import-map path, so key off the recorded imports instead).
+        let mut exports = parsed.export_details.clone();
+        for export in &mut exports {
+            if let Some(from) = export.from.as_deref() {
+                if let Some((_, id, _)) = imports.iter().find(|(spec, _, _)| spec == from) {
+                    export.target = Some(id.clone());
+                }
+            }
+        }
         module.imports = imports;
+        module.shake = Some(ferrite_transform::ShakeInfo {
+            import_bindings,
+            exports,
+        });
         Ok(module)
     }
 
@@ -969,6 +989,7 @@ impl DevServer {
         let requires = collect_requires(&module.code);
         let mut mapping: HashMap<String, String> = HashMap::new();
         let mut imports = module.imports.clone();
+        let mut shake = module.shake.clone();
         for specifier in &requires {
             if let Ok(resolved) = self
                 .resolve_id(ctx, specifier, Some(&module.id), environment)
@@ -976,6 +997,12 @@ impl DevServer {
             {
                 mapping.insert(specifier.clone(), resolved.id.0.clone());
                 imports.push((specifier.clone(), resolved.id, ImportKind::Static));
+                // The interop reads `default ?? whole`: namespace use.
+                if let Some(shake) = shake.as_mut() {
+                    shake
+                        .import_bindings
+                        .push(vec![ferrite_transform::ImportBinding::Namespace]);
+                }
             }
         }
         let mut prelude = String::from(
@@ -1002,10 +1029,22 @@ impl DevServer {
             module.id.0,
             module.id.0.rsplit_once('/').map_or("/", |(dir, _)| dir),
         );
+        // The wrapper exports only `default`; re-export facts from the
+        // original source no longer describe this code.
+        if let Some(shake) = shake.as_mut() {
+            shake.exports = vec![ferrite_transform::ParsedExport {
+                exported: "default".to_string(),
+                local: None,
+                from: None,
+                imported: None,
+                target: None,
+            }];
+        }
         Ok(PipelineModule {
             code: wrapped,
             imports,
             has_module_syntax: true,
+            shake,
             ..module
         })
     }
@@ -1358,6 +1397,8 @@ pub struct PipelineModule {
     pub uses_import_meta_hot: bool,
     /// True when the response must be raw file bytes.
     pub is_raw_bytes: bool,
+    /// Statement-DCE facts (`None` = opaque, keep everything).
+    pub shake: Option<ferrite_transform::ShakeInfo>,
 }
 
 impl PipelineModule {
@@ -1374,6 +1415,7 @@ impl PipelineModule {
             has_module_syntax: true,
             uses_import_meta_hot: false,
             is_raw_bytes: false,
+            shake: None,
         }
     }
 
@@ -1390,6 +1432,7 @@ impl PipelineModule {
             has_module_syntax: false,
             uses_import_meta_hot: false,
             is_raw_bytes: true,
+            shake: None,
         }
     }
 
@@ -1410,6 +1453,7 @@ impl PipelineModule {
             has_module_syntax: true,
             uses_import_meta_hot: cached.uses_import_meta_hot,
             is_raw_bytes: false,
+            shake: cached.shake,
         }
     }
 }
@@ -1429,6 +1473,9 @@ pub struct CachedTransform {
     pub map: Option<String>,
     /// HMR flag.
     pub uses_import_meta_hot: bool,
+    /// Statement-DCE facts (`None` for stale caches → keep everything).
+    #[serde(default)]
+    pub shake: Option<ferrite_transform::ShakeInfo>,
 }
 
 impl CachedTransform {
@@ -1446,6 +1493,7 @@ impl CachedTransform {
             module_type: module.module_type.clone(),
             map: module.map.clone(),
             uses_import_meta_hot: module.uses_import_meta_hot,
+            shake: module.shake.clone(),
         }
     }
 }

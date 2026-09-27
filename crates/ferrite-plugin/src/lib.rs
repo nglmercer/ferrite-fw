@@ -14,6 +14,7 @@ use ferrite_resolver::{ResolveKind, ResolvedId, Resolver};
 
 /// Tier-2 JS plugin host (spec §56–§57).
 pub mod js_host;
+pub mod node_adapter;
 
 /// Hook ordering (§11).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

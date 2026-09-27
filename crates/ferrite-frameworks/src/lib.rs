@@ -1,0 +1,54 @@
+//! Framework plugins: React Refresh (§69) plus Vue/Svelte SFC experiments.
+//!
+//! [`ReactPlugin`] appends a Refresh registration footer to JSX modules in
+//! dev (component detection is export-based: capitalized named exports and
+//! named default exports; anonymous default components are a documented
+//! gap). [`VuePlugin`] and [`SveltePlugin`] split single-file components
+//! into script/template/style virtual modules; template compilation is an
+//! experimental stub (render returns the markup string) — the split,
+//! pipeline integration, and HMR wiring are the real deliverable.
+
+pub mod react;
+pub mod svelte;
+pub mod vue;
+
+pub use react::ReactPlugin;
+pub use svelte::SveltePlugin;
+pub use vue::VuePlugin;
+
+/// Join an importer-relative specifier onto an absolute importer id,
+/// preserving any `?query`. Lexical only (no fs access).
+pub(crate) fn join_relative(importer: &str, specifier: &str) -> String {
+    let (spec_path, query) = match specifier.split_once('?') {
+        Some((path, query)) => (path, format!("?{query}")),
+        None => (specifier, String::new()),
+    };
+    let base = importer.split('?').next().unwrap_or(importer);
+    let dir = base.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
+    let mut parts: Vec<&str> = dir.split('/').filter(|part| !part.is_empty()).collect();
+    for part in spec_path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            _ => parts.push(part),
+        }
+    }
+    format!("/{joined}{query}", joined = parts.join("/"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::join_relative;
+
+    #[test]
+    fn joins_relative_specs() {
+        assert_eq!(join_relative("/src/a.ts", "./b.vue"), "/src/b.vue");
+        assert_eq!(
+            join_relative("/src/a.ts", "../b.vue?vue&type=script"),
+            "/b.vue?vue&type=script"
+        );
+        assert_eq!(join_relative("/a.ts", "./d/./e.vue"), "/d/e.vue");
+    }
+}

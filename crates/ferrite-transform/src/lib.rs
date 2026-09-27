@@ -17,6 +17,11 @@ use oxc_semantic::SemanticBuilder;
 use oxc_span::SourceType;
 use oxc_transformer::{JsxRuntime, TransformOptions, Transformer};
 
+#[cfg(feature = "swc")]
+mod swc_impl;
+
+pub mod concat;
+
 /// Compiler abstraction (spec §5).
 pub trait JsCompiler: Send + Sync {
     /// Parse a module and extract imports/exports.
@@ -71,6 +76,8 @@ pub struct ParsedImport {
     pub kind: ParsedImportKind,
     /// True for `import type ...` (elided at runtime).
     pub is_type: bool,
+    /// Bindings pulled through this import (empty = unknown: treat as all).
+    pub bindings: Vec<ImportBinding>,
 }
 
 /// Static vs dynamic import.
@@ -82,6 +89,47 @@ pub enum ParsedImportKind {
     Dynamic,
 }
 
+/// One binding pulled through an import (statement-level DCE, §38).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ImportBinding {
+    /// `import { name }` (the DEP-side exported name).
+    Named(String),
+    /// `import name` (dep `default`).
+    Default,
+    /// `import * as ns` (uses everything).
+    Namespace,
+    /// Bare `import "…"` (uses nothing).
+    SideEffect,
+    /// `export … from "…"` (usage propagates, not direct use).
+    Reexport,
+}
+
+/// One export with its local binding (§38).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ParsedExport {
+    /// Exported name (`default`, or `*` for star re-exports).
+    pub exported: String,
+    /// Local name, when locally declared.
+    pub local: Option<String>,
+    /// Source specifier, when re-exported.
+    pub from: Option<String>,
+    /// Source-side name, when re-exported (`export { a as b }` → `a`).
+    pub imported: Option<String>,
+    /// Resolved source module, filled by the pipeline (not the parser).
+    #[serde(default)]
+    pub target: Option<ferrite_core::ModuleId>,
+}
+
+/// Statement-DCE facts for one module (§38). `None` (stale caches,
+/// non-JS shims) means *opaque*: consumers must keep everything.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ShakeInfo {
+    /// Bindings per resolved import, aligned with the import list.
+    pub import_bindings: Vec<Vec<ImportBinding>>,
+    /// Declared exports with re-export provenance.
+    pub exports: Vec<ParsedExport>,
+}
+
 /// A parsed module (§5, decoupled from compiler ASTs).
 #[derive(Debug, Clone)]
 pub struct ParsedModule {
@@ -91,6 +139,8 @@ pub struct ParsedModule {
     pub imports: Vec<ParsedImport>,
     /// Exported names (`default` for default exports, `*` for star re-exports).
     pub exports: Vec<String>,
+    /// Export details with local bindings (statement-level DCE).
+    pub export_details: Vec<ParsedExport>,
     /// True when the module uses ESM syntax.
     pub has_module_syntax: bool,
     /// True when `import.meta.hot` is referenced.
@@ -235,29 +285,45 @@ impl JsCompiler for OxcCompiler {
 
 /// SWC compatibility backend (§89).
 ///
-/// v0.1 ships the adapter type with the stable [`JsCompiler`] interface; the
-/// native SWC pipeline is an explicit roadmap item (spec §101 defers full
-/// ecosystem-compat transforms). Configure `engine = "oxc"` (default).
+/// Native SWC pipeline (TS strip, JSX, target lowering, minify) behind the
+/// `swc` cargo feature; without it, transform/minify fail loudly and
+/// parsing still works through the shared Oxc frontend.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SwcCompiler;
 
 impl JsCompiler for SwcCompiler {
     fn parse(&self, request: ParseRequest) -> Result<ParsedModule> {
-        // Parsing is engine-agnostic through the Oxc frontend; the SWC adapter
-        // reuses it until the native SWC pipeline lands.
+        // Parsing is engine-agnostic through the Oxc frontend so both
+        // engines agree on the module graph.
         OxcCompiler::new(OxcOptions::default()).parse(request)
     }
 
-    fn transform(&self, _request: TransformRequest) -> Result<TransformResult> {
-        Err(FerriteError::Other(
-            "the SWC transform backend is not compiled into this build; set `[compiler] engine = \"oxc\"` (default)".to_string(),
-        ))
+    fn transform(&self, request: TransformRequest) -> Result<TransformResult> {
+        #[cfg(feature = "swc")]
+        {
+            swc_impl::transform_module_swc(request)
+        }
+        #[cfg(not(feature = "swc"))]
+        {
+            let _ = request;
+            Err(FerriteError::Other(
+                "the SWC transform backend is not compiled into this build; rebuild with `--features swc` or set `[compiler] engine = \"oxc\"` (default)".to_string(),
+            ))
+        }
     }
 
-    fn minify(&self, _request: MinifyRequest) -> Result<MinifyResult> {
-        Err(FerriteError::Other(
-            "the SWC minify backend is not compiled into this build; set `[compiler] engine = \"oxc\"` (default)".to_string(),
-        ))
+    fn minify(&self, request: MinifyRequest) -> Result<MinifyResult> {
+        #[cfg(feature = "swc")]
+        {
+            swc_impl::minify_module_swc(&request)
+        }
+        #[cfg(not(feature = "swc"))]
+        {
+            let _ = request;
+            Err(FerriteError::Other(
+                "the SWC minify backend is not compiled into this build; rebuild with `--features swc` or set `[compiler] engine = \"oxc\"` (default)".to_string(),
+            ))
+        }
     }
 }
 
@@ -279,6 +345,40 @@ fn source_type_for(id: &str, module_type: &ModuleType) -> SourceType {
 }
 
 /// Parse a module and extract imports/exports.
+/// Exported name text (`None` for null entries).
+fn export_name_of(name: &oxc_syntax::module_record::ExportExportName<'_>) -> Option<String> {
+    match name {
+        oxc_syntax::module_record::ExportExportName::Name(name) => {
+            Some(name.name.as_str().to_string())
+        }
+        oxc_syntax::module_record::ExportExportName::Default(_) => Some("default".to_string()),
+        oxc_syntax::module_record::ExportExportName::Null => None,
+    }
+}
+
+/// Source-side re-export name (`export { a as b } from` → `a`).
+fn import_name_of(name: &oxc_syntax::module_record::ExportImportName<'_>) -> Option<String> {
+    match name {
+        oxc_syntax::module_record::ExportImportName::Name(name) => {
+            Some(name.name.as_str().to_string())
+        }
+        _ => None,
+    }
+}
+
+/// Local binding text (`None` when not locally accessible).
+fn local_name_of(name: &oxc_syntax::module_record::ExportLocalName<'_>) -> Option<String> {
+    match name {
+        oxc_syntax::module_record::ExportLocalName::Name(name) => {
+            Some(name.name.as_str().to_string())
+        }
+        oxc_syntax::module_record::ExportLocalName::Default(name) => {
+            Some(name.name.as_str().to_string())
+        }
+        oxc_syntax::module_record::ExportLocalName::Null => None,
+    }
+}
+
 fn parse_module(id: &str, code: &str, module_type: &ModuleType) -> Result<ParsedModule> {
     let allocator = Allocator::default();
     let source_type = source_type_for(id, module_type);
@@ -303,16 +403,45 @@ fn parse_module(id: &str, code: &str, module_type: &ModuleType) -> Result<Parsed
         });
     }
     let record = &parsed.module_record;
-    let mut imports = Vec::new();
+    // Aggregate bindings per (specifier, range): one statement can carry
+    // several entries (`import d, {a} from "x"`).
+    let mut import_map: HashMap<(String, (usize, usize)), ParsedImport> = HashMap::new();
+    let mut push_binding = |specifier: String,
+                            range: (usize, usize),
+                            kind: ParsedImportKind,
+                            is_type: bool,
+                            binding: ImportBinding| {
+        import_map
+            .entry((specifier.clone(), range))
+            .or_insert_with(|| ParsedImport {
+                specifier,
+                range,
+                kind,
+                is_type,
+                bindings: Vec::new(),
+            })
+            .bindings
+            .push(binding);
+    };
     for entry in record.import_entries.iter() {
         let specifier = entry.module_request.name.as_str().to_string();
         let range = expand_to_quotes(code, entry.module_request.span);
-        imports.push(ParsedImport {
+        let binding = match &entry.import_name {
+            oxc_syntax::module_record::ImportImportName::Name(name) => {
+                ImportBinding::Named(name.name.as_str().to_string())
+            }
+            oxc_syntax::module_record::ImportImportName::NamespaceObject => {
+                ImportBinding::Namespace
+            }
+            oxc_syntax::module_record::ImportImportName::Default(_) => ImportBinding::Default,
+        };
+        push_binding(
             specifier,
             range,
-            kind: ParsedImportKind::Static,
-            is_type: entry.is_type,
-        });
+            ParsedImportKind::Static,
+            entry.is_type,
+            binding,
+        );
     }
     for entry in record
         .indirect_export_entries
@@ -322,22 +451,24 @@ fn parse_module(id: &str, code: &str, module_type: &ModuleType) -> Result<Parsed
         if let Some(request) = &entry.module_request {
             let specifier = request.name.as_str().to_string();
             let range = expand_to_quotes(code, request.span);
-            imports.push(ParsedImport {
+            push_binding(
                 specifier,
                 range,
-                kind: ParsedImportKind::Static,
-                is_type: entry.is_type,
-            });
+                ParsedImportKind::Static,
+                entry.is_type,
+                ImportBinding::Reexport,
+            );
         }
     }
     for dynamic in record.dynamic_imports.iter() {
         if let Some((specifier, range)) = static_dynamic_specifier(code, dynamic.module_request) {
-            imports.push(ParsedImport {
+            push_binding(
                 specifier,
                 range,
-                kind: ParsedImportKind::Dynamic,
-                is_type: false,
-            });
+                ParsedImportKind::Dynamic,
+                false,
+                ImportBinding::Namespace,
+            );
         }
     }
     // Side-effect imports (`import "./x"`) carry no bindings and may be absent
@@ -345,39 +476,63 @@ fn parse_module(id: &str, code: &str, module_type: &ModuleType) -> Result<Parsed
     for (specifier, requests) in record.requested_modules.iter() {
         for requested in requests.iter() {
             let range = expand_to_quotes(code, requested.span);
-            imports.push(ParsedImport {
-                specifier: specifier.as_str().to_string(),
-                range,
-                kind: ParsedImportKind::Static,
-                is_type: requested.is_type,
-            });
+            let key = (specifier.as_str().to_string(), range);
+            import_map
+                .entry(key.clone())
+                .or_insert_with(|| ParsedImport {
+                    specifier: key.0,
+                    range: key.1,
+                    kind: ParsedImportKind::Static,
+                    is_type: requested.is_type,
+                    bindings: vec![ImportBinding::SideEffect],
+                });
         }
     }
+    let mut imports: Vec<ParsedImport> = import_map.into_values().collect();
     imports.sort_by_key(|import| import.range.0);
-    imports.dedup_by(|a, b| a.range == b.range && a.specifier == b.specifier);
 
     let mut exports = Vec::new();
+    let mut export_details = Vec::new();
     for entry in record.local_export_entries.iter() {
-        match &entry.export_name {
-            oxc_syntax::module_record::ExportExportName::Name(name) => {
-                exports.push(name.name.as_str().to_string());
-            }
-            oxc_syntax::module_record::ExportExportName::Default(_) => {
-                exports.push("default".to_string());
-            }
-            oxc_syntax::module_record::ExportExportName::Null => {}
-        }
+        let Some(exported) = export_name_of(&entry.export_name) else {
+            continue;
+        };
+        exports.push(exported.clone());
+        export_details.push(ParsedExport {
+            exported,
+            local: local_name_of(&entry.local_name),
+            from: None,
+            imported: None,
+            target: None,
+        });
     }
     for entry in record.indirect_export_entries.iter() {
-        match &entry.export_name {
-            oxc_syntax::module_record::ExportExportName::Name(name) => {
-                exports.push(name.name.as_str().to_string());
-            }
-            oxc_syntax::module_record::ExportExportName::Default(_) => {
-                exports.push("default".to_string());
-            }
-            oxc_syntax::module_record::ExportExportName::Null => {}
-        }
+        let Some(exported) = export_name_of(&entry.export_name) else {
+            continue;
+        };
+        exports.push(exported.clone());
+        export_details.push(ParsedExport {
+            exported,
+            local: None,
+            from: entry
+                .module_request
+                .as_ref()
+                .map(|request| request.name.as_str().to_string()),
+            imported: import_name_of(&entry.import_name),
+            target: None,
+        });
+    }
+    for entry in record.star_export_entries.iter() {
+        export_details.push(ParsedExport {
+            exported: "*".to_string(),
+            local: None,
+            from: entry
+                .module_request
+                .as_ref()
+                .map(|request| request.name.as_str().to_string()),
+            imported: None,
+            target: None,
+        });
     }
     if !record.star_export_entries.is_empty() {
         exports.push("*".to_string());
@@ -387,6 +542,7 @@ fn parse_module(id: &str, code: &str, module_type: &ModuleType) -> Result<Parsed
         id: id.to_string(),
         imports,
         exports,
+        export_details,
         has_module_syntax: record.has_module_syntax,
         uses_import_meta_hot: code.contains("import.meta.hot"),
         uses_import_meta_env: code.contains("import.meta.env"),
@@ -575,7 +731,198 @@ fn transform_js_like(request: &TransformRequest) -> Result<(String, Option<Sourc
     Ok((generated.code, map))
 }
 
-/// Minify a module with Oxc.
+/// Drop unused export statements (§38 statement-level DCE).
+///
+/// `used` holds the exported names live importers need. Unused exports
+/// are *unwrapped* (`export const a = …` → `const a = …`, unused
+/// specifiers removed); callers must minify afterwards so dead bindings
+/// (and only provably pure ones) are collected. Returns `None` when
+/// nothing changed, so callers keep the original code and source map.
+///
+/// Conservative by design: re-exports, default expressions, heritage
+/// classes, complex patterns, and mixed multi-declarators are kept.
+pub fn drop_unused_exports(
+    id: &str,
+    code: &str,
+    used: &std::collections::HashSet<String>,
+) -> Result<Option<String>> {
+    use oxc_allocator::ReplaceWith as _;
+    use oxc_ast::ast::*;
+    use oxc_parser::Parser;
+    use oxc_span::SourceType;
+
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, code, SourceType::mjs()).parse();
+    if parsed.fatal_error {
+        return Err(FerriteError::Parse {
+            id: id.to_string(),
+            message: "syntax error".to_string(),
+            frame: Some(ferrite_core::code_frame(code, 0, 2)),
+        });
+    }
+    let mut program = parsed.program;
+    let mut changed = false;
+    let mut index = 0;
+    while index < program.body.len() {
+        // Decide by reference first so untouched statements are never moved.
+        enum Action {
+            Keep,
+            DropSpecifiers,
+            UnwrapExport,
+            UnwrapDefaultFunction,
+            DropStatement,
+        }
+        let action = match &mut program.body[index] {
+            // `export { a as b, c };` — drop unused specifiers.
+            Statement::ExportNamedDeclaration(decl) => {
+                let before = decl.specifiers.len();
+                decl.specifiers
+                    .retain(|spec| used.contains(&module_export_name(&spec.exported)));
+                if decl.specifiers.is_empty() {
+                    Action::DropStatement
+                } else if decl.specifiers.len() != before {
+                    Action::DropSpecifiers
+                } else {
+                    Action::Keep
+                }
+            }
+            // `export const/function/class …` — unwrap when fully unused.
+            Statement::ExportDeclaration(decl) => match &decl.declaration {
+                Declaration::VariableDeclaration(var) => {
+                    if declarator_names(&var.declarations)
+                        .is_some_and(|names| names.iter().all(|name| !used.contains(name)))
+                    {
+                        Action::UnwrapExport
+                    } else {
+                        Action::Keep
+                    }
+                }
+                Declaration::FunctionDeclaration(fun) => {
+                    if fun
+                        .id
+                        .as_ref()
+                        .is_some_and(|id| !used.contains(id.name.as_str()))
+                    {
+                        Action::UnwrapExport
+                    } else {
+                        Action::Keep
+                    }
+                }
+                Declaration::ClassDeclaration(class) => {
+                    if class
+                        .id
+                        .as_ref()
+                        .is_some_and(|id| !used.contains(id.name.as_str()))
+                    {
+                        Action::UnwrapExport
+                    } else {
+                        Action::Keep
+                    }
+                }
+                _ => Action::Keep,
+            },
+            // `export default …` — unwrap named functions, drop anonymous
+            // ones, keep everything else (heritage/expressions may run).
+            Statement::ExportDefaultDeclaration(decl) => {
+                if used.contains("default") {
+                    Action::Keep
+                } else if let ExportDefaultDeclarationKind::FunctionDeclaration(fun) =
+                    &decl.declaration
+                {
+                    if fun.id.is_some() {
+                        Action::UnwrapDefaultFunction
+                    } else {
+                        Action::DropStatement
+                    }
+                } else {
+                    Action::Keep
+                }
+            }
+            // Re-exports, star exports, plain statements: keep.
+            _ => Action::Keep,
+        };
+        match action {
+            Action::Keep => index += 1,
+            Action::DropSpecifiers => {
+                changed = true;
+                index += 1;
+            }
+            Action::DropStatement => {
+                program.body.remove(index);
+                changed = true;
+            }
+            Action::UnwrapExport => {
+                changed = true;
+                program.body[index].replace_with(|stmt| match stmt {
+                    Statement::ExportDeclaration(decl) => match decl.unbox().declaration {
+                        Declaration::VariableDeclaration(var) => {
+                            Statement::VariableDeclaration(var)
+                        }
+                        Declaration::FunctionDeclaration(fun) => {
+                            Statement::FunctionDeclaration(fun)
+                        }
+                        Declaration::ClassDeclaration(class) => Statement::ClassDeclaration(class),
+                        // Unreachable: the decision gate selects only these three.
+                        _ => unreachable!("shake decision/action mismatch"),
+                    },
+                    // Unreachable: same gate.
+                    other => other,
+                });
+                index += 1;
+            }
+            Action::UnwrapDefaultFunction => {
+                changed = true;
+                program.body[index].replace_with(|stmt| match stmt {
+                    Statement::ExportDefaultDeclaration(decl) => {
+                        match decl.unbox().declaration {
+                            ExportDefaultDeclarationKind::FunctionDeclaration(fun) => {
+                                Statement::FunctionDeclaration(fun)
+                            }
+                            // Unreachable: the decision gate selects only functions.
+                            _ => unreachable!("shake decision/action mismatch"),
+                        }
+                    }
+                    // Unreachable: same gate.
+                    other => other,
+                });
+                index += 1;
+            }
+        }
+    }
+    if !changed {
+        return Ok(None);
+    }
+    Ok(Some(
+        Codegen::new()
+            .with_options(CodegenOptions::default())
+            .build(&program)
+            .code,
+    ))
+}
+
+/// Exported-name text of a module export name.
+fn module_export_name(name: &oxc_ast::ast::ModuleExportName<'_>) -> String {
+    match name {
+        oxc_ast::ast::ModuleExportName::IdentifierName(name) => name.name.as_str().to_string(),
+        oxc_ast::ast::ModuleExportName::IdentifierReference(name) => name.name.as_str().to_string(),
+        oxc_ast::ast::ModuleExportName::StringLiteral(name) => name.value.as_str().to_string(),
+    }
+}
+
+/// Bound top-level names of declarators (`None` unless every pattern is
+/// a single identifier — complex patterns stay conservative).
+fn declarator_names(declarators: &[oxc_ast::ast::VariableDeclarator<'_>]) -> Option<Vec<String>> {
+    declarators
+        .iter()
+        .map(|declarator| match &declarator.id {
+            oxc_ast::ast::BindingPattern::BindingIdentifier(ident) => {
+                Some(ident.name.as_str().to_string())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 fn minify_module(request: &MinifyRequest) -> Result<MinifyResult> {
     let allocator = Allocator::default();
     let source_type = SourceType::mjs();
@@ -1019,6 +1366,197 @@ mod tests {
         let inner = "{\"version\":3,\"sources\":[],\"names\":[],\"mappings\":\"\"}";
         assert!(chain_source_maps("nope", inner).is_err());
         assert!(chain_source_maps(inner, "nope").is_err());
+    }
+
+    #[cfg(not(feature = "swc"))]
+    #[test]
+    fn swc_engine_without_feature_fails_loudly() {
+        let compiler = compiler_for_engine("swc").unwrap();
+        let error = compiler
+            .transform(TransformRequest::new(
+                "/a.ts",
+                "const x = 1;\n",
+                ModuleType::Ts,
+            ))
+            .unwrap_err();
+        assert!(error.to_string().contains("--features swc"), "{error}");
+        let error = compiler
+            .minify(MinifyRequest {
+                id: "/a.js".to_string(),
+                code: "const x = 1;\n".to_string(),
+                sourcemap: false,
+                input_map: None,
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains("--features swc"), "{error}");
+        // Parsing still works: the graph never depends on the engine.
+        let parsed = compiler
+            .parse(ParseRequest {
+                id: "/a.ts".to_string(),
+                code: "import x from \"./x\";\n".to_string(),
+                module_type: ModuleType::Ts,
+            })
+            .unwrap();
+        assert_eq!(parsed.imports.len(), 1);
+    }
+
+    fn used(names: &[&str]) -> std::collections::HashSet<String> {
+        names.iter().map(|name| name.to_string()).collect()
+    }
+
+    fn minified(id: &str, code: &str) -> String {
+        compiler()
+            .minify(MinifyRequest {
+                id: id.to_string(),
+                code: code.to_string(),
+                sourcemap: false,
+                input_map: None,
+            })
+            .unwrap()
+            .code
+    }
+
+    #[test]
+    fn drops_unused_specifiers() {
+        let code = "const alpha = 1;\nconst beta = 2;\nexport { alpha, beta };\n";
+        let dropped = drop_unused_exports("/a.js", code, &used(&["alpha"]))
+            .unwrap()
+            .expect("changed");
+        assert!(dropped.contains("alpha"), "{dropped}");
+        let export_line = dropped
+            .lines()
+            .find(|line| line.contains("export"))
+            .expect("export line");
+        assert!(!export_line.contains("beta"), "{dropped}");
+        // Minifier collects the orphaned binding.
+        let min = minified("/a.js", &dropped);
+        assert!(!min.contains("beta"), "{min}");
+    }
+
+    #[test]
+    fn unwraps_unused_declarations() {
+        let code = "export const alpha = 1;\nexport function beta() { return 2; }\n";
+        let dropped = drop_unused_exports("/a.js", code, &used(&["alpha"]))
+            .unwrap()
+            .expect("changed");
+        assert!(dropped.contains("export const alpha"), "{dropped}");
+        assert!(dropped.contains("function beta"), "{dropped}");
+        assert!(!dropped.contains("export function"), "{dropped}");
+        let min = minified("/a.js", &dropped);
+        assert!(!min.contains("beta"), "{min}");
+    }
+
+    #[test]
+    fn keeps_used_and_returns_none_when_clean() {
+        let code = "export const alpha = 1;\nside();\n";
+        assert!(drop_unused_exports("/a.js", code, &used(&["alpha"]))
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn default_function_rules() {
+        let named = "export default function fargo() { return 1; }\n";
+        let dropped = drop_unused_exports("/a.js", named, &used(&[]))
+            .unwrap()
+            .expect("changed");
+        assert!(dropped.contains("function fargo"), "{dropped}");
+        assert!(!dropped.contains("export"), "{dropped}");
+        let anon = "export default function () { return 1; }\n";
+        let dropped = drop_unused_exports("/a.js", anon, &used(&[]))
+            .unwrap()
+            .expect("changed");
+        assert!(!dropped.contains("return 1"), "{dropped}");
+        // Default expressions may run: kept.
+        let expr = "export default init();\n";
+        assert!(drop_unused_exports("/a.js", expr, &used(&[]))
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn keeps_reexports_classes_and_complex_patterns() {
+        let code = "export * from \"./x.js\";\n\
+            export const { deep } = unpack();\n\
+            export default class extends Base {}\n";
+        assert!(drop_unused_exports("/a.js", code, &used(&[]))
+            .unwrap()
+            .is_none());
+        // Partially-used multi-declarator export: kept whole (conservative).
+        let multi = "export const mixed = 1, other = 2;\n";
+        assert!(drop_unused_exports("/a.js", multi, &used(&["mixed"]))
+            .unwrap()
+            .is_none());
+        // Fully-unused multi-declarator export: unwrapped, minifier collects.
+        let dropped = drop_unused_exports("/a.js", multi, &used(&[]))
+            .unwrap()
+            .expect("changed");
+        assert!(!dropped.contains("export"), "{dropped}");
+    }
+
+    #[test]
+    fn drops_empty_specifier_list() {
+        let code = "const alpha = 1;\nexport { alpha };\n";
+        let dropped = drop_unused_exports("/a.js", code, &used(&[]))
+            .unwrap()
+            .expect("changed");
+        assert!(!dropped.contains("export"), "{dropped}");
+    }
+
+    #[test]
+    fn parse_captures_bindings_and_export_details() {
+        let parsed = parse_module(
+            "/a.js",
+            "import def, { named as alias } from \"./d.js\";\n\
+             import * as ns from \"./n.js\";\n\
+             import \"./s.js\";\n\
+             const local = 1;\n\
+             export { local as renamed };\n\
+             export { x } from \"./r.js\";\n\
+             export * from \"./star.js\";\n",
+            &ModuleType::Js,
+        )
+        .unwrap();
+        let by_spec = |spec: &str| {
+            parsed
+                .imports
+                .iter()
+                .find(|import| import.specifier == spec)
+                .unwrap_or_else(|| panic!("{spec}"))
+                .bindings
+                .clone()
+        };
+        assert!(by_spec("./d.js").contains(&ImportBinding::Default));
+        assert!(by_spec("./d.js").contains(&ImportBinding::Named("named".to_string())));
+        assert_eq!(by_spec("./n.js"), vec![ImportBinding::Namespace]);
+        assert_eq!(by_spec("./s.js"), vec![ImportBinding::SideEffect]);
+        assert!(by_spec("./r.js").contains(&ImportBinding::Reexport));
+        assert!(by_spec("./star.js").contains(&ImportBinding::Reexport));
+        type Detail<'a> = (&'a str, Option<&'a str>, Option<&'a str>, Option<&'a str>);
+        let details: Vec<Detail<'_>> = parsed
+            .export_details
+            .iter()
+            .map(|detail| {
+                (
+                    detail.exported.as_str(),
+                    detail.local.as_deref(),
+                    detail.from.as_deref(),
+                    detail.imported.as_deref(),
+                )
+            })
+            .collect();
+        assert!(
+            details.contains(&("renamed", Some("local"), None, None)),
+            "{details:?}"
+        );
+        assert!(
+            details.contains(&("x", None, Some("./r.js"), Some("x"))),
+            "{details:?}"
+        );
+        assert!(
+            details.contains(&("*", None, Some("./star.js"), None)),
+            "{details:?}"
+        );
     }
 
     #[test]

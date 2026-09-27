@@ -1,18 +1,17 @@
 [package]
-name = "ferrite-wasm"
+name = "ferrite-frameworks"
 version = "0.1.0"
 edition = "2021"
-description = "Ferrite Rust/WASM integration: rust: imports and WASM pipeline"
+description = "Ferrite framework plugins: React Refresh, Vue/Svelte SFC experiments"
 
 [dependencies]
+async-trait = { workspace = true }
 ferrite-core = { workspace = true }
+ferrite-config = { workspace = true }
 ferrite-plugin = { workspace = true }
 ferrite-resolver = { workspace = true }
-async-trait = { workspace = true }
-serde = { workspace = true }
+ferrite-transform = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-ferrite-config = { workspace = true }
-ferrite-graph = { workspace = true }
 tokio = { workspace = true }

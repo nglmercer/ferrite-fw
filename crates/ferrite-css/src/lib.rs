@@ -119,6 +119,48 @@ pub fn extract_urls(source: &str) -> Vec<CssUrl> {
         .collect()
 }
 
+/// Rewrite `@import` specifiers via `rewrite` (leaves `url()` alone).
+#[must_use]
+pub fn rewrite_css_imports(source: &str, rewrite: impl Fn(&str) -> Option<String>) -> String {
+    let mut edits: Vec<(usize, usize, String)> = Vec::new();
+    for import in extract_imports(source) {
+        if let Some(replacement) = rewrite(&import.specifier) {
+            let (start, end) = import.range;
+            let statement = &source[start..end];
+            if let Some(pos) = statement.find(&import.specifier) {
+                edits.push((
+                    start + pos,
+                    start + pos + import.specifier.len(),
+                    replacement,
+                ));
+            }
+        }
+    }
+    edits.sort_by_key(|edit| std::cmp::Reverse(edit.0));
+    let mut output = source.to_string();
+    for (start, end, replacement) in edits {
+        output.replace_range(start..end, &replacement);
+    }
+    output
+}
+
+/// Rewrite `url()` references via `rewrite` (leaves `@import` alone).
+#[must_use]
+pub fn rewrite_css_urls(source: &str, rewrite: impl Fn(&str) -> Option<String>) -> String {
+    let mut edits: Vec<(usize, usize, String)> = Vec::new();
+    for url in extract_urls(source) {
+        if let Some(replacement) = rewrite(&url.url) {
+            edits.push((url.range.0, url.range.1, replacement));
+        }
+    }
+    edits.sort_by_key(|edit| std::cmp::Reverse(edit.0));
+    let mut output = source.to_string();
+    for (start, end, replacement) in edits {
+        output.replace_range(start..end, &replacement);
+    }
+    output
+}
+
 /// Rewrite `@import` specifiers and `url()` references via `rewrite`.
 #[must_use]
 pub fn rewrite_css_refs(source: &str, rewrite: impl Fn(&str) -> Option<String>) -> String {

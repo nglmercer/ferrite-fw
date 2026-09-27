@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2021"
 description = "Ferrite test helpers: temp projects, fixtures, assertions"
 
+[features]
+swc = ["ferrite/swc"]
+
 [dependencies]
 ferrite-core = { workspace = true }
 ferrite-config = { workspace = true }
@@ -12,5 +15,6 @@ tempfile = { workspace = true }
 
 [dev-dependencies]
 ferrite = { workspace = true }
+ferrite-frameworks = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }

@@ -93,6 +93,8 @@ pub struct BuildConfig {
     pub entries: Vec<String>,
     /// Library mode options.
     pub lib: Option<LibConfig>,
+    /// Scope-hoist each entry closure into one file (§91).
+    pub scope_hoist: bool,
 }
 
 /// Source map output mode (§41).
@@ -154,6 +156,7 @@ impl Default for BuildConfig {
             target: "es2022".to_string(),
             entries: vec!["index.html".to_string()],
             lib: None,
+            scope_hoist: false,
         }
     }
 }
@@ -310,6 +313,8 @@ pub struct PackageConfig {
     pub embed_assets: bool,
     /// Compress embedded assets.
     pub compress_assets: bool,
+    /// Cross-compilation triple (`cargo build --target`).
+    pub target: Option<String>,
 }
 
 impl Default for PackageConfig {
@@ -318,6 +323,7 @@ impl Default for PackageConfig {
             standalone: false,
             embed_assets: true,
             compress_assets: true,
+            target: None,
         }
     }
 }
@@ -475,6 +481,10 @@ pub struct CliOverrides {
     pub minify: Option<bool>,
     /// Override standalone.
     pub standalone: Option<bool>,
+    /// Override the cross-compilation target.
+    pub target: Option<String>,
+    /// Override scope hoisting.
+    pub scope_hoist: Option<bool>,
     /// Override runtime backend.
     pub runtime: Option<String>,
 }
@@ -575,6 +585,9 @@ fn merge_build(mut base: BuildConfig, over: BuildConfig) -> BuildConfig {
     if over.lib.is_some() {
         base.lib = over.lib;
     }
+    if over.scope_hoist {
+        base.scope_hoist = true;
+    }
     if over.entries != defaults.entries {
         base.entries = over.entries;
     }
@@ -664,6 +677,12 @@ pub fn resolve_config(
     let mut package = user.package.clone();
     if let Some(standalone) = overrides.standalone {
         package.standalone = standalone;
+    }
+    if let Some(target) = overrides.target {
+        package.target = Some(target);
+    }
+    if let Some(scope_hoist) = overrides.scope_hoist {
+        build.scope_hoist = scope_hoist;
     }
     let base = overrides
         .base

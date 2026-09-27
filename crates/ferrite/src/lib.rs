@@ -32,6 +32,7 @@ pub use ferrite_cache as cache;
 pub use ferrite_config as config;
 pub use ferrite_core as core;
 pub use ferrite_css as css;
+pub use ferrite_frameworks as frameworks;
 pub use ferrite_graph as graph;
 pub use ferrite_hmr as hmr;
 pub use ferrite_html as html;
@@ -45,6 +46,8 @@ pub use ferrite_ssr as ssr;
 pub use ferrite_transform as transform;
 pub use ferrite_wasm as wasm;
 
+pub mod package;
+
 // --- re-exported vocabulary --------------------------------------------------
 pub use ferrite_config::{
     load_user_config, merge_user_config, resolve_config, CliOverrides, ResolvedConfig, UserConfig,
@@ -57,7 +60,8 @@ pub use ferrite_plugin::{Apply, Enforce, Plugin, PluginContainer};
 pub use ferrite_server::DevServer;
 
 use ferrite_bundler::{
-    BuildBundleConfig, BundleRequest, Bundler as _, FerriteBundler, LoadedModule, ModuleLoader,
+    BuildBundleConfig, BundleRequest, Bundler as _, CssExtract, FerriteBundler, LoadedModule,
+    ModuleLoader,
 };
 
 /// Prelude for framework and plugin authors.
@@ -409,6 +413,10 @@ impl Builder {
                     minify: false, // loader minifies per-module
                     sourcemap: config.build.sourcemap.enabled(),
                     map_comment: !config.build.sourcemap.hidden(),
+                    // Statement shake rides the production minify flag.
+                    treeshake: config.build.minify,
+                    engine: config.compiler.engine.clone(),
+                    scope_hoist: config.build.scope_hoist,
                 },
             )
             .await?;
@@ -450,9 +458,33 @@ impl Builder {
             self.write_html(&config, &output.manifest)?;
             copy_public(&config)?;
         }
-        // Standalone scaffold (§51 stepping stone; single-binary is roadmap).
+        // Standalone single binary (§51–§54; blocking cargo builds run
+        // off the async runtime).
+        let mut standalone_binary = None;
         if config.package.standalone && env == "client" {
-            write_standalone_scaffold(&out_dir)?;
+            let opts = package::StandaloneOptions {
+                embed_assets: config.package.embed_assets,
+                compress_assets: config.package.compress_assets,
+                target: config.package.target.clone(),
+                cargo: None,
+            };
+            let out = out_dir.clone();
+            let report =
+                tokio::task::spawn_blocking(move || package::write_standalone(&out, &opts))
+                    .await
+                    .map_err(|error| {
+                        ferrite_core::FerriteError::Build(format!(
+                            "standalone packaging failed: {error}"
+                        ))
+                    })??;
+            tracing::info!(
+                "standalone: {} files ({} bytes, {} embedded) → {}",
+                report.files,
+                report.bytes,
+                report.embedded_bytes,
+                report.dir.display()
+            );
+            standalone_binary = report.binary;
         }
         let chunks = output.bundle.files.len();
         Ok(BuildReport {
@@ -463,6 +495,7 @@ impl Builder {
             bytes: output.stats.bytes,
             modules: output.stats.modules_emitted,
             dropped: output.stats.modules_dropped,
+            standalone_binary,
         })
     }
 
@@ -529,13 +562,23 @@ impl Builder {
                 continue;
             }
             let html = std::fs::read_to_string(&file)?;
-            let rewritten = ferrite_html::rewrite_module_scripts(&html, |src| {
-                if let Some(entry) = manifest.entries.get(src) {
-                    return format!("{base}{}", entry.file);
+            // Stylesheets for this page's entries (manifest css[], in order).
+            let mut css_hrefs: Vec<String> = Vec::new();
+            for discovered in ferrite_html::discover_entries(&html) {
+                if !discovered.is_module {
+                    continue;
                 }
-                // Try with/without leading slash.
-                let alt = src.strip_prefix('/').unwrap_or(src);
-                if let Some(entry) = manifest.entries.get(&format!("/{alt}")) {
+                if let Some(entry) = manifest_entry(manifest, &discovered.src) {
+                    for css in &entry.css {
+                        let href = format!("{base}{css}");
+                        if !css_hrefs.contains(&href) {
+                            css_hrefs.push(href);
+                        }
+                    }
+                }
+            }
+            let rewritten = ferrite_html::rewrite_module_scripts(&html, |src| {
+                if let Some(entry) = manifest_entry(manifest, src) {
                     return format!("{base}{}", entry.file);
                 }
                 src.to_string()
@@ -545,6 +588,7 @@ impl Builder {
                 "<script type=\"module\" src=\"/@ferrite/client\"></script>",
                 "",
             );
+            let rewritten = inject_stylesheets(&rewritten, &css_hrefs);
             let target = config.out_dir().join(html_entry);
             if let Some(parent) = target.parent() {
                 std::fs::create_dir_all(parent)?;
@@ -552,6 +596,33 @@ impl Builder {
             std::fs::write(target, rewritten)?;
         }
         Ok(())
+    }
+}
+
+/// Look up a manifest entry by script src (tolerates leading slash).
+fn manifest_entry<'a>(
+    manifest: &'a ferrite_manifest::BuildManifest,
+    src: &str,
+) -> Option<&'a ferrite_manifest::ManifestEntry> {
+    manifest.entries.get(src).or_else(|| {
+        let alt = src.strip_prefix('/').unwrap_or(src);
+        manifest.entries.get(&format!("/{alt}"))
+    })
+}
+
+/// Inject stylesheet links before `</head>` (document start fallback).
+fn inject_stylesheets(html: &str, hrefs: &[String]) -> String {
+    if hrefs.is_empty() {
+        return html.to_string();
+    }
+    let links = hrefs
+        .iter()
+        .map(|href| format!("<link rel=\"stylesheet\" href=\"{href}\">"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    match html.find("</head>") {
+        Some(pos) => format!("{}{links}\n{}", &html[..pos], &html[pos..]),
+        None => format!("{links}\n{html}"),
     }
 }
 
@@ -572,6 +643,8 @@ pub struct BuildReport {
     pub modules: usize,
     /// Modules dropped by tree-shaking.
     pub dropped: usize,
+    /// Prebuilt standalone binary (`--target`), when produced.
+    pub standalone_binary: Option<PathBuf>,
 }
 
 /// [`ModuleLoader`] over the dev-server pipeline (build mode).
@@ -608,11 +681,138 @@ impl BuildLoader {
         }
         url
     }
+
+    /// Load a stylesheet for extraction (§29).
+    ///
+    /// Transforms (module scoping + minify), emits relative `url()` assets,
+    /// and reports relative `@import`s as deps; the bundler turns those
+    /// into hashed `.css` files. Absolute `/` refs point at `public/` and
+    /// pass through; remote refs stay untouched.
+    fn load_css(&self, id: &ModuleId) -> Result<LoadedModule> {
+        let file = self.server.id_to_file(id)?;
+        let source = std::fs::read_to_string(&file)?;
+        let is_modules = id.0.contains(".module.css");
+        let result = ferrite_css::transform_css(
+            &id.0,
+            &source,
+            &ferrite_css::CssOptions {
+                modules: is_modules,
+                minify: self.minify,
+                dev: false,
+            },
+        );
+        let env = self.server.inner().config.client_env();
+        let mut url_mapping: HashMap<String, String> = HashMap::new();
+        for found in &result.urls {
+            let spec = &found.url;
+            if !spec.starts_with("./") && !spec.starts_with("../") {
+                continue;
+            }
+            match self.resolve_css_ref(id, spec, &env) {
+                Ok(dep) => match self.server.id_to_file(&dep).and_then(|file| {
+                    let bytes = std::fs::read(&file)?;
+                    let name = file
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "asset".to_string());
+                    Ok((name, bytes))
+                }) {
+                    Ok((name, bytes)) => {
+                        url_mapping.insert(spec.clone(), self.emit_bytes(&name, bytes));
+                    }
+                    Err(error) => {
+                        tracing::warn!("cannot emit CSS asset `{spec}` from `{id}`: {error}");
+                    }
+                },
+                Err(error) => {
+                    tracing::warn!("cannot resolve CSS asset `{spec}` from `{id}`: {error}");
+                }
+            }
+        }
+        let text =
+            ferrite_css::rewrite_css_urls(&result.code, |spec| url_mapping.get(spec).cloned());
+        let mut imports = Vec::new();
+        for found in &result.imports {
+            let spec = &found.specifier;
+            if !spec.starts_with("./") && !spec.starts_with("../") {
+                continue;
+            }
+            match self.resolve_css_ref(id, spec, &env) {
+                Ok(dep) => imports.push((spec.clone(), dep, ferrite_graph::ImportKind::Static)),
+                Err(error) => {
+                    tracing::warn!("cannot resolve CSS @import `{spec}` from `{id}`: {error}");
+                }
+            }
+        }
+        // Deterministic stub (sorted export map — content-hashed downstream).
+        let code = if is_modules {
+            let exports: std::collections::BTreeMap<&String, &String> =
+                result.exports.iter().collect();
+            format!(
+                "export default {};\n",
+                serde_json::to_string(&exports).unwrap_or_else(|_| "{}".to_string())
+            )
+        } else {
+            "export default undefined;\n".to_string()
+        };
+        // CSS `@import` edges pull styles, not JS bindings; the stub exports
+        // only `default`.
+        let shake = ferrite_transform::ShakeInfo {
+            import_bindings: imports
+                .iter()
+                .map(|_| vec![ferrite_transform::ImportBinding::SideEffect])
+                .collect(),
+            exports: vec![ferrite_transform::ParsedExport {
+                exported: "default".to_string(),
+                local: None,
+                from: None,
+                imported: None,
+                target: None,
+            }],
+        };
+        Ok(LoadedModule {
+            id: id.clone(),
+            code,
+            imports,
+            side_effects: None,
+            module_type: ModuleType::Js,
+            map: None,
+            css: Some(CssExtract { text, is_modules }),
+            shake: Some(shake),
+        })
+    }
+
+    /// Resolve a CSS-relative ref through the client resolver.
+    fn resolve_css_ref(&self, id: &ModuleId, spec: &str, env: &Environment) -> Result<ModuleId> {
+        let resolved =
+            self.server
+                .inner()
+                .client_resolver
+                .resolve(&ferrite_resolver::ResolveRequest {
+                    specifier: spec,
+                    importer: Some(id),
+                    environment: env.kind.clone(),
+                    kind: ferrite_resolver::ResolveKind::Css,
+                })?;
+        if resolved.external || !resolved.id.0.starts_with('/') {
+            return Err(FerriteError::Resolve(format!(
+                "CSS ref `{spec}` from `{id}` is not a local file"
+            )));
+        }
+        Ok(resolved.id)
+    }
 }
 
 #[async_trait::async_trait]
 impl ModuleLoader for BuildLoader {
     async fn load(&self, id: &ModuleId, env: &str) -> Result<LoadedModule> {
+        // CSS extraction (§29): plain styles ride `LoadedModule.css` into
+        // hashed `.css` assets (query variants like `?inline` keep the
+        // normal pipeline).
+        let (path, query) = id.split_query();
+        if query.is_none() && ModuleType::from_path(path) == ModuleType::Css {
+            return self.load_css(id);
+        }
         let module = self.server.pipeline_module(id, None, env).await?;
         // Raw assets become hashed files + URL shims.
         if module.is_raw_bytes {
@@ -630,6 +830,8 @@ impl ModuleLoader for BuildLoader {
                 side_effects: module.side_effects,
                 module_type: ModuleType::Js,
                 map: None,
+                css: None,
+                shake: Some(ferrite_transform::ShakeInfo::default()),
             });
         }
         // The pipeline already rewrote specifiers to resolved urls, so the
@@ -637,7 +839,13 @@ impl ModuleLoader for BuildLoader {
         // `code` (not the original specifier).
         let mut code = module.code.clone();
         let mut imports = Vec::new();
-        for (_specifier, dep, kind) in &module.imports {
+        let mut import_bindings = Vec::new();
+        for (index, (_specifier, dep, kind)) in module.imports.iter().enumerate() {
+            // Dropped `?asset-shim` edges drop their bindings in step.
+            let bindings = module
+                .shake
+                .as_ref()
+                .and_then(|shake| shake.import_bindings.get(index).cloned());
             if let Some(plain) = dep.0.strip_suffix("?asset-shim") {
                 // Eagerly resolve `?asset-shim` imports to final URLs.
                 let asset_id = ModuleId::new(plain);
@@ -661,12 +869,26 @@ impl ModuleLoader for BuildLoader {
                     Err(error) => {
                         tracing::warn!("cannot emit asset `{plain}`: {error}");
                         imports.push((dep.0.clone(), dep.clone(), kind.clone()));
+                        if let Some(bindings) = bindings {
+                            import_bindings.push(bindings);
+                        }
                     }
                 }
             } else {
                 imports.push((dep.0.clone(), dep.clone(), kind.clone()));
+                if let Some(bindings) = bindings {
+                    import_bindings.push(bindings);
+                }
             }
         }
+        // Alignment is all-or-nothing: a partial binding list would
+        // misattribute names, so a short list voids the shake facts.
+        let shake = module.shake.as_ref().and_then(|shake| {
+            (import_bindings.len() == imports.len()).then(|| ferrite_transform::ShakeInfo {
+                import_bindings,
+                exports: shake.exports.clone(),
+            })
+        });
         // Minify per module (production).
         let mut map = if self.sourcemap { module.map } else { None };
         if self.minify && module.module_type.is_js_like() {
@@ -690,6 +912,8 @@ impl ModuleLoader for BuildLoader {
             side_effects: module.side_effects,
             module_type: module.module_type.clone(),
             map,
+            css: None,
+            shake,
         })
     }
 }
@@ -798,48 +1022,5 @@ fn copy_dir(from: &std::path::Path, to: &std::path::Path) -> Result<()> {
             std::fs::copy(entry.path(), target)?;
         }
     }
-    Ok(())
-}
-
-/// Write the standalone scaffold (§51 stepping stone).
-///
-/// v0.1 produces a deployable `dist/` plus a ready-to-compile Rust server
-/// scaffold; the one-command single binary is the Phase 5 milestone.
-fn write_standalone_scaffold(out_dir: &std::path::Path) -> Result<()> {
-    let dir = out_dir.join("standalone");
-    std::fs::create_dir_all(dir.join("src"))?;
-    std::fs::write(
-        dir.join("Cargo.toml"),
-        "[package]\nname = \"ferrite-app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
-         [dependencies]\naxum = { version = \"0.8\", features = [\"ws\"] }\ntokio = { version = \"1\", features = [\"full\"] }\n\
-         tower-http = { version = \"0.6\", features = [\"fs\"] }\n",
-    )?;
-    std::fs::write(
-        dir.join("src/main.rs"),
-        "//! Generated by `ferrite build --standalone`.\n\
-         //! Serves the sibling `dist/` output. `PORT`/`HOST` configure binding.\n\
-         #[tokio::main]\nasync fn main() {\n    let host = std::env::var(\"HOST\").unwrap_or_else(|_| \"0.0.0.0\".to_string());\n    let port: u16 = std::env::var(\"PORT\").ok().and_then(|p| p.parse().ok()).unwrap_or(8080);\n    let dist = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|p| p.join(\"../\").join(\"\")));\n    let _ = dist;\n    let app = axum::Router::new().fallback(tower_http::services::ServeDir::new(\"..\").append_index_html_on_directories(true));\n    let listener = tokio::net::TcpListener::bind(format!(\"{host}:{port}\")).await.unwrap();\n    println!(\"listening on http://{host}:{port}\");\n    axum::serve(listener, app).await.unwrap();\n}\n",
-    )?;
-    std::fs::write(
-        dir.join("STANDALONE.md"),
-        "# Standalone deployment (v0.1 scaffold)\n\n\
-         This directory turns `dist/` into a Rust-native deployment:\n\n\
-         ```bash\ncd standalone\ncargo build --release\nPORT=8080 ./target/release/ferrite-app\n```\n\n\
-         Or with Docker (`docker build -f Dockerfile ..` from this directory).\n\n\
-         Single-binary asset embedding (`include_ferrite_assets!`, §52) and\n\
-         `ferrite build --target` cross-compilation (§53) are the Phase 5 milestone.\n",
-    )?;
-    // Minimal deployment image (§54): binary + static output, no Node.
-    std::fs::write(
-        dir.join("Dockerfile"),
-        "FROM debian:stable-slim AS runtime\n\
-         WORKDIR /srv\n\
-         COPY ../assets ./assets\n\
-         COPY ../index.html ../manifest.json ./\n\
-         COPY target/release/ferrite-app /srv/ferrite-app\n\
-         ENV HOST=0.0.0.0 PORT=8080\n\
-         EXPOSE 8080\n\
-         ENTRYPOINT [\"/srv/ferrite-app\"]\n",
-    )?;
     Ok(())
 }
