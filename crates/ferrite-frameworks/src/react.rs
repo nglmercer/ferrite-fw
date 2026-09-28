@@ -1,9 +1,11 @@
 //! React Refresh plugin (§69).
 //!
 //! Dev-only: serves the `react-refresh` preamble as a virtual module,
-//! injects it into `index.html`, and appends a Refresh registration +
-//! HMR-boundary footer to JSX modules. Production builds are untouched
-//! (JSX is already compiled by the core pipeline).
+//! injects it into `index.html` (only when the `react-refresh` package
+//! resolves — non-React projects get no injection), and appends a
+//! Refresh registration + HMR-boundary footer to JSX modules.
+//! Production builds are untouched (JSX is already compiled by the
+//! core pipeline).
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -19,6 +21,9 @@ use ferrite_plugin::{
 pub const REFRESH_SPEC: &str = "/@react-refresh";
 /// Preamble virtual id.
 pub const REFRESH_VIRTUAL: &str = "\0react-refresh";
+/// Refresh runtime the preamble and footers import (single source of
+/// truth: preamble code, footer code, and the injection gate below).
+pub const REFRESH_RUNTIME_SPEC: &str = "react-refresh/runtime";
 
 /// React Refresh plugin (`ferrite:react-refresh`).
 #[derive(Debug, Default)]
@@ -54,12 +59,13 @@ impl ReactPlugin {
 #[must_use]
 pub fn preamble_code() -> String {
     format!(
-        "import RefreshRuntime from \"react-refresh/runtime\";\n\
+        "import RefreshRuntime from {runtime:?};\n\
          RefreshRuntime.injectIntoGlobalHook(window);\n\
          window.$RefreshReg$ = (type, id) => RefreshRuntime.register(type, {spec:?} + \" \" + id);\n\
          window.$RefreshSig$ = RefreshRuntime.createSignatureFunctionForTransform;\n\
          window.__ferrite_react_preamble_installed__ = true;\n",
         spec = REFRESH_SPEC,
+        runtime = REFRESH_RUNTIME_SPEC,
     )
 }
 
@@ -112,8 +118,9 @@ pub fn detect_components(id: &str, code: &str) -> Vec<Registration> {
 #[must_use]
 pub fn refresh_footer(id: &str, registrations: &[Registration]) -> String {
     let mut footer = format!(
-        "\nimport {spec:?};\nimport RefreshRuntime from \"react-refresh/runtime\";\n",
+        "\nimport {spec:?};\nimport RefreshRuntime from {runtime:?};\n",
         spec = REFRESH_SPEC,
+        runtime = REFRESH_RUNTIME_SPEC,
     );
     for (local, debug_id) in registrations {
         footer.push_str(&format!("$RefreshReg$({local}, {debug_id:?});\n"));
@@ -214,10 +221,17 @@ impl Plugin for ReactPlugin {
 
     async fn transform_index_html(
         &self,
-        _ctx: &PluginContext,
+        ctx: &PluginContext,
         _html: HtmlTransformContext,
     ) -> Result<Option<HtmlTransformResult>> {
         if !self.is_enabled() {
+            return Ok(None);
+        }
+        // No refresh runtime installed → nothing to inject. Skipping keeps
+        // non-React projects clean; when refresh output IS produced (JSX
+        // footers) but the runtime is missing, the pipeline's bare-import
+        // resolution fails loudly with a `ferrite add` hint instead.
+        if ctx.resolve(REFRESH_RUNTIME_SPEC, None).is_err() {
             return Ok(None);
         }
         Ok(Some(HtmlTransformResult {

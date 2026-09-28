@@ -4,6 +4,9 @@ use crate::parse::*;
 use crate::types::*;
 use ferrite_core::ModuleType;
 use ferrite_core::Result;
+use oxc_allocator::Allocator;
+use oxc_parser::Parser;
+use oxc_span::SourceType;
 use std::collections::HashMap;
 
 /// Rewrite specifiers in `code` using AST ranges (§28).
@@ -100,21 +103,33 @@ pub fn apply_define(code: &str, define: &HashMap<String, String>) -> String {
 
 /// Rewrite `import.meta.hot` to the Ferrite HMR registry (§33).
 ///
-/// v0.1 uses a scoped textual rewrite (only outside strings/comments is a
-/// roadmap item); the dev client provides `globalThis.__ferrite_create_hot__`.
+/// AST-accurate: only real member expressions are replaced — occurrences
+/// inside strings, comments, or template text are left alone, since the
+/// replacement carries quotes that would corrupt the enclosing literal
+/// (e.g. a Markdown module whose prose mentions `import.meta.hot`).
+/// Unparseable code is returned unchanged; the pipeline's own parse
+/// reports the loud error. The dev client provides
+/// `globalThis.__ferrite_create_hot__`.
 pub fn rewrite_import_meta_hot(code: &str, id: &str) -> String {
     if !code.contains("import.meta.hot") {
         return code.to_string();
     }
-    let Ok(pattern) = regex::Regex::new(r"import\.meta\.hot([^A-Za-z0-9_$]|$)") else {
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, code, SourceType::mjs()).parse();
+    if parsed.fatal_error || !parsed.diagnostics.is_empty() {
         return code.to_string();
-    };
+    }
+    let mut ranges = import_meta_hot_spans(&parsed.program);
+    if ranges.is_empty() {
+        return code.to_string();
+    }
+    ranges.sort_by_key(|range| std::cmp::Reverse(range.0));
     let replacement = format!("globalThis.__ferrite_create_hot__({id:?})");
-    pattern
-        .replace_all(code, |captures: &regex::Captures| {
-            format!("{}{}", replacement, &captures[1])
-        })
-        .into_owned()
+    let mut output = code.to_string();
+    for (start, end) in ranges {
+        output.replace_range(start..end, &replacement);
+    }
+    output
 }
 
 /// Prepend the HMR client import for dev transforms.

@@ -464,4 +464,53 @@ mod tests {
         let result = compiler().transform(request).unwrap();
         assert!(result.map.is_some());
     }
+
+    #[test]
+    fn hot_rewrite_replaces_real_usage() {
+        let code = "if (import.meta.hot) { import.meta.hot.accept(); }\n";
+        let out = rewrite_import_meta_hot(code, "/src/main.js");
+        assert!(!out.contains("import.meta.hot"), "{out}");
+        assert_eq!(out.matches("__ferrite_create_hot__").count(), 2, "{out}");
+        assert!(
+            out.contains("globalThis.__ferrite_create_hot__(\"/src/main.js\")"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn hot_rewrite_skips_strings_comments_and_template_text() {
+        let code = "const a = \"import.meta.hot\";\n\
+            const b = 'x import.meta.hot y';\n\
+            // import.meta.hot\n\
+            /* import.meta.hot */\n\
+            const c = `doc: import.meta.hot`;\n\
+            console.log(a, b, c);\n";
+        assert_eq!(rewrite_import_meta_hot(code, "/x.js"), code);
+    }
+
+    #[test]
+    fn hot_rewrite_handles_template_expressions_and_spacing() {
+        let code = "const c = `${import.meta.hot ? 1 : 0}`;\nif (import . meta . hot) {}\n";
+        let out = rewrite_import_meta_hot(code, "/x.js");
+        assert_eq!(out.matches("__ferrite_create_hot__").count(), 2, "{out}");
+    }
+
+    #[test]
+    fn hot_rewrite_leaves_unparseable_code_alone() {
+        let code = "const = ; // import.meta.hot\n";
+        assert_eq!(rewrite_import_meta_hot(code, "/x.js"), code);
+    }
+
+    #[test]
+    fn parse_flags_real_hot_only() {
+        let used = parse_module("/a.js", "if (import.meta.hot) {}\n", &ModuleType::Js).unwrap();
+        assert!(used.uses_import_meta_hot);
+        let prose = parse_module(
+            "/b.js",
+            "const page = {\"html\": \"<code>import.meta.hot</code>\"};\n",
+            &ModuleType::Js,
+        )
+        .unwrap();
+        assert!(!prose.uses_import_meta_hot);
+    }
 }

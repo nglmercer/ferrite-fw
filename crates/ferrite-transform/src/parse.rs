@@ -5,6 +5,10 @@ use ferrite_core::FerriteError;
 use ferrite_core::ModuleType;
 use ferrite_core::Result;
 use oxc_allocator::Allocator;
+use oxc_ast::ast::Expression;
+use oxc_ast::ast::Program;
+use oxc_ast::ast::StaticMemberExpression;
+use oxc_ast_visit::Visit;
 use oxc_parser::Parser;
 use oxc_span::SourceType;
 use std::collections::HashMap;
@@ -233,9 +237,35 @@ pub(crate) fn parse_module(id: &str, code: &str, module_type: &ModuleType) -> Re
         exports,
         export_details,
         has_module_syntax: record.has_module_syntax,
-        uses_import_meta_hot: code.contains("import.meta.hot"),
+        uses_import_meta_hot: !import_meta_hot_spans(&parsed.program).is_empty(),
         uses_import_meta_env: code.contains("import.meta.env"),
     })
+}
+
+/// Byte ranges of real `import.meta.hot` member expressions in `program`.
+///
+/// AST-accurate: occurrences inside strings, comments, or template text
+/// are never reported. A textual scan would corrupt them on rewrite
+/// (e.g. a Markdown module whose prose mentions `import.meta.hot`).
+pub(crate) fn import_meta_hot_spans(program: &Program<'_>) -> Vec<(usize, usize)> {
+    struct Finder {
+        ranges: Vec<(usize, usize)>,
+    }
+    impl<'a> Visit<'a> for Finder {
+        fn visit_static_member_expression(&mut self, expr: &StaticMemberExpression<'a>) {
+            if expr.property.name.as_str() == "hot"
+                && matches!(&expr.object, Expression::ImportMeta(_))
+            {
+                self.ranges
+                    .push((expr.span.start as usize, expr.span.end as usize));
+                return;
+            }
+            oxc_ast_visit::walk::walk_static_member_expression(self, expr);
+        }
+    }
+    let mut finder = Finder { ranges: Vec::new() };
+    finder.visit_program(program);
+    finder.ranges
 }
 
 /// Expand a span to cover surrounding quotes (robust to inner/outer spans).

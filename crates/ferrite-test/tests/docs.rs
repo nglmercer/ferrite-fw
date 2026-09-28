@@ -54,6 +54,41 @@ async fn docs_pipeline_builds_markdown_and_tailwind() {
     assert!(html.contains("stylesheet"), "{html}");
 }
 
+/// Markdown prose mentioning `import.meta.hot` must survive the dev
+/// pipeline byte-identical: the HMR rewrite only touches real member
+/// expressions, never JSON string payloads (a textual rewrite injected
+/// quotes into the payload and broke the module with
+/// `missing } after property list`).
+#[tokio::test]
+async fn docs_markdown_prose_survives_hmr_rewrite() {
+    let project = TempProject::new(&[(
+        "pages/guide.md",
+        "# Guide\n\n`import.meta.hot` is rewritten per module.\n",
+    )]);
+    let server = ferrite::server::DevServer::new_without_watcher(
+        project.resolve_config_mode("development"),
+        vec![Arc::new(ferrite::docs::MarkdownPlugin::new(
+            project.root.clone(),
+        ))],
+    )
+    .await
+    .unwrap();
+    let module = server
+        .pipeline_module(&ferrite::ModuleId::new("/pages/guide.md"), None, "client")
+        .await
+        .unwrap();
+    assert!(
+        module.code.contains("<code>import.meta.hot</code>"),
+        "{}",
+        module.code
+    );
+    assert!(
+        !module.code.contains("__ferrite_create_hot__"),
+        "{}",
+        module.code
+    );
+}
+
 /// Every docs locale ships the same page slugs, and every page renders
 /// to a titled module. Guards against half-translated locale additions.
 #[test]

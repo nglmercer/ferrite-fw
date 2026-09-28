@@ -92,3 +92,42 @@ async fn resolver_bare_exports_conditions() {
         &["/@npm/greet@1.0.0/index.js", "/@npm/greet@1.0.0/feature.js"],
     );
 }
+
+#[tokio::test]
+async fn resolver_missing_bare_package_fails_loudly() {
+    // A bare import no browser can resolve must never be served as-is:
+    // the pipeline fails with the install hint instead of a cryptic
+    // client-side TypeError.
+    let project = TempProject::new(&[(
+        "src/main.ts",
+        "import { x } from \"no-such-pkg/deep\";\nconsole.log(x);\n",
+    )]);
+    let server = dev_server(&project).await;
+    let error = server
+        .pipeline_module(&ModuleId::new("/src/main.ts"), None, "client")
+        .await
+        .unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("no-such-pkg"), "{message}");
+    assert!(message.contains("ferrite add no-such-pkg"), "{message}");
+}
+
+#[tokio::test]
+async fn resolver_absolute_url_failure_keeps_passthrough() {
+    // Remote imports with `[remote]` disabled (the default) are left for
+    // the browser to fetch directly — only bare specifiers fail loudly.
+    let project = TempProject::new(&[(
+        "src/main.ts",
+        "import x from \"https://esm.example/mod.js\";\nconsole.log(x);\n",
+    )]);
+    let server = dev_server(&project).await;
+    let main = server
+        .pipeline_module(&ModuleId::new("/src/main.ts"), None, "client")
+        .await
+        .unwrap();
+    assert!(
+        main.code.contains("https://esm.example/mod.js"),
+        "{}",
+        main.code
+    );
+}

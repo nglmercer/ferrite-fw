@@ -72,10 +72,20 @@ async fn node_builtin_shims_in_browser() {
 
 #[tokio::test]
 async fn tsx_automatic_runtime() {
-    let project = TempProject::new(&[(
-        "src/app.tsx",
-        "export const App = () => <div className=\"a\">hi</div>;\n",
-    )]);
+    let project = TempProject::new(&[
+        (
+            "src/app.tsx",
+            "export const App = () => <div className=\"a\">hi</div>;\n",
+        ),
+        (
+            ".ferrite/npm/packages/react@18.0.0/package.json",
+            r#"{"name":"react","version":"18.0.0","exports":{".":"./index.js","./jsx-dev-runtime":"./jsx-dev-runtime.js"}}"#,
+        ),
+        (
+            ".ferrite/npm/packages/react@18.0.0/jsx-dev-runtime.js",
+            "export function jsxDEV() {}\n",
+        ),
+    ]);
     let server = dev_server(&project).await;
     let module = server
         .pipeline_module(&ModuleId::new("/src/app.tsx"), None, "client")

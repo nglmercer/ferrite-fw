@@ -20,10 +20,32 @@ fn framework_plugins(root: &std::path::Path) -> Vec<std::sync::Arc<dyn ferrite::
 
 #[tokio::test]
 async fn react_dev_appends_refresh_footer() {
-    let project = TempProject::new(&[(
-        "src/App.tsx",
-        "export function App() { return <div>hi</div>; }\n",
-    )]);
+    let project = TempProject::new(&[
+        (
+            "src/App.tsx",
+            "export function App() { return <div>hi</div>; }\n",
+        ),
+        (
+            ".ferrite/npm/packages/react@18.0.0/package.json",
+            r#"{"name":"react","version":"18.0.0","exports":{".":"./index.js","./jsx-runtime":"./jsx-runtime.js","./jsx-dev-runtime":"./jsx-dev-runtime.js"}}"#,
+        ),
+        (
+            ".ferrite/npm/packages/react@18.0.0/jsx-runtime.js",
+            "export function jsx() {}\n",
+        ),
+        (
+            ".ferrite/npm/packages/react@18.0.0/jsx-dev-runtime.js",
+            "export function jsxDEV() {}\n",
+        ),
+        (
+            ".ferrite/npm/packages/react-refresh@0.14.0/package.json",
+            r#"{"name":"react-refresh","version":"0.14.0","exports":{".":"./runtime.js","./runtime":"./runtime.js"}}"#,
+        ),
+        (
+            ".ferrite/npm/packages/react-refresh@0.14.0/runtime.js",
+            "export function injectIntoGlobalHook() {}\n",
+        ),
+    ]);
     let server =
         DevServer::new_without_watcher(dev_config(&project), framework_plugins(&project.root))
             .await
@@ -66,6 +88,14 @@ async fn react_production_build_has_no_footer() {
             "src/App.tsx",
             "export function App() { return <div>hi</div>; }\n",
         ),
+        (
+            ".ferrite/npm/packages/react@18.0.0/package.json",
+            r#"{"name":"react","version":"18.0.0","exports":{".":"./index.js","./jsx-runtime":"./jsx-runtime.js"}}"#,
+        ),
+        (
+            ".ferrite/npm/packages/react@18.0.0/jsx-runtime.js",
+            "export function jsx() {}\n",
+        ),
     ]);
     let config = project.resolve_config_mode("production");
     let builder = ferrite::Builder::new(config, framework_plugins(&project.root));
@@ -88,12 +118,22 @@ async fn react_production_build_has_no_footer() {
 
 #[tokio::test]
 async fn vue_sfc_splits_through_pipeline() {
-    let project = TempProject::new(&[(
-        "src/App.vue",
-        "<template>\n  <button>{{ msg }}</button>\n</template>\n\
-         <script setup lang=\"ts\">\nimport { ref } from \"vue\";\nconst msg = ref(\"hi\");\n</script>\n\
-         <style scoped>\nbutton { color: red; }\n</style>\n",
-    )]);
+    let project = TempProject::new(&[
+        (
+            "src/App.vue",
+            "<template>\n  <button>{{ msg }}</button>\n</template>\n\
+             <script setup lang=\"ts\">\nimport { ref } from \"vue\";\nconst msg = ref(\"hi\");\n</script>\n\
+             <style scoped>\nbutton { color: red; }\n</style>\n",
+        ),
+        (
+            ".ferrite/npm/packages/vue@3.0.0/package.json",
+            r#"{"name":"vue","version":"3.0.0","exports":{".":"./index.js"}}"#,
+        ),
+        (
+            ".ferrite/npm/packages/vue@3.0.0/index.js",
+            "export function ref(v) { return v; }\n",
+        ),
+    ]);
     let server =
         DevServer::new_without_watcher(dev_config(&project), framework_plugins(&project.root))
             .await
@@ -129,17 +169,45 @@ async fn vue_sfc_splits_through_pipeline() {
 
 #[tokio::test]
 async fn react_dev_html_includes_preamble() {
-    let project = TempProject::new(&[(
-        "index.html",
-        "<!doctype html><html><head><title>t</title></head><body>\
-         <script type=\"module\" src=\"/src/App.tsx\"></script></body></html>",
-    )]);
+    let project = TempProject::new(&[
+        (
+            "index.html",
+            "<!doctype html><html><head><title>t</title></head><body>\
+             <script type=\"module\" src=\"/src/App.tsx\"></script></body></html>",
+        ),
+        (
+            ".ferrite/npm/packages/react-refresh@0.14.0/package.json",
+            r#"{"name":"react-refresh","version":"0.14.0","exports":{".":"./runtime.js","./runtime":"./runtime.js"}}"#,
+        ),
+        (
+            ".ferrite/npm/packages/react-refresh@0.14.0/runtime.js",
+            "export function injectIntoGlobalHook() {}\n",
+        ),
+    ]);
     let server =
         DevServer::new_without_watcher(dev_config(&project), framework_plugins(&project.root))
             .await
             .unwrap();
     let html = server.transform_index_html("/index.html").await.unwrap();
     assert!(html.contains("/@react-refresh"), "{html}");
+}
+
+#[tokio::test]
+async fn react_dev_html_skips_preamble_without_refresh_package() {
+    // No `react-refresh` installed (e.g. the docs site): injecting the
+    // preamble would serve a bare `react-refresh/runtime` import that no
+    // browser can resolve, so the plugin stays silent.
+    let project = TempProject::new(&[(
+        "index.html",
+        "<!doctype html><html><head><title>t</title></head><body>\
+         <script type=\"module\" src=\"/src/main.js\"></script></body></html>",
+    )]);
+    let server =
+        DevServer::new_without_watcher(dev_config(&project), framework_plugins(&project.root))
+            .await
+            .unwrap();
+    let html = server.transform_index_html("/index.html").await.unwrap();
+    assert!(!html.contains("/@react-refresh"), "{html}");
 }
 
 #[tokio::test]
