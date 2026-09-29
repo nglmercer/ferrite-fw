@@ -19,9 +19,9 @@ reporter, Android and Electron APIs:
 | Classification | Members | Meaning |
 |---|---:|---|
 | Equivalent | 15 | Counterpart for the basic operation/value, without full options or engine compatibility |
-| Partial | 537 | Related exposed operation with material semantic, option or engine differences |
+| Partial | 553 | Related exposed operation with material semantic, option or engine differences |
 | Idiomatic | 42 | Comparable operation through Rust language/library facilities |
-| Missing | 424 | No dedicated public counterpart |
+| Missing | 408 | No dedicated public counterpart |
 
 These counts describe an inventory, **not a behavioral compatibility
 percentage**. The earlier inventory had 458 Partial and 503 Missing members.
@@ -42,12 +42,13 @@ implementation.
 
 | Area | Implemented behavior | Remaining limit |
 |---|---|---|
-| Test isolation | Fresh context/page for every test attempt and retry; teardown on errors, timeouts and body panics | Typed dependency graphs, lazy requests and worker/project lifetimes; no built-in page fixture injection or named fixture overrides |
+| Test isolation | Fresh context/page/request per attempt; typed built-in dependencies, lazy fixtures, hook injection, worker/project lifetimes and reverse teardown | Explicit Rust requests; no named fixture overrides or callback parameter inference |
 | Page ownership | `Browser::new_page()` owns a fresh context and closes its popups on disposal | Use `default_context().new_page()` for intentional shared storage |
 | Browser lifecycle | Persistent Chromium/Firefox profiles, graceful close, Chromium HTTP/WebSocket CDP connections | No Playwright remote protocol, browser server, channels or managed browser installer |
 | Configuration | Complete resolved CLI configuration forwarded as JSON; browser launch/runner consume it, with legacy overrides | Suite/test context, timeout, retry and tag inheritance; no named fixture option override hierarchy |
 | Projects and scheduling | Independent project browsers/launch/context settings; parallel Tokio tasks, retries, repetition, filters and named resource locks | No process workers, project dependency graph or distributed locks |
-| Artifacts | Per-attempt output directories, validated `TestInfo::output_path()`, attachments, screenshots and video policies | No Playwright snapshot templates or full reporter object model |
+| Artifacts | Per-attempt output directories, validated paths, unique attachment files, screenshots/video and live Reporter callbacks | Synchronous callbacks; no complete upstream reporter graph, stdout capture or status override |
+| Runtime test controls | Shared TestInfo skip, expected failure, slow, annotations and timeout changes affect running attempts and final results | Result propagation for immediate skip; cooperative async cancellation and independent cleanup budgets |
 | Locator selection | Strict single-target operations, genuine first/last/nth slicing, relative has/hasNot filters, exact/regex/visibility builders | No complete Playwright selector extension/custom-engine surface |
 | Semantic locators | Associated labels target controls; roles and accessible names use shared DOM helpers; open shadow-root traversal | Full accessible-name specification and closed shadow roots remain outside this implementation |
 | Actions | Retry readiness, visibility/stability/hit testing, trusted forced clicks, trusted checkbox/key input; delayed fill/select and contenteditable support | Some actions use DOM setters/events; full native input/event/layout semantics remain narrower |
@@ -89,8 +90,9 @@ presence does not establish full Playwright behavior:
 - HAR recording/replay has narrower timing, body, update and archive support.
   Routes do not reproduce every response/redirect/header transformation option.
 - Traces are Ferrite JSON rather than Trace Viewer archives with DOM/source
-  snapshots. Reporter output is aggregate, without the live Suite/TestCase/
-  TestStep plugin graph, blob merging or all upstream report formats.
+  snapshots. Live Reporter callbacks expose attempt and named-step metadata,
+  without the complete Suite/TestCase/TestStep graph, blob merging or all
+  upstream report formats.
 - Screenshot comparison, update modes and paths differ. PDF options, device
   descriptors, emulation and permissions have smaller surfaces.
 - URL/event/network waits retain narrower matching/result options. Zero disables
@@ -102,7 +104,7 @@ presence does not establish full Playwright behavior:
   afterEach/fixture-teardown budget.
 - Nested suites scope hooks and inherit settings. Workers remain Tokio tasks,
   with logical fixture/suite state retired after unexpected failures; no process
-  restart or runtime test metadata mutation. Rust fixture requests/dependencies
+  restart. Runtime TestInfo controls use shared state; Rust fixture requests/dependencies
   are explicit type declarations rather than inferred callback parameters.
 
 ## Deliberately deferred substantial work
@@ -158,10 +160,55 @@ that a dedicated feature was implemented.
   versions retain the explicit filesystem download-wait fallback. Dialogs still
   require handling to be armed; WebSocket events remain Chromium-only.
 
+The runner serializes its Firefox attempt context/page creation and close operations to avoid
+stock Firefox discarding a newly created tab when another worker closes a window.
+Test bodies and hooks remain parallel. The same failure was reproduced on the
+pre-change commit `9cfe075`; the existing parallel fixture/retry regression checks
+the protected lifecycle.
+
 Configuration/CLI additions: `global_timeout_ms` / `--global-timeout`,
 `max_failures` / `--max-failures`, and `cleanup_timeout_ms` /
 `--cleanup-timeout`. Global timeout and maxFailures default to zero (disabled);
 cleanup defaults to 5 seconds per operation.
+
+## Context-aware fixtures, live reporters and runtime controls
+
+Test-scoped fixture dependencies may request `Page`, `BrowserContext`,
+`ApiClient` or `TestInfo`; worker fixtures may request `Browser` and `WorkerInfo`.
+Reserved built-in types cannot be redefined. `ContextHook` declares lazy fixture
+roots for before/after-each hooks, with shared metadata and fresh page/context/
+request resources. `WorkerHook` gives suite-wide hooks only worker resources;
+invalid test-scoped requirements fail validation before global setup.
+The standalone request fixture inherits context transport defaults and has an
+isolated cookie jar. `context.request()` explicitly shares browser cookies.
+
+`Runner::custom_reporter` adds synchronous thread-safe callbacks for run begin/end,
+attempt begin/end, named Page.step begin/end, attachments and errors. Per-attempt
+callbacks execute on workers before subsequent tests start; retry, repetition,
+project and worker identity are explicit. Step futures dropped by cancellation
+emit an interrupted end event. Each retry keeps its own trace file, with the
+original trace filename retained as a latest-attempt alias; repeated attachment
+names get a suffix instead of overwriting earlier files. Reporter panics are
+contained. Final reports still aggregate retries; begin receives discovered definitions before filtering, and
+static skips have no attempt callbacks. Asynchronous uploads, stdout capture,
+automatic action step trees and upstream status overrides remain deferred.
+
+`TestInfo::skip(reason)?` aborts a closure while cleanup still runs. Shared control
+also interrupts pending async setup/body work. `fail(reason)` marks expected
+failure; an unexpected pass fails immediately, and expected failures do not
+retry. Timeout, global cancellation or cleanup errors cannot count as expected
+failures. `slow(reason)` triples the budget once, and `set_timeout` changes the
+total elapsed context/page/setup/body budget (zero disables it). Worker fixture
+setup and beforeAll have independent setup budgets. `effective_timeout` reads live
+state; the public `timeout` field is the initial value. Dynamic annotations and
+skip/failure reasons reach attempt callbacks and aggregate reports. Cleanup keeps
+its independent budget, so test controls cannot suppress cleanup failures.
+
+These Rust counterparts follow the practical lifecycle described in the official
+[fixture execution order](https://playwright.dev/docs/test-fixtures#execution-order),
+[TestInfo controls](https://playwright.dev/docs/api/class-testinfo), and
+[reporter callbacks](https://playwright.dev/docs/api/class-reporter), with the
+explicit differences above.
 
 ## Engine and validation evidence
 
@@ -186,19 +233,22 @@ TMPDIR=/path/to/disk-backed-temp cargo test -p ferrite-e2e -- --test-threads=2
 cargo clippy -p ferrite-e2e -p ferrite-cli --all-targets -- -D warnings
 ```
 
-Validation completed successfully:
+Validation for the contextual fixtures, live reporters and runtime controls:
 
-- `ferrite-e2e`: **105 unit tests, 3 API tests, 93 browser tests, 4 new regression groups and 2 doctests**.
-  Chromium and Firefox were both installed and exercised. Unsupported-engine
-  branches remain explicit; these are not full cross-engine conformance claims.
-- CLI/configuration: **5 CLI tests, 17 configuration tests and 1 doctest**.
-- All **8 practical parity regressions** passed in the full run; the final wait
-  changes passed three targeted two-engine checks, and the four new regression
-  groups passed again after API retry and zero-timeout refinements.
-- `cargo clippy -p ferrite-e2e -p ferrite-cli --all-targets -- -D warnings`
-  passed, as did formatting checks for both changed packages and diff checks.
-- Matrix regeneration was deterministic, and incomplete source sets were
-  rejected explicitly.
+- `ferrite-e2e`: **118 unit tests, 3 API tests, 93 browser tests, 4 reliability
+  regression groups, 4 runtime/reporter groups, 6 fixture/network groups and
+  2 doctests** (230 checks total). Headless Shell and Firefox were installed and
+  exercised; unsupported-engine branches remain explicit.
+- The four runtime/reporter groups additionally passed with full Chrome and
+  Firefox, including live event ordering, retries, interrupted steps, cookie
+  isolation, scope validation, runtime skip/expected failure and cleanup errors.
+- Strict Clippy on all `ferrite-e2e` targets, package formatting, diff checks and
+  matrix regeneration passed. Reporter panic containment and live timeout
+  extension/shortening/zero/slow semantics have unit regressions.
+- Existing trace and first-attachment names remain compatible; retry trace files
+  and repeated attachment names preserve their individual contents.
+- Prior CLI/configuration validation remains unchanged: 5 CLI tests,
+  17 configuration tests and 1 doctest. This change adds no CLI options.
 
 New regressions cover isolation/retries/locks, project engines and cleanup,
 persistent profiles,

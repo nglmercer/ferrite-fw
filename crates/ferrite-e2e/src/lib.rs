@@ -91,10 +91,11 @@ pub use page::{
     RouteHandlerEntry, RouteInfo, RouteRule, ScreenshotOptions, StorageEntry, StorageOrigin,
     StorageState, Viewport, WebSocketDirection, WebSocketEvent,
 };
-pub use report::{Attachment, TestReport, TestResult, TestStatus};
+pub use report::{Attachment, AttemptInfo, Reporter, StepInfo, TestReport, TestResult, TestStatus};
 pub use runner::{
-    describe, test, test_with_context, Fixture, FixtureMap, FixtureScope, GlobalHook, HookFn,
-    Project, Runner, Suite, Test, TestContext, TestContextFn, TestInfo, TestMode,
+    describe, test, test_with_context, ContextHook, Fixture, FixtureMap, FixtureScope, GlobalHook,
+    HookFn, Project, Runner, Suite, Test, TestContext, TestContextFn, TestInfo, TestMode,
+    WorkerContext, WorkerHook, WorkerInfo,
 };
 pub use snapshot::{
     assert_snapshot_png, assert_snapshot_text, compare_png, match_text_snapshot,

@@ -13,7 +13,7 @@ This inventory covers every JavaScript-applicable method, property and event doc
 | Idiomatic | Comparable checks/operations are expressed through Rust language/library facilities; no Playwright-style API object. |
 | Missing | No dedicated counterpart found; arbitrary JS evaluation or raw CDP/BiDi calls do not establish feature parity. |
 
-Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 537; Idiomatic: 42; Missing: 424. These counts are inventory labels, not a percentage of behavioral compatibility.
+Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 553; Idiomatic: 42; Missing: 408. These counts are inventory labels, not a percentage of behavioral compatibility.
 
 ## APIRequest
 
@@ -178,7 +178,7 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 537; 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
 | `BrowserContext.backgroundPage` (deprecated) | event | Missing | — | No matching public event variant/emitter; Page.subscribe exposes only the documented PageEvent variants. |
-| `BrowserContext.clock` | property | Partial | `Page.clock_install` ([source](crates/ferrite-e2e/src/page.rs#L3028)) | Page-document-local clock; no context-wide clock object. |
+| `BrowserContext.clock` | property | Partial | `Page.clock_install` ([source](crates/ferrite-e2e/src/page.rs#L3036)) | Page-document-local clock; no context-wide clock object. |
 | `BrowserContext.credentials` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `BrowserContext.debugger` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `BrowserContext.close` | event | Partial | `BrowserContext.subscribe` ([source](crates/ferrite-e2e/src/context.rs#L454)) | ContextEventKind::Closed; context subscriptions forward observations from every current/future page; enum payloads have a narrower live object/options model. |
@@ -275,13 +275,13 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 537; 
 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
-| `Clock.fastForward` | method | Partial | `Page.clock_fast_forward` ([source](crates/ferrite-e2e/src/page.rs#L3096)) | Distinct timer/Date/jump/progression behavior; document clock persists via init scripts but resets on navigation, is not context-wide, and idle callbacks are approximated. |
-| `Clock.install` | method | Partial | `Page.clock_install_at` ([source](crates/ferrite-e2e/src/page.rs#L3124)) | Distinct timer/Date/jump/progression behavior; document clock persists via init scripts but resets on navigation, is not context-wide, and idle callbacks are approximated. |
-| `Clock.runFor` | method | Partial | `Page.clock_run_for` ([source](crates/ferrite-e2e/src/page.rs#L3103)) | Distinct timer/Date/jump/progression behavior; document clock persists via init scripts but resets on navigation, is not context-wide, and idle callbacks are approximated. |
-| `Clock.pauseAt` | method | Partial | `Page.clock_pause_at` ([source](crates/ferrite-e2e/src/page.rs#L3117)) | Distinct timer/Date/jump/progression behavior; document clock persists via init scripts but resets on navigation, is not context-wide, and idle callbacks are approximated. |
-| `Clock.resume` | method | Partial | `Page.clock_resume` ([source](crates/ferrite-e2e/src/page.rs#L3182)) | Distinct timer/Date/jump/progression behavior; document clock persists via init scripts but resets on navigation, is not context-wide, and idle callbacks are approximated. |
-| `Clock.setFixedTime` | method | Partial | `Page.clock_set_fixed_time` ([source](crates/ferrite-e2e/src/page.rs#L3060)) | Distinct timer/Date/jump/progression behavior; document clock persists via init scripts but resets on navigation, is not context-wide, and idle callbacks are approximated. |
-| `Clock.setSystemTime` | method | Partial | `Page.clock_set_system_time` ([source](crates/ferrite-e2e/src/page.rs#L3110)) | Distinct timer/Date/jump/progression behavior; document clock persists via init scripts but resets on navigation, is not context-wide, and idle callbacks are approximated. |
+| `Clock.fastForward` | method | Partial | `Page.clock_fast_forward` ([source](crates/ferrite-e2e/src/page.rs#L3104)) | Distinct timer/Date/jump/progression behavior; document clock persists via init scripts but resets on navigation, is not context-wide, and idle callbacks are approximated. |
+| `Clock.install` | method | Partial | `Page.clock_install_at` ([source](crates/ferrite-e2e/src/page.rs#L3132)) | Distinct timer/Date/jump/progression behavior; document clock persists via init scripts but resets on navigation, is not context-wide, and idle callbacks are approximated. |
+| `Clock.runFor` | method | Partial | `Page.clock_run_for` ([source](crates/ferrite-e2e/src/page.rs#L3111)) | Distinct timer/Date/jump/progression behavior; document clock persists via init scripts but resets on navigation, is not context-wide, and idle callbacks are approximated. |
+| `Clock.pauseAt` | method | Partial | `Page.clock_pause_at` ([source](crates/ferrite-e2e/src/page.rs#L3125)) | Distinct timer/Date/jump/progression behavior; document clock persists via init scripts but resets on navigation, is not context-wide, and idle callbacks are approximated. |
+| `Clock.resume` | method | Partial | `Page.clock_resume` ([source](crates/ferrite-e2e/src/page.rs#L3190)) | Distinct timer/Date/jump/progression behavior; document clock persists via init scripts but resets on navigation, is not context-wide, and idle callbacks are approximated. |
+| `Clock.setFixedTime` | method | Partial | `Page.clock_set_fixed_time` ([source](crates/ferrite-e2e/src/page.rs#L3068)) | Distinct timer/Date/jump/progression behavior; document clock persists via init scripts but resets on navigation, is not context-wide, and idle callbacks are approximated. |
+| `Clock.setSystemTime` | method | Partial | `Page.clock_set_system_time` ([source](crates/ferrite-e2e/src/page.rs#L3118)) | Distinct timer/Date/jump/progression behavior; document clock persists via init scripts but resets on navigation, is not context-wide, and idle callbacks are approximated. |
 
 ## ConsoleMessage
 
@@ -359,7 +359,7 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 537; 
 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
-| `Download.cancel` | method | Partial | `Page.cancel_downloads` ([source](crates/ferrite-e2e/src/page.rs#L4181)) | Cancels page-tracked downloads on Chromium; no per-Download.cancel method. |
+| `Download.cancel` | method | Partial | `Page.cancel_downloads` ([source](crates/ferrite-e2e/src/page.rs#L4189)) | Cancels page-tracked downloads on Chromium; no per-Download.cancel method. |
 | `Download.createReadStream` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Download.delete` | method | Partial | `Download.delete` ([source](crates/ferrite-e2e/src/page.rs#L1371)) | Represents completed files; URL/failure data are Chromium-only and filename derives from the saved path. |
 | `Download.failure` | method | Partial | `Download.failure` ([source](crates/ferrite-e2e/src/page.rs#L1333)) | Represents completed files; URL/failure data are Chromium-only and filename derives from the saved path. |
@@ -459,10 +459,10 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 537; 
 |---|---|---|---|---|
 | `Fixtures.browser` | property | Partial | `Browser` ([source](crates/ferrite-e2e/src/browser.rs#L320)) | Manual Browser/Context/client setup or injected Page; runner injects a fresh context/page for every attempt. |
 | `Fixtures.browserName` | property | Partial | `Browser.kind` ([source](crates/ferrite-e2e/src/browser.rs#L716)) | Manual Browser/Context/client setup or injected Page; runner injects a fresh context/page for every attempt. |
-| `Fixtures.context` | property | Partial | `BrowserContext` ([source](crates/ferrite-e2e/src/context.rs#L387)) | Manual Browser/Context/client setup or injected Page; runner injects a fresh context/page for every attempt. |
+| `Fixtures.context` | property | Partial | `TestContext.context` ([source](crates/ferrite-e2e/src/runner.rs#L741)) | Fresh per-attempt resource, usable as a typed fixture dependency. request is isolated from browser cookies; context.request() shares cookies. |
 | `Fixtures.mount` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `Fixtures.page` | property | Partial | `test` ([source](crates/ferrite-e2e/src/runner.rs#L163)) | Manual Browser/Context/client setup or injected Page; runner injects a fresh context/page for every attempt. |
-| `Fixtures.request` | property | Partial | `ApiClient` ([source](crates/ferrite-e2e/src/api.rs#L141)) | Manual Browser/Context/client setup or injected Page; runner injects a fresh context/page for every attempt. |
+| `Fixtures.page` | property | Partial | `TestContext.page` ([source](crates/ferrite-e2e/src/runner.rs#L739)) | Fresh per-attempt resource, usable as a typed fixture dependency. request is isolated from browser cookies; context.request() shares cookies. |
+| `Fixtures.request` | property | Partial | `TestContext.request` ([source](crates/ferrite-e2e/src/runner.rs#L743)) | Fresh per-attempt resource, usable as a typed fixture dependency. request is isolated from browser cookies; context.request() shares cookies. |
 
 ## Frame
 
@@ -560,28 +560,28 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 537; 
 | `FullConfig.argv` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `FullConfig.configFile` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `FullConfig.failOnFlakyTests` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `FullConfig.forbidOnly` | property | Partial | `Runner.forbid_only` ([source](crates/ferrite-e2e/src/runner.rs#L1407)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
+| `FullConfig.forbidOnly` | property | Partial | `Runner.forbid_only` ([source](crates/ferrite-e2e/src/runner.rs#L1772)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
 | `FullConfig.fullyParallel` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `FullConfig.globalSetup` | property | Partial | `Runner.global_setup` ([source](crates/ferrite-e2e/src/runner.rs#L1320)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
-| `FullConfig.globalTeardown` | property | Partial | `Runner.global_teardown` ([source](crates/ferrite-e2e/src/runner.rs#L1331)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
+| `FullConfig.globalSetup` | property | Partial | `Runner.global_setup` ([source](crates/ferrite-e2e/src/runner.rs#L1685)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
+| `FullConfig.globalTeardown` | property | Partial | `Runner.global_teardown` ([source](crates/ferrite-e2e/src/runner.rs#L1696)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
 | `FullConfig.globalTimeout` | property | Partial | `E2eConfig.global_timeout_ms` ([source](crates/ferrite-config/src/lib.rs#L418)) | Consumed by Runner and CLI; global cancellation with bounded teardown and final unexpected-failure scheduling limit. Active workers finish on maxFailures; no process-worker orchestration. |
-| `FullConfig.grep` | property | Partial | `Runner.grep` ([source](crates/ferrite-e2e/src/runner.rs#L1253)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
-| `FullConfig.grepInvert` | property | Partial | `Runner.grep_invert` ([source](crates/ferrite-e2e/src/runner.rs#L1262)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
+| `FullConfig.grep` | property | Partial | `Runner.grep` ([source](crates/ferrite-e2e/src/runner.rs#L1608)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
+| `FullConfig.grepInvert` | property | Partial | `Runner.grep_invert` ([source](crates/ferrite-e2e/src/runner.rs#L1617)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
 | `FullConfig.maxFailures` | property | Partial | `E2eConfig.max_failures` ([source](crates/ferrite-config/src/lib.rs#L420)) | Consumed by Runner and CLI; global cancellation with bounded teardown and final unexpected-failure scheduling limit. Active workers finish on maxFailures; no process-worker orchestration. |
 | `FullConfig.metadata` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `FullConfig.preserveOutput` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `FullConfig.projects` | property | Partial | `Runner.project` ([source](crates/ferrite-e2e/src/runner.rs#L1391)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
+| `FullConfig.projects` | property | Partial | `Runner.project` ([source](crates/ferrite-e2e/src/runner.rs#L1756)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
 | `FullConfig.quiet` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `FullConfig.reporter` | property | Partial | `E2eConfig.reporter` ([source](crates/ferrite-config/src/lib.rs#L430)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
 | `FullConfig.reportSlowTests` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `FullConfig.rootDir` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `FullConfig.shard` | property | Partial | `Runner.shard` ([source](crates/ferrite-e2e/src/runner.rs#L1349)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
+| `FullConfig.shard` | property | Partial | `Runner.shard` ([source](crates/ferrite-e2e/src/runner.rs#L1714)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
 | `FullConfig.tags` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `FullConfig.updateSnapshots` | property | Partial | `E2eConfig.update_snapshots` ([source](crates/ferrite-config/src/lib.rs#L442)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
 | `FullConfig.updateSourceMethod` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `FullConfig.version` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `FullConfig.webServer` | property | Partial | `E2eConfig.web_server` ([source](crates/ferrite-config/src/lib.rs#L446)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
-| `FullConfig.workers` | property | Partial | `Runner.workers` ([source](crates/ferrite-e2e/src/runner.rs#L1178)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
+| `FullConfig.workers` | property | Partial | `Runner.workers` ([source](crates/ferrite-e2e/src/runner.rs#L1516)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
 
 ## FullProject
 
@@ -590,21 +590,21 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 537; 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
 | `FullProject.dependencies` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `FullProject.grep` | property | Partial | `Project.grep` ([source](crates/ferrite-e2e/src/runner.rs#L835)) | Project name/filter/retry/timeout/context/browser overrides; no dependency graph or suite-scoped test.use. |
+| `FullProject.grep` | property | Partial | `Project.grep` ([source](crates/ferrite-e2e/src/runner.rs#L1164)) | Project name/filter/retry/timeout/context/browser overrides; no dependency graph or suite-scoped test.use. |
 | `FullProject.grepInvert` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `FullProject.ignoreSnapshots` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `FullProject.metadata` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `FullProject.name` | property | Partial | `Project.name` ([source](crates/ferrite-e2e/src/runner.rs#L795)) | Project name/filter/retry/timeout/context/browser overrides; no dependency graph or suite-scoped test.use. |
+| `FullProject.name` | property | Partial | `Project.name` ([source](crates/ferrite-e2e/src/runner.rs#L1124)) | Project name/filter/retry/timeout/context/browser overrides; no dependency graph or suite-scoped test.use. |
 | `FullProject.snapshotDir` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `FullProject.outputDir` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `FullProject.repeatEach` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `FullProject.retries` | property | Partial | `Project.retries` ([source](crates/ferrite-e2e/src/runner.rs#L842)) | Project name/filter/retry/timeout/context/browser overrides; no dependency graph or suite-scoped test.use. |
+| `FullProject.retries` | property | Partial | `Project.retries` ([source](crates/ferrite-e2e/src/runner.rs#L1171)) | Project name/filter/retry/timeout/context/browser overrides; no dependency graph or suite-scoped test.use. |
 | `FullProject.teardown` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `FullProject.testDir` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `FullProject.testIgnore` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `FullProject.testMatch` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `FullProject.timeout` | property | Partial | `Project.timeout` ([source](crates/ferrite-e2e/src/runner.rs#L849)) | Project name/filter/retry/timeout/context/browser overrides; no dependency graph or suite-scoped test.use. |
-| `FullProject.use` | property | Partial | `Project.context_options` ([source](crates/ferrite-e2e/src/runner.rs#L819)) | Project-specific context settings; optional browser/launch overrides, suite/test context inheritance, no named fixture overrides or project dependencies. |
+| `FullProject.timeout` | property | Partial | `Project.timeout` ([source](crates/ferrite-e2e/src/runner.rs#L1178)) | Project name/filter/retry/timeout/context/browser overrides; no dependency graph or suite-scoped test.use. |
+| `FullProject.use` | property | Partial | `Project.context_options` ([source](crates/ferrite-e2e/src/runner.rs#L1148)) | Project-specific context settings; optional browser/launch overrides, suite/test context inheritance, no named fixture overrides or project dependencies. |
 
 ## GenericAssertions
 
@@ -667,11 +667,11 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 537; 
 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
-| `Keyboard.down` | method | Partial | `Page.key_down` ([source](crates/ferrite-e2e/src/page.rs#L2734)) | Basic trusted inputs available via Page/Locator; fewer modifiers/options and different typing defaults. |
-| `Keyboard.insertText` | method | Partial | `Page.insert_text` ([source](crates/ferrite-e2e/src/page.rs#L2653)) | Basic trusted inputs available via Page/Locator; fewer modifiers/options and different typing defaults. |
-| `Keyboard.press` | method | Partial | `Page.press_key_with` ([source](crates/ferrite-e2e/src/page.rs#L2675)) | Basic trusted inputs available via Page/Locator; fewer modifiers/options and different typing defaults. |
+| `Keyboard.down` | method | Partial | `Page.key_down` ([source](crates/ferrite-e2e/src/page.rs#L2736)) | Basic trusted inputs available via Page/Locator; fewer modifiers/options and different typing defaults. |
+| `Keyboard.insertText` | method | Partial | `Page.insert_text` ([source](crates/ferrite-e2e/src/page.rs#L2655)) | Basic trusted inputs available via Page/Locator; fewer modifiers/options and different typing defaults. |
+| `Keyboard.press` | method | Partial | `Page.press_key_with` ([source](crates/ferrite-e2e/src/page.rs#L2677)) | Basic trusted inputs available via Page/Locator; fewer modifiers/options and different typing defaults. |
 | `Keyboard.type` | method | Partial | `Locator.press_sequentially_with` ([source](crates/ferrite-e2e/src/locator.rs#L1655)) | Basic trusted inputs available via Page/Locator; fewer modifiers/options and different typing defaults. |
-| `Keyboard.up` | method | Partial | `Page.key_up` ([source](crates/ferrite-e2e/src/page.rs#L2745)) | Basic trusted inputs available via Page/Locator; fewer modifiers/options and different typing defaults. |
+| `Keyboard.up` | method | Partial | `Page.key_up` ([source](crates/ferrite-e2e/src/page.rs#L2747)) | Basic trusted inputs available via Page/Locator; fewer modifiers/options and different typing defaults. |
 
 ## Location
 
@@ -679,8 +679,8 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 537; 
 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
-| `Location.file` | property | Partial | `TestInfo.file` ([source](crates/ferrite-e2e/src/runner.rs#L344)) | Rust track_caller metadata; no column. |
-| `Location.line` | property | Partial | `TestInfo.line` ([source](crates/ferrite-e2e/src/runner.rs#L346)) | Rust track_caller metadata; no column. |
+| `Location.file` | property | Partial | `TestInfo.file` ([source](crates/ferrite-e2e/src/runner.rs#L561)) | Rust track_caller metadata; no column. |
+| `Location.line` | property | Partial | `TestInfo.line` ([source](crates/ferrite-e2e/src/runner.rs#L563)) | Rust track_caller metadata; no column. |
 | `Location.column` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 
 ## Locator
@@ -811,12 +811,12 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 537; 
 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
-| `Mouse.click` | method | Partial | `Page.mouse_click_with` ([source](crates/ferrite-e2e/src/page.rs#L2626)) | Input methods on Page; down/up/wheel also take coordinates; fewer modifier/steps/button options. |
-| `Mouse.dblclick` | method | Partial | `Page.mouse_click` ([source](crates/ferrite-e2e/src/page.rs#L2615)) | Input methods on Page; down/up/wheel also take coordinates; fewer modifier/steps/button options. |
-| `Mouse.down` | method | Partial | `Page.mouse_down` ([source](crates/ferrite-e2e/src/page.rs#L2690)) | Input methods on Page; down/up/wheel also take coordinates; fewer modifier/steps/button options. |
-| `Mouse.move` | method | Partial | `Page.mouse_move` ([source](crates/ferrite-e2e/src/page.rs#L2642)) | Input methods on Page; down/up/wheel also take coordinates; fewer modifier/steps/button options. |
-| `Mouse.up` | method | Partial | `Page.mouse_up` ([source](crates/ferrite-e2e/src/page.rs#L2701)) | Input methods on Page; down/up/wheel also take coordinates; fewer modifier/steps/button options. |
-| `Mouse.wheel` | method | Partial | `Page.mouse_wheel` ([source](crates/ferrite-e2e/src/page.rs#L2723)) | Input methods on Page; down/up/wheel also take coordinates; fewer modifier/steps/button options. |
+| `Mouse.click` | method | Partial | `Page.mouse_click_with` ([source](crates/ferrite-e2e/src/page.rs#L2628)) | Input methods on Page; down/up/wheel also take coordinates; fewer modifier/steps/button options. |
+| `Mouse.dblclick` | method | Partial | `Page.mouse_click` ([source](crates/ferrite-e2e/src/page.rs#L2617)) | Input methods on Page; down/up/wheel also take coordinates; fewer modifier/steps/button options. |
+| `Mouse.down` | method | Partial | `Page.mouse_down` ([source](crates/ferrite-e2e/src/page.rs#L2692)) | Input methods on Page; down/up/wheel also take coordinates; fewer modifier/steps/button options. |
+| `Mouse.move` | method | Partial | `Page.mouse_move` ([source](crates/ferrite-e2e/src/page.rs#L2644)) | Input methods on Page; down/up/wheel also take coordinates; fewer modifier/steps/button options. |
+| `Mouse.up` | method | Partial | `Page.mouse_up` ([source](crates/ferrite-e2e/src/page.rs#L2703)) | Input methods on Page; down/up/wheel also take coordinates; fewer modifier/steps/button options. |
+| `Mouse.wheel` | method | Partial | `Page.mouse_wheel` ([source](crates/ferrite-e2e/src/page.rs#L2725)) | Input methods on Page; down/up/wheel also take coordinates; fewer modifier/steps/button options. |
 
 ## Page
 
@@ -824,135 +824,135 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 537; 
 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
-| `Page.clock` | property | Partial | `Page.clock_install` ([source](crates/ferrite-e2e/src/page.rs#L3028)) | Fake clock is scoped to the current document and resets on navigation; semantic differences below. |
-| `Page.close` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1725)) | PageEvent.Closed via broadcast receiver; smaller payload and lifecycle; socket events are Chromium-only. |
-| `Page.console` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1725)) | PageEvent.Console via broadcast receiver; smaller payload and lifecycle; socket events are Chromium-only. |
+| `Page.clock` | property | Partial | `Page.clock_install` ([source](crates/ferrite-e2e/src/page.rs#L3036)) | Fake clock is scoped to the current document and resets on navigation; semantic differences below. |
+| `Page.close` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1727)) | PageEvent.Closed via broadcast receiver; smaller payload and lifecycle; socket events are Chromium-only. |
+| `Page.console` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1727)) | PageEvent.Console via broadcast receiver; smaller payload and lifecycle; socket events are Chromium-only. |
 | `Page.crash` | event | Missing | — | No matching public event variant/emitter; Page.subscribe exposes only the documented PageEvent variants. |
-| `Page.dialog` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1725)) | PageEvent.Dialog via broadcast receiver; smaller payload and lifecycle; socket events are Chromium-only. |
+| `Page.dialog` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1727)) | PageEvent.Dialog via broadcast receiver; smaller payload and lifecycle; socket events are Chromium-only. |
 | `Page.dialogClosed` | event | Missing | — | No matching public event variant/emitter; Page.subscribe exposes only the documented PageEvent variants. |
 | `Page.DOMContentLoaded` | event | Missing | — | No matching public event variant/emitter; Page.subscribe exposes only the documented PageEvent variants. |
-| `Page.download` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1725)) | PageEvent.Download via broadcast receiver; smaller payload and lifecycle; socket events are Chromium-only. |
+| `Page.download` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1727)) | PageEvent.Download via broadcast receiver; smaller payload and lifecycle; socket events are Chromium-only. |
 | `Page.fileChooser` | event | Missing | — | No matching public event variant/emitter; Page.subscribe exposes only the documented PageEvent variants. |
 | `Page.frameAttached` | event | Missing | — | No matching public event variant/emitter; Page.subscribe exposes only the documented PageEvent variants. |
 | `Page.frameDetached` | event | Missing | — | No matching public event variant/emitter; Page.subscribe exposes only the documented PageEvent variants. |
 | `Page.frameNavigated` | event | Missing | — | No matching public event variant/emitter; Page.subscribe exposes only the documented PageEvent variants. |
 | `Page.load` | event | Missing | — | No matching public event variant/emitter; Page.subscribe exposes only the documented PageEvent variants. |
 | `Page.pageError` | event | Missing | — | No matching public event variant/emitter; Page.subscribe exposes only the documented PageEvent variants. |
-| `Page.popup` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1725)) | PageEvent.Popup via broadcast receiver; smaller payload and lifecycle; socket events are Chromium-only. |
-| `Page.request` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1725)) | PageEvent.Request via broadcast receiver; smaller payload and lifecycle; socket events are Chromium-only. |
-| `Page.requestFailed` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1725)) | RequestFailed enum events on Chromium/Firefox with request IDs and method/URL; failed requests carry transport error text. Context events include page identity. No rich live Request object graph. |
-| `Page.requestFinished` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1725)) | RequestFinished enum events on Chromium/Firefox with request IDs and method/URL; failed requests carry transport error text. Context events include page identity. No rich live Request object graph. |
-| `Page.response` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1725)) | PageEvent.Response via broadcast receiver; smaller payload and lifecycle; socket events are Chromium-only. |
-| `Page.webSocket` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1725)) | PageEvent.WebSocket via broadcast receiver; smaller payload and lifecycle; socket events are Chromium-only. |
+| `Page.popup` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1727)) | PageEvent.Popup via broadcast receiver; smaller payload and lifecycle; socket events are Chromium-only. |
+| `Page.request` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1727)) | PageEvent.Request via broadcast receiver; smaller payload and lifecycle; socket events are Chromium-only. |
+| `Page.requestFailed` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1727)) | RequestFailed enum events on Chromium/Firefox with request IDs and method/URL; failed requests carry transport error text. Context events include page identity. No rich live Request object graph. |
+| `Page.requestFinished` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1727)) | RequestFinished enum events on Chromium/Firefox with request IDs and method/URL; failed requests carry transport error text. Context events include page identity. No rich live Request object graph. |
+| `Page.response` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1727)) | PageEvent.Response via broadcast receiver; smaller payload and lifecycle; socket events are Chromium-only. |
+| `Page.webSocket` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1727)) | PageEvent.WebSocket via broadcast receiver; smaller payload and lifecycle; socket events are Chromium-only. |
 | `Page.worker` | event | Missing | — | No matching public event variant/emitter; Page.subscribe exposes only the documented PageEvent variants. |
-| `Page.addInitScript` | method | Partial | `Page.add_init_script` ([source](crates/ferrite-e2e/src/page.rs#L3856)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.addScriptTag` | method | Partial | `Page.add_script_tag_url` ([source](crates/ferrite-e2e/src/page.rs#L3863)) | URL/content helpers return unit; no ElementHandle return, file/type options; other helper: Page.add_script_tag_content |
-| `Page.addStyleTag` | method | Partial | `Page.add_style_tag_url` ([source](crates/ferrite-e2e/src/page.rs#L3897)) | URL/content helpers return unit; no ElementHandle return, file/type options; other helper: Page.add_style_tag_content |
-| `Page.bringToFront` | method | Partial | `Page.bring_to_front` ([source](crates/ferrite-e2e/src/page.rs#L2187)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.addInitScript` | method | Partial | `Page.add_init_script` ([source](crates/ferrite-e2e/src/page.rs#L3864)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.addScriptTag` | method | Partial | `Page.add_script_tag_url` ([source](crates/ferrite-e2e/src/page.rs#L3871)) | URL/content helpers return unit; no ElementHandle return, file/type options; other helper: Page.add_script_tag_content |
+| `Page.addStyleTag` | method | Partial | `Page.add_style_tag_url` ([source](crates/ferrite-e2e/src/page.rs#L3905)) | URL/content helpers return unit; no ElementHandle return, file/type options; other helper: Page.add_style_tag_content |
+| `Page.bringToFront` | method | Partial | `Page.bring_to_front` ([source](crates/ferrite-e2e/src/page.rs#L2189)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
 | `Page.cancelPickLocator` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Page.check` | method | Partial | `Locator.check` ([source](crates/ferrite-e2e/src/locator.rs#L1740)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Page.click` | method | Partial | `Locator.click` ([source](crates/ferrite-e2e/src/locator.rs#L1339)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
-| `Page.close` | method | Partial | `Page.close` ([source](crates/ferrite-e2e/src/page.rs#L4611)) | Closes the target and its owning convenience context; no runBeforeUnload/reason options. |
-| `Page.content` | method | Equivalent | `Page.content` ([source](crates/ferrite-e2e/src/page.rs#L2159)) | Basic document access. |
-| `Page.context` | method | Partial | `Page.context` ([source](crates/ferrite-e2e/src/page.rs#L1672)) | Owning context while registered; returns Option and becomes None after context disposal. |
-| `Page.coverage` | property | Partial | `Page.coverage` ([source](crates/ferrite-e2e/src/page.rs#L1642)) | Dedicated API exists; coverage is Chromium-only, lazy frame locators are same-origin, exceptions have ConsoleMessage shape. |
+| `Page.close` | method | Partial | `Page.close` ([source](crates/ferrite-e2e/src/page.rs#L4619)) | Closes the target and its owning convenience context; no runBeforeUnload/reason options. |
+| `Page.content` | method | Equivalent | `Page.content` ([source](crates/ferrite-e2e/src/page.rs#L2161)) | Basic document access. |
+| `Page.context` | method | Partial | `Page.context` ([source](crates/ferrite-e2e/src/page.rs#L1674)) | Owning context while registered; returns Option and becomes None after context disposal. |
+| `Page.coverage` | property | Partial | `Page.coverage` ([source](crates/ferrite-e2e/src/page.rs#L1644)) | Dedicated API exists; coverage is Chromium-only, lazy frame locators are same-origin, exceptions have ConsoleMessage shape. |
 | `Page.dblclick` | method | Partial | `Locator.dblclick` ([source](crates/ferrite-e2e/src/locator.rs#L1389)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Page.dispatchEvent` | method | Partial | `Locator.dispatch_event` ([source](crates/ferrite-e2e/src/locator.rs#L1528)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Page.dragAndDrop` | method | Partial | `Locator.drag_to` ([source](crates/ferrite-e2e/src/locator.rs#L1478)) | Page.locator(source).drag_to(target, steps); fewer options and frame-coordinate restrictions. |
-| `Page.emulateMedia` | method | Partial | `Page.emulate_media` ([source](crates/ferrite-e2e/src/page.rs#L3533)) | Chromium only; color scheme/reduced motion only, no full media/forcedColors/contrast surface. |
+| `Page.emulateMedia` | method | Partial | `Page.emulate_media` ([source](crates/ferrite-e2e/src/page.rs#L3541)) | Chromium only; color scheme/reduced motion only, no full media/forcedColors/contrast surface. |
 | `Page.evalOnSelector` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Page.evalOnSelectorAll` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `Page.evaluate` | method | Partial | `Page.evaluate_with_arg` ([source](crates/ferrite-e2e/src/page.rs#L2194)) | JSON-serializable arguments and results; no JSHandle argument or arbitrary JS value serialization. |
-| `Page.evaluateHandle` | method | Partial | `Page.evaluate_handle` ([source](crates/ferrite-e2e/src/page.rs#L2259)) | Remote JSHandle supported; no ElementHandle conversion or separate evaluation argument. |
+| `Page.evaluate` | method | Partial | `Page.evaluate_with_arg` ([source](crates/ferrite-e2e/src/page.rs#L2196)) | JSON-serializable arguments and results; no JSHandle argument or arbitrary JS value serialization. |
+| `Page.evaluateHandle` | method | Partial | `Page.evaluate_handle` ([source](crates/ferrite-e2e/src/page.rs#L2261)) | Remote JSHandle supported; no ElementHandle conversion or separate evaluation argument. |
 | `Page.exposeBinding` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `Page.exposeFunction` | method | Partial | `Page.expose_function` ([source](crates/ferrite-e2e/src/page.rs#L3984)) | Survives navigation using init scripts; polled Rust callbacks, no context bindings, frame-wide dispatch or async callbacks. |
+| `Page.exposeFunction` | method | Partial | `Page.expose_function` ([source](crates/ferrite-e2e/src/page.rs#L3992)) | Survives navigation using init scripts; polled Rust callbacks, no context bindings, frame-wide dispatch or async callbacks. |
 | `Page.fill` | method | Partial | `Locator.fill` ([source](crates/ferrite-e2e/src/locator.rs#L1603)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Page.focus` | method | Partial | `Locator.focus` ([source](crates/ferrite-e2e/src/locator.rs#L1429)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
-| `Page.frame` | method | Partial | `Page.frame_by_name` ([source](crates/ferrite-e2e/src/page.rs#L3954)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.frameLocator` | method | Partial | `Page.frame_locator` ([source](crates/ferrite-e2e/src/page.rs#L1630)) | Dedicated API exists; coverage is Chromium-only, lazy frame locators are same-origin, exceptions have ConsoleMessage shape. |
-| `Page.frames` | method | Partial | `Page.document_frames` ([source](crates/ferrite-e2e/src/page.rs#L3933)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.frame` | method | Partial | `Page.frame_by_name` ([source](crates/ferrite-e2e/src/page.rs#L3962)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.frameLocator` | method | Partial | `Page.frame_locator` ([source](crates/ferrite-e2e/src/page.rs#L1632)) | Dedicated API exists; coverage is Chromium-only, lazy frame locators are same-origin, exceptions have ConsoleMessage shape. |
+| `Page.frames` | method | Partial | `Page.document_frames` ([source](crates/ferrite-e2e/src/page.rs#L3941)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
 | `Page.getAttribute` | method | Partial | `Locator.attribute` ([source](crates/ferrite-e2e/src/locator.rs#L1898)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
-| `Page.getByAltText` | method | Partial | `Page.get_by_alt` ([source](crates/ferrite-e2e/src/page.rs#L2415)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
-| `Page.getByLabel` | method | Partial | `Page.get_by_label` ([source](crates/ferrite-e2e/src/page.rs#L2403)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
-| `Page.getByPlaceholder` | method | Partial | `Page.get_by_placeholder` ([source](crates/ferrite-e2e/src/page.rs#L2409)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
-| `Page.getByRole` | method | Partial | `Page.get_by_role_with` ([source](crates/ferrite-e2e/src/page.rs#L2391)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
-| `Page.getByTestId` | method | Partial | `Page.get_by_test_id` ([source](crates/ferrite-e2e/src/page.rs#L2373)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
-| `Page.getByText` | method | Partial | `Page.get_by_text` ([source](crates/ferrite-e2e/src/page.rs#L2379)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
-| `Page.getByTitle` | method | Partial | `Page.get_by_title` ([source](crates/ferrite-e2e/src/page.rs#L2421)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
-| `Page.goBack` | method | Partial | `Page.go_back` ([source](crates/ferrite-e2e/src/page.rs#L2131)) | Returns unit, not a navigation Response; fewer navigation options. Relative URLs resolve through the configured base URL. |
-| `Page.goForward` | method | Partial | `Page.go_forward` ([source](crates/ferrite-e2e/src/page.rs#L2138)) | Returns unit, not a navigation Response; fewer navigation options. Relative URLs resolve through the configured base URL. |
-| `Page.requestGC` | method | Partial | `Page.request_gc` ([source](crates/ferrite-e2e/src/page.rs#L2608)) | Chromium only; Firefox returns an unsupported error. |
-| `Page.goto` | method | Partial | `Page.goto_with_options` ([source](crates/ferrite-e2e/src/page.rs#L2046)) | Returns unit, not a navigation Response; fewer navigation options. Relative URLs resolve through the configured base URL. |
+| `Page.getByAltText` | method | Partial | `Page.get_by_alt` ([source](crates/ferrite-e2e/src/page.rs#L2417)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
+| `Page.getByLabel` | method | Partial | `Page.get_by_label` ([source](crates/ferrite-e2e/src/page.rs#L2405)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
+| `Page.getByPlaceholder` | method | Partial | `Page.get_by_placeholder` ([source](crates/ferrite-e2e/src/page.rs#L2411)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
+| `Page.getByRole` | method | Partial | `Page.get_by_role_with` ([source](crates/ferrite-e2e/src/page.rs#L2393)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
+| `Page.getByTestId` | method | Partial | `Page.get_by_test_id` ([source](crates/ferrite-e2e/src/page.rs#L2375)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
+| `Page.getByText` | method | Partial | `Page.get_by_text` ([source](crates/ferrite-e2e/src/page.rs#L2381)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
+| `Page.getByTitle` | method | Partial | `Page.get_by_title` ([source](crates/ferrite-e2e/src/page.rs#L2423)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
+| `Page.goBack` | method | Partial | `Page.go_back` ([source](crates/ferrite-e2e/src/page.rs#L2133)) | Returns unit, not a navigation Response; fewer navigation options. Relative URLs resolve through the configured base URL. |
+| `Page.goForward` | method | Partial | `Page.go_forward` ([source](crates/ferrite-e2e/src/page.rs#L2140)) | Returns unit, not a navigation Response; fewer navigation options. Relative URLs resolve through the configured base URL. |
+| `Page.requestGC` | method | Partial | `Page.request_gc` ([source](crates/ferrite-e2e/src/page.rs#L2610)) | Chromium only; Firefox returns an unsupported error. |
+| `Page.goto` | method | Partial | `Page.goto_with_options` ([source](crates/ferrite-e2e/src/page.rs#L2048)) | Returns unit, not a navigation Response; fewer navigation options. Relative URLs resolve through the configured base URL. |
 | `Page.hideHighlight` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Page.hover` | method | Partial | `Locator.hover` ([source](crates/ferrite-e2e/src/locator.rs#L1407)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Page.innerHTML` | method | Partial | `Locator.inner_html` ([source](crates/ferrite-e2e/src/locator.rs#L1951)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Page.innerText` | method | Partial | `Locator.text` ([source](crates/ferrite-e2e/src/locator.rs#L1837)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Page.inputValue` | method | Partial | `Locator.input_value` ([source](crates/ferrite-e2e/src/locator.rs#L1849)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Page.isChecked` | method | Partial | `Locator.is_checked` ([source](crates/ferrite-e2e/src/locator.rs#L2082)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
-| `Page.isClosed` | method | Partial | `Page.is_closed` ([source](crates/ferrite-e2e/src/page.rs#L1829)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.isClosed` | method | Partial | `Page.is_closed` ([source](crates/ferrite-e2e/src/page.rs#L1831)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
 | `Page.isDisabled` | method | Partial | `Locator.is_disabled` ([source](crates/ferrite-e2e/src/locator.rs#L2072)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Page.isEditable` | method | Partial | `Locator.is_editable` ([source](crates/ferrite-e2e/src/locator.rs#L2092)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Page.isEnabled` | method | Partial | `Locator.is_enabled` ([source](crates/ferrite-e2e/src/locator.rs#L2062)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Page.isHidden` | method | Partial | `Locator.is_hidden` ([source](crates/ferrite-e2e/src/locator.rs#L2049)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Page.isVisible` | method | Partial | `Locator.is_visible` ([source](crates/ferrite-e2e/src/locator.rs#L2039)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
-| `Page.keyboard` | property | Partial | `Page.press_key` ([source](crates/ferrite-e2e/src/page.rs#L2664)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.clearConsoleMessages` | method | Partial | `Page.clear_console_messages` ([source](crates/ferrite-e2e/src/page.rs#L1690)) | Dedicated API exists; coverage is Chromium-only, lazy frame locators are same-origin, exceptions have ConsoleMessage shape. |
-| `Page.clearPageErrors` | method | Partial | `Page.clear_page_errors` ([source](crates/ferrite-e2e/src/page.rs#L1707)) | Dedicated API exists; coverage is Chromium-only, lazy frame locators are same-origin, exceptions have ConsoleMessage shape. |
-| `Page.localStorage` | property | Partial | `Page.local_storage_get` ([source](crates/ferrite-e2e/src/page.rs#L2815)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.sessionStorage` | property | Partial | `Page.session_storage_get` ([source](crates/ferrite-e2e/src/page.rs#L2852)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.consoleMessages` | method | Partial | `Page.console_messages` ([source](crates/ferrite-e2e/src/page.rs#L1996)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.pageErrors` | method | Partial | `Page.page_errors` ([source](crates/ferrite-e2e/src/page.rs#L1699)) | Dedicated API exists; coverage is Chromium-only, lazy frame locators are same-origin, exceptions have ConsoleMessage shape. |
-| `Page.locator` | method | Partial | `Page.locator` ([source](crates/ferrite-e2e/src/page.rs#L2367)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
-| `Page.mainFrame` | method | Partial | `Page.document_frames` ([source](crates/ferrite-e2e/src/page.rs#L3933)) | Enumerate frames and choose the root manually; no dedicated main_frame API. |
-| `Page.mouse` | property | Partial | `Page.mouse_click` ([source](crates/ferrite-e2e/src/page.rs#L2615)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.opener` | method | Partial | `Page.opener` ([source](crates/ferrite-e2e/src/page.rs#L1874)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.keyboard` | property | Partial | `Page.press_key` ([source](crates/ferrite-e2e/src/page.rs#L2666)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.clearConsoleMessages` | method | Partial | `Page.clear_console_messages` ([source](crates/ferrite-e2e/src/page.rs#L1692)) | Dedicated API exists; coverage is Chromium-only, lazy frame locators are same-origin, exceptions have ConsoleMessage shape. |
+| `Page.clearPageErrors` | method | Partial | `Page.clear_page_errors` ([source](crates/ferrite-e2e/src/page.rs#L1709)) | Dedicated API exists; coverage is Chromium-only, lazy frame locators are same-origin, exceptions have ConsoleMessage shape. |
+| `Page.localStorage` | property | Partial | `Page.local_storage_get` ([source](crates/ferrite-e2e/src/page.rs#L2823)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.sessionStorage` | property | Partial | `Page.session_storage_get` ([source](crates/ferrite-e2e/src/page.rs#L2860)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.consoleMessages` | method | Partial | `Page.console_messages` ([source](crates/ferrite-e2e/src/page.rs#L1998)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.pageErrors` | method | Partial | `Page.page_errors` ([source](crates/ferrite-e2e/src/page.rs#L1701)) | Dedicated API exists; coverage is Chromium-only, lazy frame locators are same-origin, exceptions have ConsoleMessage shape. |
+| `Page.locator` | method | Partial | `Page.locator` ([source](crates/ferrite-e2e/src/page.rs#L2369)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
+| `Page.mainFrame` | method | Partial | `Page.document_frames` ([source](crates/ferrite-e2e/src/page.rs#L3941)) | Enumerate frames and choose the root manually; no dedicated main_frame API. |
+| `Page.mouse` | property | Partial | `Page.mouse_click` ([source](crates/ferrite-e2e/src/page.rs#L2617)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.opener` | method | Partial | `Page.opener` ([source](crates/ferrite-e2e/src/page.rs#L1876)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
 | `Page.pause` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `Page.pdf` | method | Partial | `Page.pdf` ([source](crates/ferrite-e2e/src/page.rs#L3001)) | PDF export exists; no PDF options builder. Engine behavior differs. |
+| `Page.pdf` | method | Partial | `Page.pdf` ([source](crates/ferrite-e2e/src/page.rs#L3009)) | PDF export exists; no PDF options builder. Engine behavior differs. |
 | `Page.pickLocator` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Page.press` | method | Partial | `Locator.press` ([source](crates/ferrite-e2e/src/locator.rs#L1629)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Page.querySelector` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Page.querySelectorAll` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `Page.requests` | method | Partial | `Page.requests` ([source](crates/ferrite-e2e/src/page.rs#L3793)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.addLocatorHandler` | method | Partial | `Page.add_locator_handler_with` ([source](crates/ferrite-e2e/src/page.rs#L2450)) | Visibility-based overlay handlers run before actions and state/custom assertions; no full dismissal/noWaitAfter semantics. |
+| `Page.requests` | method | Partial | `Page.requests` ([source](crates/ferrite-e2e/src/page.rs#L3801)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.addLocatorHandler` | method | Partial | `Page.add_locator_handler_with` ([source](crates/ferrite-e2e/src/page.rs#L2452)) | Visibility-based overlay handlers run before actions and state/custom assertions; no full dismissal/noWaitAfter semantics. |
 | `Page.removeAllListeners` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `Page.removeLocatorHandler` | method | Partial | `Page.remove_locator_handler` ([source](crates/ferrite-e2e/src/page.rs#L2472)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.reload` | method | Partial | `Page.reload` ([source](crates/ferrite-e2e/src/page.rs#L2126)) | Returns unit, not a navigation Response; fewer navigation options. Relative URLs resolve through the configured base URL. |
-| `Page.request` | property | Partial | `Page.request` ([source](crates/ferrite-e2e/src/page.rs#L1683)) | HTTP client sharing owning-context cookies and inheriting its transport defaults; cancellation follows context disposal. |
-| `Page.route` | method | Partial | `Page.route_with_handler` ([source](crates/ferrite-e2e/src/page.rs#L3566)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.routeFromHAR` | method | Partial | `Page.route_from_har` ([source](crates/ferrite-e2e/src/page.rs#L3681)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.removeLocatorHandler` | method | Partial | `Page.remove_locator_handler` ([source](crates/ferrite-e2e/src/page.rs#L2474)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.reload` | method | Partial | `Page.reload` ([source](crates/ferrite-e2e/src/page.rs#L2128)) | Returns unit, not a navigation Response; fewer navigation options. Relative URLs resolve through the configured base URL. |
+| `Page.request` | property | Partial | `Page.request` ([source](crates/ferrite-e2e/src/page.rs#L1685)) | HTTP client sharing owning-context cookies and inheriting its transport defaults; cancellation follows context disposal. |
+| `Page.route` | method | Partial | `Page.route_with_handler` ([source](crates/ferrite-e2e/src/page.rs#L3574)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.routeFromHAR` | method | Partial | `Page.route_from_har` ([source](crates/ferrite-e2e/src/page.rs#L3689)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
 | `Page.routeWebSocket` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `Page.screencast` | property | Partial | `Page.frames` ([source](crates/ferrite-e2e/src/page.rs#L4575)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.screenshot` | method | Partial | `Page.screenshot` ([source](crates/ferrite-e2e/src/page.rs#L2908)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.screencast` | property | Partial | `Page.frames` ([source](crates/ferrite-e2e/src/page.rs#L4583)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.screenshot` | method | Partial | `Page.screenshot` ([source](crates/ferrite-e2e/src/page.rs#L2916)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
 | `Page.selectOption` | method | Partial | `Locator.select_options` ([source](crates/ferrite-e2e/src/locator.rs#L1796)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Page.setChecked` | method | Partial | `Locator.set_checked` ([source](crates/ferrite-e2e/src/locator.rs#L2150)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
-| `Page.setContent` | method | Partial | `Page.set_content` ([source](crates/ferrite-e2e/src/page.rs#L2169)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.setDefaultNavigationTimeout` | method | Partial | `Page.set_navigation_timeout` ([source](crates/ferrite-e2e/src/page.rs#L1944)) | Navigation default distinct from locator timeout. |
-| `Page.setDefaultTimeout` | method | Partial | `Page.set_timeout` ([source](crates/ferrite-e2e/src/page.rs#L1935)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.setExtraHTTPHeaders` | method | Partial | `Page.set_extra_http_headers` ([source](crates/ferrite-e2e/src/page.rs#L3463)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.setInputFiles` | method | Partial | `Page.set_input_files` ([source](crates/ferrite-e2e/src/page.rs#L3824)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.setViewportSize` | method | Partial | `Page.set_viewport` ([source](crates/ferrite-e2e/src/page.rs#L3008)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.ariaSnapshot` | method | Partial | `Page.aria_snapshot` ([source](crates/ferrite-e2e/src/page.rs#L4231)) | Structured role/name/state DOM approximation, including open shadow roots; no full ARIA/YAML matching, mode/depth/boxes options. |
-| `Page.ariaSnapshotJSON` | method | Partial | `Page.aria_snapshot_json` ([source](crates/ferrite-e2e/src/page.rs#L4221)) | Nested role/name/state DOM tree without name/node truncation; not the complete accessibility algorithm. |
+| `Page.setContent` | method | Partial | `Page.set_content` ([source](crates/ferrite-e2e/src/page.rs#L2171)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.setDefaultNavigationTimeout` | method | Partial | `Page.set_navigation_timeout` ([source](crates/ferrite-e2e/src/page.rs#L1946)) | Navigation default distinct from locator timeout. |
+| `Page.setDefaultTimeout` | method | Partial | `Page.set_timeout` ([source](crates/ferrite-e2e/src/page.rs#L1937)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.setExtraHTTPHeaders` | method | Partial | `Page.set_extra_http_headers` ([source](crates/ferrite-e2e/src/page.rs#L3471)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.setInputFiles` | method | Partial | `Page.set_input_files` ([source](crates/ferrite-e2e/src/page.rs#L3832)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.setViewportSize` | method | Partial | `Page.set_viewport` ([source](crates/ferrite-e2e/src/page.rs#L3016)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.ariaSnapshot` | method | Partial | `Page.aria_snapshot` ([source](crates/ferrite-e2e/src/page.rs#L4239)) | Structured role/name/state DOM approximation, including open shadow roots; no full ARIA/YAML matching, mode/depth/boxes options. |
+| `Page.ariaSnapshotJSON` | method | Partial | `Page.aria_snapshot_json` ([source](crates/ferrite-e2e/src/page.rs#L4229)) | Nested role/name/state DOM tree without name/node truncation; not the complete accessibility algorithm. |
 | `Page.tap` | method | Partial | `Locator.tap` ([source](crates/ferrite-e2e/src/locator.rs#L1455)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Page.textContent` | method | Partial | `Locator.text` ([source](crates/ferrite-e2e/src/locator.rs#L1837)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
-| `Page.title` | method | Equivalent | `Page.title` ([source](crates/ferrite-e2e/src/page.rs#L2145)) | Basic document access. |
-| `Page.touchscreen` | property | Partial | `Page.touchscreen_tap` ([source](crates/ferrite-e2e/src/page.rs#L2756)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.title` | method | Equivalent | `Page.title` ([source](crates/ferrite-e2e/src/page.rs#L2147)) | Basic document access. |
+| `Page.touchscreen` | property | Partial | `Page.touchscreen_tap` ([source](crates/ferrite-e2e/src/page.rs#L2758)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
 | `Page.type` (deprecated) | method | Partial | `Locator.press_sequentially_with` ([source](crates/ferrite-e2e/src/locator.rs#L1655)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Page.uncheck` | method | Partial | `Locator.uncheck` ([source](crates/ferrite-e2e/src/locator.rs#L1752)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
-| `Page.unrouteAll` | method | Partial | `Page.unroute_all` ([source](crates/ferrite-e2e/src/page.rs#L3656)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.unroute` | method | Partial | `Page.unroute` ([source](crates/ferrite-e2e/src/page.rs#L3626)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.url` | method | Equivalent | `Page.url` ([source](crates/ferrite-e2e/src/page.rs#L2152)) | Basic document access. |
-| `Page.video` | method | Partial | `Page.start_video` ([source](crates/ferrite-e2e/src/page.rs#L4502)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.viewportSize` | method | Partial | `Page.viewport_size` ([source](crates/ferrite-e2e/src/page.rs#L2593)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.waitForEvent` | method | Partial | `Page.wait_for_event` ([source](crates/ferrite-e2e/src/page.rs#L1734)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.waitForFunction` | method | Partial | `Page.wait_for_function` ([source](crates/ferrite-e2e/src/page.rs#L2278)) | Awaits Promise predicates correctly; polling returns unit, with no JSHandle/polling-mode/argument options. |
-| `Page.waitForLoadState` | method | Partial | `Page.wait_for_load_state` ([source](crates/ferrite-e2e/src/page.rs#L2348)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.unrouteAll` | method | Partial | `Page.unroute_all` ([source](crates/ferrite-e2e/src/page.rs#L3664)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.unroute` | method | Partial | `Page.unroute` ([source](crates/ferrite-e2e/src/page.rs#L3634)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.url` | method | Equivalent | `Page.url` ([source](crates/ferrite-e2e/src/page.rs#L2154)) | Basic document access. |
+| `Page.video` | method | Partial | `Page.start_video` ([source](crates/ferrite-e2e/src/page.rs#L4510)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.viewportSize` | method | Partial | `Page.viewport_size` ([source](crates/ferrite-e2e/src/page.rs#L2595)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.waitForEvent` | method | Partial | `Page.wait_for_event` ([source](crates/ferrite-e2e/src/page.rs#L1736)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.waitForFunction` | method | Partial | `Page.wait_for_function` ([source](crates/ferrite-e2e/src/page.rs#L2280)) | Awaits Promise predicates correctly; polling returns unit, with no JSHandle/polling-mode/argument options. |
+| `Page.waitForLoadState` | method | Partial | `Page.wait_for_load_state` ([source](crates/ferrite-e2e/src/page.rs#L2350)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
 | `Page.waitForNavigation` (deprecated) | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `Page.waitForRequest` | method | Partial | `Page.wait_for_request` ([source](crates/ferrite-e2e/src/page.rs#L4341)) | URL substring match; returns RecordedRequest rather than rich Request/Response; no predicate overload. |
-| `Page.waitForResponse` | method | Partial | `Page.wait_for_response` ([source](crates/ferrite-e2e/src/page.rs#L4382)) | URL substring match; returns RecordedRequest rather than rich Request/Response; no predicate overload. |
-| `Page.waitForSelector` | method | Partial | `Page.wait_for_selector_with` ([source](crates/ferrite-e2e/src/page.rs#L1845)) | Waits for requested state and returns Locator, not ElementHandle. |
-| `Page.waitForTimeout` | method | Partial | `Page.wait_for_timeout` ([source](crates/ferrite-e2e/src/page.rs#L2309)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.waitForURL` | method | Partial | `Page.wait_for_url` ([source](crates/ferrite-e2e/src/page.rs#L2319)) | Substring match only; no exact/glob/regex/predicate or waitUntil option. |
+| `Page.waitForRequest` | method | Partial | `Page.wait_for_request` ([source](crates/ferrite-e2e/src/page.rs#L4349)) | URL substring match; returns RecordedRequest rather than rich Request/Response; no predicate overload. |
+| `Page.waitForResponse` | method | Partial | `Page.wait_for_response` ([source](crates/ferrite-e2e/src/page.rs#L4390)) | URL substring match; returns RecordedRequest rather than rich Request/Response; no predicate overload. |
+| `Page.waitForSelector` | method | Partial | `Page.wait_for_selector_with` ([source](crates/ferrite-e2e/src/page.rs#L1847)) | Waits for requested state and returns Locator, not ElementHandle. |
+| `Page.waitForTimeout` | method | Partial | `Page.wait_for_timeout` ([source](crates/ferrite-e2e/src/page.rs#L2311)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.waitForURL` | method | Partial | `Page.wait_for_url` ([source](crates/ferrite-e2e/src/page.rs#L2321)) | Substring match only; no exact/glob/regex/predicate or waitUntil option. |
 | `Page.workers` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 
 ## PageAssertions
@@ -998,18 +998,18 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 537; 
 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
-| `Reporter.onBegin` | method | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `Reporter.onEnd` | method | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `Reporter.onError` | method | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `Reporter.onExit` | method | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `Reporter.onStdErr` | method | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `Reporter.onStdOut` | method | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `Reporter.onStepBegin` | method | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `Reporter.onStepEnd` | method | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `Reporter.onTestBegin` | method | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `Reporter.onTestEnd` | method | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `Reporter.printsToStdio` | method | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `Reporter.preprocess` | method | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
+| `Reporter.onBegin` | method | Partial | `Reporter.on_begin` ([source](crates/ferrite-e2e/src/report.rs#L33)) | Live synchronous thread-safe callbacks; attempt identity includes retry/project/repetition/worker, errors and interrupted user steps reported. No Suite/TestCase graph, asynchronous end/status override or worker stdout capture. |
+| `Reporter.onEnd` | method | Partial | `Reporter.on_end` ([source](crates/ferrite-e2e/src/report.rs#L42)) | Live synchronous thread-safe callbacks; attempt identity includes retry/project/repetition/worker, errors and interrupted user steps reported. No Suite/TestCase graph, asynchronous end/status override or worker stdout capture. |
+| `Reporter.onError` | method | Partial | `Reporter.on_error` ([source](crates/ferrite-e2e/src/report.rs#L41)) | Live synchronous thread-safe callbacks; attempt identity includes retry/project/repetition/worker, errors and interrupted user steps reported. No Suite/TestCase graph, asynchronous end/status override or worker stdout capture. |
+| `Reporter.onExit` | method | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `Reporter.onStdErr` | method | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `Reporter.onStdOut` | method | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `Reporter.onStepBegin` | method | Partial | `Reporter.on_step_begin` ([source](crates/ferrite-e2e/src/report.rs#L37)) | Live synchronous thread-safe callbacks; attempt identity includes retry/project/repetition/worker, errors and interrupted user steps reported. No Suite/TestCase graph, asynchronous end/status override or worker stdout capture. |
+| `Reporter.onStepEnd` | method | Partial | `Reporter.on_step_end` ([source](crates/ferrite-e2e/src/report.rs#L38)) | Live synchronous thread-safe callbacks; attempt identity includes retry/project/repetition/worker, errors and interrupted user steps reported. No Suite/TestCase graph, asynchronous end/status override or worker stdout capture. |
+| `Reporter.onTestBegin` | method | Partial | `Reporter.on_test_begin` ([source](crates/ferrite-e2e/src/report.rs#L34)) | Live synchronous thread-safe callbacks; attempt identity includes retry/project/repetition/worker, errors and interrupted user steps reported. No Suite/TestCase graph, asynchronous end/status override or worker stdout capture. |
+| `Reporter.onTestEnd` | method | Partial | `Reporter.on_test_end` ([source](crates/ferrite-e2e/src/report.rs#L36)) | Live synchronous thread-safe callbacks; attempt identity includes retry/project/repetition/worker, errors and interrupted user steps reported. No Suite/TestCase graph, asynchronous end/status override or worker stdout capture. |
+| `Reporter.printsToStdio` | method | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `Reporter.preprocess` | method | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
 
 ## Request
 
@@ -1083,8 +1083,8 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 537; 
 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
-| `Screencast.start` | method | Partial | `Page.start_video` ([source](crates/ferrite-e2e/src/page.rs#L4502)) | Video recording/live frames available; fewer formats/options, no screencast overlay/action system. |
-| `Screencast.stop` | method | Partial | `Page.stop_video` ([source](crates/ferrite-e2e/src/page.rs#L4543)) | Explicit output path; Chromium assembles frames with ffmpeg, Firefox records natively. |
+| `Screencast.start` | method | Partial | `Page.start_video` ([source](crates/ferrite-e2e/src/page.rs#L4510)) | Video recording/live frames available; fewer formats/options, no screencast overlay/action system. |
+| `Screencast.stop` | method | Partial | `Page.stop_video` ([source](crates/ferrite-e2e/src/page.rs#L4551)) | Explicit output path; Chromium assembles frames with ffmpeg, Firefox records natively. |
 | `Screencast.showOverlay` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Screencast.showChapter` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Screencast.showActions` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
@@ -1115,16 +1115,16 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 537; 
 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
-| `Suite.allTests` | method | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `Suite.entries` | method | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `Suite.location` | property | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `Suite.parent` | property | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `Suite.project` | method | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `Suite.suites` | property | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `Suite.tests` | property | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `Suite.title` | property | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `Suite.titlePath` | method | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `Suite.type` | property | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
+| `Suite.allTests` | method | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `Suite.entries` | method | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `Suite.location` | property | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `Suite.parent` | property | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `Suite.project` | method | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `Suite.suites` | property | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `Suite.tests` | property | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `Suite.title` | property | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `Suite.titlePath` | method | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `Suite.type` | property | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
 
 ## Test
 
@@ -1132,34 +1132,34 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 537; 
 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
-| `Test.(call)` | method | Partial | `test` ([source](crates/ferrite-e2e/src/runner.rs#L163)) | Rust test closure; dynamic details/locks/options differ. |
-| `Test.afterAll` | method | Partial | `Suite.after_all` ([source](crates/ferrite-e2e/src/runner.rs#L303)) | Nested suite hooks; beforeAll/afterAll once per worker/project, beforeEach/afterEach per attempt. Tokio worker state rather than process restarts; no callback fixture injection. |
-| `Test.afterEach` | method | Partial | `Suite.after_each` ([source](crates/ferrite-e2e/src/runner.rs#L284)) | Nested suite hooks; beforeAll/afterAll once per worker/project, beforeEach/afterEach per attempt. Tokio worker state rather than process restarts; no callback fixture injection. |
-| `Test.beforeAll` | method | Partial | `Suite.before_all` ([source](crates/ferrite-e2e/src/runner.rs#L294)) | Nested suite hooks; beforeAll/afterAll once per worker/project, beforeEach/afterEach per attempt. Tokio worker state rather than process restarts; no callback fixture injection. |
-| `Test.beforeEach` | method | Partial | `Suite.before_each` ([source](crates/ferrite-e2e/src/runner.rs#L274)) | Nested suite hooks; beforeAll/afterAll once per worker/project, beforeEach/afterEach per attempt. Tokio worker state rather than process restarts; no callback fixture injection. |
-| `Test.describe` | method | Partial | `Suite.tests` ([source](crates/ferrite-e2e/src/runner.rs#L312)) | Nested identity, scoped hooks, inherited timeout/retry/context/tags; no serial/fully-parallel suite scheduling configuration. |
-| `Test.describe.configure` | method | Partial | `Suite.timeout` ([source](crates/ferrite-e2e/src/runner.rs#L239)) | Suite timeout/retry/context settings inherited by descendants; no serial/fully-parallel execution mode configuration. |
-| `Test.describe.fixme` | method | Partial | `Suite.fixme` ([source](crates/ferrite-e2e/src/runner.rs#L259)) | Applies focus/skip/fixme to descendants; Rust builders, no JavaScript describe callbacks. |
-| `Test.describe.only` | method | Partial | `Suite.only` ([source](crates/ferrite-e2e/src/runner.rs#L264)) | Applies focus/skip/fixme to descendants; Rust builders, no JavaScript describe callbacks. |
+| `Test.(call)` | method | Partial | `test` ([source](crates/ferrite-e2e/src/runner.rs#L358)) | Rust test closure; dynamic details/locks/options differ. |
+| `Test.afterAll` | method | Partial | `Suite.after_all_with_context` ([source](crates/ferrite-e2e/src/runner.rs#L432)) | ContextHook explicitly declares lazy fixture roots; WorkerHook permits only worker roots. Nested lifecycle ordering; no process workers or callback parameter inference. |
+| `Test.afterEach` | method | Partial | `Suite.after_each_with_context` ([source](crates/ferrite-e2e/src/runner.rs#L494)) | ContextHook explicitly declares lazy fixture roots; WorkerHook permits only worker roots. Nested lifecycle ordering; no process workers or callback parameter inference. |
+| `Test.beforeAll` | method | Partial | `Suite.before_all_with_context` ([source](crates/ferrite-e2e/src/runner.rs#L427)) | ContextHook explicitly declares lazy fixture roots; WorkerHook permits only worker roots. Nested lifecycle ordering; no process workers or callback parameter inference. |
+| `Test.beforeEach` | method | Partial | `Suite.before_each_with_context` ([source](crates/ferrite-e2e/src/runner.rs#L489)) | ContextHook explicitly declares lazy fixture roots; WorkerHook permits only worker roots. Nested lifecycle ordering; no process workers or callback parameter inference. |
+| `Test.describe` | method | Partial | `Suite.tests` ([source](crates/ferrite-e2e/src/runner.rs#L529)) | Nested identity, scoped hooks, inherited timeout/retry/context/tags; no serial/fully-parallel suite scheduling configuration. |
+| `Test.describe.configure` | method | Partial | `Suite.timeout` ([source](crates/ferrite-e2e/src/runner.rs#L444)) | Suite timeout/retry/context settings inherited by descendants; no serial/fully-parallel execution mode configuration. |
+| `Test.describe.fixme` | method | Partial | `Suite.fixme` ([source](crates/ferrite-e2e/src/runner.rs#L464)) | Applies focus/skip/fixme to descendants; Rust builders, no JavaScript describe callbacks. |
+| `Test.describe.only` | method | Partial | `Suite.only` ([source](crates/ferrite-e2e/src/runner.rs#L469)) | Applies focus/skip/fixme to descendants; Rust builders, no JavaScript describe callbacks. |
 | `Test.describe.parallel` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Test.describe.parallel.only` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Test.describe.serial` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Test.describe.serial.only` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `Test.describe.skip` | method | Partial | `Suite.skip` ([source](crates/ferrite-e2e/src/runner.rs#L254)) | Applies focus/skip/fixme to descendants; Rust builders, no JavaScript describe callbacks. |
+| `Test.describe.skip` | method | Partial | `Suite.skip` ([source](crates/ferrite-e2e/src/runner.rs#L459)) | Applies focus/skip/fixme to descendants; Rust builders, no JavaScript describe callbacks. |
 | `Test.expect` | property | Partial | `Locator.expect` ([source](crates/ferrite-e2e/src/expect.rs#L1252)) | Rust builders, expect_poll, expect_to_pass and SoftAsserts; no generic matcher registry/configure API. |
-| `Test.extend` | method | Partial | `Runner.fixture_definition` ([source](crates/ferrite-e2e/src/runner.rs#L1485)) | Typed dependency graph, explicit lazy requests, automatic fixtures, test/worker scope and reverse dependency teardown. No named overrides, callback parameter inference or built-in page fixture injection. |
+| `Test.extend` | method | Partial | `Runner.fixture_definition` ([source](crates/ferrite-e2e/src/runner.rs#L1850)) | Typed lazy dependencies including built-in page/context/request/TestInfo and browser/WorkerInfo, test/worker scopes and reverse teardown. No named overrides or callback parameter inference. |
 | `Test.abort` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `Test.fail` | method | Partial | `Test.fail` ([source](crates/ferrite-e2e/src/runner.rs#L127)) | Static test builder setting; no runtime conditional/context metadata overloads. |
+| `Test.fail` | method | Partial | `TestInfo.fail` ([source](crates/ferrite-e2e/src/runner.rs#L599)) | Static Test builders plus runtime TestInfo controls; use Rust conditionals and skip(reason)? for immediate closure exit. No JavaScript overload inference. |
 | `Test.fail.only` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `Test.fixme` | method | Partial | `Test.fixme` ([source](crates/ferrite-e2e/src/runner.rs#L120)) | Static test builder setting; no runtime conditional/context metadata overloads. |
-| `Test.info` | method | Partial | `TestContext.info` ([source](crates/ferrite-e2e/src/runner.rs#L469)) | Provided through test_with_context; fewer live metadata fields and mutators. |
-| `Test.only` | method | Partial | `Test.only` ([source](crates/ferrite-e2e/src/runner.rs#L113)) | Static test builder setting; no runtime conditional/context metadata overloads. |
-| `Test.setTimeout` | method | Partial | `Test.timeout` ([source](crates/ferrite-e2e/src/runner.rs#L155)) | Static test builder setting; no runtime conditional/context metadata overloads. |
-| `Test.skip` | method | Partial | `Test.skip` ([source](crates/ferrite-e2e/src/runner.rs#L106)) | Static test builder setting; no runtime conditional/context metadata overloads. |
-| `Test.slow` | method | Partial | `Test.slow` ([source](crates/ferrite-e2e/src/runner.rs#L141)) | Static test builder setting; no runtime conditional/context metadata overloads. |
-| `Test.step` | method | Partial | `Page.step` ([source](crates/ferrite-e2e/src/page.rs#L2767)) | Named closure logged on Page; no structured step tree, boxing, timeout, subtitle/params or TestStepInfo. |
+| `Test.fixme` | method | Partial | `Test.fixme` ([source](crates/ferrite-e2e/src/runner.rs#L315)) | Static test builder setting; no runtime conditional/context metadata overloads. |
+| `Test.info` | method | Partial | `TestContext.info` ([source](crates/ferrite-e2e/src/runner.rs#L745)) | Provided through test_with_context; fewer live metadata fields and mutators. |
+| `Test.only` | method | Partial | `Test.only` ([source](crates/ferrite-e2e/src/runner.rs#L308)) | Static test builder setting; no runtime conditional/context metadata overloads. |
+| `Test.setTimeout` | method | Partial | `TestInfo.set_timeout` ([source](crates/ferrite-e2e/src/runner.rs#L618)) | Static Test builders plus runtime TestInfo controls; use Rust conditionals and skip(reason)? for immediate closure exit. No JavaScript overload inference. |
+| `Test.skip` | method | Partial | `TestInfo.skip` ([source](crates/ferrite-e2e/src/runner.rs#L588)) | Static Test builders plus runtime TestInfo controls; use Rust conditionals and skip(reason)? for immediate closure exit. No JavaScript overload inference. |
+| `Test.slow` | method | Partial | `TestInfo.slow` ([source](crates/ferrite-e2e/src/runner.rs#L607)) | Static Test builders plus runtime TestInfo controls; use Rust conditionals and skip(reason)? for immediate closure exit. No JavaScript overload inference. |
+| `Test.step` | method | Partial | `Page.step` ([source](crates/ferrite-e2e/src/page.rs#L2769)) | Named closure logged on Page; no structured step tree, boxing, timeout, subtitle/params or TestStepInfo. |
 | `Test.step.skip` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `Test.use` | method | Partial | `Suite.context_options` ([source](crates/ferrite-e2e/src/runner.rs#L227)) | Nested suite/test context inheritance; no general named fixture option overrides. |
+| `Test.use` | method | Partial | `Suite.context_options` ([source](crates/ferrite-e2e/src/runner.rs#L422)) | Nested suite/test context inheritance; no general named fixture option overrides. |
 
 ## TestCase
 
@@ -1167,21 +1167,21 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 537; 
 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
-| `TestCase.annotations` | property | Partial | `Test.annotations` ([source](crates/ferrite-e2e/src/runner.rs#L65)) | Test definition field only; no TestCase/Suite reporter tree. |
-| `TestCase.expectedStatus` | property | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `TestCase.id` | property | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `TestCase.location` | property | Partial | `Test.file` ([source](crates/ferrite-e2e/src/runner.rs#L67)) | Test definition field only; no TestCase/Suite reporter tree. |
-| `TestCase.ok` | method | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `TestCase.outcome` | method | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `TestCase.parent` | property | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `TestCase.repeatEachIndex` | property | Partial | `TestResult.repeat_each_index` ([source](crates/ferrite-e2e/src/report.rs#L59)) | Result metadata only; no TestCase/Suite reporter tree. |
-| `TestCase.results` | property | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `TestCase.retries` | property | Partial | `Test.retries` ([source](crates/ferrite-e2e/src/runner.rs#L148)) | Test definition field only; no TestCase/Suite reporter tree. |
-| `TestCase.tags` | property | Partial | `Test.tags` ([source](crates/ferrite-e2e/src/runner.rs#L63)) | Test definition field only; no TestCase/Suite reporter tree. |
-| `TestCase.timeout` | property | Partial | `Test.timeout` ([source](crates/ferrite-e2e/src/runner.rs#L155)) | Test definition field only; no TestCase/Suite reporter tree. |
-| `TestCase.title` | property | Partial | `Test.name` ([source](crates/ferrite-e2e/src/runner.rs#L57)) | Test definition field only; no TestCase/Suite reporter tree. |
-| `TestCase.titlePath` | method | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `TestCase.type` | property | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
+| `TestCase.annotations` | property | Partial | `Test.annotations` ([source](crates/ferrite-e2e/src/runner.rs#L260)) | Test definition field only; no TestCase/Suite reporter tree. |
+| `TestCase.expectedStatus` | property | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `TestCase.id` | property | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `TestCase.location` | property | Partial | `Test.file` ([source](crates/ferrite-e2e/src/runner.rs#L262)) | Test definition field only; no TestCase/Suite reporter tree. |
+| `TestCase.ok` | method | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `TestCase.outcome` | method | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `TestCase.parent` | property | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `TestCase.repeatEachIndex` | property | Partial | `TestResult.repeat_each_index` ([source](crates/ferrite-e2e/src/report.rs#L146)) | Result metadata only; no TestCase/Suite reporter tree. |
+| `TestCase.results` | property | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `TestCase.retries` | property | Partial | `Test.retries` ([source](crates/ferrite-e2e/src/runner.rs#L343)) | Test definition field only; no TestCase/Suite reporter tree. |
+| `TestCase.tags` | property | Partial | `Test.tags` ([source](crates/ferrite-e2e/src/runner.rs#L258)) | Test definition field only; no TestCase/Suite reporter tree. |
+| `TestCase.timeout` | property | Partial | `Test.timeout` ([source](crates/ferrite-e2e/src/runner.rs#L350)) | Test definition field only; no TestCase/Suite reporter tree. |
+| `TestCase.title` | property | Partial | `Test.name` ([source](crates/ferrite-e2e/src/runner.rs#L252)) | Test definition field only; no TestCase/Suite reporter tree. |
+| `TestCase.titlePath` | method | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `TestCase.type` | property | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
 
 ## TestConfig
 
@@ -1193,13 +1193,13 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 537; 
 | `TestConfig.captureGitInfo` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestConfig.expect` | property | Partial | `E2eConfig.expect_timeout_ms` ([source](crates/ferrite-config/src/lib.rs#L424)) | Consumed by CLI environment bridge and Runner; per-page/expect overrides supported. |
 | `TestConfig.failOnFlakyTests` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `TestConfig.forbidOnly` | property | Partial | `Runner.forbid_only` ([source](crates/ferrite-e2e/src/runner.rs#L1407)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
+| `TestConfig.forbidOnly` | property | Partial | `Runner.forbid_only` ([source](crates/ferrite-e2e/src/runner.rs#L1772)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
 | `TestConfig.fullyParallel` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `TestConfig.globalSetup` | property | Partial | `Runner.global_setup` ([source](crates/ferrite-e2e/src/runner.rs#L1320)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
-| `TestConfig.globalTeardown` | property | Partial | `Runner.global_teardown` ([source](crates/ferrite-e2e/src/runner.rs#L1331)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
+| `TestConfig.globalSetup` | property | Partial | `Runner.global_setup` ([source](crates/ferrite-e2e/src/runner.rs#L1685)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
+| `TestConfig.globalTeardown` | property | Partial | `Runner.global_teardown` ([source](crates/ferrite-e2e/src/runner.rs#L1696)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
 | `TestConfig.globalTimeout` | property | Partial | `E2eConfig.global_timeout_ms` ([source](crates/ferrite-config/src/lib.rs#L418)) | Consumed by Runner and CLI; global cancellation with bounded teardown and final unexpected-failure scheduling limit. Active workers finish on maxFailures; no process-worker orchestration. |
-| `TestConfig.grep` | property | Partial | `Runner.grep` ([source](crates/ferrite-e2e/src/runner.rs#L1253)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
-| `TestConfig.grepInvert` | property | Partial | `Runner.grep_invert` ([source](crates/ferrite-e2e/src/runner.rs#L1262)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
+| `TestConfig.grep` | property | Partial | `Runner.grep` ([source](crates/ferrite-e2e/src/runner.rs#L1608)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
+| `TestConfig.grepInvert` | property | Partial | `Runner.grep_invert` ([source](crates/ferrite-e2e/src/runner.rs#L1617)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
 | `TestConfig.ignoreSnapshots` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestConfig.maxFailures` | property | Partial | `E2eConfig.max_failures` ([source](crates/ferrite-config/src/lib.rs#L420)) | Consumed by Runner and CLI; global cancellation with bounded teardown and final unexpected-failure scheduling limit. Active workers finish on maxFailures; no process-worker orchestration. |
 | `TestConfig.metadata` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
@@ -1208,26 +1208,26 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 537; 
 | `TestConfig.snapshotDir` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestConfig.snapshotPathTemplate` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestConfig.preserveOutput` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `TestConfig.projects` | property | Partial | `Runner.project` ([source](crates/ferrite-e2e/src/runner.rs#L1391)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
+| `TestConfig.projects` | property | Partial | `Runner.project` ([source](crates/ferrite-e2e/src/runner.rs#L1756)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
 | `TestConfig.quiet` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `TestConfig.repeatEach` | property | Partial | `Runner.repeat_each` ([source](crates/ferrite-e2e/src/runner.rs#L1398)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
+| `TestConfig.repeatEach` | property | Partial | `Runner.repeat_each` ([source](crates/ferrite-e2e/src/runner.rs#L1763)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
 | `TestConfig.reporter` | property | Partial | `E2eConfig.reporter` ([source](crates/ferrite-config/src/lib.rs#L430)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
 | `TestConfig.reportSlowTests` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestConfig.respectGitIgnore` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `TestConfig.retries` | property | Partial | `Runner.retries` ([source](crates/ferrite-e2e/src/runner.rs#L1185)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
+| `TestConfig.retries` | property | Partial | `Runner.retries` ([source](crates/ferrite-e2e/src/runner.rs#L1523)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
 | `TestConfig.retryStrategy` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `TestConfig.shard` | property | Partial | `Runner.shard` ([source](crates/ferrite-e2e/src/runner.rs#L1349)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
+| `TestConfig.shard` | property | Partial | `Runner.shard` ([source](crates/ferrite-e2e/src/runner.rs#L1714)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
 | `TestConfig.tag` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestConfig.testDir` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestConfig.testIgnore` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestConfig.testMatch` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `TestConfig.timeout` | property | Partial | `Runner.test_timeout` ([source](crates/ferrite-e2e/src/runner.rs#L1192)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
+| `TestConfig.timeout` | property | Partial | `Runner.test_timeout` ([source](crates/ferrite-e2e/src/runner.rs#L1530)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
 | `TestConfig.tsconfig` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestConfig.updateSnapshots` | property | Partial | `E2eConfig.update_snapshots` ([source](crates/ferrite-config/src/lib.rs#L442)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
 | `TestConfig.updateSourceMethod` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestConfig.use` | property | Partial | `ContextOptions` ([source](crates/ferrite-e2e/src/context.rs#L31)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
 | `TestConfig.webServer` | property | Partial | `E2eConfig.web_server` ([source](crates/ferrite-config/src/lib.rs#L446)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
-| `TestConfig.workers` | property | Partial | `Runner.workers` ([source](crates/ferrite-e2e/src/runner.rs#L1178)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
+| `TestConfig.workers` | property | Partial | `Runner.workers` ([source](crates/ferrite-e2e/src/runner.rs#L1516)) | Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ. |
 
 ## TestError
 
@@ -1236,7 +1236,7 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 537; 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
 | `TestError.cause` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `TestError.message` | property | Partial | `TestResult.error` ([source](crates/ferrite-e2e/src/report.rs#L44)) | String-formatted Rust error; no structured cause/stack/error-context object. |
+| `TestError.message` | property | Partial | `TestResult.error` ([source](crates/ferrite-e2e/src/report.rs#L131)) | String-formatted Rust error; no structured cause/stack/error-context object. |
 | `TestError.stack` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestError.value` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestError.location` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
@@ -1248,39 +1248,39 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 537; 
 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
-| `TestInfo.annotations` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `TestInfo.attachments` | property | Partial | `TestInfo.attachments` ([source](crates/ferrite-e2e/src/runner.rs#L416)) | Similar per-execution metadata; project is only an optional name and other metadata/mutation facilities differ. |
-| `TestInfo.attach` | method | Partial | `TestInfo.attach` ([source](crates/ferrite-e2e/src/runner.rs#L391)) | Similar per-execution metadata; project is only an optional name and other metadata/mutation facilities differ. |
+| `TestInfo.annotations` | property | Partial | `TestInfo.annotations` ([source](crates/ferrite-e2e/src/runner.rs#L632)) | Shared runtime control affects the active setup/body future and final annotations; skip uses Result propagation, timeouts include elapsed time, cleanup retains independent budgets. No full TestInfo object parity. |
+| `TestInfo.attachments` | property | Partial | `TestInfo.attachments` ([source](crates/ferrite-e2e/src/runner.rs#L688)) | Similar per-execution metadata; project is only an optional name and other metadata/mutation facilities differ. |
+| `TestInfo.attach` | method | Partial | `TestInfo.attach` ([source](crates/ferrite-e2e/src/runner.rs#L660)) | Similar per-execution metadata; project is only an optional name and other metadata/mutation facilities differ. |
 | `TestInfo.column` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestInfo.config` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestInfo.duration` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestInfo.error` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestInfo.errors` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestInfo.expectedStatus` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `TestInfo.fail` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `TestInfo.file` | property | Partial | `TestInfo.file` ([source](crates/ferrite-e2e/src/runner.rs#L344)) | Similar per-execution metadata; project is only an optional name and other metadata/mutation facilities differ. |
+| `TestInfo.fail` | method | Partial | `TestInfo.fail` ([source](crates/ferrite-e2e/src/runner.rs#L599)) | Shared runtime control affects the active setup/body future and final annotations; skip uses Result propagation, timeouts include elapsed time, cleanup retains independent budgets. No full TestInfo object parity. |
+| `TestInfo.file` | property | Partial | `TestInfo.file` ([source](crates/ferrite-e2e/src/runner.rs#L561)) | Similar per-execution metadata; project is only an optional name and other metadata/mutation facilities differ. |
 | `TestInfo.fixme` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestInfo.fn` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `TestInfo.tags` | property | Partial | `TestInfo.tags` ([source](crates/ferrite-e2e/src/runner.rs#L348)) | Similar per-execution metadata; project is only an optional name and other metadata/mutation facilities differ. |
+| `TestInfo.tags` | property | Partial | `TestInfo.tags` ([source](crates/ferrite-e2e/src/runner.rs#L565)) | Similar per-execution metadata; project is only an optional name and other metadata/mutation facilities differ. |
 | `TestInfo.testId` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `TestInfo.line` | property | Partial | `TestInfo.line` ([source](crates/ferrite-e2e/src/runner.rs#L346)) | Similar per-execution metadata; project is only an optional name and other metadata/mutation facilities differ. |
+| `TestInfo.line` | property | Partial | `TestInfo.line` ([source](crates/ferrite-e2e/src/runner.rs#L563)) | Similar per-execution metadata; project is only an optional name and other metadata/mutation facilities differ. |
 | `TestInfo.snapshotDir` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `TestInfo.outputDir` | property | Partial | `TestInfo.output_dir` ([source](crates/ferrite-e2e/src/runner.rs#L358)) | Similar per-execution metadata; project is only an optional name and other metadata/mutation facilities differ. |
-| `TestInfo.outputPath` | method | Partial | `TestInfo.output_path` ([source](crates/ferrite-e2e/src/runner.rs#L367)) | Attempt-specific artifact path; parent traversal and absolute paths rejected. No snapshot-path templates. |
+| `TestInfo.outputDir` | property | Partial | `TestInfo.output_dir` ([source](crates/ferrite-e2e/src/runner.rs#L575)) | Similar per-execution metadata; project is only an optional name and other metadata/mutation facilities differ. |
+| `TestInfo.outputPath` | method | Partial | `TestInfo.output_path` ([source](crates/ferrite-e2e/src/runner.rs#L636)) | Attempt-specific artifact path; parent traversal and absolute paths rejected. No snapshot-path templates. |
 | `TestInfo.parallelIndex` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `TestInfo.project` | property | Partial | `TestInfo.project` ([source](crates/ferrite-e2e/src/runner.rs#L360)) | Similar per-execution metadata; project is only an optional name and other metadata/mutation facilities differ. |
-| `TestInfo.repeatEachIndex` | property | Partial | `TestInfo.repeat_each_index` ([source](crates/ferrite-e2e/src/runner.rs#L354)) | Similar per-execution metadata; project is only an optional name and other metadata/mutation facilities differ. |
-| `TestInfo.retry` | property | Partial | `TestInfo.retry` ([source](crates/ferrite-e2e/src/runner.rs#L350)) | Similar per-execution metadata; project is only an optional name and other metadata/mutation facilities differ. |
-| `TestInfo.setTimeout` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `TestInfo.skip` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `TestInfo.slow` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
+| `TestInfo.project` | property | Partial | `TestInfo.project` ([source](crates/ferrite-e2e/src/runner.rs#L577)) | Similar per-execution metadata; project is only an optional name and other metadata/mutation facilities differ. |
+| `TestInfo.repeatEachIndex` | property | Partial | `TestInfo.repeat_each_index` ([source](crates/ferrite-e2e/src/runner.rs#L571)) | Similar per-execution metadata; project is only an optional name and other metadata/mutation facilities differ. |
+| `TestInfo.retry` | property | Partial | `TestInfo.retry` ([source](crates/ferrite-e2e/src/runner.rs#L567)) | Similar per-execution metadata; project is only an optional name and other metadata/mutation facilities differ. |
+| `TestInfo.setTimeout` | method | Partial | `TestInfo.set_timeout` ([source](crates/ferrite-e2e/src/runner.rs#L618)) | Shared runtime control affects the active setup/body future and final annotations; skip uses Result propagation, timeouts include elapsed time, cleanup retains independent budgets. No full TestInfo object parity. |
+| `TestInfo.skip` | method | Partial | `TestInfo.skip` ([source](crates/ferrite-e2e/src/runner.rs#L588)) | Shared runtime control affects the active setup/body future and final annotations; skip uses Result propagation, timeouts include elapsed time, cleanup retains independent budgets. No full TestInfo object parity. |
+| `TestInfo.slow` | method | Partial | `TestInfo.slow` ([source](crates/ferrite-e2e/src/runner.rs#L607)) | Shared runtime control affects the active setup/body future and final annotations; skip uses Result propagation, timeouts include elapsed time, cleanup retains independent budgets. No full TestInfo object parity. |
 | `TestInfo.snapshotPath` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestInfo.snapshotSuffix` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestInfo.status` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `TestInfo.timeout` | property | Partial | `TestInfo.timeout` ([source](crates/ferrite-e2e/src/runner.rs#L356)) | Similar per-execution metadata; project is only an optional name and other metadata/mutation facilities differ. |
-| `TestInfo.title` | property | Partial | `TestInfo.title` ([source](crates/ferrite-e2e/src/runner.rs#L342)) | Similar per-execution metadata; project is only an optional name and other metadata/mutation facilities differ. |
+| `TestInfo.timeout` | property | Partial | `TestInfo.timeout` ([source](crates/ferrite-e2e/src/runner.rs#L573)) | Similar per-execution metadata; project is only an optional name and other metadata/mutation facilities differ. |
+| `TestInfo.title` | property | Partial | `TestInfo.title` ([source](crates/ferrite-e2e/src/runner.rs#L559)) | Similar per-execution metadata; project is only an optional name and other metadata/mutation facilities differ. |
 | `TestInfo.titlePath` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `TestInfo.workerIndex` | property | Partial | `TestInfo.worker_index` ([source](crates/ferrite-e2e/src/runner.rs#L352)) | Similar per-execution metadata; project is only an optional name and other metadata/mutation facilities differ. |
+| `TestInfo.workerIndex` | property | Partial | `TestInfo.worker_index` ([source](crates/ferrite-e2e/src/runner.rs#L569)) | Similar per-execution metadata; project is only an optional name and other metadata/mutation facilities differ. |
 
 ## TestInfoError
 
@@ -1289,7 +1289,7 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 537; 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
 | `TestInfoError.cause` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `TestInfoError.message` | property | Partial | `TestResult.error` ([source](crates/ferrite-e2e/src/report.rs#L44)) | String-formatted Rust error; no structured cause/stack/error-context object. |
+| `TestInfoError.message` | property | Partial | `TestResult.error` ([source](crates/ferrite-e2e/src/report.rs#L131)) | String-formatted Rust error; no structured cause/stack/error-context object. |
 | `TestInfoError.stack` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestInfoError.errorContext` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestInfoError.value` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
@@ -1302,14 +1302,14 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 537; 
 |---|---|---|---|---|
 | `TestOptions.acceptDownloads` | property | Partial | `ContextOptions.accept_downloads` ([source](crates/ferrite-e2e/src/context.rs#L206)) | Available through runner defaults and per-project context options; no suite-scoped test.use; Firefox restrictions and narrower options apply. |
 | `TestOptions.baseURL` | property | Partial | `E2eConfig.base_url` ([source](crates/ferrite-config/src/lib.rs#L414)) | Runner/launch config field; no automatic named-fixture/project options equivalence. |
-| `TestOptions.browserName` | property | Partial | `Project.browser` ([source](crates/ferrite-e2e/src/runner.rs#L806)) | Projects select Chromium/Firefox independently; no WebKit backend. |
+| `TestOptions.browserName` | property | Partial | `Project.browser` ([source](crates/ferrite-e2e/src/runner.rs#L1135)) | Projects select Chromium/Firefox independently; no WebKit backend. |
 | `TestOptions.actionTimeout` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestOptions.bypassCSP` | property | Partial | `ContextOptions.bypass_csp` ([source](crates/ferrite-e2e/src/context.rs#L199)) | Available through runner defaults and per-project context options; no suite-scoped test.use; Firefox restrictions and narrower options apply. |
 | `TestOptions.channel` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestOptions.clientCertificates` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `TestOptions.colorScheme` | property | Partial | `Page.emulate_media` ([source](crates/ferrite-e2e/src/page.rs#L3533)) | Chromium page-level manual emulation; no context/test option binding. |
+| `TestOptions.colorScheme` | property | Partial | `Page.emulate_media` ([source](crates/ferrite-e2e/src/page.rs#L3541)) | Chromium page-level manual emulation; no context/test option binding. |
 | `TestOptions.connectOptions` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `TestOptions.contextOptions` | property | Partial | `Project.context_options` ([source](crates/ferrite-e2e/src/runner.rs#L819)) | Isolated context per attempt, runner defaults and per-project overrides; no full named-fixture test.use model. |
+| `TestOptions.contextOptions` | property | Partial | `Project.context_options` ([source](crates/ferrite-e2e/src/runner.rs#L1148)) | Isolated context per attempt, runner defaults and per-project overrides; no full named-fixture test.use model. |
 | `TestOptions.contrast` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestOptions.deviceScaleFactor` | property | Partial | `ContextOptions.device_scale_factor` ([source](crates/ferrite-e2e/src/context.rs#L171)) | Available through runner defaults and per-project context options; no suite-scoped test.use; Firefox restrictions and narrower options apply. |
 | `TestOptions.extraHTTPHeaders` | property | Partial | `ContextOptions.extra_http_headers` ([source](crates/ferrite-e2e/src/context.rs#L164)) | Available through runner defaults and per-project context options; no suite-scoped test.use; Firefox restrictions and narrower options apply. |
@@ -1321,13 +1321,13 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 537; 
 | `TestOptions.ignoreHTTPSErrors` | property | Partial | `ContextOptions.ignore_https_errors` ([source](crates/ferrite-e2e/src/context.rs#L41)) | Available through runner defaults and per-project context options; no suite-scoped test.use; Firefox restrictions and narrower options apply. |
 | `TestOptions.isMobile` | property | Partial | `ContextOptions.is_mobile` ([source](crates/ferrite-e2e/src/context.rs#L178)) | Available through runner defaults and per-project context options; no suite-scoped test.use; Firefox restrictions and narrower options apply. |
 | `TestOptions.javaScriptEnabled` | property | Partial | `ContextOptions.java_script_enabled` ([source](crates/ferrite-e2e/src/context.rs#L192)) | Available through runner defaults and per-project context options; no suite-scoped test.use; Firefox restrictions and narrower options apply. |
-| `TestOptions.launchOptions` | property | Partial | `Project.launch_options` ([source](crates/ferrite-e2e/src/runner.rs#L812)) | Dedicated project launch settings; persistent profiles supported, no managed channels. |
+| `TestOptions.launchOptions` | property | Partial | `Project.launch_options` ([source](crates/ferrite-e2e/src/runner.rs#L1141)) | Dedicated project launch settings; persistent profiles supported, no managed channels. |
 | `TestOptions.locale` | property | Partial | `ContextOptions.locale` ([source](crates/ferrite-e2e/src/context.rs#L122)) | Available through runner defaults and per-project context options; no suite-scoped test.use; Firefox restrictions and narrower options apply. |
 | `TestOptions.navigationTimeout` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestOptions.offline` | property | Partial | `ContextOptions.offline` ([source](crates/ferrite-e2e/src/context.rs#L150)) | Available through runner defaults and per-project context options; no suite-scoped test.use; Firefox restrictions and narrower options apply. |
 | `TestOptions.permissions` | property | Partial | `ContextOptions.permissions` ([source](crates/ferrite-e2e/src/context.rs#L143)) | Available through runner defaults and per-project context options; no suite-scoped test.use; Firefox restrictions and narrower options apply. |
 | `TestOptions.proxy` | property | Partial | `ContextOptions.proxy_server` ([source](crates/ferrite-e2e/src/context.rs#L39)) | Available through runner defaults and per-project context options; no suite-scoped test.use; Firefox restrictions and narrower options apply. |
-| `TestOptions.reducedMotion` | property | Partial | `Page.emulate_media` ([source](crates/ferrite-e2e/src/page.rs#L3533)) | Chromium page-level manual emulation; no context/test option binding. |
+| `TestOptions.reducedMotion` | property | Partial | `Page.emulate_media` ([source](crates/ferrite-e2e/src/page.rs#L3541)) | Chromium page-level manual emulation; no context/test option binding. |
 | `TestOptions.reuseContext` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestOptions.screenshot` | property | Partial | `E2eConfig.screenshot` ([source](crates/ferrite-config/src/lib.rs#L434)) | Runner/launch config field; no automatic named-fixture/project options equivalence. |
 | `TestOptions.storageState` | property | Partial | `ContextOptions.storage_state` ([source](crates/ferrite-e2e/src/context.rs#L220)) | Available through runner defaults and per-project context options; no suite-scoped test.use; Firefox restrictions and narrower options apply. |
@@ -1348,23 +1348,23 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 537; 
 | `TestProject.dependencies` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestProject.expect` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestProject.fullyParallel` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `TestProject.grep` | property | Partial | `Project.grep` ([source](crates/ferrite-e2e/src/runner.rs#L835)) | Project name/filter/retry/timeout/context/browser overrides; no dependency graph or suite-scoped test.use. |
+| `TestProject.grep` | property | Partial | `Project.grep` ([source](crates/ferrite-e2e/src/runner.rs#L1164)) | Project name/filter/retry/timeout/context/browser overrides; no dependency graph or suite-scoped test.use. |
 | `TestProject.grepInvert` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestProject.ignoreSnapshots` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestProject.metadata` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `TestProject.name` | property | Partial | `Project.name` ([source](crates/ferrite-e2e/src/runner.rs#L795)) | Project name/filter/retry/timeout/context/browser overrides; no dependency graph or suite-scoped test.use. |
+| `TestProject.name` | property | Partial | `Project.name` ([source](crates/ferrite-e2e/src/runner.rs#L1124)) | Project name/filter/retry/timeout/context/browser overrides; no dependency graph or suite-scoped test.use. |
 | `TestProject.snapshotDir` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestProject.snapshotPathTemplate` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestProject.outputDir` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestProject.repeatEach` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestProject.respectGitIgnore` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `TestProject.retries` | property | Partial | `Project.retries` ([source](crates/ferrite-e2e/src/runner.rs#L842)) | Project name/filter/retry/timeout/context/browser overrides; no dependency graph or suite-scoped test.use. |
+| `TestProject.retries` | property | Partial | `Project.retries` ([source](crates/ferrite-e2e/src/runner.rs#L1171)) | Project name/filter/retry/timeout/context/browser overrides; no dependency graph or suite-scoped test.use. |
 | `TestProject.teardown` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestProject.testDir` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestProject.testIgnore` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestProject.testMatch` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `TestProject.timeout` | property | Partial | `Project.timeout` ([source](crates/ferrite-e2e/src/runner.rs#L849)) | Project name/filter/retry/timeout/context/browser overrides; no dependency graph or suite-scoped test.use. |
-| `TestProject.use` | property | Partial | `Project.context_options` ([source](crates/ferrite-e2e/src/runner.rs#L819)) | Project-specific context settings; optional browser/launch overrides, suite/test context inheritance, no named fixture overrides or project dependencies. |
+| `TestProject.timeout` | property | Partial | `Project.timeout` ([source](crates/ferrite-e2e/src/runner.rs#L1178)) | Project name/filter/retry/timeout/context/browser overrides; no dependency graph or suite-scoped test.use. |
+| `TestProject.use` | property | Partial | `Project.context_options` ([source](crates/ferrite-e2e/src/runner.rs#L1148)) | Project-specific context settings; optional browser/launch overrides, suite/test context inheritance, no named fixture overrides or project dependencies. |
 | `TestProject.workers` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 
 ## TestResult
@@ -1373,14 +1373,14 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 537; 
 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
-| `TestResult.attachments` | property | Partial | `TestResult.attachments` ([source](crates/ferrite-e2e/src/report.rs#L65)) | Aggregate result fields; attempts aggregates retries, not one TestResult per attempt; errors are strings, no reporter callbacks. |
-| `TestResult.annotations` | property | Partial | `TestResult.annotations` ([source](crates/ferrite-e2e/src/report.rs#L62)) | Aggregate result fields; attempts aggregates retries, not one TestResult per attempt; errors are strings, no reporter callbacks. |
-| `TestResult.duration` | property | Partial | `TestResult.duration_ms` ([source](crates/ferrite-e2e/src/report.rs#L41)) | Aggregate result fields; attempts aggregates retries, not one TestResult per attempt; errors are strings, no reporter callbacks. |
-| `TestResult.error` | property | Partial | `TestResult.error` ([source](crates/ferrite-e2e/src/report.rs#L44)) | Aggregate result fields; attempts aggregates retries, not one TestResult per attempt; errors are strings, no reporter callbacks. |
+| `TestResult.attachments` | property | Partial | `TestResult.attachments` ([source](crates/ferrite-e2e/src/report.rs#L152)) | Aggregate result fields; attempts aggregates retries, not one TestResult per attempt; errors are strings. Live callbacks additionally receive per-attempt results; the final report aggregates retries. |
+| `TestResult.annotations` | property | Partial | `TestResult.annotations` ([source](crates/ferrite-e2e/src/report.rs#L149)) | Aggregate result fields; attempts aggregates retries, not one TestResult per attempt; errors are strings. Live callbacks additionally receive per-attempt results; the final report aggregates retries. |
+| `TestResult.duration` | property | Partial | `TestResult.duration_ms` ([source](crates/ferrite-e2e/src/report.rs#L128)) | Aggregate result fields; attempts aggregates retries, not one TestResult per attempt; errors are strings. Live callbacks additionally receive per-attempt results; the final report aggregates retries. |
+| `TestResult.error` | property | Partial | `TestResult.error` ([source](crates/ferrite-e2e/src/report.rs#L131)) | Aggregate result fields; attempts aggregates retries, not one TestResult per attempt; errors are strings. Live callbacks additionally receive per-attempt results; the final report aggregates retries. |
 | `TestResult.errors` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `TestResult.retry` | property | Partial | `TestResult.attempts` ([source](crates/ferrite-e2e/src/report.rs#L39)) | Aggregate result fields; attempts aggregates retries, not one TestResult per attempt; errors are strings, no reporter callbacks. |
+| `TestResult.retry` | property | Partial | `TestResult.attempts` ([source](crates/ferrite-e2e/src/report.rs#L126)) | Aggregate result fields; attempts aggregates retries, not one TestResult per attempt; errors are strings. Live callbacks additionally receive per-attempt results; the final report aggregates retries. |
 | `TestResult.startTime` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `TestResult.status` | property | Partial | `TestResult.status` ([source](crates/ferrite-e2e/src/report.rs#L37)) | Aggregate result fields; attempts aggregates retries, not one TestResult per attempt; errors are strings, no reporter callbacks. |
+| `TestResult.status` | property | Partial | `TestResult.status` ([source](crates/ferrite-e2e/src/report.rs#L124)) | Aggregate result fields; attempts aggregates retries, not one TestResult per attempt; errors are strings. Live callbacks additionally receive per-attempt results; the final report aggregates retries. |
 | `TestResult.stderr` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestResult.stdout` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestResult.steps` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
@@ -1393,11 +1393,11 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 537; 
 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
-| `TestRun.exclude` | method | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `TestRun.fail` | method | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `TestRun.fixme` | method | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `TestRun.skip` | method | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `TestRun.skipSharding` | method | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
+| `TestRun.exclude` | method | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `TestRun.fail` | method | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `TestRun.fixme` | method | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `TestRun.skip` | method | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `TestRun.skipSharding` | method | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
 
 ## TestStep
 
@@ -1405,19 +1405,19 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 537; 
 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
-| `TestStep.category` | property | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `TestStep.duration` | property | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `TestStep.location` | property | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `TestStep.error` | property | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `TestStep.parent` | property | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `TestStep.params` | property | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `TestStep.startTime` | property | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `TestStep.steps` | property | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `TestStep.annotations` | property | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `TestStep.attachments` | property | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `TestStep.title` | property | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `TestStep.subtitle` | property | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `TestStep.titlePath` | method | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
+| `TestStep.category` | property | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `TestStep.duration` | property | Partial | `StepInfo.duration_ms` ([source](crates/ferrite-e2e/src/report.rs#L23)) | Named Page.step live event metadata; no automatic action tree, parent hierarchy or structured error/source data. |
+| `TestStep.location` | property | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `TestStep.error` | property | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `TestStep.parent` | property | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `TestStep.params` | property | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `TestStep.startTime` | property | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `TestStep.steps` | property | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `TestStep.annotations` | property | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `TestStep.attachments` | property | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `TestStep.title` | property | Partial | `StepInfo.title` ([source](crates/ferrite-e2e/src/report.rs#L22)) | Named Page.step live event metadata; no automatic action tree, parent hierarchy or structured error/source data. |
+| `TestStep.subtitle` | property | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `TestStep.titlePath` | method | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
 
 ## TestStepInfo
 
@@ -1425,10 +1425,10 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 537; 
 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
-| `TestStepInfo.annotations` | property | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `TestStepInfo.attach` | method | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `TestStepInfo.skip` | method | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `TestStepInfo.titlePath` | property | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
+| `TestStepInfo.annotations` | property | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `TestStepInfo.attach` | method | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `TestStepInfo.skip` | method | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `TestStepInfo.titlePath` | property | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
 
 ## TimeoutError
 
@@ -1440,7 +1440,7 @@ No own JS-applicable member headings. The class/error type is not exposed as a F
 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
-| `Touchscreen.tap` | method | Partial | `Page.touchscreen_tap` ([source](crates/ferrite-e2e/src/page.rs#L2756)) | Coordinate tap available; no separate Touchscreen object. |
+| `Touchscreen.tap` | method | Partial | `Page.touchscreen_tap` ([source](crates/ferrite-e2e/src/page.rs#L2758)) | Coordinate tap available; no separate Touchscreen object. |
 
 ## Tracing
 
@@ -1450,12 +1450,12 @@ No own JS-applicable member headings. The class/error type is not exposed as a F
 |---|---|---|---|---|
 | `Tracing.start` | method | Partial | `BrowserContext.start_tracing` ([source](crates/ferrite-e2e/src/context.rs#L900)) | Custom JSON actions/logs/requests; optional screenshots at Page.step only, no DOM/ARIA/source snapshots. |
 | `Tracing.startChunk` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `Tracing.startHar` | method | Partial | `Page.start_request_capture` ([source](crates/ferrite-e2e/src/page.rs#L3772)) | Page capture + save_har_with; no Tracing.startHar API or full browser/API-request tracing. |
+| `Tracing.startHar` | method | Partial | `Page.start_request_capture` ([source](crates/ferrite-e2e/src/page.rs#L3780)) | Page capture + save_har_with; no Tracing.startHar API or full browser/API-request tracing. |
 | `Tracing.group` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Tracing.groupEnd` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Tracing.stop` | method | Partial | `BrowserContext.stop_tracing` ([source](crates/ferrite-e2e/src/context.rs#L913)) | Writes JSON, not a Trace Viewer-compatible zip archive. |
 | `Tracing.stopChunk` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `Tracing.stopHar` | method | Partial | `Page.save_har_with` ([source](crates/ferrite-e2e/src/page.rs#L3812)) | HAR exporter; no Tracing.stopHar interface, update/rewrite mode or full timing/body coverage. |
+| `Tracing.stopHar` | method | Partial | `Page.save_har_with` ([source](crates/ferrite-e2e/src/page.rs#L3820)) | HAR exporter; no Tracing.stopHar interface, update/rewrite mode or full timing/body coverage. |
 
 ## Video
 
@@ -1464,8 +1464,8 @@ No own JS-applicable member headings. The class/error type is not exposed as a F
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
 | `Video.delete` | method | Idiomatic | — | Caller deletes artifact through Rust filesystem operations; no Video object. |
-| `Video.path` | method | Partial | `TestResult.video` ([source](crates/ferrite-e2e/src/report.rs#L53)) | Runner records an optional artifact path, not Page.video()/Video object. |
-| `Video.saveAs` | method | Partial | `Page.stop_video` ([source](crates/ferrite-e2e/src/page.rs#L4543)) | Stop recording to a path; no independently awaitable Video handle. |
+| `Video.path` | method | Partial | `TestResult.video` ([source](crates/ferrite-e2e/src/report.rs#L140)) | Runner records an optional artifact path, not Page.video()/Video object. |
+| `Video.saveAs` | method | Partial | `Page.stop_video` ([source](crates/ferrite-e2e/src/page.rs#L4551)) | Stop recording to a path; no independently awaitable Video handle. |
 
 ## WebError
 
@@ -1483,9 +1483,9 @@ No own JS-applicable member headings. The class/error type is not exposed as a F
 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
-| `WebSocket.close` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1725)) | PageEvent::WebSocket direction Closed; Chromium-only observation without a WebSocket object. |
-| `WebSocket.frameReceived` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1725)) | PageEvent::WebSocket direction Received; Chromium-only observation without a WebSocket object. |
-| `WebSocket.frameSent` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1725)) | PageEvent::WebSocket direction Sent; Chromium-only observation without a WebSocket object. |
+| `WebSocket.close` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1727)) | PageEvent::WebSocket direction Closed; Chromium-only observation without a WebSocket object. |
+| `WebSocket.frameReceived` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1727)) | PageEvent::WebSocket direction Received; Chromium-only observation without a WebSocket object. |
+| `WebSocket.frameSent` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1727)) | PageEvent::WebSocket direction Sent; Chromium-only observation without a WebSocket object. |
 | `WebSocket.socketError` | event | Missing | — | No matching public event variant/emitter; Page.subscribe exposes only the documented PageEvent variants. |
 | `WebSocket.isClosed` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `WebSocket.url` | method | Partial | `WebSocketEvent.url` ([source](crates/ferrite-e2e/src/page.rs#L260)) | Captured socket URL, Chromium only. |
@@ -1512,10 +1512,10 @@ No own JS-applicable member headings. The class/error type is not exposed as a F
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
 | `WebStorage.items` | method | Missing | — | No dedicated storage enumeration API; general evaluate can be used as a workaround. |
-| `WebStorage.getItem` | method | Partial | `Page.local_storage_get` ([source](crates/ferrite-e2e/src/page.rs#L2815)) | Page helper methods for local and session storage; no WebStorage object. |
-| `WebStorage.setItem` | method | Partial | `Page.local_storage_set` ([source](crates/ferrite-e2e/src/page.rs#L2822)) | Page helper methods for local and session storage; no WebStorage object. |
-| `WebStorage.removeItem` | method | Partial | `Page.local_storage_remove` ([source](crates/ferrite-e2e/src/page.rs#L2829)) | Page helper methods for local and session storage; no WebStorage object. |
-| `WebStorage.clear` | method | Partial | `Page.local_storage_clear` ([source](crates/ferrite-e2e/src/page.rs#L2842)) | Page helper methods for local and session storage; no WebStorage object. |
+| `WebStorage.getItem` | method | Partial | `Page.local_storage_get` ([source](crates/ferrite-e2e/src/page.rs#L2823)) | Page helper methods for local and session storage; no WebStorage object. |
+| `WebStorage.setItem` | method | Partial | `Page.local_storage_set` ([source](crates/ferrite-e2e/src/page.rs#L2830)) | Page helper methods for local and session storage; no WebStorage object. |
+| `WebStorage.removeItem` | method | Partial | `Page.local_storage_remove` ([source](crates/ferrite-e2e/src/page.rs#L2837)) | Page helper methods for local and session storage; no WebStorage object. |
+| `WebStorage.clear` | method | Partial | `Page.local_storage_clear` ([source](crates/ferrite-e2e/src/page.rs#L2850)) | Page helper methods for local and session storage; no WebStorage object. |
 
 ## Worker
 
@@ -1536,7 +1536,7 @@ No own JS-applicable member headings. The class/error type is not exposed as a F
 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
-| `WorkerInfo.config` | property | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `WorkerInfo.parallelIndex` | property | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `WorkerInfo.project` | property | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
-| `WorkerInfo.workerIndex` | property | Missing | — | No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers. |
+| `WorkerInfo.config` | property | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `WorkerInfo.parallelIndex` | property | Missing | — | No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls. |
+| `WorkerInfo.project` | property | Partial | `WorkerInfo.project` ([source](crates/ferrite-e2e/src/runner.rs#L120)) | Optional project name only, not a resolved FullProject object. |
+| `WorkerInfo.workerIndex` | property | Partial | `WorkerInfo.worker_index` ([source](crates/ferrite-e2e/src/runner.rs#L119)) | Logical Tokio worker index, not a process identity. |

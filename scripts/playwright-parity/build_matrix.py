@@ -37,10 +37,11 @@ for file in files:
  obj=''
  for n,line in enumerate(file.read_text().splitlines(),1):
   im=re.match(r'impl(?:<[^>]*>)?\s+(\w+)',line)
-  st=re.match(r'pub (?:struct|enum) (\w+)',line)
+  st=re.match(r'pub (?:struct|enum|trait) (\w+)',line)
   if im:obj=im[1]
   if st:obj=st[1];refs[obj]=(file.relative_to(ROOT).as_posix(),n)
   fun=re.match(r'    pub (?:async )?fn (\w+)',line)
+  if obj=='Reporter':fun=fun or re.match(r'    fn (\w+)',line)
   field=re.match(r'    pub (\w+):',line)
   free=re.match(r'pub (?:async )?fn (\w+)',line)
   if fun or field:refs[obj+'.'+(fun or field)[1]]=(file.relative_to(ROOT).as_posix(),n)
@@ -193,11 +194,11 @@ for m,n in {'close':'Closed','console':'Console','dialog':'Dialog','download':'D
 for m,n in {'close':'Closed','frameReceived':'Received','frameSent':'Sent'}.items():put('WebSocket',m,'Page.subscribe','PageEvent::WebSocket direction '+n+'; Chromium-only observation without a WebSocket object.',kind='event')
 put('WebSocket','url','WebSocketEvent.url','Captured socket URL, Chromium only.')
 # Runner and configuration.
-for m,t in {'afterAll':'after_all','afterEach':'after_each','beforeAll':'before_all','beforeEach':'before_each'}.items():put('Test',m,'Suite.'+t,'Nested suite hooks; beforeAll/afterAll once per worker/project, beforeEach/afterEach per attempt. Tokio worker state rather than process restarts; no callback fixture injection.')
+for m,t in {'afterAll':'after_all','afterEach':'after_each','beforeAll':'before_all','beforeEach':'before_each'}.items():put('Test',m,'Suite.'+t,'Nested suite hooks; beforeAll/afterAll once per worker/project, beforeEach/afterEach per attempt. Tokio worker state rather than process restarts; explicit typed ContextHook/WorkerHook requests with scope validation; no callback parameter inference.')
 put('Test','(call)','test','Rust test closure; dynamic details/locks/options differ.')
 put('Test','describe','Suite.tests','Nested identity, scoped hooks, inherited timeout/retry/context/tags; no serial/fully-parallel suite scheduling configuration.')
 put('Test','expect','Locator.expect','Rust builders, expect_poll, expect_to_pass and SoftAsserts; no generic matcher registry/configure API.')
-put('Test','extend','Runner.fixture_definition','Typed dependency graph, explicit lazy requests, automatic fixtures, test/worker scope and reverse dependency teardown. No named overrides, callback parameter inference or built-in page fixture injection.')
+put('Test','extend','Runner.fixture_definition','Typed dependency graph, explicit lazy requests, automatic fixtures, test/worker scope and reverse dependency teardown. No named overrides or callback parameter inference. Built-in page/context/request/TestInfo dependencies and browser/WorkerInfo worker dependencies are available.')
 for m,t in {'fail':'fail','fixme':'fixme','only':'only','skip':'skip','slow':'slow','setTimeout':'timeout'}.items():put('Test',m,'Test.'+t,'Static test builder setting; no runtime conditional/context metadata overloads.')
 put('Test','info','TestContext.info','Provided through test_with_context; fewer live metadata fields and mutators.')
 put('Test','step','Page.step','Named closure logged on Page; no structured step tree, boxing, timeout, subtitle/params or TestStepInfo.')
@@ -206,7 +207,7 @@ for m in ['browser','browserName','context','page','request']:
  target={'browser':'Browser','browserName':'Browser.kind','context':'BrowserContext','page':'test','request':'ApiClient'}[m]
  put('Fixtures',m,target,'Manual Browser/Context/client setup or injected Page; runner injects a fresh context/page for every attempt.')
 for m,t in {'attachments':'attachments','attach':'attach','file':'file','tags':'tags','line':'line','outputDir':'output_dir','project':'project','repeatEachIndex':'repeat_each_index','retry':'retry','timeout':'timeout','title':'title','workerIndex':'worker_index'}.items():put('TestInfo',m,'TestInfo.'+t,'Similar per-execution metadata; project is only an optional name and other metadata/mutation facilities differ.')
-for m,t in {'attachments':'attachments','annotations':'annotations','duration':'duration_ms','error':'error','status':'status','retry':'attempts'}.items():put('TestResult',m,'TestResult.'+t,'Aggregate result fields; attempts aggregates retries, not one TestResult per attempt; errors are strings, no reporter callbacks.')
+for m,t in {'attachments':'attachments','annotations':'annotations','duration':'duration_ms','error':'error','status':'status','retry':'attempts'}.items():put('TestResult',m,'TestResult.'+t,'Aggregate result fields; attempts aggregates retries, not one TestResult per attempt; errors are strings. Live callbacks additionally receive per-attempt results; the final report aggregates retries.')
 for m,t in {'annotations':'annotations','location':'file','repeatEachIndex':'repeat_each_index','retries':'retries','tags':'tags','timeout':'timeout','title':'name'}.items():
  if m in ['repeatEachIndex']:put('TestCase',m,'TestResult.'+t,'Result metadata only; no TestCase/Suite reporter tree.')
  else:put('TestCase',m,'Test.'+t,'Test definition field only; no TestCase/Suite reporter tree.')
@@ -285,12 +286,27 @@ for c in ['Page', 'BrowserContext']:
 for m,t in {'describe.only':'only','describe.skip':'skip','describe.fixme':'fixme'}.items():
  put('Test',m,'Suite.'+t,'Applies focus/skip/fixme to descendants; Rust builders, no JavaScript describe callbacks.')
 put('Test','describe.configure','Suite.timeout','Suite timeout/retry/context settings inherited by descendants; no serial/fully-parallel execution mode configuration.')
+# Context-aware fixtures, runtime controls and live reporter callbacks.
+for m,t in {'fail':'fail','skip':'skip','slow':'slow','setTimeout':'set_timeout','annotations':'annotations'}.items():
+ put('TestInfo',m,'TestInfo.'+t,'Shared runtime control affects the active setup/body future and final annotations; skip uses Result propagation, timeouts include elapsed time, cleanup retains independent budgets. No full TestInfo object parity.')
+for m,t in {'fail':'fail','skip':'skip','slow':'slow','setTimeout':'set_timeout'}.items():
+ put('Test',m,'TestInfo.'+t,'Static Test builders plus runtime TestInfo controls; use Rust conditionals and skip(reason)? for immediate closure exit. No JavaScript overload inference.')
+for m,t in {'beforeEach':'before_each_with_context','afterEach':'after_each_with_context','beforeAll':'before_all_with_context','afterAll':'after_all_with_context'}.items():
+ put('Test',m,'Suite.'+t,'ContextHook explicitly declares lazy fixture roots; WorkerHook permits only worker roots. Nested lifecycle ordering; no process workers or callback parameter inference.')
+put('Test','extend','Runner.fixture_definition','Typed lazy dependencies including built-in page/context/request/TestInfo and browser/WorkerInfo, test/worker scopes and reverse teardown. No named overrides or callback parameter inference.')
+for m,t in {'page':'page','context':'context','request':'request'}.items():
+ put('Fixtures',m,'TestContext.'+t,'Fresh per-attempt resource, usable as a typed fixture dependency. request is isolated from browser cookies; context.request() shares cookies.')
+for m,t in {'onBegin':'on_begin','onEnd':'on_end','onError':'on_error','onTestBegin':'on_test_begin','onTestEnd':'on_test_end','onStepBegin':'on_step_begin','onStepEnd':'on_step_end'}.items():
+ put('Reporter',m,'Reporter.'+t,'Live synchronous thread-safe callbacks; attempt identity includes retry/project/repetition/worker, errors and interrupted user steps reported. No Suite/TestCase graph, asynchronous end/status override or worker stdout capture.')
+for m,t in {'title':'title','duration':'duration_ms'}.items():put('TestStep',m,'StepInfo.'+t,'Named Page.step live event metadata; no automatic action tree, parent hierarchy or structured error/source data.')
+put('WorkerInfo','workerIndex','WorkerInfo.worker_index','Logical Tokio worker index, not a process identity.')
+put('WorkerInfo','project','WorkerInfo.project','Optional project name only, not a resolved FullProject object.')
 # Fill every remaining upstream member explicitly as absent, with class-specific explanations.
 def default_note(c,e):
  if c.startswith('Android') or c in ['Electron','ElectronApplication']:return 'Experimental upstream API; Ferrite has no Android/ADB/WebView or Electron backend.'
  if c=='ElementHandle':return 'No ElementHandle abstraction; locator replacements cover many DOM actions but do not reproduce handle identity/lifetime semantics.'
  if c=='FrameLocator':return 'Same-origin lazy FrameLocator exists; cross-origin selector-free search and OOPIF traversal remain deferred.'
- if c in ['Reporter','Suite','TestCase','TestRun','TestStep','TestStepInfo','WorkerInfo']:return 'No corresponding live reporter/suite/step/worker API; Ferrite exposes aggregate TestReport/TestResult and fixed report serializers.'
+ if c in ['Reporter','Suite','TestCase','TestRun','TestStep','TestStepInfo','WorkerInfo']:return 'No dedicated counterpart for this member. Ferrite has live Reporter callbacks with AttemptInfo/StepInfo and aggregate TestReport, but no complete upstream object graph or all plugin controls.'
  if c in ['Coverage','Credentials','Debugger','BrowserServer','Worker','WebSocketRoute','FileChooser','Logger']:return 'No public '+c+' abstraction or matching feature API; raw protocol calls are not counted as an equivalent.'
  if e['kind']=='event':return 'No matching public event variant/emitter; Page.subscribe exposes only the documented PageEvent variants.'
  return 'No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity.'

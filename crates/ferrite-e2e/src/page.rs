@@ -1378,6 +1378,7 @@ impl Download {
 /// An automated page (one browser tab).
 #[derive(Clone)]
 pub struct Page {
+    pub(crate) reporter: Option<(crate::report::ReporterHub, crate::report::AttemptInfo)>,
     expect_timeout: Arc<Mutex<Duration>>,
     action_timeout: Arc<Mutex<Duration>>,
     navigation_timeout: Arc<Mutex<Option<Duration>>>,
@@ -1504,6 +1505,7 @@ impl Page {
         driver.share_timeout(action_timeout.clone());
         let download_dir = sink.download_dir.clone();
         Self {
+            reporter: None,
             driver,
             coverage_state: Arc::new(tokio::sync::Mutex::new(Default::default())),
             sink,
@@ -2769,12 +2771,18 @@ impl Page {
         F: Future<Output = T>,
     {
         let started = std::time::Instant::now();
+        let mut reporting = self.reporter.as_ref().map(|(hub, attempt)| {
+            crate::report::StepGuard::new(hub.clone(), attempt.clone(), name)
+        });
         let out = step.await;
         self.sink.record(
             "step",
             format!("{name} ({}ms)", started.elapsed().as_millis()),
         );
         self.trace_screenshot(name).await;
+        if let Some(guard) = &mut reporting {
+            guard.complete();
+        }
         out
     }
 

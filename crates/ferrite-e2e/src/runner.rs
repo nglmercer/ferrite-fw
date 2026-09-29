@@ -17,6 +17,201 @@ use crate::report::{Attachment, TestReport, TestResult, TestStatus};
 use crate::video::{VideoMode, VideoOptions};
 use crate::ContextOptions;
 
+#[derive(Clone)]
+struct RuntimeState {
+    started: tokio::time::Instant,
+    timeout: Duration,
+    slow: bool,
+    expected_fail: bool,
+    skipped: Option<String>,
+    annotations: Vec<(String, String)>,
+}
+
+#[derive(Clone)]
+struct RuntimeControl {
+    state: Arc<tokio::sync::watch::Sender<RuntimeState>>,
+}
+impl RuntimeControl {
+    fn new(
+        timeout: Duration,
+        slow: bool,
+        expected_fail: bool,
+        annotations: Vec<(String, String)>,
+    ) -> Self {
+        Self {
+            state: Arc::new(
+                tokio::sync::watch::channel(RuntimeState {
+                    started: tokio::time::Instant::now(),
+                    timeout,
+                    slow,
+                    expected_fail,
+                    skipped: None,
+                    annotations,
+                })
+                .0,
+            ),
+        }
+    }
+    fn snapshot(&self) -> RuntimeState {
+        self.state.borrow().clone()
+    }
+    fn restart(&self) {
+        self.state
+            .send_modify(|state| state.started = tokio::time::Instant::now());
+    }
+    async fn run<T>(&self, future: impl Future<Output = E2eResult<T>>) -> E2eResult<T> {
+        let mut changes = self.state.subscribe();
+        let future = future;
+        tokio::pin!(future);
+        loop {
+            let state = changes.borrow_and_update().clone();
+            if let Some(reason) = state.skipped {
+                return Err(E2eError::Skipped(reason));
+            }
+            let end = if state.timeout.is_zero() {
+                None
+            } else {
+                state.started.checked_add(state.timeout)
+            };
+            tokio::select! { biased;
+                _=changes.changed()=>{},
+                _=async { match end { Some(end)=>tokio::time::sleep_until(end).await, None=>std::future::pending().await } }=>
+                    return Err(E2eError::Timeout(state.timeout.as_millis().min(u128::from(u64::MAX)) as u64,"test setup/body".into())),
+                result=&mut future=>return result,
+            }
+        }
+    }
+}
+
+/// A hook with declared fixture requirements and access to attempt resources.
+#[derive(Clone)]
+pub struct ContextHook {
+    fixtures: Vec<TypeId>,
+    func: TestContextFn,
+}
+impl ContextHook {
+    pub fn new<F, Fut>(hook: F) -> Self
+    where
+        F: Fn(TestContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = E2eResult<()>> + Send + 'static,
+    {
+        Self {
+            fixtures: Vec::new(),
+            func: Arc::new(move |ctx| Box::pin(hook(ctx))),
+        }
+    }
+    /// Request a lazy fixture before this hook executes.
+    pub fn fixture<T: Send + Sync + 'static>(mut self) -> Self {
+        self.fixtures.push(TypeId::of::<T>());
+        self
+    }
+}
+
+#[derive(Clone)]
+enum EachHook {
+    Page(HookFn),
+    Context(ContextHook),
+}
+
+/// Metadata available before any test resources exist on a worker.
+#[derive(Debug, Clone)]
+pub struct WorkerInfo {
+    pub worker_index: usize,
+    pub project: Option<String>,
+}
+
+/// Suite-wide hooks can use the browser and worker fixtures, but no test page.
+#[derive(Clone)]
+pub struct WorkerContext {
+    pub browser: Arc<Browser>,
+    pub info: WorkerInfo,
+    fixtures: FixtureMap,
+}
+impl WorkerContext {
+    pub fn require<T: Send + Sync + 'static>(&self) -> E2eResult<Arc<T>> {
+        self.fixtures.require()
+    }
+    pub fn get<T: Send + Sync + 'static>(&self) -> Option<Arc<T>> {
+        self.fixtures.get()
+    }
+}
+
+/// A suite hook with validated worker-scoped fixture requirements.
+#[derive(Clone)]
+pub struct WorkerHook {
+    fixtures: Vec<TypeId>,
+    func: Arc<dyn Fn(WorkerContext) -> BoxTestFuture + Send + Sync>,
+}
+impl WorkerHook {
+    pub fn new<F, Fut>(hook: F) -> Self
+    where
+        F: Fn(WorkerContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = E2eResult<()>> + Send + 'static,
+    {
+        Self {
+            fixtures: Vec::new(),
+            func: Arc::new(move |ctx| Box::pin(hook(ctx))),
+        }
+    }
+    pub fn fixture<T: Send + Sync + 'static>(mut self) -> Self {
+        self.fixtures.push(TypeId::of::<T>());
+        self
+    }
+}
+
+#[derive(Clone)]
+enum SuiteHook {
+    Global(GlobalHook),
+    Worker(WorkerHook),
+}
+impl SuiteHook {
+    fn fixtures(&self) -> &[TypeId] {
+        match self {
+            Self::Global(_) => &[],
+            Self::Worker(hook) => &hook.fixtures,
+        }
+    }
+    async fn run(
+        &self,
+        runner: &Runner,
+        state: &mut FixtureState,
+        info: &WorkerInfo,
+    ) -> E2eResult<()> {
+        match self {
+            Self::Global(hook) => hook().await,
+            Self::Worker(hook) => {
+                let fixtures = setup_fixtures(
+                    &runner.fixtures,
+                    &hook.fixtures,
+                    state,
+                    &mut FixtureState::default(),
+                )
+                .await?;
+                (hook.func)(WorkerContext {
+                    browser: fixtures.require()?,
+                    info: info.clone(),
+                    fixtures,
+                })
+                .await
+            }
+        }
+    }
+}
+impl EachHook {
+    fn fixtures(&self) -> &[TypeId] {
+        match self {
+            Self::Page(_) => &[],
+            Self::Context(hook) => &hook.fixtures,
+        }
+    }
+    async fn run(&self, context: TestContext) -> E2eResult<()> {
+        match self {
+            Self::Page(hook) => hook(context.page).await,
+            Self::Context(hook) => (hook.func)(context).await,
+        }
+    }
+}
+
 /// A boxed test future.
 pub type BoxTestFuture = Pin<Box<dyn Future<Output = E2eResult<()>> + Send + 'static>>;
 
@@ -211,10 +406,10 @@ pub fn describe(name: &str, tests: Vec<Test>) -> Vec<Test> {
 pub struct Suite {
     context_options: Option<ContextOptions>,
     name: String,
-    before_each: Vec<HookFn>,
-    after_each: Vec<HookFn>,
-    before_all: Vec<GlobalHook>,
-    after_all: Vec<GlobalHook>,
+    before_each: Vec<EachHook>,
+    after_each: Vec<EachHook>,
+    before_all: Vec<SuiteHook>,
+    after_all: Vec<SuiteHook>,
     timeout: Option<Duration>,
     retries: Option<u32>,
     tags: Vec<String>,
@@ -226,6 +421,16 @@ impl Suite {
     /// Context defaults inherited by descendants without an override.
     pub fn context_options(mut self, options: ContextOptions) -> Self {
         self.context_options = Some(options);
+        self
+    }
+    /// Run once per worker/project with worker fixtures (test-scoped roots are rejected).
+    pub fn before_all_with_context(mut self, hook: WorkerHook) -> Self {
+        self.before_all.push(SuiteHook::Worker(hook));
+        self
+    }
+    /// Run before worker fixture teardown, including after failures.
+    pub fn after_all_with_context(mut self, hook: WorkerHook) -> Self {
+        self.after_all.push(SuiteHook::Worker(hook));
         self
     }
     /// Start a named suite; call [`Suite::tests`] to finish it.
@@ -277,7 +482,17 @@ impl Suite {
         Fut: Future<Output = E2eResult<()>> + Send + 'static,
     {
         self.before_each
-            .push(Arc::new(move |page| Box::pin(hook(page))));
+            .push(EachHook::Page(Arc::new(move |page| Box::pin(hook(page)))));
+        self
+    }
+    /// Run a hook with metadata, built-in resources and declared fixtures.
+    pub fn before_each_with_context(mut self, hook: ContextHook) -> Self {
+        self.before_each.push(EachHook::Context(hook));
+        self
+    }
+    /// Resolve declared fixtures before cleanup; already-built values are reused.
+    pub fn after_each_with_context(mut self, hook: ContextHook) -> Self {
+        self.after_each.push(EachHook::Context(hook));
         self
     }
     /// Run after each descendant attempt, inner suites first.
@@ -287,7 +502,7 @@ impl Suite {
         Fut: Future<Output = E2eResult<()>> + Send + 'static,
     {
         self.after_each
-            .push(Arc::new(move |page| Box::pin(hook(page))));
+            .push(EachHook::Page(Arc::new(move |page| Box::pin(hook(page)))));
         self
     }
     /// Run once before this worker executes descendants in a project.
@@ -296,7 +511,8 @@ impl Suite {
         F: Fn() -> Fut + Send + Sync + 'static,
         Fut: Future<Output = E2eResult<()>> + Send + 'static,
     {
-        self.before_all.push(Arc::new(move || Box::pin(hook())));
+        self.before_all
+            .push(SuiteHook::Global(Arc::new(move || Box::pin(hook()))));
         self
     }
     /// Run once at worker cleanup, inner suites first, even after setup failure.
@@ -305,7 +521,8 @@ impl Suite {
         F: Fn() -> Fut + Send + Sync + 'static,
         Fut: Future<Output = E2eResult<()>> + Send + 'static,
     {
-        self.after_all.push(Arc::new(move || Box::pin(hook())));
+        self.after_all
+            .push(SuiteHook::Global(Arc::new(move || Box::pin(hook()))));
         self
     }
     /// Finish the suite, preserving nested scopes and descendant overrides.
@@ -352,7 +569,7 @@ pub struct TestInfo {
     pub worker_index: usize,
     /// `repeat_each` index (`0` = single run).
     pub repeat_each_index: u32,
-    /// Effective per-attempt timeout.
+    /// Initial per-attempt timeout; use `effective_timeout()` for runtime updates.
     pub timeout: Duration,
     /// Artifact directory.
     pub output_dir: String,
@@ -360,9 +577,61 @@ pub struct TestInfo {
     pub project: Option<String>,
     /// Attachments shared across attempts.
     attachments: Arc<Mutex<Vec<Attachment>>>,
+    runtime: RuntimeControl,
+    reporters: crate::report::ReporterHub,
+    attempt: crate::report::AttemptInfo,
 }
 
 impl TestInfo {
+    /// Stop this attempt. Use `info.skip(reason)?` to stop the current closure
+    /// immediately. Shared control also stops pending setup/body futures.
+    pub fn skip(&self, reason: impl Into<String>) -> E2eResult<()> {
+        let reason = reason.into();
+        self.runtime.state.send_modify(|state| {
+            if state.skipped.is_none() {
+                state.skipped = Some(reason.clone());
+                state.annotations.push(("skip".into(), reason.clone()));
+            }
+        });
+        Err(E2eError::Skipped(reason))
+    }
+    /// Mark this attempt as an expected failure. Unexpected passes fail the run.
+    pub fn fail(&self, reason: impl Into<String>) {
+        let reason = reason.into();
+        self.runtime.state.send_modify(|state| {
+            state.expected_fail = true;
+            state.annotations.push(("fail".into(), reason));
+        });
+    }
+    /// Triple the current budget once, measured from the attempt's start.
+    pub fn slow(&self, reason: impl Into<String>) {
+        let reason = reason.into();
+        self.runtime.state.send_modify(|state| {
+            if !state.slow {
+                state.timeout = state.timeout.saturating_mul(3);
+                state.slow = true;
+                state.annotations.push(("slow".into(), reason));
+            }
+        });
+    }
+    /// Change the total setup/body budget, including time already spent. Zero disables it.
+    pub fn set_timeout(&self, timeout: Duration) {
+        self.runtime
+            .state
+            .send_modify(|state| state.timeout = timeout);
+    }
+    pub fn effective_timeout(&self) -> Duration {
+        self.runtime.snapshot().timeout
+    }
+    pub fn annotate(&self, kind: impl Into<String>, description: impl Into<String>) {
+        let annotation = (kind.into(), description.into());
+        self.runtime
+            .state
+            .send_modify(|state| state.annotations.push(annotation));
+    }
+    pub fn annotations(&self) -> Vec<(String, String)> {
+        self.runtime.snapshot().annotations
+    }
     /// Build a path inside this attempt's output directory, creating parents.
     pub fn output_path(&self, name: impl AsRef<std::path::Path>) -> E2eResult<std::path::PathBuf> {
         let name = name.as_ref();
@@ -391,23 +660,26 @@ impl TestInfo {
     pub fn attach(&self, name: &str, body: &[u8], content_type: &str) -> E2eResult<String> {
         let dir = std::path::Path::new(&self.output_dir).join("attachments");
         std::fs::create_dir_all(&dir)?;
-        let file = format!(
-            "{}-{}{}",
-            slug(&self.title),
-            slug(name),
-            attach_extension(content_type)
-        );
-        let path = dir.join(file);
+        let mut attachments = self.attachments.lock().unwrap_or_else(|e| e.into_inner());
+        let stem = format!("{}-{}", slug(&self.title), slug(name));
+        let extension = attach_extension(content_type);
+        let mut path = dir.join(format!("{stem}{extension}"));
+        let mut suffix = 1;
+        while path.exists() {
+            path = dir.join(format!("{stem}-{suffix}{extension}"));
+            suffix += 1;
+        }
         std::fs::write(&path, body)?;
         let path = path.display().to_string();
-        self.attachments
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(Attachment {
-                name: name.to_string(),
-                path: path.clone(),
-                content_type: content_type.to_string(),
-            });
+        let attachment = Attachment {
+            name: name.to_string(),
+            path: path.clone(),
+            content_type: content_type.to_string(),
+        };
+        attachments.push(attachment.clone());
+        drop(attachments);
+        self.reporters
+            .emit(|r| r.on_attachment(&self.attempt, &attachment));
         Ok(path)
     }
 
@@ -465,6 +737,10 @@ impl FixtureMap {
 pub struct TestContext {
     /// Fresh page for this attempt.
     pub page: Page,
+    /// Fresh browser context for this attempt.
+    pub context: crate::BrowserContext,
+    /// Isolated HTTP client for this attempt, independent of browser cookies.
+    pub request: crate::ApiClient,
     /// Execution metadata (attach via [`TestInfo::attach`]).
     pub info: TestInfo,
     /// Fixture values for this attempt.
@@ -480,6 +756,9 @@ impl Deref for TestContext {
 }
 
 impl TestContext {
+    pub fn require<T: Send + Sync + 'static>(&self) -> E2eResult<Arc<T>> {
+        self.fixtures.require()
+    }
     /// The fixture value of type `T`, if it has been set up in this scope.
     #[must_use]
     pub fn get<T: Send + Sync + 'static>(&self) -> Option<Arc<T>> {
@@ -592,6 +871,7 @@ struct FixtureState {
 
 #[derive(Default)]
 struct SuiteState {
+    worker: Option<WorkerInfo>,
     started: Vec<(Arc<Suite>, Option<String>)>,
 }
 
@@ -599,9 +879,13 @@ impl SuiteState {
     async fn setup(
         &mut self,
         test: &Test,
+        runner: &Runner,
+        fixtures: &mut FixtureState,
+        info: WorkerInfo,
         deadline: crate::operation::Deadline,
         control: &crate::CancellationToken,
     ) -> E2eResult<()> {
+        self.worker = Some(info.clone());
         for suite in &test.suites {
             if let Some((_, error)) = self
                 .started
@@ -616,7 +900,7 @@ impl SuiteState {
             self.started.push((suite.clone(), None));
             for hook in &suite.before_all {
                 if let Err(error) = bounded(deadline, Some(control), "suite before_all", async {
-                    hook().await
+                    hook.run(runner, fixtures, &info).await
                 })
                 .await
                 {
@@ -628,13 +912,19 @@ impl SuiteState {
         }
         Ok(())
     }
-    async fn cleanup(&mut self, runner: &Runner, project: Option<&str>) -> Vec<TestResult> {
-        self.cleanup_finished(runner, project, &[]).await
+    async fn cleanup(
+        &mut self,
+        runner: &Runner,
+        fixtures: &mut FixtureState,
+        project: Option<&str>,
+    ) -> Vec<TestResult> {
+        self.cleanup_finished(runner, fixtures, project, &[]).await
     }
 
     async fn cleanup_finished(
         &mut self,
         runner: &Runner,
+        fixtures: &mut FixtureState,
         project: Option<&str>,
         remaining: &[Arc<Suite>],
     ) -> Vec<TestResult> {
@@ -654,11 +944,21 @@ impl SuiteState {
                     crate::operation::Deadline::new(runner.cleanup_timeout),
                     None,
                     "suite after_all",
-                    async { hook().await },
+                    async {
+                        hook.run(
+                            runner,
+                            fixtures,
+                            &self.worker.clone().unwrap_or(WorkerInfo {
+                                worker_index: 0,
+                                project: project.map(str::to_string),
+                            }),
+                        )
+                        .await
+                    },
                 )
                 .await
                 {
-                    results.push(failed_result(
+                    results.push(runner.report_failure(
                         &display_name(project, &format!("{} > <after_all>", suite.name)),
                         error.to_string(),
                     ));
@@ -676,7 +976,7 @@ async fn retire_worker_resources(
     project: Option<&str>,
 ) -> Vec<String> {
     let mut errors: Vec<_> = suites
-        .cleanup(runner, project)
+        .cleanup(runner, fixtures, project)
         .await
         .into_iter()
         .filter_map(|result| result.error)
@@ -686,6 +986,20 @@ async fn retire_worker_resources(
     }
     *fixtures = FixtureState::default();
     errors
+}
+
+fn builtin_scope(id: TypeId) -> Option<FixtureScope> {
+    if id == TypeId::of::<Browser>() || id == TypeId::of::<WorkerInfo>() {
+        return Some(FixtureScope::Worker);
+    }
+    [
+        TypeId::of::<Page>(),
+        TypeId::of::<crate::BrowserContext>(),
+        TypeId::of::<crate::ApiClient>(),
+        TypeId::of::<TestInfo>(),
+    ]
+    .contains(&id)
+    .then_some(FixtureScope::Test)
 }
 
 fn fixture_plan(defs: &[FixtureDef], roots: &[TypeId]) -> E2eResult<Vec<usize>> {
@@ -706,6 +1020,15 @@ fn fixture_plan(defs: &[FixtureDef], roots: &[TypeId]) -> E2eResult<Vec<usize>> 
         }
         marks[index] = 1;
         for dependency in &defs[index].dependencies {
+            if let Some(scope) = builtin_scope(*dependency) {
+                if defs[index].scope == FixtureScope::Worker && scope == FixtureScope::Test {
+                    return Err(E2eError::Config(format!(
+                        "worker fixture {} cannot depend on a test-scoped built-in",
+                        defs[index].name
+                    )));
+                }
+                continue;
+            }
             let dep = defs
                 .iter()
                 .position(|def| def.type_id == *dependency)
@@ -730,6 +1053,9 @@ fn fixture_plan(defs: &[FixtureDef], roots: &[TypeId]) -> E2eResult<Vec<usize>> 
     let mut marks = vec![0; defs.len()];
     let mut out = Vec::new();
     for root in roots {
+        if builtin_scope(*root).is_some() {
+            continue;
+        }
         let index = defs
             .iter()
             .position(|def| def.type_id == *root)
@@ -768,7 +1094,10 @@ async fn setup_fixtures(
         }
         let value = (def.setup)(dependencies)
             .await
-            .map_err(|error| E2eError::Config(format!("fixture {} setup: {error}", def.name)))?;
+            .map_err(|error| match error {
+                E2eError::Skipped(_) => error,
+                _ => E2eError::Config(format!("fixture {} setup: {error}", def.name)),
+            })?;
         let target = if def.scope == FixtureScope::Worker {
             &mut *worker
         } else {
@@ -1070,9 +1399,11 @@ pub type GlobalHook = Arc<dyn Fn() -> BoxTestFuture + Send + Sync>;
 
 #[derive(Clone)]
 pub struct Runner {
+    firefox_lifecycle: Arc<tokio::sync::Mutex<()>>,
     context_options: ContextOptions,
     expect_timeout: Duration,
     reporter: String,
+    reporters: crate::report::ReporterHub,
     resource_locks: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
     workers: usize,
     retries: u32,
@@ -1085,8 +1416,8 @@ pub struct Runner {
     grep: Option<String>,
     grep_invert: Option<String>,
     shard: Option<(usize, usize)>,
-    before_each: Vec<HookFn>,
-    after_each: Vec<HookFn>,
+    before_each: Vec<EachHook>,
+    after_each: Vec<EachHook>,
     before_all: Vec<GlobalHook>,
     after_all: Vec<GlobalHook>,
     global_setup: Vec<GlobalHook>,
@@ -1116,6 +1447,11 @@ impl Runner {
         Ok(Self::from_config(&crate::config_from_env()?))
     }
 
+    /// Add a live reporter alongside the configured file reporters.
+    pub fn custom_reporter<R: crate::report::Reporter>(mut self, reporter: R) -> Self {
+        self.reporters.0.push(Arc::new(reporter));
+        self
+    }
     /// Configure the fresh context created for each attempt.
     pub fn context_options(mut self, options: ContextOptions) -> Self {
         self.context_options = options;
@@ -1132,6 +1468,7 @@ impl Runner {
     #[must_use]
     pub fn from_config(config: &ferrite_config::E2eConfig) -> Self {
         Self {
+            firefox_lifecycle: Arc::new(tokio::sync::Mutex::new(())),
             context_options: ContextOptions {
                 viewport: config.viewport.as_ref().map(|v| crate::Viewport {
                     width: v.width,
@@ -1141,6 +1478,7 @@ impl Runner {
             },
             expect_timeout: Duration::from_millis(config.expect_timeout_ms),
             reporter: config.reporter.clone(),
+            reporters: crate::report::ReporterHub::default(),
             resource_locks: Arc::new(Mutex::new(HashMap::new())),
             workers: config.workers.max(1),
             retries: config.retries,
@@ -1215,6 +1553,20 @@ impl Runner {
         self.cancellation = token;
         self
     }
+    fn report_failure(&self, name: &str, error: String) -> TestResult {
+        self.reporters.emit(|r| r.on_error(None, &error));
+        failed_result(name, error)
+    }
+    async fn lifecycle_guard(
+        &self,
+        browser: &Browser,
+    ) -> E2eResult<Option<tokio::sync::OwnedMutexGuard<()>>> {
+        Ok(if browser.kind() == BrowserKind::Firefox {
+            Some(self.firefox_lifecycle.clone().lock_owned().await)
+        } else {
+            None
+        })
+    }
     async fn finish_run(&self, mut report: TestReport) -> TestReport {
         for (label, hooks) in [
             ("<after_all>", &self.after_all),
@@ -1229,12 +1581,15 @@ impl Runner {
                 )
                 .await
                 {
-                    report.results.push(failed_result(label, error.to_string()));
+                    report
+                        .results
+                        .push(self.report_failure(label, error.to_string()));
                 }
             }
         }
         report.results.sort_by(|a, b| a.name.cmp(&b.name));
         self.write_artifacts(&report, &self.reporter);
+        self.reporters.emit(|r| r.on_end(&report));
         report
     }
     /// Only run tests whose name or tags contain `filter`.
@@ -1272,10 +1627,20 @@ impl Runner {
         Fut: Future<Output = E2eResult<()>> + Send + 'static,
     {
         self.before_each
-            .push(Arc::new(move |page| Box::pin(hook(page))));
+            .push(EachHook::Page(Arc::new(move |page| Box::pin(hook(page)))));
         self
     }
 
+    /// Run a hook with metadata, built-in resources and declared fixtures.
+    pub fn before_each_with_context(mut self, hook: ContextHook) -> Self {
+        self.before_each.push(EachHook::Context(hook));
+        self
+    }
+    /// Resolve declared fixtures before cleanup; already-built values are reused.
+    pub fn after_each_with_context(mut self, hook: ContextHook) -> Self {
+        self.after_each.push(EachHook::Context(hook));
+        self
+    }
     /// Run `hook` after every attempt (failures fail the attempt).
     #[must_use]
     pub fn after_each<F, Fut>(mut self, hook: F) -> Self
@@ -1284,7 +1649,7 @@ impl Runner {
         Fut: Future<Output = E2eResult<()>> + Send + 'static,
     {
         self.after_each
-            .push(Arc::new(move |page| Box::pin(hook(page))));
+            .push(EachHook::Page(Arc::new(move |page| Box::pin(hook(page)))));
         self
     }
 
@@ -1497,6 +1862,7 @@ impl Runner {
     /// Tests run on a worker pool
     /// (`worker_index` in [`TestInfo`]); progress prints in completion order.
     pub async fn run(&self, browser: &Browser, tests: Vec<Test>) -> TestReport {
+        self.reporters.emit(|r| r.on_begin(&tests));
         let mut report = TestReport::default();
         let control = crate::CancellationToken::new();
         if let Some(reason) = self.cancellation.reason() {
@@ -1513,14 +1879,44 @@ impl Runner {
         }));
         let roots: Vec<_> = self.fixtures.iter().map(|def| def.type_id).collect();
         let mut seen = std::collections::HashSet::new();
-        let validation = if self.fixtures.iter().any(|def| !seen.insert(def.type_id)) {
+        let validation = if self
+            .fixtures
+            .iter()
+            .any(|def| builtin_scope(def.type_id).is_some() || !seen.insert(def.type_id))
+        {
             Err(E2eError::Config(
-                "duplicate fixture type registration".into(),
+                "duplicate or reserved built-in fixture type registration".into(),
             ))
         } else {
             fixture_plan(&self.fixtures, &roots).and_then(|_| {
                 for test in &tests {
                     fixture_plan(&self.fixtures, &test.required_fixtures)?;
+                    for hook in test
+                        .suites
+                        .iter()
+                        .flat_map(|suite| suite.before_all.iter().chain(suite.after_all.iter()))
+                    {
+                        let plan = fixture_plan(&self.fixtures, hook.fixtures())?;
+                        if hook
+                            .fixtures()
+                            .iter()
+                            .any(|id| builtin_scope(*id) == Some(FixtureScope::Test))
+                            || plan
+                                .iter()
+                                .any(|index| self.fixtures[*index].scope == FixtureScope::Test)
+                        {
+                            return Err(E2eError::Config(
+                                "suite-wide hooks may only request worker-scoped fixtures".into(),
+                            ));
+                        }
+                    }
+                    for hook in self.before_each.iter().chain(self.after_each.iter()).chain(
+                        test.suites.iter().flat_map(|suite| {
+                            suite.before_each.iter().chain(suite.after_each.iter())
+                        }),
+                    ) {
+                        fixture_plan(&self.fixtures, hook.fixtures())?;
+                    }
                 }
                 Ok(())
             })
@@ -1528,7 +1924,9 @@ impl Runner {
         if let Err(error) = validation {
             report
                 .results
-                .push(failed_result("<fixtures>", error.to_string()));
+                .push(self.report_failure("<fixtures>", error.to_string()));
+            self.write_artifacts(&report, &self.reporter);
+            self.reporters.emit(|r| r.on_end(&report));
             return report;
         }
         for setup in &self.global_setup {
@@ -1542,7 +1940,7 @@ impl Runner {
             {
                 report
                     .results
-                    .push(failed_result("<global setup>", error.to_string()));
+                    .push(self.report_failure("<global setup>", error.to_string()));
                 return self.finish_run(report).await;
             }
         }
@@ -1567,7 +1965,7 @@ impl Runner {
         let projects = match resolve_projects(&self.projects, &project_filter) {
             Ok(projects) => projects,
             Err(error) => {
-                report.results.push(failed_result("<project>", error));
+                report.results.push(self.report_failure("<project>", error));
                 return self.finish_run(report).await;
             }
         };
@@ -1585,7 +1983,7 @@ impl Runner {
         if (self.forbid_only || ci_truthy())
             && runnable.iter().any(|item| item.test.mode == TestMode::Only)
         {
-            report.results.push(failed_result(
+            report.results.push(self.report_failure(
                 "<forbid-only>",
                 "test.only is forbidden (forbid_only/CI)".to_string(),
             ));
@@ -1622,7 +2020,7 @@ impl Runner {
             {
                 report
                     .results
-                    .push(failed_result("<before_all>", error.to_string()));
+                    .push(self.report_failure("<before_all>", error.to_string()));
                 return self.finish_run(report).await;
             }
         }
@@ -1652,7 +2050,7 @@ impl Runner {
                     }
                     Err(error) => {
                         rejected_projects.push(project.name.clone());
-                        report.results.push(failed_result(
+                        report.results.push(self.report_failure(
                             &format!("{} > <browser launch>", project.name),
                             error.to_string(),
                         ));
@@ -1728,7 +2126,7 @@ impl Runner {
                                 )
                                 .await;
                                 if !errors.is_empty() {
-                                    results.push(failed_result(
+                                    results.push(runner.report_failure(
                                         &display_name(item.project.as_deref(), "<worker cleanup>"),
                                         errors.join("; "),
                                     ));
@@ -1745,7 +2143,12 @@ impl Runner {
                             let cleanup = suite_states
                                 .entry(item.project.clone())
                                 .or_default()
-                                .cleanup_finished(&runner, item.project.as_deref(), &remaining)
+                                .cleanup_finished(
+                                    &runner,
+                                    fixture_states.entry(item.project.clone()).or_default(),
+                                    item.project.as_deref(),
+                                    &remaining,
+                                )
                                 .await;
                             failures.fetch_add(cleanup.len(), std::sync::atomic::Ordering::SeqCst);
                             if !cleanup.is_empty() {
@@ -1758,7 +2161,7 @@ impl Runner {
                                 .await;
                                 if !errors.is_empty() {
                                     failures.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                                    results.push(failed_result(
+                                    results.push(runner.report_failure(
                                         &display_name(item.project.as_deref(), "<worker cleanup>"),
                                         errors.join("; "),
                                     ));
@@ -1770,11 +2173,19 @@ impl Runner {
                     }
                 }
                 for (project, state) in &mut suite_states {
-                    results.extend(state.cleanup(&runner, project.as_deref()).await);
+                    results.extend(
+                        state
+                            .cleanup(
+                                &runner,
+                                fixture_states.entry(project.clone()).or_default(),
+                                project.as_deref(),
+                            )
+                            .await,
+                    );
                 }
                 for (project, state) in &fixture_states {
                     if let Some(error) = teardown_fixtures(&runner, &state.built).await {
-                        results.push(failed_result(
+                        results.push(runner.report_failure(
                             &display_name(project.as_deref(), "<worker fixtures>"),
                             error,
                         ));
@@ -1804,12 +2215,12 @@ impl Runner {
                 }
                 Err(error) => report
                     .results
-                    .push(failed_result("<join>", error.to_string())),
+                    .push(self.report_failure("<join>", error.to_string())),
             }
         }
         if let Ok(mut pending) = queue.lock() {
             for item in pending.drain(..) {
-                let mut result = failed_result(
+                let mut result = self.report_failure(
                     &item.display_name(),
                     control
                         .reason()
@@ -1826,7 +2237,7 @@ impl Runner {
         if let Some(reason) = control.reason() {
             report
                 .results
-                .push(failed_result("<run interrupted>", reason));
+                .push(self.report_failure("<run interrupted>", reason));
         }
         drop(project_browsers);
         for browser in owned_browsers {
@@ -1841,7 +2252,7 @@ impl Runner {
                 {
                     report
                         .results
-                        .push(failed_result("<browser close>", error.to_string()));
+                        .push(self.report_failure("<browser close>", error.to_string()));
                 }
             }
         }
@@ -1914,6 +2325,57 @@ async fn bounded<T>(
     }
 }
 
+struct AttemptGuard {
+    hub: crate::report::ReporterHub,
+    info: TestInfo,
+    result: TestResult,
+    started: Instant,
+    attachments_start: usize,
+}
+impl AttemptGuard {
+    fn new(hub: crate::report::ReporterHub, info: TestInfo) -> Self {
+        hub.emit(|r| r.on_test_begin(&info.attempt));
+        let mut result = failed_result(
+            &info.attempt.name,
+            "attempt interrupted before completion".into(),
+        );
+        result.attempts = info.retry + 1;
+        result.project = info.project.clone();
+        result.repeat_each_index = info.repeat_each_index;
+        let attachments_start = info.attachments().len();
+        Self {
+            hub,
+            info,
+            result,
+            started: Instant::now(),
+            attachments_start,
+        }
+    }
+    fn outcome(&mut self, status: TestStatus, error: Option<String>) {
+        self.result.status = status;
+        self.result.error = error;
+    }
+}
+impl Drop for AttemptGuard {
+    fn drop(&mut self) {
+        self.result.duration_ms =
+            self.started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+        self.result.annotations = self.info.annotations();
+        self.result.attachments = self
+            .info
+            .attachments()
+            .into_iter()
+            .skip(self.attachments_start)
+            .collect();
+        if let Some(error) = &self.result.error {
+            self.hub
+                .emit(|r| r.on_error(Some(&self.info.attempt), error));
+        }
+        self.hub
+            .emit(|r| r.on_test_end(&self.info.attempt, &self.result));
+    }
+}
+
 async fn run_one(
     runner: &Runner,
     browser: &Browser,
@@ -1969,6 +2431,7 @@ async fn run_one(
     }
     let expected_fail = test.mode == TestMode::Fail;
     let mut expected_failure_observed = false;
+    let mut annotations = test.annotations.clone();
 
     for _ in 0..=item.retries {
         if control.is_cancelled() {
@@ -1977,6 +2440,47 @@ async fn run_one(
         }
         attempts += 1;
         expected_failure_observed = false;
+        let runtime =
+            RuntimeControl::new(timeout, test.slow, expected_fail, test.annotations.clone());
+        let info = TestInfo {
+            title: test.name.clone(),
+            file: test.file.clone(),
+            line: test.line,
+            tags: test.tags.clone(),
+            retry: attempts - 1,
+            worker_index,
+            repeat_each_index: item.repeat_each_index,
+            timeout,
+            output_dir: std::path::Path::new(&runner.output_dir)
+                .join(format!("{slug}-attempt{attempts}"))
+                .display()
+                .to_string(),
+            project: item.project.clone(),
+            attachments: Arc::clone(&attachments),
+            runtime: runtime.clone(),
+            reporters: runner.reporters.clone(),
+            attempt: crate::report::AttemptInfo {
+                name: name.clone(),
+                file: test.file.clone(),
+                line: test.line,
+                project: item.project.clone(),
+                worker_index,
+                repeat_each_index: item.repeat_each_index,
+                retry: attempts - 1,
+            },
+        };
+        let mut attempt_report = AttemptGuard::new(runner.reporters.clone(), info.clone());
+        worker_fixtures.values.inner.insert(
+            TypeId::of::<WorkerInfo>(),
+            Arc::new(WorkerInfo {
+                worker_index,
+                project: item.project.clone(),
+            }),
+        );
+        worker_fixtures
+            .values
+            .inner
+            .insert(TypeId::of::<Browser>(), Arc::new(browser.worker_handle()));
         let deadline = crate::operation::Deadline::new(timeout);
         let automatic_worker: Vec<_> = runner
             .fixtures
@@ -2009,10 +2513,25 @@ async fn run_one(
                     format!("; worker cleanup: {}", cleanup.join("; "))
                 }
             );
+            attempt_report.outcome(TestStatus::Failed, Some(last_error.clone()));
+            annotations = info.annotations();
             continue;
         }
         let deadline = crate::operation::Deadline::new(timeout);
-        if let Err(error) = suites.setup(test, deadline, control).await {
+        if let Err(error) = suites
+            .setup(
+                test,
+                runner,
+                worker_fixtures,
+                WorkerInfo {
+                    worker_index,
+                    project: item.project.clone(),
+                },
+                deadline,
+                control,
+            )
+            .await
+        {
             last_error = error.to_string();
             if attempts <= item.retries && !control.is_cancelled() {
                 let cleanup = retire_worker_resources(
@@ -2025,10 +2544,33 @@ async fn run_one(
                 if !cleanup.is_empty() {
                     last_error.push_str(&format!("; worker cleanup: {}", cleanup.join("; ")));
                 }
+                attempt_report.outcome(TestStatus::Failed, Some(last_error.clone()));
+                annotations = info.annotations();
                 continue;
             }
+            attempt_report.outcome(TestStatus::Failed, Some(last_error.clone()));
+            annotations = info.annotations();
             break;
         }
+        // Worker fixtures and beforeAll have independent setup budgets.
+        // Firefox can discard a new tab when another worker closes its window.
+        // Serialize lifecycle operations; bodies and hooks still run concurrently.
+        let lifecycle = match bounded(
+            crate::operation::Deadline::new(timeout),
+            Some(control),
+            "context scheduling",
+            runner.lifecycle_guard(browser),
+        )
+        .await
+        {
+            Ok(guard) => guard,
+            Err(error) => {
+                last_error = error.to_string();
+                attempt_report.outcome(TestStatus::Failed, Some(last_error.clone()));
+                break;
+            }
+        };
+        runtime.restart();
         let deadline = crate::operation::Deadline::new(timeout);
         let context = match bounded(
             deadline,
@@ -2045,6 +2587,8 @@ async fn run_one(
             Ok(context) => context,
             Err(error) => {
                 last_error = error.to_string();
+                attempt_report.outcome(TestStatus::Failed, Some(last_error.clone()));
+                annotations = info.annotations();
                 break;
             }
         };
@@ -2060,91 +2604,140 @@ async fn run_one(
                         context.close(),
                     )
                     .await;
+                    attempt_report.outcome(TestStatus::Failed, Some(last_error.clone()));
+                    annotations = info.annotations();
                     continue;
                 }
             };
         page.set_expect_timeout(runner.expect_timeout);
+        drop(lifecycle);
         page.snapshot_dir = Some(
             std::env::var("FERRITE_SNAPSHOT_DIR")
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|_| std::path::Path::new(&runner.output_dir).join("snapshots")),
         );
+        page.reporter = Some((runner.reporters.clone(), info.attempt.clone()));
+        let request = match crate::ApiClient::with_options(context.api_options()) {
+            Ok(request) => request,
+            Err(error) => {
+                last_error = error.to_string();
+                let _ = bounded(
+                    crate::operation::Deadline::new(runner.cleanup_timeout),
+                    None,
+                    "context close",
+                    context.close(),
+                )
+                .await;
+                attempt_report.outcome(TestStatus::Failed, Some(last_error.clone()));
+                annotations = info.annotations();
+                break;
+            }
+        };
         let mut attempt_fixtures = FixtureState::default();
+        attempt_fixtures
+            .values
+            .inner
+            .insert(TypeId::of::<Page>(), Arc::new(page.clone()));
+        attempt_fixtures.values.inner.insert(
+            TypeId::of::<crate::BrowserContext>(),
+            Arc::new(context.clone()),
+        );
+        attempt_fixtures
+            .values
+            .inner
+            .insert(TypeId::of::<crate::ApiClient>(), Arc::new(request.clone()));
+        attempt_fixtures
+            .values
+            .inner
+            .insert(TypeId::of::<TestInfo>(), Arc::new(info.clone()));
         let mut recording = false;
         let mut body_started = false;
-        let info = TestInfo {
-            title: test.name.clone(),
-            file: test.file.clone(),
-            line: test.line,
-            tags: test.tags.clone(),
-            retry: attempts - 1,
-            worker_index,
-            repeat_each_index: item.repeat_each_index,
-            timeout,
-            output_dir: std::path::Path::new(&runner.output_dir)
-                .join(format!("{slug}-attempt{attempts}"))
-                .display()
-                .to_string(),
-            project: item.project.clone(),
-            attachments: Arc::clone(&attachments),
-        };
+
         // One budget covers beforeEach, fixture setup, recording setup and body.
-        let outcome = bounded(deadline, Some(control), "test setup/body", async {
-            let roots: Vec<_> = runner
-                .fixtures
-                .iter()
-                .filter(|def| def.automatic)
-                .map(|def| def.type_id)
-                .collect();
-            setup_fixtures(
-                &runner.fixtures,
-                &roots,
-                worker_fixtures,
-                &mut attempt_fixtures,
-            )
-            .await?;
-            for hook in runner.before_each.iter().chain(
-                test.suites
+        let outcome = bounded(
+            crate::operation::Deadline::new(Duration::ZERO),
+            Some(control),
+            "test setup/body",
+            runtime.run(async {
+                let roots: Vec<_> = runner
+                    .fixtures
                     .iter()
-                    .flat_map(|suite| suite.before_each.iter()),
-            ) {
-                hook(page.clone())
-                    .await
-                    .map_err(|e| E2eError::Config(format!("before_each: {e}")))?;
-            }
-            let fixtures = setup_fixtures(
-                &runner.fixtures,
-                &test.required_fixtures,
-                worker_fixtures,
-                &mut attempt_fixtures,
-            )
-            .await?;
-            if runner.video.records() {
-                page.start_video(VideoOptions {
-                    dir: std::path::PathBuf::from(&runner.output_dir),
-                    fps: runner.video_fps,
-                    ..VideoOptions::default()
-                })
+                    .filter(|def| def.automatic)
+                    .map(|def| def.type_id)
+                    .collect();
+                setup_fixtures(
+                    &runner.fixtures,
+                    &roots,
+                    worker_fixtures,
+                    &mut attempt_fixtures,
+                )
                 .await?;
-                recording = true;
-            }
-            body_started = true;
-            match &test.ctx_func {
-                Some(func) => {
-                    func(TestContext {
+                for hook in runner.before_each.iter().chain(
+                    test.suites
+                        .iter()
+                        .flat_map(|suite| suite.before_each.iter()),
+                ) {
+                    let fixtures = setup_fixtures(
+                        &runner.fixtures,
+                        hook.fixtures(),
+                        worker_fixtures,
+                        &mut attempt_fixtures,
+                    )
+                    .await?;
+                    hook.run(TestContext {
                         page: page.clone(),
-                        info,
+                        context: context.clone(),
+                        request: request.clone(),
+                        info: info.clone(),
                         fixtures,
                     })
-                    .await
+                    .await?;
                 }
-                None => (test.func)(page.clone()).await,
-            }
-        })
+                let fixtures = setup_fixtures(
+                    &runner.fixtures,
+                    &test.required_fixtures,
+                    worker_fixtures,
+                    &mut attempt_fixtures,
+                )
+                .await?;
+                if runner.video.records() {
+                    page.start_video(VideoOptions {
+                        dir: std::path::PathBuf::from(&runner.output_dir),
+                        fps: runner.video_fps,
+                        ..VideoOptions::default()
+                    })
+                    .await?;
+                    recording = true;
+                }
+                body_started = true;
+                match &test.ctx_func {
+                    Some(func) => {
+                        func(TestContext {
+                            page: page.clone(),
+                            context: context.clone(),
+                            request: request.clone(),
+                            info: info.clone(),
+                            fixtures,
+                        })
+                        .await
+                    }
+                    None => (test.func)(page.clone()).await,
+                }
+            }),
+        )
         .await;
-        let mut failed = outcome.err().map(|e| e.to_string());
+        let state = runtime.snapshot();
+        let skipped = matches!(&outcome, Err(E2eError::Skipped(_)))
+            || (state.skipped.is_some() && outcome.is_ok());
+        let expected_fail = state.expected_fail;
+        let failure_can_be_expected = matches!(&outcome, Err(error) if !matches!(error, E2eError::Timeout(..) | E2eError::Cancelled(_) | E2eError::Skipped(_)));
+        let mut failed = if skipped {
+            None
+        } else {
+            outcome.err().map(|e| e.to_string())
+        };
         expected_failure_observed =
-            expected_fail && body_started && failed.is_some() && !control.is_cancelled();
+            expected_fail && body_started && failure_can_be_expected && !control.is_cancelled();
         for hook in test
             .suites
             .iter()
@@ -2156,7 +2749,23 @@ async fn run_one(
                 crate::operation::Deadline::new(runner.cleanup_timeout),
                 None,
                 "after_each",
-                async { hook(page.clone()).await },
+                async {
+                    let fixtures = setup_fixtures(
+                        &runner.fixtures,
+                        hook.fixtures(),
+                        worker_fixtures,
+                        &mut attempt_fixtures,
+                    )
+                    .await?;
+                    hook.run(TestContext {
+                        page: page.clone(),
+                        context: context.clone(),
+                        request: request.clone(),
+                        info: info.clone(),
+                        fixtures,
+                    })
+                    .await
+                },
             )
             .await
             {
@@ -2175,7 +2784,7 @@ async fn run_one(
                 None => note,
             });
         }
-        let unexpected_pass = failed.is_none() && expected_fail;
+        let unexpected_pass = failed.is_none() && expected_fail && !skipped;
         if unexpected_pass {
             failed = Some("expected to fail, but passed".to_string());
         }
@@ -2195,6 +2804,7 @@ async fn run_one(
                 {
                     Ok(done) => video_path = Some(done.display().to_string()),
                     Err(error) => {
+                        expected_failure_observed = false;
                         let note = format!("stop video: {error}");
                         failed = Some(match failed {
                             Some(prior) => format!("{prior} ({note})"),
@@ -2233,7 +2843,8 @@ async fn run_one(
             }
         }
         if runner.write_trace {
-            let path = std::path::Path::new(&runner.output_dir).join(format!("{slug}.json"));
+            let path = std::path::Path::new(&runner.output_dir)
+                .join(format!("{slug}-attempt{attempts}.json"));
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent).ok();
             }
@@ -2245,15 +2856,37 @@ async fn run_one(
                 "console": page.console_messages(),
                 "trace": page.trace(),
             });
-            if std::fs::write(
-                &path,
-                serde_json::to_string_pretty(&payload).unwrap_or_default(),
-            )
-            .is_ok()
-            {
+            let data = serde_json::to_string_pretty(&payload).unwrap_or_default();
+            if std::fs::write(&path, &data).is_ok() {
+                // Preserve the original latest-attempt filename for existing consumers.
+                let _ = std::fs::write(
+                    std::path::Path::new(&runner.output_dir).join(format!("{slug}.json")),
+                    &data,
+                );
                 trace_path = Some(path.display().to_string());
             }
         }
+        request.dispose();
+        let lifecycle = match bounded(
+            crate::operation::Deadline::new(runner.cleanup_timeout),
+            None,
+            "context cleanup scheduling",
+            runner.lifecycle_guard(browser),
+        )
+        .await
+        {
+            Ok(guard) => guard,
+            Err(error) => {
+                expected_failure_observed = false;
+                let note = format!("context cleanup scheduling: {error}");
+                failed = Some(
+                    failed
+                        .map(|prior| format!("{prior}; {note}"))
+                        .unwrap_or(note),
+                );
+                None
+            }
+        };
         for (label, result) in [
             (
                 "page close",
@@ -2286,6 +2919,7 @@ async fn run_one(
                 );
             }
         }
+        drop(lifecycle);
         // Retire logical worker resources after an unexpected failure, so
         // retries and subsequent tests cannot inherit failed fixture/suite state.
         if failed.is_some() && !expected_failure_observed {
@@ -2300,6 +2934,32 @@ async fn run_one(
                 ));
             }
         }
+        annotations = info.annotations();
+        attempt_report.result.screenshots = screenshots
+            .iter()
+            .filter(|path| path.contains(&format!("attempt{attempts}.")))
+            .cloned()
+            .collect();
+        attempt_report.result.trace = trace_path
+            .clone()
+            .filter(|path| path.ends_with(&format!("{slug}-attempt{attempts}.json")));
+        attempt_report.result.video = video_path
+            .clone()
+            .filter(|path| path.ends_with(&format!("{slug}-attempt{attempts}.webm")));
+        attempt_report.outcome(
+            if failed.is_none() {
+                if skipped {
+                    TestStatus::Skipped
+                } else {
+                    TestStatus::Passed
+                }
+            } else if expected_failure_observed {
+                TestStatus::FailedExpected
+            } else {
+                TestStatus::Failed
+            },
+            failed.clone(),
+        );
         // Unexpected passes fail immediately (no retry can redeem a pass).
         if unexpected_pass {
             return TestResult {
@@ -2313,7 +2973,7 @@ async fn run_one(
                 video: video_path,
                 project: item.project.clone(),
                 repeat_each_index: item.repeat_each_index,
-                annotations: test.annotations.clone(),
+                annotations: annotations.clone(),
                 attachments: attachments.lock().map(|a| a.clone()).unwrap_or_default(),
             };
         }
@@ -2321,7 +2981,11 @@ async fn run_one(
             None => {
                 return TestResult {
                     name: name.clone(),
-                    status: TestStatus::Passed,
+                    status: if skipped {
+                        TestStatus::Skipped
+                    } else {
+                        TestStatus::Passed
+                    },
                     attempts,
                     duration_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
                     error: None,
@@ -2330,11 +2994,16 @@ async fn run_one(
                     video: video_path,
                     project: item.project.clone(),
                     repeat_each_index: item.repeat_each_index,
-                    annotations: test.annotations.clone(),
+                    annotations: annotations.clone(),
                     attachments: attachments.lock().map(|a| a.clone()).unwrap_or_default(),
                 };
             }
-            Some(error) => last_error = error,
+            Some(error) => {
+                last_error = error;
+                if expected_failure_observed {
+                    break;
+                }
+            }
         }
     }
     TestResult {
@@ -2352,7 +3021,7 @@ async fn run_one(
         video: video_path,
         project: item.project.clone(),
         repeat_each_index: item.repeat_each_index,
-        annotations: test.annotations.clone(),
+        annotations: annotations.clone(),
         attachments: attachments.lock().map(|a| a.clone()).unwrap_or_default(),
     }
 }
@@ -2707,17 +3376,31 @@ mod tests {
             output_dir: dir.display().to_string(),
             project: None,
             attachments: Arc::new(Mutex::new(Vec::new())),
+            runtime: RuntimeControl::new(Duration::from_secs(1), false, false, Vec::new()),
+            reporters: crate::report::ReporterHub::default(),
+            attempt: crate::report::AttemptInfo {
+                name: "home renders!".into(),
+                file: "suite.rs".into(),
+                line: 42,
+                project: None,
+                worker_index: 0,
+                repeat_each_index: 0,
+                retry: 0,
+            },
         };
         let path = info.attach("console log", b"hello", "text/plain").unwrap();
         assert!(path.ends_with("home-renders-console-log.txt"), "{path}");
         assert!(std::path::Path::new(&path).is_file());
+        let repeated = info.attach("console log", b"second", "text/plain").unwrap();
+        assert_ne!(path, repeated);
+        assert_eq!(std::fs::read(&path).unwrap(), b"hello");
         let path = info.attach("data", b"{}", "application/json").unwrap();
         assert!(path.ends_with(".json"), "{path}");
         let path = info
             .attach("blob", b"x", "application/octet-stream")
             .unwrap();
         assert!(!path.ends_with(".txt"), "{path}");
-        assert_eq!(info.attachments().len(), 3);
+        assert_eq!(info.attachments().len(), 4);
         assert_eq!(info.attachments()[0].content_type, "text/plain");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2919,6 +3602,12 @@ mod suite_lifecycle_tests {
         assert!(state
             .setup(
                 &tests[0],
+                &Runner::default(),
+                &mut FixtureState::default(),
+                WorkerInfo {
+                    worker_index: 0,
+                    project: None
+                },
                 crate::operation::Deadline::new(Duration::from_millis(20)),
                 &token
             )
@@ -2928,6 +3617,7 @@ mod suite_lifecycle_tests {
         let results = state
             .cleanup(
                 &Runner::default().cleanup_timeout(Duration::from_millis(20)),
+                &mut FixtureState::default(),
                 None,
             )
             .await;
@@ -3042,5 +3732,104 @@ mod fixture_cancellation_tests {
         );
         assert_eq!(cleaned.load(Ordering::SeqCst), 1);
         assert!(worker.built.is_empty());
+    }
+    fn runtime_info(timeout: Duration) -> TestInfo {
+        TestInfo {
+            title: "runtime".into(),
+            file: "runtime.rs".into(),
+            line: 1,
+            tags: Vec::new(),
+            retry: 0,
+            worker_index: 0,
+            repeat_each_index: 0,
+            timeout,
+            output_dir: String::new(),
+            project: None,
+            attachments: Arc::default(),
+            runtime: RuntimeControl::new(timeout, false, false, Vec::new()),
+            reporters: crate::report::ReporterHub::default(),
+            attempt: crate::report::AttemptInfo {
+                name: "runtime".into(),
+                file: "runtime.rs".into(),
+                line: 1,
+                project: None,
+                worker_index: 0,
+                repeat_each_index: 0,
+                retry: 0,
+            },
+        }
+    }
+    #[tokio::test]
+    async fn runtime_timeout_updates_wake_active_waits_and_include_elapsed_time() {
+        let info = runtime_info(Duration::from_millis(60));
+        let change = info.clone();
+        info.runtime
+            .run(async move {
+                change.set_timeout(Duration::from_millis(400));
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let info = runtime_info(Duration::from_secs(10));
+        let change = info.clone();
+        let update = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            change.set_timeout(Duration::from_millis(20));
+        });
+        let started = Instant::now();
+        assert!(matches!(
+            info.runtime
+                .run(std::future::pending::<E2eResult<()>>())
+                .await,
+            Err(E2eError::Timeout(20, _))
+        ));
+        update.await.unwrap();
+        assert!(started.elapsed() < Duration::from_secs(1));
+        let info = runtime_info(Duration::from_millis(20));
+        let change = info.clone();
+        info.runtime
+            .run(async move {
+                change.set_timeout(Duration::ZERO);
+                tokio::time::sleep(Duration::from_millis(80)).await;
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+    #[tokio::test]
+    async fn runtime_slow_is_idempotent_and_skip_interrupts_pending_body() {
+        let info = runtime_info(Duration::from_millis(60));
+        let change = info.clone();
+        info.runtime
+            .run(async move {
+                change.slow("slow machine");
+                change.slow("again");
+                assert_eq!(change.effective_timeout(), Duration::from_millis(180));
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert_eq!(info.annotations().len(), 1);
+        let change = info.clone();
+        let update = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            let _ = change.skip("unsupported");
+        });
+        assert!(
+            matches!(info.runtime.run(std::future::pending::<E2eResult<()>>()).await, Err(E2eError::Skipped(reason)) if reason == "unsupported")
+        );
+        update.await.unwrap();
+    }
+    #[test]
+    fn worker_fixture_cannot_depend_on_test_builtins() {
+        let def = Fixture::<String>::new(|_| async { Ok(String::new()) })
+            .dependency::<Page>()
+            .scope(FixtureScope::Worker);
+        assert!(fixture_plan(&[def.def], &[TypeId::of::<String>()])
+            .unwrap_err()
+            .to_string()
+            .contains("test-scoped built-in"));
     }
 }

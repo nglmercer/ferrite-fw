@@ -90,6 +90,41 @@ winning. `beforeAll`/`afterAll` run once per participating worker/project;
 `afterAll` runs after the remaining descendants. Before/after-each order follows
 outer-to-inner/inner-to-outer nesting. Skipped and filtered suites do not run hooks.
 
+Fixtures can also depend on `Page`, `BrowserContext`, `ApiClient` and `TestInfo`.
+Worker fixtures can depend on `Browser` and `WorkerInfo`; test-scoped dependencies
+are rejected for worker fixtures and suite-wide hooks.
+
+```rust
+let tests = Suite::new("authenticated")
+    .before_each_with_context(ContextHook::new(|ctx| async move {
+        ctx.info.set_timeout(std::time::Duration::from_secs(60));
+        ctx.info.annotate("setup", "authentication");
+        ctx.page.goto("/login").await
+    }))
+    .tests(vec![test_with_context("account", |ctx| async move {
+        if !cfg!(target_os = "linux") {
+            ctx.info.skip("Linux-only fixture")?;
+        }
+        ctx.info.slow("large account");
+        ctx.page.step("open account", ctx.page.goto("/account")).await?;
+        Ok(())
+    })]);
+```
+
+Use `.fixture::<Profile>()` on `ContextHook` to request lazy fixtures before the
+hook. `Suite::before_all_with_context` and `after_all_with_context` take a
+`WorkerHook` with worker-only fixture requests. `ctx.context` is the fresh browser
+context, and `ctx.request` is an isolated HTTP client; `ctx.context.request()`
+shares browser cookies. Runtime `fail`, `skip`, `slow`, timeout and annotations
+are shared across metadata clones. Use `effective_timeout()` to read live changes.
+
+Implement `Reporter` and register it with `Runner::custom_reporter` to receive
+live run, attempt, step, attachment and error callbacks. Callbacks are synchronous
+and may run on different workers concurrently; queue slow uploads separately.
+Retries have distinct `AttemptInfo.retry` values. Cleanup completes before attempt
+end, and cancelled steps emit an interrupted end event. File reporters continue
+to serialize the final aggregate report.
+
 Network events now distinguish response headers, request completion and transport
 failure. `PageEvent::RequestFinished(NetworkRequest)` supplies request ID, method
 and URL; `RequestFailed` additionally supplies error text and a backend cancellation

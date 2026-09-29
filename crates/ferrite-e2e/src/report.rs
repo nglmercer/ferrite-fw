@@ -1,6 +1,93 @@
 //! Test results and reporters (`list`, `dot`, `json`, `junit`, `html`).
 
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+
+/// Identity of one attempt. Retries and repetitions have separate identities.
+#[derive(Debug, Clone)]
+pub struct AttemptInfo {
+    pub name: String,
+    pub file: String,
+    pub line: u32,
+    pub project: Option<String>,
+    pub worker_index: usize,
+    pub repeat_each_index: u32,
+    pub retry: u32,
+}
+
+/// One named user step. Interrupted steps finish when their future is dropped.
+#[derive(Debug, Clone)]
+pub struct StepInfo {
+    pub id: u64,
+    pub title: String,
+    pub duration_ms: u64,
+    pub interrupted: bool,
+}
+
+/// Live runner callbacks, in lifecycle order within each attempt.
+/// Callbacks are synchronous and may run concurrently on different workers.
+/// Keep them short (enqueue slow uploads yourself). Callback panics are contained.
+/// Aggregate file reporters remain available alongside these callbacks.
+pub trait Reporter: Send + Sync + 'static {
+    /// Discovered tests, before filtering or project expansion.
+    fn on_begin(&self, _tests: &[crate::Test]) {}
+    fn on_test_begin(&self, _attempt: &AttemptInfo) {}
+    /// The result covers this attempt only; `attempts` is its one-based ordinal.
+    fn on_test_end(&self, _attempt: &AttemptInfo, _result: &TestResult) {}
+    fn on_step_begin(&self, _attempt: &AttemptInfo, _step: &StepInfo) {}
+    fn on_step_end(&self, _attempt: &AttemptInfo, _step: &StepInfo) {}
+    fn on_attachment(&self, _attempt: &AttemptInfo, _attachment: &Attachment) {}
+    /// `None` denotes a run/worker error rather than an attempt error.
+    fn on_error(&self, _attempt: Option<&AttemptInfo>, _error: &str) {}
+    fn on_end(&self, _report: &TestReport) {}
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct ReporterHub(pub(crate) Vec<Arc<dyn Reporter>>);
+impl ReporterHub {
+    pub(crate) fn emit(&self, callback: impl Fn(&dyn Reporter)) {
+        for reporter in &self.0 {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                callback(reporter.as_ref());
+            }));
+        }
+    }
+}
+
+pub(crate) struct StepGuard {
+    hub: ReporterHub,
+    attempt: AttemptInfo,
+    step: StepInfo,
+    started: std::time::Instant,
+}
+impl StepGuard {
+    pub(crate) fn new(hub: ReporterHub, attempt: AttemptInfo, title: &str) -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let mut step = StepInfo {
+            id: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            title: title.into(),
+            duration_ms: 0,
+            interrupted: false,
+        };
+        hub.emit(|r| r.on_step_begin(&attempt, &step));
+        step.interrupted = true;
+        Self {
+            hub,
+            attempt,
+            step,
+            started: std::time::Instant::now(),
+        }
+    }
+    pub(crate) fn complete(&mut self) {
+        self.step.interrupted = false;
+    }
+}
+impl Drop for StepGuard {
+    fn drop(&mut self) {
+        self.step.duration_ms = self.started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+        self.hub.emit(|r| r.on_step_end(&self.attempt, &self.step));
+    }
+}
 
 /// Outcome of one test.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -482,5 +569,33 @@ mod tests {
             list.contains("attachment: test-results/console.txt"),
             "{list}"
         );
+    }
+}
+
+#[cfg(test)]
+mod live_reporter_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct PanicReporter;
+    impl Reporter for PanicReporter {
+        fn on_begin(&self, _: &[crate::Test]) {
+            panic!("reporter panic");
+        }
+    }
+    struct Counter(Arc<AtomicUsize>);
+    impl Reporter for Counter {
+        fn on_begin(&self, _: &[crate::Test]) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    #[test]
+    fn callback_panic_does_not_block_other_reporters() {
+        let count = Arc::new(AtomicUsize::new(0));
+        let hub = ReporterHub(vec![
+            Arc::new(PanicReporter),
+            Arc::new(Counter(count.clone())),
+        ]);
+        hub.emit(|r| r.on_begin(&[]));
+        assert_eq!(count.load(Ordering::SeqCst), 1);
     }
 }
