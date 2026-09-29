@@ -1,0 +1,87 @@
+//! E2E error model.
+
+/// Ferrite e2e result type.
+pub type E2eResult<T> = std::result::Result<T, E2eError>;
+
+/// Errors raised by the e2e framework.
+#[derive(Debug, thiserror::Error)]
+pub enum E2eError {
+    /// No Chromium executable found.
+    #[error("chromium not found: {0}")]
+    BrowserNotFound(String),
+    /// Chromium failed to launch or crashed.
+    #[error("browser launch failed: {0}")]
+    Launch(String),
+    /// CDP protocol error.
+    #[error("cdp error ({method}): {message}")]
+    Cdp {
+        /// CDP method that failed.
+        method: String,
+        /// Protocol error message.
+        message: String,
+    },
+    /// CDP connection dropped.
+    #[error("cdp connection closed: {0}")]
+    Disconnected(String),
+    /// Operation timed out.
+    #[error("timed out after {0}ms: {1}")]
+    Timeout(u64, String),
+    /// Selector resolved to zero (or ambiguous) elements.
+    #[error("locator error for `{selector}`: {message}")]
+    Locator {
+        /// Selector text.
+        selector: String,
+        /// Human-readable message.
+        message: String,
+    },
+    /// Assertion failed after the retry window.
+    #[error("expect failed: {0}")]
+    Expect(String),
+    /// Navigation failed.
+    #[error("navigation to `{url}` failed: {message}")]
+    Navigation {
+        /// Target URL.
+        url: String,
+        /// Human-readable message.
+        message: String,
+    },
+    /// Web server did not become ready.
+    #[error("web server not ready: {0}")]
+    WebServer(String),
+    /// Configuration error.
+    #[error("config error: {0}")]
+    Config(String),
+    /// Underlying I/O failure.
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+    /// JSON failure.
+    #[error("json error: {0}")]
+    Json(#[from] serde_json::Error),
+}
+
+impl E2eError {
+    /// Machine-readable error code.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::BrowserNotFound(_) => "FERRITE_E2E_BROWSER_NOT_FOUND",
+            Self::Launch(_) => "FERRITE_E2E_LAUNCH",
+            Self::Cdp { .. } => "FERRITE_E2E_CDP",
+            Self::Disconnected(_) => "FERRITE_E2E_DISCONNECTED",
+            Self::Timeout(_, _) => "FERRITE_E2E_TIMEOUT",
+            Self::Locator { .. } => "FERRITE_E2E_LOCATOR",
+            Self::Expect(_) => "FERRITE_E2E_EXPECT",
+            Self::Navigation { .. } => "FERRITE_E2E_NAVIGATION",
+            Self::WebServer(_) => "FERRITE_E2E_WEB_SERVER",
+            Self::Config(_) => "FERRITE_E2E_CONFIG",
+            Self::Io(_) => "FERRITE_E2E_IO",
+            Self::Json(_) => "FERRITE_E2E_JSON",
+        }
+    }
+}
+
+impl From<E2eError> for ferrite_core::FerriteError {
+    fn from(error: E2eError) -> Self {
+        Self::Other(format!("{}: {error}", error.code()))
+    }
+}

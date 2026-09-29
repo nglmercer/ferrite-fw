@@ -24,6 +24,7 @@ members = [
     "crates/ferrite-tailwind",
     "crates/ferrite-docs",
     "crates/ferrite-test",
+    "crates/ferrite-e2e",
     "crates/ferrite-cli",
     "xtask",
 ]
@@ -125,6 +126,7 @@ ferrite-wasm = { path = "crates/ferrite-wasm" }
 ferrite-tailwind = { path = "crates/ferrite-tailwind" }
 ferrite-docs = { path = "crates/ferrite-docs" }
 ferrite-test = { path = "crates/ferrite-test" }
+ferrite-e2e = { path = "crates/ferrite-e2e" }
 
 [workspace.lints.rust]
 unsafe_code = "warn"

@@ -25,6 +25,8 @@ ferrite build                        # → dist/ + manifest.json
 ferrite preview                      # serve dist/ locally
 ferrite ssr                          # dev + SSR shell adapter
 ferrite transform src/main.ts        # one-shot transform
+ferrite e2e                          # boot server + run tests/e2e.rs (Chromium)
+ferrite e2e --check                  # verify Chromium launches
 ferrite inspect                      # resolved config / plugins / lockfile
 ferrite compat                       # live self-checks
 ferrite clean                        # remove .ferrite/
@@ -77,6 +79,7 @@ let app = my_router.merge(server.router());
 | `ferrite-manifest` | Client + SSR manifest schemas (§40) |
 | `ferrite-wasm` | `rust:` packages, WASM loader (§45, §74) |
 | `ferrite-test` | Temp projects, fixtures, assertions (§67) |
+| `ferrite-e2e` | Chromium-first e2e: CDP browser, pages, locators, runner |
 | `ferrite-cli` | `ferrite` binary (§1, §80) |
 
 Plus `packages/ferrite-client` (typed HMR client reference) and
@@ -223,6 +226,39 @@ imports — plus the items below.
 cargo test --workspace   # unit + tests/vite-compat/ suite, no Node needed
 ferrite compat            # live self-checks against the real pipeline
 ```
+
+## End-to-end testing
+
+Playwright-style e2e in pure Rust, Chromium-first, no Node required.
+`ferrite e2e` boots the web server (in-process dev server by default),
+sets `FERRITE_E2E_BASE_URL`, and runs your Rust suite:
+
+```bash
+ferrite e2e --check                 # verify Chromium launches
+ferrite e2e                         # boot + cargo test --test e2e
+ferrite e2e --headed --retries 2    # visible browser, retries
+ferrite e2e --url http://127.0.0.1:3000/ -- cargo test --test shop
+```
+
+```toml
+# ferrite.toml
+[e2e]
+retries = 1
+workers = 4
+reporter = "list,json"              # list | json | junit (comma-separated)
+screenshot = "only-on-failure"      # on | off | only-on-failure
+
+[e2e.web_server]
+url = "http://127.0.0.1:5190/"
+```
+
+Suites use the `ferrite_e2e` library (`Browser`, `Page`, locators with
+`css`/`text=`/`xpath=`/`role=` engines, auto-retrying `expect_*`,
+request routing, screenshots, traces, parallel `Runner`). See
+`examples/e2e/` for a runnable project and
+`crates/ferrite-e2e/tests/browser.rs` for coverage (skipped when no
+Chromium is found; point `FERRITE_CHROMIUM_PATH` at any
+Chromium/Chrome/headless-shell binary).
 
 ## License
 

@@ -30,6 +30,7 @@ async fn main() {
         Command::Compat => cmds::compat::compat().await,
         Command::Clean => cmds::compat::clean().await,
         Command::Create(args) => cmds::create::create(args).await,
+        Command::E2e(args) => cmds::e2e::e2e(args, cli.config, cli.mode).await,
     };
     if let Err(error) = result {
         eprintln!("error: {error}");

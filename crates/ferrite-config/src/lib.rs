@@ -48,6 +48,8 @@ pub struct UserConfig {
     pub react: ReactConfig,
     /// Embedded runtime options.
     pub runtime: RuntimeConfig,
+    /// End-to-end test options.
+    pub e2e: E2eConfig,
 }
 
 /// Dev server options.
@@ -387,6 +389,119 @@ impl Default for RuntimeConfig {
     }
 }
 
+/// End-to-end test options (`ferrite e2e`, Chromium-first).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct E2eConfig {
+    /// Browser engine (`chromium` is the only v1 backend).
+    pub browser: String,
+    /// Launch Chromium headless.
+    pub headless: bool,
+    /// Explicit Chromium executable path (overrides auto-detection).
+    pub executable_path: Option<String>,
+    /// Extra Chromium CLI args.
+    pub args: Vec<String>,
+    /// Base URL for relative navigations (`page.goto("/")`).
+    /// Defaults to the booted dev server or `FERRITE_E2E_BASE_URL`.
+    pub base_url: Option<String>,
+    /// Per-test timeout in milliseconds.
+    pub timeout_ms: u64,
+    /// Default assertion retry window in milliseconds.
+    pub expect_timeout_ms: u64,
+    /// Retries per test after the first attempt.
+    pub retries: u32,
+    /// Parallel test workers.
+    pub workers: usize,
+    /// Reporter (`list`, `json`, `junit`, comma-separated).
+    pub reporter: String,
+    /// Artifact directory (screenshots, traces, reports).
+    pub output_dir: String,
+    /// Screenshot policy (`on`, `off`, `only-on-failure`).
+    pub screenshot: String,
+    /// Slow down each action by this many milliseconds.
+    pub slow_mo_ms: u64,
+    /// Default viewport.
+    pub viewport: Option<ViewportConfig>,
+    /// Web server to boot before tests (dev server by default).
+    pub web_server: Option<WebServerConfig>,
+}
+
+impl Default for E2eConfig {
+    fn default() -> Self {
+        Self {
+            browser: "chromium".to_string(),
+            headless: true,
+            executable_path: None,
+            args: Vec::new(),
+            base_url: None,
+            timeout_ms: 30_000,
+            expect_timeout_ms: 5_000,
+            retries: 0,
+            workers: 4,
+            reporter: "list".to_string(),
+            output_dir: "test-results".to_string(),
+            screenshot: "only-on-failure".to_string(),
+            slow_mo_ms: 0,
+            viewport: None,
+            web_server: None,
+        }
+    }
+}
+
+impl E2eConfig {
+    /// True for the only supported v1 engine.
+    #[must_use]
+    pub fn is_chromium(&self) -> bool {
+        self.browser == "chromium" || self.browser == "chrome"
+    }
+
+    /// True when failures must capture a screenshot.
+    #[must_use]
+    pub fn screenshot_on_failure(&self) -> bool {
+        self.screenshot == "only-on-failure" || self.screenshot == "on"
+    }
+
+    /// True when every test captures a screenshot.
+    #[must_use]
+    pub fn screenshot_always(&self) -> bool {
+        self.screenshot == "on"
+    }
+}
+
+/// Default viewport size.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ViewportConfig {
+    /// Viewport width in CSS pixels.
+    pub width: u32,
+    /// Viewport height in CSS pixels.
+    pub height: u32,
+}
+
+/// Web server lifecycle for e2e runs.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct WebServerConfig {
+    /// Command to run (`ferrite dev` equivalent when unset).
+    pub command: Option<String>,
+    /// URL to wait for before running tests.
+    pub url: Option<String>,
+    /// Readiness timeout in milliseconds.
+    pub timeout_ms: u64,
+    /// Reuse an already-listening server instead of booting.
+    pub reuse_existing: bool,
+}
+
+impl Default for WebServerConfig {
+    fn default() -> Self {
+        Self {
+            command: None,
+            url: None,
+            timeout_ms: 60_000,
+            reuse_existing: true,
+        }
+    }
+}
+
 /// Fully resolved configuration.
 #[derive(Debug, Clone)]
 pub struct ResolvedConfig {
@@ -424,6 +539,8 @@ pub struct ResolvedConfig {
     pub react: ReactConfig,
     /// Runtime options.
     pub runtime: RuntimeConfig,
+    /// E2E options.
+    pub e2e: E2eConfig,
     /// Configured environments.
     pub environments: HashMap<String, Environment>,
 }
@@ -553,6 +670,57 @@ pub fn merge_user_config(mut base: UserConfig, over: UserConfig) -> UserConfig {
     base.package = over.package;
     base.react = over.react;
     base.runtime = merge_runtime(base.runtime, over.runtime);
+    base.e2e = merge_e2e(base.e2e, over.e2e);
+    base
+}
+
+fn merge_e2e(mut base: E2eConfig, over: E2eConfig) -> E2eConfig {
+    let defaults = E2eConfig::default();
+    if over.browser != defaults.browser {
+        base.browser = over.browser;
+    }
+    if over.headless != defaults.headless {
+        base.headless = over.headless;
+    }
+    if over.executable_path.is_some() {
+        base.executable_path = over.executable_path;
+    }
+    if !over.args.is_empty() {
+        base.args = over.args;
+    }
+    if over.base_url.is_some() {
+        base.base_url = over.base_url;
+    }
+    if over.timeout_ms != defaults.timeout_ms {
+        base.timeout_ms = over.timeout_ms;
+    }
+    if over.expect_timeout_ms != defaults.expect_timeout_ms {
+        base.expect_timeout_ms = over.expect_timeout_ms;
+    }
+    if over.retries != defaults.retries {
+        base.retries = over.retries;
+    }
+    if over.workers != defaults.workers {
+        base.workers = over.workers;
+    }
+    if over.reporter != defaults.reporter {
+        base.reporter = over.reporter;
+    }
+    if over.output_dir != defaults.output_dir {
+        base.output_dir = over.output_dir;
+    }
+    if over.screenshot != defaults.screenshot {
+        base.screenshot = over.screenshot;
+    }
+    if over.slow_mo_ms != defaults.slow_mo_ms {
+        base.slow_mo_ms = over.slow_mo_ms;
+    }
+    if over.viewport.is_some() {
+        base.viewport = over.viewport;
+    }
+    if over.web_server.is_some() {
+        base.web_server = over.web_server;
+    }
     base
 }
 
@@ -781,6 +949,7 @@ pub fn resolve_config(
             }
             runtime
         },
+        e2e: user.e2e.clone(),
         environments,
     })
 }
@@ -869,6 +1038,50 @@ mod tests {
         assert!(merged.env.prefix.contains(&"APP_".to_string()));
         assert!(merged.env.prefix.contains(&"FERRITE_".to_string()));
         assert_eq!(merged.server.proxy.len(), 2);
+    }
+
+    #[test]
+    fn e2e_toml_shape_parses() {
+        let user: UserConfig = toml::from_str(
+            "[e2e]\n\
+             browser = \"chromium\"\n\
+             headless = false\n\
+             retries = 2\n\
+             workers = 8\n\
+             reporter = \"list,json\"\n\
+             [e2e.viewport]\n\
+             width = 1280\n\
+             height = 720\n\
+             [e2e.web_server]\n\
+             command = \"ferrite dev --port 5190\"\n\
+             url = \"http://127.0.0.1:5190/\"\n",
+        )
+        .unwrap();
+        assert!(!user.e2e.headless);
+        assert_eq!(user.e2e.retries, 2);
+        assert_eq!(user.e2e.workers, 8);
+        assert_eq!(user.e2e.reporter, "list,json");
+        assert_eq!(user.e2e.viewport.as_ref().unwrap().width, 1280);
+        let server = user.e2e.web_server.as_ref().unwrap();
+        assert_eq!(server.url.as_deref(), Some("http://127.0.0.1:5190/"));
+        assert!(server.reuse_existing);
+        // Defaults stay headless with failure screenshots.
+        let defaults = E2eConfig::default();
+        assert!(defaults.headless);
+        assert!(defaults.screenshot_on_failure());
+        assert!(!defaults.screenshot_always());
+    }
+
+    #[test]
+    fn e2e_merge_layering() {
+        let base = UserConfig::default();
+        let mut over = UserConfig::default();
+        over.e2e.retries = 3;
+        over.e2e.headless = false;
+        let merged = merge_user_config(base, over);
+        assert_eq!(merged.e2e.retries, 3);
+        assert!(!merged.e2e.headless);
+        assert_eq!(merged.e2e.workers, E2eConfig::default().workers);
     }
 
     #[test]

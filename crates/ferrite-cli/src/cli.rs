@@ -55,6 +55,8 @@ pub(crate) enum Command {
     Clean,
     /// Scaffold a new app.
     Create(CreateArgs),
+    /// Run end-to-end tests (Chromium, Rust-native, no Node required).
+    E2e(E2eArgs),
 }
 
 #[derive(Debug, Args)]
@@ -194,4 +196,44 @@ pub(crate) struct CreateArgs {
     /// Template (`vanilla`, `ssr`).
     #[arg(long, default_value = "vanilla")]
     pub(crate) template: String,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct E2eArgs {
+    /// Project root.
+    #[arg(default_value = ".")]
+    pub(crate) root: PathBuf,
+    /// Run with a visible browser window.
+    #[arg(long)]
+    pub(crate) headed: bool,
+    /// Chromium executable path.
+    #[arg(long)]
+    pub(crate) browser: Option<PathBuf>,
+    /// Base URL for tests (overrides config).
+    #[arg(long)]
+    pub(crate) base_url: Option<String>,
+    /// Use an already-running server at URL (boots nothing).
+    #[arg(long)]
+    pub(crate) url: Option<String>,
+    /// Web server command to boot (overrides config).
+    #[arg(long)]
+    pub(crate) web_server: Option<String>,
+    /// Reporter spec (`list`, `json`, `junit`, comma-separated).
+    #[arg(long)]
+    pub(crate) reporter: Option<String>,
+    /// Retries per test.
+    #[arg(long)]
+    pub(crate) retries: Option<u32>,
+    /// Parallel workers.
+    #[arg(long)]
+    pub(crate) workers: Option<usize>,
+    /// Only run tests whose name contains this.
+    #[arg(long)]
+    pub(crate) filter: Option<String>,
+    /// Only verify Chromium launches, then exit.
+    #[arg(long)]
+    pub(crate) check: bool,
+    /// Test command to run (default: `cargo test --test e2e`).
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    pub(crate) command: Vec<String>,
 }

@@ -1,0 +1,11 @@
+[e2e]
+browser = "chromium"
+headless = true
+retries = 1
+workers = 2
+reporter = "list,json"
+
+[e2e.web_server]
+url = "http://127.0.0.1:5190/"
+timeout_ms = 60000
+reuse_existing = true

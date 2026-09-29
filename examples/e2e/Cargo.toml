@@ -1,0 +1,11 @@
+[package]
+name = "e2e-demo"
+version = "0.1.0"
+edition = "2021"
+
+# Detached from the ferrite workspace: this is a standalone consumer project.
+[workspace]
+
+[dev-dependencies]
+ferrite-e2e = { path = "../../crates/ferrite-e2e" }
+tokio = { version = "1", features = ["full"] }

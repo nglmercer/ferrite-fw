@@ -29,6 +29,7 @@ pub use ferrite_config as config;
 pub use ferrite_core as core;
 pub use ferrite_css as css;
 pub use ferrite_docs as docs;
+pub use ferrite_e2e as e2e;
 pub use ferrite_frameworks as frameworks;
 pub use ferrite_graph as graph;
 pub use ferrite_hmr as hmr;
