@@ -19,9 +19,9 @@ reporter, Android and Electron APIs:
 | Classification | Members | Meaning |
 |---|---:|---|
 | Equivalent | 15 | Counterpart for the basic operation/value, without full options or engine compatibility |
-| Partial | 584 | Related exposed operation with material semantic, option or engine differences |
+| Partial | 587 | Related exposed operation with material semantic, option or engine differences |
 | Idiomatic | 42 | Comparable operation through Rust language/library facilities |
-| Missing | 377 | No dedicated public counterpart |
+| Missing | 374 | No dedicated public counterpart |
 
 These counts describe an inventory, **not a behavioral compatibility
 percentage**. The earlier inventory had 458 Partial and 503 Missing members.
@@ -69,7 +69,7 @@ implementation.
 | API testing | Query/headers/JSON/form/raw/multipart, cookies, TLS/proxy/auth, timeout, redirects, status checks and connect retries | IndexedDB state and all redirect/retry semantics remain deferred; returned response buffers are independently owned |
 | Browser/API storage | Context-linked cookies in both directions; isolated protocol cookie partitions; Playwright cookies/origins localStorage JSON; Page/context API clients inherit transport defaults at creation | Redirect/partition/SameSite details remain narrower; no IndexedDB/OPFS snapshots |
 | HTTP credentials | Browser challenge authentication on Chromium, preserving extra headers; explicit preemptive Basic helper | Firefox challenge credentials unsupported; cached-auth clearing is approximate |
-| Callbacks and buffers | Page-exposed functions survive navigation; console/error source metadata, context history and per-attempt reporting | No context-wide bindings, async Rust callbacks or complete frame/worker dispatch |
+| Callbacks and buffers | Page/context sync/async functions and bindings, startup preloads, navigation/removal lifecycle; console/error metadata and attempt history | JSON arguments, polled bounded dispatch and main/same-origin frames; no cross-origin/worker/handle dispatch |
 | Downloads | Chromium download behavior/cancellation scoped to the owning context; completed-file deduplication | File-based lifecycle, limited Firefox URL/failure/cancellation metadata |
 | Coverage | Dedicated Chromium JS/CSS coverage controller with sources and usage ranges | Native V8/CSS ranges, without Playwright flattening/navigation options; Firefox unsupported |
 
@@ -405,6 +405,41 @@ These additions follow the official [URL waits](https://playwright.dev/docs/api/
 and [console metadata](https://playwright.dev/docs/api/class-consolemessage), with
 the Rust/engine limits above.
 
+## Async and context callback lifecycle
+
+`Page` and `BrowserContext` provide `expose_function_async` and async
+`expose_binding`; existing synchronous `expose_function` remains available.
+Callbacks accept JSON and return `E2eResult<Value>`. BindingSource carries owning
+context, page and native frame identity for main/same-origin documents. Rust
+errors and callback creation/future panics reject JavaScript with an Error.
+Calls execute independently through a bounded queue (256 pending per document
+and 256 active per page), with polling latency around 25ms. Cross-origin/OOPIF
+binding dispatch and remote handle arguments remain deferred.
+
+Registrations persist through navigation. Context callbacks cover current,
+future and adopted popup startup documents: native user-context preloads on
+Firefox, and preload installation while Chromium popups are paused. Callbacks
+are installed before context init scripts. Firefox context registration requires
+[scoped preloads introduced in Firefox 136](https://bugzilla.mozilla.org/show_bug.cgi?id=1940927);
+unknown/older versions return Config rather than installing a global callback. Duplicate
+page/context names return Config errors. `remove_exposed_function` is idempotent
+for missing names, removes the owning native preload and rejects pending calls;
+context callbacks must be removed from the context. `clear_exposed_functions`
+retains its legacy best-effort return type and clears page-owned registrations.
+Removed callbacks cannot return after navigation, and unrelated callbacks survive.
+A scoped caller cancellation rejects that registration's work while unrelated
+callbacks retain their pump. Navigation aborts old-document futures using a realm
+nonce; closure aborts pumps
+and pending calls and releases captures. Dropped registration work removes
+returned/known native preload IDs instead of retaining an orphan callback.
+
+[Native callback regressions](crates/ferrite-e2e/tests/callback_lifecycle.rs) cover
+startup, isolation, main/child identity, concurrency, errors/panics, registration
+races, removal/re-registration, navigation, cancellation and closed-context capture
+release. Firefox child frames are no longer adopted as popup pages. Callback
+registration and native command cancellation remain bounded by existing lifecycle
+and protocol budgets; runner attempt cleanup owns ongoing callback work.
+
 ## Engine and validation evidence
 
 Chromium uses CDP and Firefox uses stock WebDriver BiDi. Firefox accepts user
@@ -434,7 +469,8 @@ Validation for URL/network matching, generated uploads and browser diagnostics:
 - `ferrite-e2e`: **138 unit tests, 3 API tests, 93 browser tests, 7 attempt-diagnostics
   groups, 4 reliability groups, 4 runtime/reporter groups, 6 fixture/network
   groups, 4 step-control/bundle groups, 5 wait/upload/console groups,
-  3 core conformance/capability groups and 2 doctests** (269 checks total).
+  3 core conformance/capability groups, 4 callback lifecycle groups and
+  2 doctests** (273 checks total).
   Headless Shell and Firefox were installed and exercised; unsupported-engine branches remain explicit.
 - The five new groups additionally passed with full Chrome and Firefox, covering
   exact/glob/regex and predicate URL matching, frame history, request-start and
@@ -460,7 +496,7 @@ Validation for URL/network matching, generated uploads and browser diagnostics:
 - Existing trace and first-attachment names remain compatible; retry trace files
   and repeated attachment names preserve their individual contents.
 - CLI/configuration checks passed again: 5 CLI tests, 17 configuration tests and
-  1 doctest (292 checks across E2E/CLI/configuration). This change adds no CLI
+  1 doctest (296 checks across E2E/CLI/configuration). This change adds no CLI
   options. A real portable HTML report with expanded automatic/user/hook trees,
   skipped steps, annotations and run lifecycle was rendered in Chromium and
   visually inspected. The console section was also rendered and visually

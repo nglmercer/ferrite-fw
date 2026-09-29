@@ -352,6 +352,7 @@ impl Default for ConsoleSink {
 /// CDP-backed driver (Chromium): one flattened target session.
 #[derive(Clone)]
 pub struct CdpDriver {
+    main_worlds: Arc<Mutex<HashMap<String, i64>>>,
     cdp: CdpConnection,
     session: String,
     target: String,
@@ -435,6 +436,12 @@ impl Driver {
             Self::Bidi(driver) => driver.cancellation = token,
         }
         self
+    }
+    pub(crate) fn caller_cancellation(&self) -> crate::CancellationToken {
+        match self {
+            Self::Cdp(driver) => driver.cancellation.clone(),
+            Self::Bidi(driver) => driver.cancellation.clone(),
+        }
     }
     pub(crate) fn cancel_lifecycle(&self) {
         match self {
@@ -536,6 +543,7 @@ impl CdpDriver {
     ) -> E2eResult<Self> {
         *sink.page_id.lock().unwrap_or_else(|e| e.into_inner()) = Some(target.clone());
         let driver = Self {
+            main_worlds: Arc::new(Mutex::new(HashMap::new())),
             cdp,
             session,
             target,
@@ -549,11 +557,11 @@ impl CdpDriver {
             browser_context,
             fetch_auth: Arc::new(Mutex::new(FetchAuthState::default())),
         };
+        driver.spawn_listener();
         driver.call("Page.enable", Value::Null).await?;
         driver.call("Runtime.enable", Value::Null).await?;
         driver.call("Log.enable", Value::Null).await?;
         driver.call("Network.enable", Value::Null).await?;
-        driver.spawn_listener();
         Ok(driver)
     }
 
@@ -562,14 +570,13 @@ impl CdpDriver {
         let session = self.session.clone();
         let sink = self.sink.clone();
         let target = self.target.clone();
+        let worlds = self.main_worlds.clone();
+        let lifecycle = self.lifecycle.clone();
         tokio::spawn(async move {
             let mut frames = std::collections::HashSet::from([target]);
             let mut downloads = HashMap::new();
-            loop {
-                let event = match events.recv().await {
-                    Ok(event) => event,
-                    Err(_) => break,
-                };
+            while let Ok(event) = tokio::select! { biased; _ = lifecycle.cancelled() => Err(tokio::sync::broadcast::error::RecvError::Closed), event = events.recv() => event }
+            {
                 if event.method == "Browser.downloadWillBegin"
                     && event.params["frameId"]
                         .as_str()
@@ -595,6 +602,33 @@ impl CdpDriver {
                 }
                 if event.session.as_deref() != Some(&session) {
                     continue;
+                }
+                match event.method.as_str() {
+                    "Runtime.executionContextCreated" => {
+                        let context = &event.params["context"];
+                        if context["auxData"]["isDefault"].as_bool() == Some(true) {
+                            if let (Some(frame), Some(id)) = (
+                                context["auxData"]["frameId"].as_str(),
+                                context["id"].as_i64(),
+                            ) {
+                                worlds
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .insert(frame.into(), id);
+                            }
+                        }
+                    }
+                    "Runtime.executionContextDestroyed" => {
+                        let id = event.params["executionContextId"].as_i64();
+                        worlds
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .retain(|_, value| Some(*value) != id);
+                    }
+                    "Runtime.executionContextsCleared" => {
+                        worlds.lock().unwrap_or_else(|e| e.into_inner()).clear()
+                    }
+                    _ => {}
                 }
                 if event.method == "Page.frameAttached" {
                     if let Some(id) = event.params["frameId"].as_str() {
@@ -933,11 +967,54 @@ impl Driver {
 
     /// Run `source` before page scripts in every future document.
     pub async fn add_init_script(&self, source: &str) -> E2eResult<()> {
+        self.add_owned_init_script(source).await.map(|_| ())
+    }
+
+    pub(crate) async fn add_owned_init_script(&self, source: &str) -> E2eResult<String> {
+        self.run(async {
+            // Receive the native ID even if the caller drops this registration.
+            // A dropped receiver removes an orphan preload rather than losing it.
+            let driver = self.clone().with_cancellation(crate::CancellationToken::new());
+            let source = source.to_owned();
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            tokio::spawn(async move {
+                let result = driver.run(async {
+                    let result = match &driver {
+                        Self::Cdp(driver) => driver.call("Page.addScriptToEvaluateOnNewDocument", serde_json::json!({"source": source})).await?,
+                        Self::Bidi(driver) => driver.bidi.call("script.addPreloadScript", serde_json::json!({"functionDeclaration": format!("() => {{ {source} }}"), "contexts": [driver.context]}), driver.timeout()).await?,
+                    };
+                    let key = if matches!(driver, Self::Cdp(_)) { "identifier" } else { "script" };
+                    result[key].as_str().map(str::to_owned).ok_or_else(|| E2eError::Config("native preload ID unavailable".into()))
+                }).await;
+                if let Err(Ok(id)) = tx.send(result) { let _ = driver.remove_owned_init_script(&id).await; }
+            });
+            rx.await.map_err(|_| E2eError::Disconnected("owned preload registration dropped".into()))?
+        }).await
+    }
+
+    pub(crate) async fn remove_owned_init_script(&self, id: &str) -> E2eResult<()> {
         self.run(async {
             match self {
-                Self::Cdp(driver) => driver.add_init_script(source).await,
-                Self::Bidi(driver) => driver.add_init_script(source).await,
+                Self::Cdp(driver) => {
+                    driver
+                        .call(
+                            "Page.removeScriptToEvaluateOnNewDocument",
+                            serde_json::json!({"identifier": id}),
+                        )
+                        .await?;
+                }
+                Self::Bidi(driver) => {
+                    driver
+                        .bidi
+                        .call(
+                            "script.removePreloadScript",
+                            serde_json::json!({"script": id}),
+                            driver.timeout(),
+                        )
+                        .await?;
+                }
             }
+            Ok(())
         })
         .await
     }
@@ -948,6 +1025,31 @@ impl Driver {
             match self {
                 Self::Cdp(driver) => driver.frames().await,
                 Self::Bidi(driver) => driver.frames().await,
+            }
+        })
+        .await
+    }
+
+    pub(crate) async fn frame_main_world_evaluate(
+        &self,
+        frame_id: &str,
+        expression: &str,
+    ) -> E2eResult<Value> {
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => {
+                    let id = driver
+                        .main_worlds
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .get(frame_id)
+                        .copied()
+                        .ok_or_else(|| {
+                            E2eError::Config("frame main world is unavailable or detached".into())
+                        })?;
+                    driver.evaluate_with_context(expression, Some(id)).await
+                }
+                Self::Bidi(driver) => driver.frame_evaluate(frame_id, expression).await,
             }
         })
         .await
@@ -2023,15 +2125,6 @@ impl CdpDriver {
             }
         }
         Ok(canceled)
-    }
-
-    async fn add_init_script(&self, source: &str) -> E2eResult<()> {
-        self.call(
-            "Page.addScriptToEvaluateOnNewDocument",
-            serde_json::json!({ "source": source }),
-        )
-        .await?;
-        Ok(())
     }
 
     async fn set_ignore_https_errors(&self, ignore: bool) -> E2eResult<()> {
@@ -3776,22 +3869,6 @@ impl BidiDriver {
              (BiDi has no download-cancel command)"
                 .to_string(),
         ))
-    }
-
-    async fn add_init_script(&self, source: &str) -> E2eResult<()> {
-        // BiDi preload scripts must be function declarations.
-        let function = format!("() => {{ {source} }}");
-        self.bidi
-            .call(
-                "script.addPreloadScript",
-                serde_json::json!({
-                    "functionDeclaration": function,
-                    "contexts": [self.context],
-                }),
-                self.timeout(),
-            )
-            .await?;
-        Ok(())
     }
 
     async fn emulate_device(&self, _device: crate::page::DeviceDescriptor) -> E2eResult<()> {

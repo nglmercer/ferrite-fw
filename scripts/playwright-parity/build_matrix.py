@@ -346,6 +346,10 @@ for c in ['Page','Frame']:
   put(c,m,'Locator.'+t,c+'.locator(selector) followed by the distinct rendered/raw text getter; strict resolution and same-origin frame limitations remain.')
 put('Locator','textContent','Locator.text_content','Untrimmed nullable DOM textContent with strict single-target resolution; no ElementHandle or full options surface.')
 put('Locator','innerText','Locator.inner_text','Distinct rendered DOM innerText getter; strict resolution, nullable Rust result and same-origin lazy frame limitations remain.')
+# Async and context callback lifecycle.
+for c in ['Page','BrowserContext']:
+ put(c,'exposeFunction',c+'.expose_function_async','Sync/async JSON callbacks in current/future same-origin documents; independent bounded dispatch, native preload ownership, duplicate-name errors and named removal. Rust errors/panics reject JS promises; cross-origin dispatch/handle arguments deferred.')
+ put(c,'exposeBinding',c+'.expose_binding','Async JSON binding with owning context/page/native frame identity. Same-origin frame dispatch; native startup preloads and navigation/disposal cleanup. Cross-origin/OOPIF callers and handle arguments deferred.')
 # Fill every remaining upstream member explicitly as absent, with class-specific explanations.
 def default_note(c,e):
  if c.startswith('Android') or c in ['Electron','ElectronApplication']:return 'Experimental upstream API; Ferrite has no Android/ADB/WebView or Electron backend.'

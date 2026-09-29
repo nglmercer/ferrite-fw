@@ -453,6 +453,14 @@ impl std::fmt::Debug for Frame {
 }
 
 impl Frame {
+    /// Native frame/context identity; retained by a handle after detachment.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+    pub fn parent_id(&self) -> Option<&str> {
+        self.parent_id.as_deref()
+    }
+
     /// The top-level page owning this frame.
     pub fn page(&self) -> Page {
         self.page.owning_page()
@@ -664,7 +672,7 @@ impl Frame {
 }
 
 /// True when `name` is a safe JS identifier for [`Page::expose_function`].
-fn valid_expose_name(name: &str) -> bool {
+pub(crate) fn valid_expose_name(name: &str) -> bool {
     let mut chars = name.chars();
     matches!(chars.next(), Some('_' | '$' | 'a'..='z' | 'A'..='Z'))
         && chars.all(|c| matches!(c, '_' | '$' | 'a'..='z' | 'A'..='Z' | '0'..='9'))
@@ -1426,7 +1434,7 @@ pub struct Page {
     action_timeout: Arc<Mutex<Duration>>,
     navigation_timeout: Arc<Mutex<Option<Duration>>>,
     pub(crate) snapshot_dir: Option<PathBuf>,
-    driver: Driver,
+    pub(crate) driver: Driver,
     pub(crate) coverage_state: Arc<tokio::sync::Mutex<crate::coverage::CoverageState>>,
     sink: ConsoleSink,
     slow_mo: Duration,
@@ -1446,7 +1454,7 @@ pub struct Page {
     /// grants need an origin, so fresh pages cannot take them yet).
     pending_grants: Arc<Mutex<Vec<String>>>,
     net_capture: Arc<Mutex<Option<tokio::task::AbortHandle>>>,
-    exposed: ExposedState,
+    pub(crate) exposed: crate::callbacks::ExposedState,
     extra_headers: Arc<Mutex<Vec<(String, String)>>>,
     auth_credentials: Arc<Mutex<Option<(String, String)>>>,
     cleared_auth: Arc<Mutex<bool>>,
@@ -1508,16 +1516,6 @@ impl fmt::Debug for Page {
     }
 }
 
-/// Rust handlers exposed to page JS ([`Page::expose_function`]).
-type ExposedFn = Arc<dyn Fn(Vec<Value>) -> Value + Send + Sync>;
-
-/// Exposed handlers plus their dispatch pump.
-#[derive(Clone, Default)]
-struct ExposedState {
-    fns: Arc<Mutex<HashMap<String, ExposedFn>>>,
-    pump: Arc<Mutex<Option<tokio::task::AbortHandle>>>,
-}
-
 /// Fake clock injected by [`Page::clock_install`]: overrides `Date`,
 /// `setTimeout`/`setInterval`, `requestAnimationFrame` and `performance.now`
 /// with a virtual queue drained by `__ferriteClock.tick(ms)`.
@@ -1569,7 +1567,7 @@ impl Page {
             snapshot_dir: None,
             pending_grants: Arc::new(Mutex::new(Vec::new())),
             net_capture: Arc::new(Mutex::new(None)),
-            exposed: ExposedState::default(),
+            exposed: crate::callbacks::ExposedState::default(),
             extra_headers: Arc::new(Mutex::new(Vec::new())),
             auth_credentials: Arc::new(Mutex::new(None)),
             cleared_auth: Arc::new(Mutex::new(false)),
@@ -1865,6 +1863,7 @@ impl Page {
             return;
         }
         *closed = true;
+        self.exposed.stop();
         self.emit(PageEvent::Closed);
         self.driver.cancel_lifecycle();
     }
@@ -4173,158 +4172,6 @@ impl Page {
                     .find(|frame| frame.url.contains(pattern)))
             })
             .await
-    }
-
-    /// Expose a Rust function to page JS as `window[name]`. The page calls
-    /// it like `await window[name](...args)`; the callback receives all args
-    /// and its return value resolves the promise (panics reject it).
-    /// Dispatch polls (~50ms latency), so keep handlers fast. Applies to the
-    /// current and future documents, including after navigation.
-    pub async fn expose_function<F>(&self, name: &str, f: F) -> E2eResult<()>
-    where
-        F: Fn(Vec<Value>) -> Value + Send + Sync + 'static,
-    {
-        self.driver
-            .run(async {
-                if !valid_expose_name(name) {
-                    return Err(E2eError::Config(format!(
-                        "expose_function needs a JS identifier, got {name:?}"
-                    )));
-                }
-                let name_json = serde_json::to_string(name).map_err(E2eError::Json)?;
-                let source = format!(
-                    "(() => {{ \
-             window.__ferriteExpose = window.__ferriteExpose \
-             || {{ seq: 0, queue: [], pending: {{}} }}; \
-             const bx = window.__ferriteExpose; \
-             window[{name_json}] = (...args) => new Promise((resolve, reject) => {{ \
-             const id = ++bx.seq; \
-             bx.pending[id] = {{ resolve, reject }}; \
-             bx.queue.push([{name_json}, id, args]); }}); \
-             return true; }})()"
-                );
-                self.add_init_script(&source).await?;
-                self.evaluate_value(&source).await?;
-                self.exposed
-                    .fns
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .insert(name.to_string(), Arc::new(f));
-                self.start_expose_pump();
-                Ok(())
-            })
-            .await
-    }
-
-    /// Remove exposed functions and stop their dispatch pump.
-    pub async fn clear_exposed_functions(&self) {
-        let handle = self
-            .exposed
-            .pump
-            .lock()
-            .map(|mut pump| pump.take())
-            .unwrap_or(None);
-        if let Some(handle) = handle {
-            handle.abort();
-        }
-        let names: Vec<String> = self
-            .exposed
-            .fns
-            .lock()
-            .map(|mut fns| fns.drain().map(|(name, _)| name).collect())
-            .unwrap_or_default();
-        if !names.is_empty() {
-            let mut script = String::from("(() => {");
-            for name in &names {
-                script.push_str(&format!(
-                    "delete window[{}];",
-                    serde_json::to_string(name).unwrap_or_default()
-                ));
-            }
-            script.push_str("delete window.__ferriteExpose; return true; })()");
-            self.add_init_script(&script).await.ok();
-            self.evaluate_value(&script).await.ok();
-        }
-    }
-
-    /// Start the exposed-function dispatch pump (once per page).
-    fn start_expose_pump(&self) {
-        let mut pump = self.exposed.pump.lock().unwrap_or_else(|e| e.into_inner());
-        if pump.is_some() {
-            return;
-        }
-        let page = self.clone();
-        let fns = self.exposed.fns.clone();
-        *pump = Some(
-            tokio::spawn(async move {
-                let mut failures = 0u32;
-                loop {
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                    let calls: Vec<(String, u64, Vec<Value>)> = match page
-                        .evaluate(
-                            "(() => { const bx = window.__ferriteExpose; \
-                             if (!bx) return []; \
-                             const taken = bx.queue; bx.queue = []; return taken; })()",
-                        )
-                        .await
-                    {
-                        Ok(calls) => {
-                            failures = 0;
-                            calls
-                        }
-                        Err(_) => {
-                            failures += 1;
-                            if failures > 20 {
-                                break;
-                            }
-                            continue;
-                        }
-                    };
-                    for (name, id, args) in calls {
-                        let handler = fns
-                            .lock()
-                            .map(|fns| fns.get(&name).cloned())
-                            .unwrap_or(None);
-                        let (result, failed) = match handler {
-                            Some(handle) => {
-                                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                    handle(args)
-                                })) {
-                                    Ok(value) => (value.to_string(), false),
-                                    Err(_) => (
-                                        serde_json::json!("exposed function panicked").to_string(),
-                                        true,
-                                    ),
-                                }
-                            }
-                            None => (
-                                serde_json::json!("unknown exposed function").to_string(),
-                                true,
-                            ),
-                        };
-                        let settle = if failed { "reject" } else { "resolve" };
-                        let delivered = page
-                            .evaluate_value(&format!(
-                                "(() => {{ const bx = window.__ferriteExpose; \
-                                 const entry = bx && bx.pending[{id}]; \
-                                 if (!entry) return false; \
-                                 delete bx.pending[{id}]; entry.{settle}({result}); \
-                                 return true; }})()"
-                            ))
-                            .await;
-                        if delivered.is_err() {
-                            failures += 1;
-                            if failures > 20 {
-                                break;
-                            }
-                        } else {
-                            failures = 0;
-                        }
-                    }
-                }
-            })
-            .abort_handle(),
-        );
     }
 
     /// Wait for a new file in `dir`, returning once it stops growing.

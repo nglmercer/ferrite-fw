@@ -6,7 +6,7 @@
 //! as broadcast events. Verified against Firefox 156.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -48,6 +48,7 @@ enum Outbound {
 }
 
 struct Inner {
+    user_context_preloads: AtomicBool,
     tx: mpsc::UnboundedSender<Outbound>,
     pending: Mutex<HashMap<u64, oneshot::Sender<E2eResult<Value>>>>,
     events: broadcast::Sender<BidiEvent>,
@@ -85,6 +86,7 @@ impl BidiConnection {
         let (tx, mut rx) = mpsc::unbounded_channel::<Outbound>();
         let (events, _) = broadcast::channel::<BidiEvent>(4096);
         let inner = Arc::new(Inner {
+            user_context_preloads: AtomicBool::new(false),
             tx,
             pending: Mutex::new(HashMap::new()),
             events,
@@ -129,6 +131,20 @@ impl BidiConnection {
     #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<BidiEvent> {
         self.inner.events.subscribe()
+    }
+
+    pub(crate) fn set_browser_version(&self, version: &str) {
+        let supported = version
+            .split('.')
+            .next()
+            .and_then(|major| major.parse::<u32>().ok())
+            .is_some_and(|major| major >= 136);
+        self.inner
+            .user_context_preloads
+            .store(supported, Ordering::Release);
+    }
+    pub(crate) fn supports_user_context_preloads(&self) -> bool {
+        self.inner.user_context_preloads.load(Ordering::Acquire)
     }
 
     /// Send a command and await its `result`.
@@ -290,6 +306,7 @@ mod tests {
         let (events, _) = broadcast::channel(4);
         let (tx, mut outgoing) = mpsc::unbounded_channel();
         let inner = Arc::new(Inner {
+            user_context_preloads: AtomicBool::new(false),
             tx,
             pending: Mutex::new(HashMap::new()),
             events,

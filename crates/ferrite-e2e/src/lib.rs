@@ -43,6 +43,7 @@ mod assertion_options;
 mod bidi;
 mod browser;
 mod bundle;
+mod callbacks;
 mod cdp;
 mod config;
 mod context;
@@ -73,6 +74,7 @@ pub use assertion_options::{
 pub use bidi::BidiConnection;
 pub use browser::{find_chromium, find_firefox, Browser, BrowserKind, LaunchOptions};
 pub use bundle::ReportBundle;
+pub use callbacks::BindingSource;
 pub use cdp::CdpConnection;
 pub use config::config_from_env;
 pub use context::{

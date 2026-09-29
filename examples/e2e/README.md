@@ -271,3 +271,25 @@ events are untrusted; use the native action APIs when trusted input matters.
 See the [engine table](../../E2E-ENGINE-CAPABILITIES.md) and
 [pinned conformance corpus](../../scripts/e2e-conformance/README.md) for native
 verification and remaining limits.
+
+Async callbacks can be registered per page or per context. Context registration
+also covers future pages and popup startup scripts:
+
+```rust,no_run
+context.expose_function_async("double", |args| async move {
+    Ok(serde_json::json!(args[0].as_i64().unwrap_or_default() * 2))
+}).await?;
+context.expose_binding("caller", |source, _args| async move {
+    Ok(serde_json::json!({
+        "page": source.page.target_id(),
+        "frame": source.frame.id(),
+        "url": source.frame.current_url().await?,
+    }))
+}).await?;
+let result = page.evaluate_value("double(21)").await?;
+context.remove_exposed_function("double").await?;
+```
+
+Bindings cover main/same-origin frames. JSON callbacks are polled and bounded;
+errors/panics reject, navigation/closure cancels pending work and removal owns the
+native preload. Duplicate names fail instead of replacing a live callback.

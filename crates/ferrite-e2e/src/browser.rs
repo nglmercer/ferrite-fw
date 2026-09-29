@@ -493,7 +493,7 @@ impl Browser {
             launch_download_dir: options.download_dir.clone(),
             ignore_https_errors: options.ignore_https_errors,
         };
-        browser.spawn_popup_pump();
+        browser.spawn_popup_pump().await?;
         Ok(browser)
     }
 
@@ -598,6 +598,11 @@ impl Browser {
                 "BiDi session.new returned no sessionId".to_string(),
             ));
         }
+        bidi.set_browser_version(
+            session["capabilities"]["browserVersion"]
+                .as_str()
+                .unwrap_or(""),
+        );
         let product = session
             .get("capabilities")
             .and_then(|caps| {
@@ -655,7 +660,7 @@ impl Browser {
             launch_download_dir: options.download_dir.clone(),
             ignore_https_errors: options.ignore_https_errors,
         };
-        browser.spawn_popup_pump();
+        browser.spawn_popup_pump().await?;
         Ok(browser)
     }
 
@@ -707,7 +712,7 @@ impl Browser {
             launch_download_dir: None,
             ignore_https_errors: false,
         };
-        browser.spawn_popup_pump();
+        browser.spawn_popup_pump().await?;
         Ok(browser)
     }
 
@@ -728,22 +733,28 @@ impl Browser {
     ///
     /// Our own `new_page` targets carry no opener/parent, so they are never
     /// double-adopted; popups without a tracked opener are left alone.
-    fn spawn_popup_pump(&self) {
+    async fn spawn_popup_pump(&self) -> E2eResult<()> {
+        let mut cdp_events = None;
+        if let Backend::Cdp(cdp) = &self.backend {
+            cdp_events = Some(cdp.subscribe());
+            cdp.call(
+                None,
+                "Target.setDiscoverTargets",
+                serde_json::json!({"discover":true}),
+                self.timeout,
+            )
+            .await?;
+            cdp.call(None,"Target.setAutoAttach",serde_json::json!({"autoAttach":true,"waitForDebuggerOnStart":true,"flatten":true,"filter":[{"type":"page","exclude":false},{"exclude":true}]}),self.timeout).await?;
+        }
         let backend = self.backend.clone();
         let contexts = Arc::downgrade(&self.contexts);
         let timeout = self.timeout;
         tokio::spawn(async move {
             match backend {
                 Backend::Cdp(cdp) => {
-                    let _ = cdp
-                        .call(
-                            None,
-                            "Target.setDiscoverTargets",
-                            serde_json::json!({ "discover": true }),
-                            timeout,
-                        )
-                        .await;
-                    let mut events = cdp.subscribe();
+                    let mut events = cdp_events
+                        .take()
+                        .expect("CDP subscription created before enabling attachment");
                     loop {
                         let event = match events.recv().await {
                             Ok(event) => event,
@@ -758,64 +769,71 @@ impl Browser {
                             }
                             continue;
                         }
-                        if event.method != "Target.targetCreated" {
+                        if event.method != "Target.attachedToTarget" || event.session.is_some() {
                             continue;
                         }
                         let info = &event.params["targetInfo"];
-                        if info["type"].as_str() != Some("page") {
-                            continue;
-                        }
                         let target = info["targetId"].as_str().unwrap_or_default();
-                        let opener = info["openerId"].as_str().filter(|id| !id.is_empty());
-                        if target.is_empty() || opener.is_none() {
-                            continue;
-                        }
-                        if is_known_page(&contexts, target) {
-                            continue;
-                        }
-                        let attached = match cdp
-                            .call(
-                                None,
-                                "Target.attachToTarget",
-                                serde_json::json!({ "targetId": target, "flatten": true }),
-                                timeout,
-                            )
-                            .await
-                        {
-                            Ok(attached) => attached,
-                            Err(_) => continue,
-                        };
-                        let session = attached
-                            .get("sessionId")
-                            .and_then(Value::as_str)
+                        let session = event.params["sessionId"]
+                            .as_str()
                             .unwrap_or_default()
-                            .to_string();
+                            .to_owned();
                         if session.is_empty() {
                             continue;
                         }
-                        let Some((owner, opener)) =
-                            find_owner(&contexts, opener.unwrap_or_default())
-                        else {
-                            continue;
-                        };
-                        if is_known_page(&contexts, target) {
+                        let owner = info["openerId"]
+                            .as_str()
+                            .and_then(|id| find_owner(&contexts, id));
+                        if info["type"].as_str() != Some("page")
+                            || target.is_empty()
+                            || is_known_page(&contexts, target)
+                            || owner.is_none()
+                        {
+                            let _ = cdp
+                                .call(
+                                    Some(&session),
+                                    "Runtime.runIfWaitingForDebugger",
+                                    Value::Null,
+                                    timeout,
+                                )
+                                .await;
                             continue;
                         }
+                        let (owner, opener) = owner.expect("owner checked");
                         let sink = ConsoleSink::new();
                         let spawned = CdpDriver::spawn(
                             cdp.clone(),
-                            session,
+                            session.clone(),
                             target.to_string(),
                             timeout,
                             sink.clone(),
                             owner.id().map(str::to_string),
                         )
                         .await;
-                        let Ok(driver) = spawned else { continue };
-                        if let Ok(page) = owner.finish_page(Driver::Cdp(driver), sink).await {
+                        let Ok(driver) = spawned else {
+                            let _ = cdp
+                                .call(
+                                    Some(&session),
+                                    "Runtime.runIfWaitingForDebugger",
+                                    Value::Null,
+                                    timeout,
+                                )
+                                .await;
+                            continue;
+                        };
+                        if let Ok(page) = owner.finish_page(Driver::Cdp(driver), sink, false).await
+                        {
                             page.set_opener_target(opener.target_id());
                             opener.emit(PageEvent::Popup(Box::new(page)));
                         }
+                        let _ = cdp
+                            .call(
+                                Some(&session),
+                                "Runtime.runIfWaitingForDebugger",
+                                Value::Null,
+                                timeout,
+                            )
+                            .await;
                     }
                 }
                 Backend::Bidi {
@@ -843,12 +861,13 @@ impl Browser {
                         let context_id = event.params["context"].as_str().unwrap_or_default();
                         // Popups report `originalOpener` (tabs have no parent);
                         // our own `new_page` tabs carry neither.
+                        // Child frames have a parent and are not popup pages.
+                        if !event.params["parent"].is_null() {
+                            continue;
+                        }
                         let opener = event.params["originalOpener"]
                             .as_str()
-                            .filter(|id| !id.is_empty())
-                            .or_else(|| {
-                                event.params["parent"].as_str().filter(|id| !id.is_empty())
-                            });
+                            .filter(|id| !id.is_empty());
                         if context_id.is_empty() || opener.is_none() {
                             continue;
                         }
@@ -872,7 +891,7 @@ impl Browser {
                             sink.clone(),
                             owner.id().map(str::to_string),
                         ));
-                        if let Ok(page) = owner.finish_page(driver, sink).await {
+                        if let Ok(page) = owner.finish_page(driver, sink, true).await {
                             page.set_opener_target(opener.target_id());
                             opener.emit(PageEvent::Popup(Box::new(page)));
                         }
@@ -880,6 +899,7 @@ impl Browser {
                 }
             }
         });
+        Ok(())
     }
 
     /// Default protocol timeout.

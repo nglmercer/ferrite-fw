@@ -385,6 +385,7 @@ impl ContextEvent {
 /// An isolated browser context; pages inside it share cookies and storage.
 #[derive(Clone)]
 pub struct BrowserContext {
+    pub(crate) callbacks: crate::callbacks::ExposedState,
     closed: Arc<std::sync::atomic::AtomicBool>,
     cancellation: crate::CancellationToken,
     events: tokio::sync::broadcast::Sender<ContextEvent>,
@@ -430,6 +431,7 @@ impl BrowserContext {
         let permissions = options.permissions.clone();
         let geolocation = options.geolocation;
         Self {
+            callbacks: crate::callbacks::ExposedState::default(),
             closed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             cancellation: crate::CancellationToken::new(),
             events: tokio::sync::broadcast::channel(512).0,
@@ -610,7 +612,7 @@ impl BrowserContext {
             }
         };
 
-        self.finish_page(driver, sink).await
+        self.finish_page(driver, sink, true).await
     }
 
     /// Wrap a live driver as a context page (shared by `new_page` and popup
@@ -619,6 +621,7 @@ impl BrowserContext {
         &self,
         mut driver: Driver,
         sink: ConsoleSink,
+        initialize_current_callbacks: bool,
     ) -> E2eResult<Page> {
         driver.bind_context_cancellation(self.cancellation.clone());
         let target_id = driver.target_id().to_owned();
@@ -681,6 +684,17 @@ impl BrowserContext {
         if self.options.ignore_https_errors {
             page.set_ignore_https_errors(true).await?;
         }
+        if let Some(timeout) = self
+            .live
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .action_timeout
+        {
+            page.set_timeout(timeout);
+        }
+        let _callback_gate = self.callbacks.gate.lock().await;
+        self.apply_callbacks(&page, initialize_current_callbacks)
+            .await?;
         self.apply_live_state(&page).await?;
         page.sync_protocol_timeout();
         if !self
@@ -1394,6 +1408,73 @@ impl BrowserContext {
         self.closed.load(std::sync::atomic::Ordering::Acquire)
     }
 
+    pub(crate) async fn add_callback_preload(&self, source: &str) -> E2eResult<Option<String>> {
+        match &self.backend {
+            Backend::Cdp(_) => Ok(None),
+            Backend::Bidi { conn, .. } => {
+                if !conn.supports_user_context_preloads() {
+                    return Err(E2eError::Config(
+                        "context callbacks require Firefox 136+ native user-context preloads"
+                            .into(),
+                    ));
+                }
+                // Explicit scope, including the default user context. Never
+                // install a session-global callback that leaks across contexts.
+                let id = self.id.as_deref().unwrap_or("default");
+                let conn = conn.clone();
+                let source = source.to_owned();
+                let id = id.to_owned();
+                let timeout = self
+                    .live
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .action_timeout
+                    .unwrap_or(self.timeout);
+                let cancellation = self.cancellation.clone();
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                tokio::spawn(async move {
+                    let result = cancellation.run(async {
+                        let result = conn.call("script.addPreloadScript", serde_json::json!({
+                            "functionDeclaration": format!("() => {{ {source} }}"), "userContexts": [id]
+                        }), timeout).await?;
+                        result["script"].as_str().map(str::to_owned).ok_or_else(|| E2eError::Config("native context preload ID unavailable".into()))
+                    }).await;
+                    if let Err(Ok(id)) = tx.send(result) {
+                        let _ = conn
+                            .call(
+                                "script.removePreloadScript",
+                                serde_json::json!({"script":id}),
+                                timeout,
+                            )
+                            .await;
+                    }
+                });
+                rx.await
+                    .map_err(|_| {
+                        E2eError::Disconnected("context preload registration dropped".into())
+                    })?
+                    .map(Some)
+            }
+        }
+    }
+    pub(crate) async fn remove_callback_preload(&self, id: &str) -> E2eResult<()> {
+        let timeout = self
+            .live
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .action_timeout
+            .unwrap_or(self.timeout);
+        if let Backend::Bidi { conn, .. } = &self.backend {
+            conn.call(
+                "script.removePreloadScript",
+                serde_json::json!({"script":id}),
+                timeout,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
     /// Close the context and all its pages.
     pub async fn close(self) -> E2eResult<()> {
         if self.closed.swap(true, std::sync::atomic::Ordering::AcqRel) {
@@ -1402,6 +1483,20 @@ impl BrowserContext {
         let _ = self.events.send(ContextEvent::Closed);
         self.cancellation
             .cancel_with_reason("browser context closed");
+        let _callback_gate = self.callbacks.gate.lock().await;
+        let preloads: Vec<_> = self
+            .callbacks
+            .registrations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .filter_map(|r| r.preload.clone())
+            .collect();
+        self.callbacks.stop();
+        for id in preloads {
+            let _ = self.remove_callback_preload(&id).await;
+        }
+
         if let Some(registry) = self.registry.upgrade() {
             registry
                 .lock()

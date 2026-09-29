@@ -16,7 +16,8 @@ Partial means the listed limitation must be retained in API/docs/test evidence.
 | Request/response lifecycle and redirects | Supported | Supported | IDs are scoped to a page; optional native metadata must stay optional |
 | Console/error metadata and attempt history | Supported | Supported | Unknown source/timestamp fields remain None; page identity retained |
 | In-memory/path uploads | Supported | Supported | DOM File/DataTransfer injection, 64 MiB total; no chooser/directories |
-| Page callbacks and clocks | Partial | Partial | Callback/frame scope and virtual-time limits documented in parity audit |
+| Page/context functions and bindings | Supported | Supported | JSON sync/async callbacks; main/same-origin frames; startup preload and named removal; cross-origin/handles excluded |
+| Page clocks | Partial | Partial | Document-local virtual-time semantics documented in parity audit |
 | Cookies, API cookie sharing, localStorage state | Supported | Supported | IndexedDB/OPFS and complete partition/SameSite semantics excluded |
 | Extra headers and offline after launch | Supported | Unsupported | Firefox calls return an explicit unsupported error |
 | Browser HTTP challenge credentials | Supported | Unsupported | API Basic auth is separate and available on both |
