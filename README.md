@@ -295,7 +295,8 @@ Chromium JS/CSS coverage, persistent profiles, context-linked API cookies,
 per-project browser/context options, and named test locks. See the
 [Playwright comparison](PLAYWRIGHT-PARITY.md) and
 [complete member matrix](PLAYWRIGHT-API-MATRIX.md) for remaining differences,
-plus
+and the [implementation TODO](E2E-PARITY-TODO.md) for prioritized follow-up work.
+See
 `examples/e2e/` for a runnable project and
 `crates/ferrite-e2e/tests/browser.rs` for coverage (per-engine tests
 skip when that browser is missing; point `FERRITE_CHROMIUM_PATH` at any

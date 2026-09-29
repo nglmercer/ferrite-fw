@@ -32,6 +32,9 @@ Ferrite's tests; they are not a differential Playwright conformance suite.
 The [generator](scripts/playwright-parity/README.md) pins official sources,
 requires a complete inventory and validates local evidence links.
 
+The [implementation TODO](E2E-PARITY-TODO.md) prioritizes the remaining practical
+work, with dependencies, completion criteria and explicit substantial-work exclusions.
+
 A follow-up audit corrected three false Missing entries: `Page.close`,
 `BrowserContext.isClosed` and `Locator.visible` already have implementations.
 They are classified Partial because their options or lifecycle/visibility
