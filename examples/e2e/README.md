@@ -152,8 +152,8 @@ its own steps, errors, annotations and artifacts. `result.flaky` and
 `report.flaky()` identify successful retries after an unexpected failure. Handled
 step errors stay in the step tree without making a successful test flaky. Existing
 aggregate result fields remain available; older JSON without attempt history
-still deserializes. Manual Rust `TestResult` literals need `attempt_results` and
-`flaky` fields. `on_test_end` includes only the current attempt; the final report
+still deserializes. Manual Rust result literals need the new history/step fields; `TestReport`
+literals also need `run_steps` (empty when unused). `on_test_end` includes only the current attempt; the final report
 includes the whole retry history.
 
 Network events now distinguish response headers, request completion and transport
@@ -163,3 +163,43 @@ flag. HTTP 4xx/5xx responses finish normally. Context subscriptions forward both
 kinds with the source page ID. `Request` and `Response` also include `request_id`;
 use `..` in patterns when you only need URL/status. Firefox BiDi does not supply an
 explicit cancellation flag (`cancelled` is `None`). Subscribe before triggering requests.
+
+Controlled steps add local deadlines, skip reasons and live metadata:
+
+```rust,ignore
+use ferrite_e2e::{StepOptions, StepOutcome};
+use std::time::Duration;
+
+let outcome = ctx.page.step_with(
+    "optional details",
+    StepOptions::default().timeout(Duration::from_secs(2)).annotate("issue", "123"),
+    |step| async move {
+        if !show_details {
+            step.skip("details are disabled")?;
+        }
+        ctx.page.get_by_role("button", "Details").click().await?;
+        Ok(())
+    },
+).await?;
+if let StepOutcome::Skipped(reason) = outcome {
+    println!("{reason}");
+}
+```
+
+Use `StepOptions::skip(reason)` to avoid even constructing the closure. Skipping
+only affects that step; local timeout errors may be handled while the test keeps
+running. Zero adds no local deadline; test cancellation and its enclosing timeout
+still apply. `StepContext::annotations()` and `title_path()` read live metadata.
+
+Navigation/set-content, Locator operations and assertions record automatic steps,
+as do hooks and typed fixture setup/teardown. Internal action calls and assertion
+polling are suppressed. JSON/HTML retain categories, statuses and annotations;
+run-wide cleanup appears in `report.run_steps`. Direct Page input and raw protocol
+calls are outside this automatic coverage.
+
+`report.write_bundle("report-folder")?` copies screenshots, videos, traces and
+attachments into `artifacts/` and writes HTML, JSON and JUnit with relative links.
+Move or upload the entire folder; links remain usable after source files are
+removed. Selecting the `html` reporter performs this export automatically.
+JSON/JUnit selected with HTML share its relative paths; JSON-only/JUnit-only
+exports retain their prior source paths. Missing artifact files fail export.

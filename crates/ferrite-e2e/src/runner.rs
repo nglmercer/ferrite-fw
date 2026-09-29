@@ -1195,7 +1195,14 @@ async fn setup_fixtures(
                 dependencies.inner.insert(*dependency, value.clone());
             }
         }
-        let value = (def.setup)(dependencies).await.map_err(|error| {
+        let value = crate::report::automatic(
+            None,
+            format!("fixture setup {}", def.name),
+            crate::StepCategory::Fixture,
+            async { (def.setup)(dependencies).await },
+        )
+        .await
+        .map_err(|error| {
             SetupFailure::new(error, &format!("fixture {} setup", def.name)).error()
         })?;
         let target = if def.scope == FixtureScope::Worker {
@@ -1689,6 +1696,9 @@ impl Runner {
                 }
             }
         }
+        report.run_steps = crate::report::current_session()
+            .map(|s| s.finish_all())
+            .unwrap_or_default();
         report.results.sort_by(|a, b| a.name.cmp(&b.name));
         self.write_artifacts(&report, &self.reporter);
         self.reporters.emit(|r| r.on_end(&report));
@@ -1964,6 +1974,21 @@ impl Runner {
     /// Tests run on a worker pool
     /// (`worker_index` in [`TestInfo`]); progress prints in completion order.
     pub async fn run(&self, browser: &Browser, tests: Vec<Test>) -> TestReport {
+        let session = crate::report::StepSession::new(
+            crate::report::ReporterHub::default(),
+            crate::AttemptInfo {
+                name: "Run lifecycle".into(),
+                file: "<run>".into(),
+                line: 0,
+                project: None,
+                worker_index: 0,
+                repeat_each_index: 0,
+                retry: 0,
+            },
+        );
+        session.scope(self.run_inner(browser, tests)).await
+    }
+    async fn run_inner(&self, browser: &Browser, tests: Vec<Test>) -> TestReport {
         self.reporters.emit(|r| r.on_begin(&tests));
         let mut report = TestReport::default();
         let control = crate::CancellationToken::new();
@@ -2184,118 +2209,156 @@ impl Runner {
             let project_browsers = project_browsers.clone();
             let control = control.clone();
             let failures = failures.clone();
+            let run_session = crate::report::current_session().expect("runner scope");
             workers.spawn(async move {
-                let mut results = Vec::new();
-                let mut fixture_states: HashMap<Option<String>, FixtureState> = HashMap::new();
-                let mut suite_states: HashMap<Option<String>, SuiteState> = HashMap::new();
-                loop {
-                    let item = queue
-                        .lock()
-                        .map(|mut q| {
-                            if control.is_cancelled()
-                                || (runner.max_failures > 0
-                                    && failures.load(std::sync::atomic::Ordering::SeqCst)
-                                        >= runner.max_failures)
-                            {
-                                None
-                            } else {
-                                q.pop_front()
+                run_session
+                    .scope(crate::report::automatic(
+                        None,
+                        format!("worker {worker_index}"),
+                        crate::StepCategory::Hook,
+                        async move {
+                            let mut results = Vec::new();
+                            let mut fixture_states: HashMap<Option<String>, FixtureState> =
+                                HashMap::new();
+                            let mut suite_states: HashMap<Option<String>, SuiteState> =
+                                HashMap::new();
+                            loop {
+                                let item = queue
+                                    .lock()
+                                    .map(|mut q| {
+                                        if control.is_cancelled()
+                                            || (runner.max_failures > 0
+                                                && failures
+                                                    .load(std::sync::atomic::Ordering::SeqCst)
+                                                    >= runner.max_failures)
+                                        {
+                                            None
+                                        } else {
+                                            q.pop_front()
+                                        }
+                                    })
+                                    .unwrap_or(None);
+                                match item {
+                                    Some(item) => {
+                                        let selected = item
+                                            .project
+                                            .as_ref()
+                                            .and_then(|name| project_browsers.get(name))
+                                            .unwrap_or(&browser);
+                                        let result = run_one(
+                                            &runner,
+                                            selected,
+                                            &item,
+                                            worker_index,
+                                            &control,
+                                            fixture_states.entry(item.project.clone()).or_default(),
+                                            suite_states.entry(item.project.clone()).or_default(),
+                                        )
+                                        .await;
+                                        if result.status == TestStatus::Failed {
+                                            failures
+                                                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                                            let errors = retire_worker_resources(
+                                                &runner,
+                                                suite_states
+                                                    .entry(item.project.clone())
+                                                    .or_default(),
+                                                fixture_states
+                                                    .entry(item.project.clone())
+                                                    .or_default(),
+                                                item.project.as_deref(),
+                                            )
+                                            .await;
+                                            if !errors.is_empty() {
+                                                results.push(runner.report_failure(
+                                                    &display_name(
+                                                        item.project.as_deref(),
+                                                        "<worker cleanup>",
+                                                    ),
+                                                    errors.join("; "),
+                                                ));
+                                            }
+                                        }
+                                        results.push(result);
+                                        let remaining: Vec<_> = queue
+                                            .lock()
+                                            .unwrap_or_else(|e| e.into_inner())
+                                            .iter()
+                                            .filter(|pending| pending.project == item.project)
+                                            .flat_map(|pending| pending.test.suites.iter().cloned())
+                                            .collect();
+                                        let cleanup = suite_states
+                                            .entry(item.project.clone())
+                                            .or_default()
+                                            .cleanup_finished(
+                                                &runner,
+                                                fixture_states
+                                                    .entry(item.project.clone())
+                                                    .or_default(),
+                                                item.project.as_deref(),
+                                                &remaining,
+                                            )
+                                            .await;
+                                        failures.fetch_add(
+                                            cleanup.len(),
+                                            std::sync::atomic::Ordering::SeqCst,
+                                        );
+                                        if !cleanup.is_empty() {
+                                            let errors = retire_worker_resources(
+                                                &runner,
+                                                suite_states
+                                                    .entry(item.project.clone())
+                                                    .or_default(),
+                                                fixture_states
+                                                    .entry(item.project.clone())
+                                                    .or_default(),
+                                                item.project.as_deref(),
+                                            )
+                                            .await;
+                                            if !errors.is_empty() {
+                                                failures.fetch_add(
+                                                    1,
+                                                    std::sync::atomic::Ordering::SeqCst,
+                                                );
+                                                results.push(runner.report_failure(
+                                                    &display_name(
+                                                        item.project.as_deref(),
+                                                        "<worker cleanup>",
+                                                    ),
+                                                    errors.join("; "),
+                                                ));
+                                            }
+                                        }
+                                        results.extend(cleanup);
+                                    }
+                                    None => break,
+                                }
                             }
-                        })
-                        .unwrap_or(None);
-                    match item {
-                        Some(item) => {
-                            let selected = item
-                                .project
-                                .as_ref()
-                                .and_then(|name| project_browsers.get(name))
-                                .unwrap_or(&browser);
-                            let result = run_one(
-                                &runner,
-                                selected,
-                                &item,
-                                worker_index,
-                                &control,
-                                fixture_states.entry(item.project.clone()).or_default(),
-                                suite_states.entry(item.project.clone()).or_default(),
-                            )
-                            .await;
-                            if result.status == TestStatus::Failed {
-                                failures.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                                let errors = retire_worker_resources(
-                                    &runner,
-                                    suite_states.entry(item.project.clone()).or_default(),
-                                    fixture_states.entry(item.project.clone()).or_default(),
-                                    item.project.as_deref(),
-                                )
-                                .await;
-                                if !errors.is_empty() {
+                            for (project, state) in &mut suite_states {
+                                results.extend(
+                                    state
+                                        .cleanup(
+                                            &runner,
+                                            fixture_states.entry(project.clone()).or_default(),
+                                            project.as_deref(),
+                                        )
+                                        .await,
+                                );
+                            }
+                            for (project, state) in &fixture_states {
+                                if let Some(error) = teardown_fixtures(&runner, &state.built).await
+                                {
                                     results.push(runner.report_failure(
-                                        &display_name(item.project.as_deref(), "<worker cleanup>"),
-                                        errors.join("; "),
+                                        &display_name(project.as_deref(), "<worker fixtures>"),
+                                        error,
                                     ));
                                 }
                             }
-                            results.push(result);
-                            let remaining: Vec<_> = queue
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner())
-                                .iter()
-                                .filter(|pending| pending.project == item.project)
-                                .flat_map(|pending| pending.test.suites.iter().cloned())
-                                .collect();
-                            let cleanup = suite_states
-                                .entry(item.project.clone())
-                                .or_default()
-                                .cleanup_finished(
-                                    &runner,
-                                    fixture_states.entry(item.project.clone()).or_default(),
-                                    item.project.as_deref(),
-                                    &remaining,
-                                )
-                                .await;
-                            failures.fetch_add(cleanup.len(), std::sync::atomic::Ordering::SeqCst);
-                            if !cleanup.is_empty() {
-                                let errors = retire_worker_resources(
-                                    &runner,
-                                    suite_states.entry(item.project.clone()).or_default(),
-                                    fixture_states.entry(item.project.clone()).or_default(),
-                                    item.project.as_deref(),
-                                )
-                                .await;
-                                if !errors.is_empty() {
-                                    failures.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                                    results.push(runner.report_failure(
-                                        &display_name(item.project.as_deref(), "<worker cleanup>"),
-                                        errors.join("; "),
-                                    ));
-                                }
-                            }
-                            results.extend(cleanup);
-                        }
-                        None => break,
-                    }
-                }
-                for (project, state) in &mut suite_states {
-                    results.extend(
-                        state
-                            .cleanup(
-                                &runner,
-                                fixture_states.entry(project.clone()).or_default(),
-                                project.as_deref(),
-                            )
-                            .await,
-                    );
-                }
-                for (project, state) in &fixture_states {
-                    if let Some(error) = teardown_fixtures(&runner, &state.built).await {
-                        results.push(runner.report_failure(
-                            &display_name(project.as_deref(), "<worker fixtures>"),
-                            error,
-                        ));
-                    }
-                }
-                results
+                            Ok(results)
+                        },
+                    ))
+                    .await
+                    .expect("worker scope returns outcomes")
             });
         }
         while let Some(joined) = workers.join_next().await {
@@ -2365,32 +2428,44 @@ impl Runner {
 
     /// Write file artifacts for the reporters in `spec` (comma-separated).
     ///
-    /// `json`, `junit`, and `html` write files; `list` and `dot` are printed
-    /// by the caller via [`TestReport::to_list`] / [`TestReport::to_dot`].
+    /// `html` exports a portable bundle with relative artifact links and companion
+    /// JSON/JUnit files. Selected JSON/JUnit reporters reuse those files; without
+    /// HTML they retain source paths. Bundle failures emit `Reporter::on_error`.
+    /// `list` and `dot` are printed by the caller via [`TestReport::to_list`] /
+    /// [`TestReport::to_dot`].
     pub fn write_artifacts(&self, report: &TestReport, spec: &str) -> Vec<String> {
         let mut written = Vec::new();
         std::fs::create_dir_all(&self.output_dir).ok();
-        for reporter in spec.split(',').map(str::trim) {
-            match reporter {
-                "json" => {
-                    let path = format!("{}/results.json", self.output_dir);
-                    if std::fs::write(&path, report.to_json()).is_ok() {
-                        written.push(path);
-                    }
+        let formats: Vec<_> = spec.split(',').map(str::trim).collect();
+        let bundle = if formats.contains(&"html") {
+            match report.write_bundle(&self.output_dir) {
+                Ok(bundle) => Some(bundle),
+                Err(error) => {
+                    self.reporters
+                        .emit(|r| r.on_error(None, &format!("report bundle: {error}")));
+                    None
                 }
-                "junit" => {
-                    let path = format!("{}/junit.xml", self.output_dir);
-                    if std::fs::write(&path, report.to_junit()).is_ok() {
-                        written.push(path);
-                    }
-                }
+            }
+        } else {
+            None
+        };
+        for format in formats {
+            let (path, data) = match format {
                 "html" => {
-                    let path = format!("{}/report.html", self.output_dir);
-                    if std::fs::write(&path, report.to_html()).is_ok() {
-                        written.push(path);
+                    if let Some(bundle) = &bundle {
+                        written.push(bundle.html.display().to_string());
                     }
+                    continue;
                 }
-                _ => {}
+                "json" => (
+                    format!("{}/results.json", self.output_dir),
+                    report.to_json(),
+                ),
+                "junit" => (format!("{}/junit.xml", self.output_dir), report.to_junit()),
+                _ => continue,
+            };
+            if bundle.is_some() || std::fs::write(&path, data).is_ok() {
+                written.push(path);
             }
         }
         written
@@ -2403,6 +2478,18 @@ impl Drop for AbortTask {
         self.0.abort();
     }
 }
+async fn bounded_in<T>(
+    session: Option<&crate::report::StepSession>,
+    deadline: crate::operation::Deadline,
+    token: Option<&crate::CancellationToken>,
+    label: &str,
+    future: impl Future<Output = E2eResult<T>>,
+) -> E2eResult<T> {
+    match session {
+        Some(session) => session.scope(bounded(deadline, token, label, future)).await,
+        None => bounded(deadline, token, label, future).await,
+    }
+}
 async fn bounded<T>(
     deadline: crate::operation::Deadline,
     token: Option<&crate::CancellationToken>,
@@ -2410,7 +2497,21 @@ async fn bounded<T>(
     future: impl Future<Output = E2eResult<T>>,
 ) -> E2eResult<T> {
     let work = async {
-        match std::panic::AssertUnwindSafe(future).catch_unwind().await {
+        let category = if label.contains("fixture") {
+            crate::StepCategory::Fixture
+        } else {
+            crate::StepCategory::Hook
+        };
+        let instrument =
+            label.contains("before") || label.contains("after") || label.contains("global");
+        let work = async {
+            if instrument {
+                crate::report::automatic(None, label, category, future).await
+            } else {
+                future.await
+            }
+        };
+        match std::panic::AssertUnwindSafe(work).catch_unwind().await {
             Ok(result) => result,
             Err(panic) => Err(E2eError::Config(format!(
                 "{label} panicked: {}",
@@ -2645,7 +2746,8 @@ async fn run_one(
             .map(|def| def.type_id)
             .collect();
         let mut empty_attempt = FixtureState::default();
-        if let Err(error) = bounded(
+        if let Err(error) = bounded_in(
+            info.steps.as_ref(),
             deadline,
             Some(control),
             "automatic worker fixture setup",
@@ -2659,9 +2761,17 @@ async fn run_one(
         .await
         {
             info.record_error(&error, "worker fixture setup");
-            let cleanup =
-                retire_worker_resources(runner, suites, worker_fixtures, item.project.as_deref())
-                    .await;
+            let cleanup = info
+                .steps
+                .as_ref()
+                .unwrap()
+                .scope(retire_worker_resources(
+                    runner,
+                    suites,
+                    worker_fixtures,
+                    item.project.as_deref(),
+                ))
+                .await;
             last_error = format!(
                 "{error}{}",
                 if cleanup.is_empty() {
@@ -2678,8 +2788,11 @@ async fn run_one(
             continue;
         }
         let deadline = crate::operation::Deadline::new(timeout);
-        if let Err(error) = suites
-            .setup(
+        if let Err(error) = info
+            .steps
+            .as_ref()
+            .unwrap()
+            .scope(suites.setup(
                 test,
                 runner,
                 worker_fixtures,
@@ -2689,19 +2802,23 @@ async fn run_one(
                 },
                 deadline,
                 control,
-            )
+            ))
             .await
         {
             info.record_error(&error, "before_all");
             last_error = error.to_string();
             if attempts <= item.retries && !control.is_cancelled() {
-                let cleanup = retire_worker_resources(
-                    runner,
-                    suites,
-                    worker_fixtures,
-                    item.project.as_deref(),
-                )
-                .await;
+                let cleanup = info
+                    .steps
+                    .as_ref()
+                    .unwrap()
+                    .scope(retire_worker_resources(
+                        runner,
+                        suites,
+                        worker_fixtures,
+                        item.project.as_deref(),
+                    ))
+                    .await;
                 if !cleanup.is_empty() {
                     info.record_error(&E2eError::Config(cleanup.join("; ")), "worker cleanup");
                     last_error.push_str(&format!("; worker cleanup: {}", cleanup.join("; ")));
@@ -2717,7 +2834,8 @@ async fn run_one(
         // Worker fixtures and beforeAll have independent setup budgets.
         // Firefox can discard a new tab when another worker closes its window.
         // Serialize lifecycle operations; bodies and hooks still run concurrently.
-        let lifecycle = match bounded(
+        let lifecycle = match bounded_in(
+            info.steps.as_ref(),
             crate::operation::Deadline::new(timeout),
             Some(control),
             "context scheduling",
@@ -2735,7 +2853,8 @@ async fn run_one(
         };
         runtime.restart();
         let deadline = crate::operation::Deadline::new(timeout);
-        let context = match bounded(
+        let context = match bounded_in(
+            info.steps.as_ref(),
             deadline,
             Some(control),
             "context setup",
@@ -2756,24 +2875,32 @@ async fn run_one(
                 break;
             }
         };
-        let mut page =
-            match bounded(deadline, Some(control), "page setup", context.new_page()).await {
-                Ok(page) => page,
-                Err(error) => {
-                    info.record_error(&error, "page setup");
-                    last_error = error.to_string();
-                    let _ = bounded(
-                        crate::operation::Deadline::new(runner.cleanup_timeout),
-                        None,
-                        "context close",
-                        context.close(),
-                    )
-                    .await;
-                    attempt_report.outcome(TestStatus::Failed, Some(last_error.clone()));
-                    annotations = info.annotations();
-                    continue;
-                }
-            };
+        let mut page = match bounded_in(
+            info.steps.as_ref(),
+            deadline,
+            Some(control),
+            "page setup",
+            context.new_page(),
+        )
+        .await
+        {
+            Ok(page) => page,
+            Err(error) => {
+                info.record_error(&error, "page setup");
+                last_error = error.to_string();
+                let _ = bounded_in(
+                    info.steps.as_ref(),
+                    crate::operation::Deadline::new(runner.cleanup_timeout),
+                    None,
+                    "context close",
+                    context.close(),
+                )
+                .await;
+                attempt_report.outcome(TestStatus::Failed, Some(last_error.clone()));
+                annotations = info.annotations();
+                continue;
+            }
+        };
         page.set_expect_timeout(runner.expect_timeout);
         drop(lifecycle);
         page.snapshot_dir = Some(
@@ -2787,7 +2914,8 @@ async fn run_one(
             Err(error) => {
                 info.record_error(&error, "request setup");
                 last_error = error.to_string();
-                let _ = bounded(
+                let _ = bounded_in(
+                    info.steps.as_ref(),
                     crate::operation::Deadline::new(runner.cleanup_timeout),
                     None,
                     "context close",
@@ -2820,7 +2948,8 @@ async fn run_one(
         let mut body_started = false;
 
         // One budget covers beforeEach, fixture setup, recording setup and body.
-        let outcome = bounded(
+        let outcome = bounded_in(
+            info.steps.as_ref(),
             crate::operation::Deadline::new(Duration::ZERO),
             Some(control),
             "test setup/body",
@@ -2843,20 +2972,28 @@ async fn run_one(
                         .iter()
                         .flat_map(|suite| suite.before_each.iter()),
                 ) {
-                    let fixtures = setup_fixtures(
-                        &runner.fixtures,
-                        hook.fixtures(),
-                        worker_fixtures,
-                        &mut attempt_fixtures,
+                    crate::report::automatic(
+                        None,
+                        "before_each",
+                        crate::StepCategory::Hook,
+                        async {
+                            let fixtures = setup_fixtures(
+                                &runner.fixtures,
+                                hook.fixtures(),
+                                worker_fixtures,
+                                &mut attempt_fixtures,
+                            )
+                            .await?;
+                            hook.run(TestContext {
+                                page: page.clone(),
+                                context: context.clone(),
+                                request: request.clone(),
+                                info: info.clone(),
+                                fixtures,
+                            })
+                            .await
+                        },
                     )
-                    .await?;
-                    hook.run(TestContext {
-                        page: page.clone(),
-                        context: context.clone(),
-                        request: request.clone(),
-                        info: info.clone(),
-                        fixtures,
-                    })
                     .await?;
                 }
                 let fixtures = setup_fixtures(
@@ -2912,7 +3049,8 @@ async fn run_one(
             .flat_map(|suite| suite.after_each.iter())
             .chain(runner.after_each.iter())
         {
-            if let Err(error) = bounded(
+            if let Err(error) = bounded_in(
+                info.steps.as_ref(),
                 crate::operation::Deadline::new(runner.cleanup_timeout),
                 None,
                 "after_each",
@@ -2977,7 +3115,8 @@ async fn run_one(
             if keep {
                 let path = std::path::Path::new(&runner.output_dir)
                     .join(format!("{slug}-attempt{attempts}.webm"));
-                match bounded(
+                match bounded_in(
+                    info.steps.as_ref(),
                     crate::operation::Deadline::new(runner.cleanup_timeout),
                     None,
                     "stop video",
@@ -2997,7 +3136,8 @@ async fn run_one(
                     }
                 }
             } else {
-                let _ = bounded(
+                let _ = bounded_in(
+                    info.steps.as_ref(),
                     crate::operation::Deadline::new(runner.cleanup_timeout),
                     None,
                     "cancel video",
@@ -3014,7 +3154,8 @@ async fn run_one(
         if take_shot {
             let path = std::path::Path::new(&runner.output_dir)
                 .join(format!("{slug}-attempt{attempts}.png"));
-            if bounded(
+            if bounded_in(
+                info.steps.as_ref(),
                 crate::operation::Deadline::new(runner.cleanup_timeout),
                 None,
                 "screenshot",
@@ -3051,7 +3192,8 @@ async fn run_one(
             }
         }
         request.dispose();
-        let lifecycle = match bounded(
+        let lifecycle = match bounded_in(
+            info.steps.as_ref(),
             crate::operation::Deadline::new(runner.cleanup_timeout),
             None,
             "context cleanup scheduling",
@@ -3075,7 +3217,8 @@ async fn run_one(
         for (label, result) in [
             (
                 "page close",
-                bounded(
+                bounded_in(
+                    info.steps.as_ref(),
                     crate::operation::Deadline::new(runner.cleanup_timeout),
                     None,
                     "page close",
@@ -3085,7 +3228,8 @@ async fn run_one(
             ),
             (
                 "context close",
-                bounded(
+                bounded_in(
+                    info.steps.as_ref(),
                     crate::operation::Deadline::new(runner.cleanup_timeout),
                     None,
                     "context close",
@@ -3109,9 +3253,17 @@ async fn run_one(
         // Retire logical worker resources after an unexpected failure, so
         // retries and subsequent tests cannot inherit failed fixture/suite state.
         if failed.is_some() && !expected_failure_observed {
-            let notes =
-                retire_worker_resources(runner, suites, worker_fixtures, item.project.as_deref())
-                    .await;
+            let notes = info
+                .steps
+                .as_ref()
+                .unwrap()
+                .scope(retire_worker_resources(
+                    runner,
+                    suites,
+                    worker_fixtures,
+                    item.project.as_deref(),
+                ))
+                .await;
             if !notes.is_empty() {
                 info.record_error(&E2eError::Config(notes.join("; ")), "worker cleanup");
                 failed = Some(format!(
@@ -3240,7 +3392,12 @@ async fn teardown_fixtures_with_info(
                 crate::operation::Deadline::new(runner.cleanup_timeout),
                 None,
                 "fixture teardown",
-                async { teardown(Arc::clone(value)).await },
+                crate::report::automatic(
+                    info.and_then(|i| i.steps.clone()),
+                    format!("fixture teardown {}", def.name),
+                    crate::StepCategory::Fixture,
+                    async { teardown(Arc::clone(value)).await },
+                ),
             )
             .await
             {
@@ -3427,6 +3584,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let runner = Runner::default().output_dir(dir.display().to_string());
         let report = TestReport {
+            run_steps: Vec::new(),
             results: vec![TestResult {
                 attempt_results: Vec::new(),
                 flaky: false,
@@ -3647,6 +3805,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let runner = Runner::default().output_dir(dir.display().to_string());
         let report = TestReport {
+            run_steps: Vec::new(),
             results: vec![TestResult {
                 attempt_results: Vec::new(),
                 flaky: false,

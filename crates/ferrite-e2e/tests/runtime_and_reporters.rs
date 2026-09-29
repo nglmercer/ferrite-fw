@@ -339,7 +339,14 @@ async fn reporter_events_are_live_and_attempt_specific_even_on_retry_and_cancell
             .position(|e| e == "test- retry 0 Failed")
             .unwrap();
         assert_eq!(events[failed_end - 1], "error attempt");
-        assert_eq!(events[failed_end - 2], "cleanup");
+        let cleanup = events[..failed_end]
+            .iter()
+            .rposition(|e| e == "cleanup")
+            .unwrap();
+        assert!(cleanup < failed_end - 1);
+        assert!(events[cleanup + 1..failed_end]
+            .iter()
+            .any(|e| e == "step- after_each false"));
         assert!(events.contains(&"attachments retry 0 1".into()));
         assert!(events.contains(&"attachments retry 1 1".into()));
         assert!(events.contains(&"trace retry 0 retry-attempt1.json".into()));

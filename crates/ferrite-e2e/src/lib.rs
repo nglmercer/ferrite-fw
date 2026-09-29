@@ -41,6 +41,7 @@ mod api;
 mod api_cookies;
 mod bidi;
 mod browser;
+mod bundle;
 mod cdp;
 mod config;
 mod context;
@@ -64,6 +65,7 @@ mod webserver;
 pub use api::{ApiClient, ApiClientOptions, ApiRequestOptions, ApiResponse, MultipartField};
 pub use bidi::BidiConnection;
 pub use browser::{find_chromium, find_firefox, Browser, BrowserKind, LaunchOptions};
+pub use bundle::ReportBundle;
 pub use cdp::CdpConnection;
 pub use config::config_from_env;
 pub use context::{
@@ -92,7 +94,8 @@ pub use page::{
     StorageState, Viewport, WebSocketDirection, WebSocketEvent,
 };
 pub use report::{
-    Attachment, AttemptInfo, AttemptResult, AttemptStatus, Reporter, SourceLocation, StepInfo,
+    Attachment, AttemptInfo, AttemptResult, AttemptStatus, Reporter, SourceLocation,
+    StepAnnotation, StepCategory, StepContext, StepInfo, StepOptions, StepOutcome, StepStatus,
     TestError, TestReport, TestResult, TestStatus,
 };
 pub use runner::{

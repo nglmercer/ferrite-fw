@@ -109,8 +109,15 @@ async fn retries_preserve_nested_steps_source_errors_and_all_artifacts() {
         for (index, attempt) in result.attempt_results.iter().enumerate() {
             assert_eq!(attempt.info.retry, index as u32);
             assert_eq!(attempt.info.name, "retry diagnostics");
-            assert_eq!(attempt.steps.len(), 1);
-            let outer = &attempt.steps[0];
+            assert_eq!(
+                attempt
+                    .steps
+                    .iter()
+                    .filter(|s| s.category == StepCategory::User)
+                    .count(),
+                1
+            );
+            let outer = attempt.steps.iter().find(|s| s.title == "outer").unwrap();
             let inner = &outer.steps[0];
             assert_eq!(inner.parent_id, Some(outer.id));
             assert_eq!(inner.attachments.len(), 1);
@@ -400,7 +407,16 @@ async fn early_setup_failures_are_in_every_attempt_with_original_status() {
             assert_eq!(attempt.status, AttemptStatus::Failed);
             assert_eq!(attempt.errors[0].phase, "worker fixture setup");
             assert!(attempt.errors[0].message.contains("worker setup failed"));
-            assert!(attempt.steps.is_empty());
+            assert_eq!(attempt.steps.len(), 1);
+            assert_eq!(attempt.steps[0].category, StepCategory::Fixture);
+            assert_eq!(attempt.steps[0].status, StepStatus::Failed);
+            assert!(attempt.steps[0].title.contains("u32"));
+            assert!(attempt.steps[0]
+                .error
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("worker setup failed"));
         }
         let tests = Suite::new("blocked setup")
             .before_all(|| async { std::future::pending::<E2eResult<()>>().await })

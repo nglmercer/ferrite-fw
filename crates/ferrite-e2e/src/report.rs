@@ -66,9 +66,156 @@ impl TestError {
     }
 }
 
-/// One named user step, including nested children and step-local attachments.
+/// Category of a recorded step.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StepCategory {
+    #[default]
+    User,
+    Action,
+    Assertion,
+    Hook,
+    Fixture,
+}
+/// Execution outcome of a step, independent of the enclosing test.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StepStatus {
+    Running,
+    #[default]
+    Passed,
+    Failed,
+    Skipped,
+    TimedOut,
+    Interrupted,
+}
+/// A step annotation with optional Rust source metadata.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StepAnnotation {
+    pub kind: String,
+    pub description: String,
+    pub location: Option<SourceLocation>,
+}
+/// Controls for a user step. Zero timeout inherits the enclosing test budget.
+#[derive(Debug, Clone, Default)]
+pub struct StepOptions {
+    pub timeout: std::time::Duration,
+    /// Record a skipped step without constructing or polling its body.
+    pub skip: Option<String>,
+    pub annotations: Vec<StepAnnotation>,
+}
+impl StepOptions {
+    pub fn timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+    pub fn skip(mut self, reason: impl Into<String>) -> Self {
+        self.skip = Some(reason.into());
+        self
+    }
+    pub fn annotate(mut self, kind: impl Into<String>, description: impl Into<String>) -> Self {
+        self.annotations.push(StepAnnotation {
+            kind: kind.into(),
+            description: description.into(),
+            location: None,
+        });
+        self
+    }
+}
+/// A controlled step may finish without producing a value when skipped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StepOutcome<T> {
+    Completed(T),
+    Skipped(String),
+}
+/// Live control and metadata for a user step. Clones share annotations/skip state.
+#[derive(Clone)]
+pub struct StepContext {
+    session: StepSession,
+    id: u64,
+    skip: crate::CancellationToken,
+}
+impl StepContext {
+    /// Abort this step; `skip(reason)?` also exits the current closure immediately.
+    /// Skipping a step does not skip its enclosing test or parent step.
+    #[track_caller]
+    pub fn skip(&self, reason: impl Into<String>) -> crate::E2eResult<()> {
+        let reason = reason.into();
+        // Serialize the annotation and cancellation across shared contexts so
+        // simultaneous skip requests retain one reason and one annotation.
+        let mut records = self
+            .session
+            .records
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if !self.skip.is_cancelled() {
+            if !records.sealed {
+                if let Some((step, _, false)) = records.nodes.iter_mut().find(|n| n.0.id == self.id)
+                {
+                    step.annotations.push(StepAnnotation {
+                        kind: "skip".into(),
+                        description: reason.clone(),
+                        location: Some(SourceLocation::caller(std::panic::Location::caller())),
+                    });
+                }
+            }
+            self.skip.cancel_with_reason(reason.clone());
+        }
+        Err(crate::E2eError::StepSkipped(reason))
+    }
+    #[track_caller]
+    pub fn annotate(&self, kind: impl Into<String>, description: impl Into<String>) {
+        let annotation = StepAnnotation {
+            kind: kind.into(),
+            description: description.into(),
+            location: Some(SourceLocation::caller(std::panic::Location::caller())),
+        };
+        let mut records = self
+            .session
+            .records
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if !records.sealed {
+            if let Some((step, _, false)) = records.nodes.iter_mut().find(|n| n.0.id == self.id) {
+                step.annotations.push(annotation);
+            }
+        }
+    }
+    pub fn annotations(&self) -> Vec<StepAnnotation> {
+        self.session
+            .records
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .nodes
+            .iter()
+            .find(|n| n.0.id == self.id)
+            .map(|n| n.0.annotations.clone())
+            .unwrap_or_default()
+    }
+    pub fn title_path(&self) -> Vec<String> {
+        self.session
+            .records
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .nodes
+            .iter()
+            .find(|n| n.0.id == self.id)
+            .map(|n| n.0.title_path.clone())
+            .unwrap_or_default()
+    }
+}
+
+/// One user, action, assertion or lifecycle step with children and attachments.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StepInfo {
+    #[serde(default)]
+    pub category: StepCategory,
+    #[serde(default)]
+    pub status: StepStatus,
+    #[serde(default)]
+    pub annotations: Vec<StepAnnotation>,
+    #[serde(default)]
+    pub title_path: Vec<String>,
     pub id: u64,
     pub parent_id: Option<u64>,
     pub title: String,
@@ -80,6 +227,12 @@ pub struct StepInfo {
     pub error: Option<TestError>,
     pub steps: Vec<StepInfo>,
     pub attachments: Vec<Attachment>,
+}
+
+impl StepInfo {
+    pub fn title_path(&self) -> Vec<String> {
+        self.title_path.clone()
+    }
 }
 
 /// Complete diagnostics and artifacts for a single attempt.
@@ -133,12 +286,47 @@ impl ReporterHub {
 
 tokio::task_local! {
     static CURRENT_STEP: (u64, u64);
+    static CURRENT_SESSION: StepSession;
+    static SUPPRESS_ACTIONS: bool;
 }
 #[derive(Default)]
 struct StepRecords {
     nodes: Vec<(StepInfo, std::time::Instant, bool)>,
     sealed: bool,
 }
+pub(crate) fn current_session() -> Option<StepSession> {
+    CURRENT_SESSION.try_with(Clone::clone).ok()
+}
+/// Record one public operation, suppressing implementation calls/poll attempts.
+/// Hook/fixture scopes intentionally keep their nested actions visible.
+pub(crate) fn automatic<'a, T: 'a>(
+    session: Option<StepSession>,
+    title: impl Into<String>,
+    category: StepCategory,
+    future: impl std::future::Future<Output = crate::E2eResult<T>> + 'a,
+) -> impl std::future::Future<Output = crate::E2eResult<T>> + 'a {
+    let future = Box::pin(future);
+    let title = title.into();
+    async move {
+        if SUPPRESS_ACTIONS.try_with(|value| *value).unwrap_or(false) {
+            return future.await;
+        }
+        match session.or_else(current_session) {
+            None => future.await,
+            Some(session) => {
+                let location = session.default_location();
+                session
+                    .run_kind(&title, location, category, Vec::new(), future, |out| {
+                        out.as_ref()
+                            .err()
+                            .map(|e| TestError::new(e, &format!("{category:?}"), None))
+                    })
+                    .await
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct StepSession {
     id: u64,
@@ -162,12 +350,44 @@ impl StepSession {
         future: F,
         error: impl FnOnce(&F::Output) -> Option<TestError>,
     ) -> F::Output {
+        self.run_kind(
+            title,
+            location,
+            StepCategory::User,
+            Vec::new(),
+            future,
+            error,
+        )
+        .await
+    }
+    pub(crate) async fn scope<F: std::future::Future>(&self, future: F) -> F::Output {
+        CURRENT_SESSION.scope(self.clone(), future).await
+    }
+    fn default_location(&self) -> SourceLocation {
+        SourceLocation {
+            file: self.attempt.file.clone(),
+            line: self.attempt.line,
+            column: 0,
+        }
+    }
+    async fn run_kind<F: std::future::Future>(
+        &self,
+        title: &str,
+        location: SourceLocation,
+        category: StepCategory,
+        annotations: Vec<StepAnnotation>,
+        future: F,
+        error: impl FnOnce(&F::Output) -> Option<TestError>,
+    ) -> F::Output {
         use futures::FutureExt;
-        let mut guard = self.start(title, location);
+        let mut guard = self.start_kind(title, location, category, annotations);
         let result = CURRENT_STEP
             .scope(
                 (self.id, guard.id),
-                std::panic::AssertUnwindSafe(future).catch_unwind(),
+                self.scope(SUPPRESS_ACTIONS.scope(
+                    matches!(category, StepCategory::Action | StepCategory::Assertion),
+                    std::panic::AssertUnwindSafe(future).catch_unwind(),
+                )),
             )
             .await;
         match result {
@@ -194,12 +414,107 @@ impl StepSession {
             }
         }
     }
+    pub(crate) async fn controlled<T, F, Fut>(
+        &self,
+        title: &str,
+        location: SourceLocation,
+        options: StepOptions,
+        body: F,
+    ) -> crate::E2eResult<StepOutcome<T>>
+    where
+        F: FnOnce(StepContext) -> Fut,
+        Fut: std::future::Future<Output = crate::E2eResult<T>>,
+    {
+        use futures::FutureExt;
+        let mut guard = self.start_kind(title, location, StepCategory::User, options.annotations);
+        let context = StepContext {
+            session: self.clone(),
+            id: guard.id,
+            skip: crate::CancellationToken::new(),
+        };
+        if let Some(reason) = options.skip {
+            let _ = context.skip(reason.clone());
+            guard.finished = true;
+            self.finish_status(guard.id, None, StepStatus::Skipped);
+            return Ok(StepOutcome::Skipped(reason));
+        }
+        let skip = context.skip.clone();
+        let work = async {
+            tokio::select! { biased;
+                reason=skip.cancelled()=>Ok(StepOutcome::Skipped(reason)),
+                result=crate::operation::Deadline::new(options.timeout).run(format!("step {title}"), async {
+                    body(context).await
+                }) => {
+                    if let Some(reason) = skip.reason() { Ok(StepOutcome::Skipped(reason)) }
+                    else { result.map(StepOutcome::Completed) }
+                },
+            }
+        };
+        let result = CURRENT_STEP
+            .scope(
+                (self.id, guard.id),
+                self.scope(
+                    SUPPRESS_ACTIONS
+                        .scope(false, std::panic::AssertUnwindSafe(work).catch_unwind()),
+                ),
+            )
+            .await;
+        match result {
+            Ok(result) => {
+                if matches!(&result, Ok(StepOutcome::Skipped(_))) {
+                    guard.finished = true;
+                    self.finish_status(guard.id, None, StepStatus::Skipped);
+                } else {
+                    guard.finish(
+                        result
+                            .as_ref()
+                            .err()
+                            .map(|e| TestError::new(e, "step", None)),
+                        false,
+                    );
+                }
+                result
+            }
+            Err(panic) => {
+                guard.finish(Some(panic_error(&panic)), false);
+                std::panic::resume_unwind(panic)
+            }
+        }
+    }
+    #[cfg(test)]
     fn start(&self, title: &str, location: SourceLocation) -> StepGuard {
+        self.start_kind(title, location, StepCategory::User, Vec::new())
+    }
+    fn start_kind(
+        &self,
+        title: &str,
+        location: SourceLocation,
+        category: StepCategory,
+        annotations: Vec<StepAnnotation>,
+    ) -> StepGuard {
         let parent_id = CURRENT_STEP
             .try_with(|(session, step)| (*session == self.id).then_some(*step))
             .ok()
             .flatten();
+        let mut title_path = vec![self.attempt.file.clone(), self.attempt.name.clone()];
+        if let Some(parent) = parent_id {
+            if let Some((step, _, _)) = self
+                .records
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .nodes
+                .iter()
+                .find(|n| n.0.id == parent)
+            {
+                title_path = step.title_path.clone();
+            }
+        }
+        title_path.push(title.into());
         let step = StepInfo {
+            category,
+            status: StepStatus::Running,
+            annotations,
+            title_path,
             id: next_id(),
             parent_id,
             title: title.into(),
@@ -233,6 +548,21 @@ impl StepSession {
         }
     }
     fn finish(&self, id: u64, error: Option<TestError>, interrupted: bool) {
+        let status = if interrupted {
+            StepStatus::Interrupted
+        } else if error
+            .as_ref()
+            .is_some_and(|e| e.code == "FERRITE_E2E_TIMEOUT")
+        {
+            StepStatus::TimedOut
+        } else if error.is_some() {
+            StepStatus::Failed
+        } else {
+            StepStatus::Passed
+        };
+        self.finish_status(id, error, status);
+    }
+    fn finish_status(&self, id: u64, error: Option<TestError>, status: StepStatus) {
         let step = {
             let mut records = self.records.lock().unwrap_or_else(|e| e.into_inner());
             let Some((step, started, finished)) = records.nodes.iter_mut().find(|n| n.0.id == id)
@@ -244,7 +574,8 @@ impl StepSession {
             }
             *finished = true;
             step.duration_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
-            step.interrupted = interrupted;
+            step.interrupted = status == StepStatus::Interrupted;
+            step.status = status;
             step.error = error.map(|mut error| {
                 if error.location.is_none() {
                     error.location = Some(step.location.clone());
@@ -291,6 +622,20 @@ impl StepSession {
             .collect()
     }
 }
+fn panic_error(panic: &Box<dyn std::any::Any + Send>) -> TestError {
+    let message = panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .unwrap_or("non-string panic");
+    TestError {
+        message: message.into(),
+        code: "panic".into(),
+        phase: "step".into(),
+        location: None,
+    }
+}
+
 fn tree(records: &StepRecords, id: u64) -> StepInfo {
     let mut step = records
         .nodes
@@ -402,6 +747,9 @@ pub struct TestResult {
 /// Aggregate report for a run.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TestReport {
+    /// Global hooks and shared worker lifecycle that are outside an attempt.
+    #[serde(default)]
+    pub run_steps: Vec<StepInfo>,
     /// Per-test results in completion order.
     pub results: Vec<TestResult>,
 }
@@ -594,7 +942,8 @@ impl TestReport {
         out
     }
 
-    /// Render the `html` reporter output (single self-contained file).
+    /// Render HTML with inline styles and links to the recorded artifact paths.
+    /// Use [`TestReport::write_bundle`] to export portable artifact links.
     #[must_use]
     pub fn to_html(&self) -> String {
         let mut out = String::from(
@@ -705,7 +1054,12 @@ impl TestReport {
             }
             out.push_str("</td></tr>");
         }
-        out.push_str("</tbody></table></body></html>");
+        out.push_str("</tbody></table>");
+        if !self.run_steps.is_empty() {
+            out.push_str("<h2>Run lifecycle</h2>");
+            render_steps(&mut out, &self.run_steps);
+        }
+        out.push_str("</body></html>");
         out
     }
 }
@@ -740,8 +1094,10 @@ fn render_steps(out: &mut String, steps: &[StepInfo]) {
     out.push_str("<ul>");
     for step in steps {
         out.push_str(&format!(
-            "<li><details open><summary>{} ({}ms{})</summary><div>{}:{}:{} · {}</div>",
+            "<li><details open><summary>{} · {:?} · {:?} ({}ms{})</summary><div>{}:{}:{} · {}</div>",
             xml_escape(&step.title),
+            step.category,
+            step.status,
             step.duration_ms,
             if step.interrupted {
                 ", interrupted"
@@ -753,6 +1109,13 @@ fn render_steps(out: &mut String, steps: &[StepInfo]) {
             step.location.column,
             crate::har::iso8601(step.start_time_ms)
         ));
+        for annotation in &step.annotations {
+            out.push_str(&format!(
+                "<div>{}: {}</div>",
+                xml_escape(&annotation.kind),
+                xml_escape(&annotation.description)
+            ));
+        }
         if let Some(error) = &step.error {
             render_error(out, error);
         }
@@ -993,6 +1356,7 @@ mod tests {
         result.attempts = 2;
         result.attempt_results = vec![attempt, second];
         let report = TestReport {
+            run_steps: Vec::new(),
             results: vec![result],
         };
         assert_eq!(report.flaky(), 1);
@@ -1016,6 +1380,159 @@ mod tests {
         assert_eq!(round_trip.results[0].attempt_results[0].steps.len(), 1);
     }
 
+    #[tokio::test]
+    async fn controlled_skips_are_local_and_never_construct_preset_bodies() {
+        let session = session();
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let preset = session
+            .controlled(
+                "preset",
+                source(),
+                StepOptions::default().skip("unsupported"),
+                |_| {
+                    calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    async { Ok(3) }
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(preset, StepOutcome::Skipped("unsupported".into()));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        let session_ref = &session;
+        let outer = session
+            .controlled(
+                "outer",
+                source(),
+                StepOptions::default(),
+                |context| async move {
+                    context.annotate("ticket", "123");
+                    assert_eq!(context.title_path(), ["test.rs", "steps", "outer"]);
+                    let nested = session_ref
+                        .controlled(
+                            "nested",
+                            source(),
+                            StepOptions::default(),
+                            |step| async move {
+                                assert_eq!(
+                                    step.title_path(),
+                                    ["test.rs", "steps", "outer", "nested"]
+                                );
+                                step.skip("later")?;
+                                panic!("skip must stop the closure");
+                                #[allow(unreachable_code)]
+                                Ok::<(), crate::E2eError>(())
+                            },
+                        )
+                        .await?;
+                    assert_eq!(nested, StepOutcome::Skipped("later".into()));
+                    Ok(42)
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(outer, StepOutcome::Completed(42));
+        let steps = session.finish_all();
+        assert_eq!(steps[0].status, StepStatus::Skipped);
+        assert_eq!(steps[1].status, StepStatus::Passed);
+        assert_eq!(steps[1].annotations[0].kind, "ticket");
+        assert_eq!(steps[1].steps[0].status, StepStatus::Skipped);
+        assert!(steps[1].steps[0].error.is_none());
+    }
+    #[tokio::test]
+    async fn shared_step_skip_cancels_children_and_annotations_stop_at_completion() {
+        let session = session();
+        let session_ref = &session;
+        let saved = Arc::new(Mutex::new(None));
+        let saved_context = saved.clone();
+        let result = session
+            .controlled(
+                "parent",
+                source(),
+                StepOptions::default(),
+                |context| async move {
+                    *saved_context.lock().unwrap() = Some(context.clone());
+                    let abort = context.clone();
+                    let task = tokio::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                        let _ = abort.skip("cancel this step");
+                        abort
+                    });
+                    session_ref
+                        .run(
+                            "pending child",
+                            source(),
+                            std::future::pending::<()>(),
+                            |_| None,
+                        )
+                        .await;
+                    task.await.unwrap();
+                    Ok::<(), crate::E2eError>(())
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(result, StepOutcome::Skipped("cancel this step".into()));
+        let completed = saved.lock().unwrap().take().unwrap();
+        completed.annotate("late", "ignored");
+        assert_eq!(completed.annotations().len(), 1);
+        let steps = session.finish_all();
+        assert_eq!(steps[0].status, StepStatus::Skipped);
+        assert_eq!(steps[0].steps[0].status, StepStatus::Interrupted);
+        assert_eq!(steps[0].annotations[0].description, "cancel this step");
+    }
+    #[tokio::test]
+    async fn step_deadlines_return_errors_and_zero_leaves_the_outer_budget_in_charge() {
+        let session = session();
+        let result = session
+            .controlled(
+                "short",
+                source(),
+                StepOptions::default().timeout(std::time::Duration::from_millis(10)),
+                |_| std::future::pending::<crate::E2eResult<()>>(),
+            )
+            .await;
+        assert!(matches!(result, Err(crate::E2eError::Timeout(10, _))));
+        session
+            .controlled("zero", source(), StepOptions::default(), |_| async {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let steps = session.finish_all();
+        assert_eq!(steps[0].status, StepStatus::TimedOut);
+        assert_eq!(steps[0].error.as_ref().unwrap().code, "FERRITE_E2E_TIMEOUT");
+        assert_eq!(steps[1].status, StepStatus::Passed);
+    }
+    #[tokio::test]
+    async fn automatic_wrappers_hide_implementation_calls_but_keep_user_scopes() {
+        let session = session();
+        session
+            .scope(automatic(None, "before_each", StepCategory::Hook, async {
+                automatic(None, "click", StepCategory::Action, async {
+                    automatic(None, "mouse down", StepCategory::Action, async { Ok(()) }).await?;
+                    session
+                        .run(
+                            "custom",
+                            source(),
+                            automatic(None, "read", StepCategory::Action, async { Ok(()) }),
+                            |_| None,
+                        )
+                        .await
+                })
+                .await
+            }))
+            .await
+            .unwrap();
+        let steps = session.finish_all();
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].category, StepCategory::Hook);
+        assert_eq!(steps[0].steps[0].title, "click");
+        assert_eq!(steps[0].steps[0].steps.len(), 1);
+        assert_eq!(steps[0].steps[0].steps[0].title, "custom");
+        assert_eq!(steps[0].steps[0].steps[0].steps[0].title, "read");
+    }
+
     fn sample_result(name: &str, status: TestStatus) -> TestResult {
         TestResult {
             attempt_results: Vec::new(),
@@ -1037,6 +1554,7 @@ mod tests {
 
     fn sample() -> TestReport {
         TestReport {
+            run_steps: Vec::new(),
             results: vec![
                 sample_result("passes", TestStatus::Passed),
                 TestResult {
@@ -1120,6 +1638,7 @@ mod tests {
     #[test]
     fn dot_marks_statuses() {
         let report = TestReport {
+            run_steps: Vec::new(),
             results: vec![
                 sample_result("a", TestStatus::Passed),
                 sample_result("b", TestStatus::Failed),
@@ -1137,6 +1656,7 @@ mod tests {
         let mut expected = sample_result("flaky", TestStatus::FailedExpected);
         expected.error = Some("timed out".to_string());
         let report = TestReport {
+            run_steps: Vec::new(),
             results: vec![expected],
         };
         assert_eq!(report.expected_failed(), 1);

@@ -32,6 +32,9 @@ pub enum E2eError {
     /// Runtime skip control flow; cleanup still runs.
     #[error("test skipped: {0}")]
     Skipped(String),
+    /// Step-local skip control flow, consumed by Page::step_with.
+    #[error("step skipped: {0}")]
+    StepSkipped(String),
     /// Selector resolved to zero (or ambiguous) elements.
     #[error("locator error for `{selector}`: {message}")]
     Locator {
@@ -79,6 +82,7 @@ impl E2eError {
             Self::Disconnected(_) => "FERRITE_E2E_DISCONNECTED",
             Self::Timeout(_, _) => "FERRITE_E2E_TIMEOUT",
             Self::Cancelled(_) => "FERRITE_E2E_CANCELLED",
+            Self::StepSkipped(_) => "FERRITE_E2E_STEP_SKIPPED",
             Self::Skipped(_) => "FERRITE_E2E_SKIPPED",
             Self::Locator { .. } => "FERRITE_E2E_LOCATOR",
             Self::Expect(_) => "FERRITE_E2E_EXPECT",

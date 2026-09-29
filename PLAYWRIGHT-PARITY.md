@@ -19,9 +19,9 @@ reporter, Android and Electron APIs:
 | Classification | Members | Meaning |
 |---|---:|---|
 | Equivalent | 15 | Counterpart for the basic operation/value, without full options or engine compatibility |
-| Partial | 571 | Related exposed operation with material semantic, option or engine differences |
+| Partial | 578 | Related exposed operation with material semantic, option or engine differences |
 | Idiomatic | 42 | Comparable operation through Rust language/library facilities |
-| Missing | 390 | No dedicated public counterpart |
+| Missing | 383 | No dedicated public counterpart |
 
 These counts describe an inventory, **not a behavioral compatibility
 percentage**. The earlier inventory had 458 Partial and 503 Missing members.
@@ -47,7 +47,8 @@ implementation.
 | Browser lifecycle | Persistent Chromium/Firefox profiles, graceful close, Chromium HTTP/WebSocket CDP connections | No Playwright remote protocol, browser server, channels or managed browser installer |
 | Configuration | Complete resolved CLI configuration forwarded as JSON; browser launch/runner consume it, with legacy overrides | Suite/test context, timeout, retry and tag inheritance; no named fixture option override hierarchy |
 | Projects and scheduling | Independent project browsers/launch/context settings; parallel Tokio tasks, retries, repetition, filters and named resource locks | No process workers, project dependency graph or distributed locks |
-| Artifacts | Per-attempt output directories, validated paths, unique attachment files, screenshots/video and live Reporter callbacks | Synchronous callbacks; no complete upstream reporter graph, stdout capture or status override |
+| Artifacts | Per-attempt output directories, validated paths, unique attachment files, screenshots/video, live Reporter callbacks and portable HTML/JSON/JUnit bundles | Synchronous callbacks; no complete upstream reporter graph, stdout capture or status override |
+| Step controls | Local timeout, skip with reason, live annotations/title paths and automatic action/assertion/hook/fixture trees | Explicit user steps have exact sources; automatic sources use test definitions; boxing and some Page/protocol actions remain absent |
 | Runtime test controls | Shared TestInfo skip, expected failure, slow, annotations and timeout changes affect running attempts and final results | Result propagation for immediate skip; cooperative async cancellation and independent cleanup budgets |
 | Locator selection | Strict single-target operations, genuine first/last/nth slicing, relative has/hasNot filters, exact/regex/visibility builders | No complete Playwright selector extension/custom-engine surface |
 | Semantic locators | Associated labels target controls; roles and accessible names use shared DOM helpers; open shadow-root traversal | Full accessible-name specification and closed shadow roots remain outside this implementation |
@@ -183,15 +184,16 @@ The standalone request fixture inherits context transport defaults and has an
 isolated cookie jar. `context.request()` explicitly shares browser cookies.
 
 `Runner::custom_reporter` adds synchronous thread-safe callbacks for run begin/end,
-attempt begin/end, named Page.step begin/end, attachments and errors. Per-attempt
+attempt begin/end, user/action/assertion/hook/fixture step begin/end, attachments and errors. Per-attempt
 callbacks execute on workers before subsequent tests start; retry, repetition,
 project and worker identity are explicit. Step futures dropped by cancellation
 emit an interrupted end event. Each retry keeps its own trace file, with the
 original trace filename retained as a latest-attempt alias; repeated attachment
 names get a suffix instead of overwriting earlier files. Reporter panics are
 contained. Final reports retain each attempt alongside the aggregate result; begin receives discovered definitions before filtering, and
-static skips have no attempt callbacks. Asynchronous uploads, stdout capture,
-automatic action step trees and upstream status overrides remain deferred.
+static skips have no attempt callbacks. Asynchronous uploads, stdout capture and
+upstream status overrides remain deferred. Run-wide lifecycle steps are retained
+in the final report rather than emitted through attempt callbacks.
 
 `TestInfo::skip(reason)?` aborts a closure while cleanup still runs. Shared control
 also interrupts pending async setup/body work. `fail(reason)` marks expected
@@ -221,7 +223,32 @@ Concurrent awaited branches keep separate parent scopes; detached Tokio tasks
 start root steps because task-local scope is not inherited. Finish or join spawned
 work before returning from the test. Attempt completion seals the recorder and
 ends any unfinished steps; later detached work cannot add late step events.
-Automatic browser-action and hook step trees remain deferred.
+`Page::step_with(title, StepOptions, |step| async move { ... })` adds a live
+`StepContext`. `StepOptions::timeout` bounds that step; zero adds no local deadline,
+while the enclosing test timeout and cancellation still apply. Timeouts return an
+`E2eError` and mark the step timed out even when the caller recovers.
+`StepOptions::skip(reason)` records a skip without constructing the callback.
+`step.skip(reason)?` aborts only that step and returns `StepOutcome::Skipped` to
+its caller; it does not skip the parent or test. A cloned context can also cancel
+pending step work. Dropped children are marked interrupted. `annotate`,
+`annotations` and `title_path` expose live metadata; completed records reject
+late annotations. JSON and HTML retain category, status, annotations and paths.
+
+Page/Frame navigation and set-content methods, Locator async operations, and
+Page/Locator assertions record automatic steps. Public calls produce one record;
+internal delegations and assertion polling do not produce duplicate records.
+Explicit user scopes can contain their own action children. beforeEach,
+afterEach, beforeAll, afterAll, global hooks and actual typed fixture setup and
+teardown record lifecycle scopes, including nested browser actions. Cached
+fixtures do not create redundant setup records. Shared worker cleanup and global
+hooks outside attempts appear in `TestReport::run_steps`, grouped by worker where
+applicable. These records reach `Reporter::on_end`; live step callbacks cover
+attempt-scoped operations. Automatic source locations use the enclosing test
+file/line with unknown column zero, or `<run>` outside an attempt. Exact Rust
+call sites remain specific to explicit user steps. Direct Page keyboard/mouse,
+raw protocol calls and other unwrapped Page APIs are not automatically recorded.
+Boxing, subtitle/parameter options and the full upstream category scheme remain
+unsupported.
 
 `TestInfo::status()`, `expected_status()` and `errors()` share live state across
 hooks, fixtures and body clones. Status is `None` while setup/body is running;
@@ -245,6 +272,29 @@ new history/flag fields still loads. Static skips and run-wide errors have no
 executed attempt history. Adding public result fields requires manual Rust struct
 initializers to supply those fields. Live `on_test_end` receives exactly one
 attempt record, after cleanup, and the final run report retains all attempts.
+
+`TestReport::write_bundle(directory)` copies every attempt and aggregate
+screenshot, trace, video and attachment, including nested and run-step attachments,
+into `artifacts/`. Canonical source paths are deduplicated; safe unique filenames
+prevent basename collisions and preserve existing artifact files. HTML, JSON and JUnit
+use relative artifact paths. The original in-memory report and source files are
+unchanged. Relative input paths resolve against the current working directory;
+missing, unreadable or non-file artifacts fail explicitly. Move or upload the
+entire output folder, including `artifacts/`. Serving that folder over HTTP keeps
+links usable after the original sources are deleted. Native traces remain
+Ferrite JSON; they are not Playwright Trace Viewer archives.
+
+Selecting the `html` reporter exports this portable folder and also writes
+`results.json` and `junit.xml`. If selected together, JSON/JUnit use the same
+relative paths. JSON-only and JUnit-only reporters retain the original serializer
+behavior. `Runner::write_artifacts` reports bundle errors through `on_error` and
+does not list a failed HTML export as written; explicit `write_bundle` returns
+an error to its caller. Step fields and `run_steps` have serde defaults for older
+JSON; manual Rust struct initializers need the new fields.
+
+These controls follow [TestStepInfo](https://playwright.dev/docs/api/class-teststepinfo)
+and the folder portability described by the [HTML reporter](https://playwright.dev/docs/test-reporters#html-reporter),
+with the Rust result and artifact-format differences above.
 
 These additions follow the official [TestStep metadata](https://playwright.dev/docs/api/class-teststep)
 and [TestInfo outcomes](https://playwright.dev/docs/api/class-testinfo), with the
@@ -273,25 +323,32 @@ TMPDIR=/path/to/disk-backed-temp cargo test -p ferrite-e2e -- --test-threads=2
 cargo clippy -p ferrite-e2e -p ferrite-cli --all-targets -- -D warnings
 ```
 
-Validation for the contextual fixtures, structured diagnostics and retry reporting:
+Validation for step controls, automatic lifecycle diagnostics and portable reports:
 
-- `ferrite-e2e`: **125 unit tests, 3 API tests, 93 browser tests, 7 attempt-diagnostics
+- `ferrite-e2e`: **132 unit tests, 3 API tests, 93 browser tests, 7 attempt-diagnostics
   groups, 4 reliability groups, 4 runtime/reporter groups, 6 fixture/network
-  groups and 2 doctests** (244 checks total). Headless Shell and Firefox were installed and
-  exercised; unsupported-engine branches remain explicit.
-- The seven diagnostics groups additionally passed with full Chrome and Firefox,
-  including nested/concurrent steps, handled and propagated errors, exact caller
-  sources, every retry/artifact, cleanup metadata, expected failure/pass mismatch,
-  setup timeouts, cancellation, fixture teardown and project/repetition isolation.
-  The earlier four runtime/reporter groups also passed with full Chrome/Firefox.
+  groups, 4 step-control/bundle groups and 2 doctests** (255 checks total).
+  Headless Shell and Firefox were installed and exercised; unsupported-engine branches remain explicit.
+- The four new groups additionally passed with full Chrome and Firefox, covering
+  preset/dynamic local skips, nested metadata and attachments, recovered and
+  propagated step timeouts, enclosing budgets/cancellation, automatic action and
+  assertion deduplication, hook/fixture lifetimes and shared worker cleanup.
+  Native screenshots, traces, videos and attachments were exported, moved to a
+  different folder and served over HTTP after original files were deleted; every
+  HTML artifact link loaded successfully on both engines. Canonical aliases,
+  basename collisions, relative source paths, re-export preservation and explicit
+  missing/non-file errors have unit regressions. Run-step attachments share the
+  same deduplicated copies as attempt/step attachments.
 - Strict Clippy on all `ferrite-e2e`/`ferrite-cli` targets, package formatting, diff checks and
   matrix regeneration passed. Reporter panic containment and live timeout
   extension/shortening/zero/slow semantics have unit regressions.
 - Existing trace and first-attachment names remain compatible; retry trace files
   and repeated attachment names preserve their individual contents.
 - CLI/configuration checks passed again: 5 CLI tests, 17 configuration tests and
-  1 doctest. This change adds no CLI options. A real recovered-retry HTML report
-  was rendered in Chromium with both attempts expanded and visually inspected.
+  1 doctest (278 checks across E2E/CLI/configuration). This change adds no CLI
+  options. A real portable HTML report with expanded automatic/user/hook trees,
+  skipped steps, annotations and run lifecycle was rendered in Chromium and
+  visually inspected.
 
 New regressions cover isolation/retries/locks, project engines and cleanup,
 persistent profiles,

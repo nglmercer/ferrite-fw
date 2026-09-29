@@ -444,7 +444,11 @@ impl Frame {
 
     /// Replace only this frame's document.
     pub async fn set_content(&self, html: &str) -> E2eResult<()> {
-        self.scoped_page().set_content(html).await
+        self.page
+            .auto_step("frame.set_content", crate::StepCategory::Action, async {
+                self.scoped_page().set_content(html).await
+            })
+            .await
     }
 
     pub async fn wait_for_function(&self, expression: &str, timeout: Duration) -> E2eResult<()> {
@@ -496,7 +500,11 @@ impl Frame {
 
     /// Navigate this frame to a URL.
     pub async fn goto(&self, url: &str) -> E2eResult<()> {
-        self.page.driver.frame_navigate(&self.id, url).await
+        self.page
+            .auto_step("frame.goto", crate::StepCategory::Action, async {
+                self.page.driver.frame_navigate(&self.id, url).await
+            })
+            .await
     }
 
     /// Parent frame (`None` for the main frame).
@@ -2036,35 +2044,45 @@ impl Page {
 
     /// Navigate to a URL and wait for the load state.
     pub async fn goto(&self, url: &str) -> E2eResult<()> {
-        self.driver
-            .run(async {
-                self.goto_with_options(url, NavigationOptions::default())
-                    .await
-            })
-            .await
+        self.auto_step("page.goto", crate::StepCategory::Action, async {
+            self.driver
+                .run(async {
+                    self.goto_with_options(url, NavigationOptions::default())
+                        .await
+                })
+                .await
+        })
+        .await
     }
 
     /// Navigate with explicit options.
     pub async fn goto_with_options(&self, url: &str, options: NavigationOptions) -> E2eResult<()> {
-        self.driver
-            .run(async {
-                let url = self.resolve_url(url)?;
-                let timeout = options.timeout.unwrap_or_else(|| self.navigation_timeout());
+        self.auto_step(
+            "page.goto_with_options",
+            crate::StepCategory::Action,
+            async {
                 self.driver
-                    .navigate(&url, options.wait_until, timeout)
+                    .run(async {
+                        let url = self.resolve_url(url)?;
+                        let timeout = options.timeout.unwrap_or_else(|| self.navigation_timeout());
+                        self.driver
+                            .navigate(&url, options.wait_until, timeout)
+                            .await
+                            .map_err(|error| match error {
+                                E2eError::Navigation { .. } => error,
+                                other => E2eError::Navigation {
+                                    url: url.clone(),
+                                    message: other.to_string(),
+                                },
+                            })?;
+                        self.slow_mo().await;
+                        self.apply_pending_grants(&url).await?;
+                        Ok(())
+                    })
                     .await
-                    .map_err(|error| match error {
-                        E2eError::Navigation { .. } => error,
-                        other => E2eError::Navigation {
-                            url: url.clone(),
-                            message: other.to_string(),
-                        },
-                    })?;
-                self.slow_mo().await;
-                self.apply_pending_grants(&url).await?;
-                Ok(())
-            })
-            .await
+            },
+        )
+        .await
     }
 
     /// Queue context grants until the first http(s) navigation (Firefox).
@@ -2126,21 +2144,30 @@ impl Page {
 
     /// Reload the page.
     pub async fn reload(&self) -> E2eResult<()> {
-        self.driver.run(async { self.driver.reload().await }).await
+        self.auto_step("page.reload", crate::StepCategory::Action, async {
+            self.driver.run(async { self.driver.reload().await }).await
+        })
+        .await
     }
 
     /// Go back in history.
     pub async fn go_back(&self) -> E2eResult<()> {
-        self.driver
-            .run(async { self.driver.traverse(-1).await })
-            .await
+        self.auto_step("page.go_back", crate::StepCategory::Action, async {
+            self.driver
+                .run(async { self.driver.traverse(-1).await })
+                .await
+        })
+        .await
     }
 
     /// Go forward in history.
     pub async fn go_forward(&self) -> E2eResult<()> {
-        self.driver
-            .run(async { self.driver.traverse(1).await })
-            .await
+        self.auto_step("page.go_forward", crate::StepCategory::Action, async {
+            self.driver
+                .run(async { self.driver.traverse(1).await })
+                .await
+        })
+        .await
     }
 
     /// Current page title.
@@ -2169,20 +2196,23 @@ impl Page {
 
     /// Set the document HTML.
     pub async fn set_content(&self, html: &str) -> E2eResult<()> {
-        self.driver
-            .run(async {
-                if self.frame_id.is_some() || !self.lazy_frames.is_empty() {
-                    self.evaluate_value(&format!(
-                        "document.open(); document.write({}); document.close(); true",
-                        serde_json::to_string(html)?
-                    ))
-                    .await?;
-                    Ok(())
-                } else {
-                    self.driver.set_content(html).await
-                }
-            })
-            .await
+        self.auto_step("page.set_content", crate::StepCategory::Action, async {
+            self.driver
+                .run(async {
+                    if self.frame_id.is_some() || !self.lazy_frames.is_empty() {
+                        self.evaluate_value(&format!(
+                            "document.open(); document.write({}); document.close(); true",
+                            serde_json::to_string(html)?
+                        ))
+                        .await?;
+                        Ok(())
+                    } else {
+                        self.driver.set_content(html).await
+                    }
+                })
+                .await
+        })
+        .await
     }
 
     /// Bring the page to front.
@@ -2796,6 +2826,76 @@ impl Page {
         })
     }
 
+    /// Run a controlled step. Skips return `StepOutcome::Skipped` and keep the test running.
+    #[track_caller]
+    pub fn step_with<'a, T: 'a, F, Fut>(
+        &'a self,
+        name: &'a str,
+        options: crate::StepOptions,
+        body: F,
+    ) -> impl Future<Output = E2eResult<crate::StepOutcome<T>>> + 'a
+    where
+        F: FnOnce(crate::StepContext) -> Fut + 'a,
+        Fut: Future<Output = E2eResult<T>> + 'a,
+    {
+        let location = crate::SourceLocation::caller(std::panic::Location::caller());
+        async move {
+            let session = self
+                .reporter
+                .clone()
+                .or_else(crate::report::current_session)
+                .unwrap_or_else(|| {
+                    crate::report::StepSession::new(
+                        crate::report::ReporterHub::default(),
+                        crate::AttemptInfo {
+                            name: "standalone page".into(),
+                            file: location.file.clone(),
+                            line: location.line,
+                            project: None,
+                            worker_index: 0,
+                            repeat_each_index: 0,
+                            retry: 0,
+                        },
+                    )
+                });
+            let result = session.controlled(name, location, options, body).await;
+            self.sink.record(
+                "step",
+                format!(
+                    "{name} ({})",
+                    match &result {
+                        Ok(crate::StepOutcome::Skipped(_)) => "skipped",
+                        Ok(_) => "completed",
+                        Err(_) => "failed",
+                    }
+                ),
+            );
+            self.trace_screenshot(name).await;
+            result
+        }
+    }
+    pub(crate) fn auto_step<'a, T: Send + 'a>(
+        &self,
+        title: impl Into<String>,
+        category: crate::StepCategory,
+        future: impl Future<Output = E2eResult<T>> + Send + 'a,
+    ) -> futures::future::BoxFuture<'a, E2eResult<T>> {
+        Box::pin(crate::report::automatic(
+            self.reporter.clone(),
+            title,
+            category,
+            future,
+        ))
+    }
+    pub(crate) fn auto_step_local<'a, T: 'a>(
+        &self,
+        title: impl Into<String>,
+        category: crate::StepCategory,
+        future: impl Future<Output = E2eResult<T>> + 'a,
+    ) -> impl Future<Output = E2eResult<T>> + 'a {
+        crate::report::automatic(self.reporter.clone(), title, category, future)
+    }
+
     async fn run_step<F: Future>(
         &self,
         name: &str,
@@ -2804,7 +2904,11 @@ impl Page {
         error: impl FnOnce(&F::Output) -> Option<crate::TestError>,
     ) -> F::Output {
         let started = std::time::Instant::now();
-        let out = match &self.reporter {
+        let session = self
+            .reporter
+            .clone()
+            .or_else(crate::report::current_session);
+        let out = match &session {
             Some(session) => session.run(name, location, future, error).await,
             None => future.await,
         };

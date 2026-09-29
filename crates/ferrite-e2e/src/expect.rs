@@ -95,7 +95,21 @@ impl From<Duration> for Timeout {
 /// Default assertion window in milliseconds.
 pub(crate) const DEFAULT_EXPECT_MS: u64 = 5_000;
 
-async fn poll<F, Fut>(timeout: Duration, description: String, mut check: F) -> E2eResult<()>
+async fn poll<F, Fut>(timeout: Duration, description: String, check: F) -> E2eResult<()>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = E2eResult<Option<String>>>,
+{
+    crate::report::automatic(
+        None,
+        format!("expect {description}"),
+        crate::StepCategory::Assertion,
+        poll_raw(timeout, description, check),
+    )
+    .await
+}
+
+async fn poll_raw<F, Fut>(timeout: Duration, description: String, mut check: F) -> E2eResult<()>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = E2eResult<Option<String>>>,
@@ -225,131 +239,177 @@ impl PageExpect {
 
     /// Assert the title with a Rust regular expression.
     pub async fn title_matches(&self, pattern: &str) -> E2eResult<()> {
-        let pattern = regex::Regex::new(pattern).map_err(|e| E2eError::Config(e.to_string()))?;
-        poll(self.timeout, "title regex".into(), || async {
-            let actual = self.page.title().await?;
-            Ok(if pattern.is_match(&actual) != self.negated {
-                None
-            } else {
-                Some(actual)
-            })
-        })
-        .await
+        self.page
+            .auto_step(
+                "expect.title_matches",
+                crate::StepCategory::Assertion,
+                async {
+                    let pattern =
+                        regex::Regex::new(pattern).map_err(|e| E2eError::Config(e.to_string()))?;
+                    poll(self.timeout, "title regex".into(), || async {
+                        let actual = self.page.title().await?;
+                        Ok(if pattern.is_match(&actual) != self.negated {
+                            None
+                        } else {
+                            Some(actual)
+                        })
+                    })
+                    .await
+                },
+            )
+            .await
     }
 
     /// Assert the URL with a Rust regular expression.
     pub async fn url_matches(&self, pattern: &str) -> E2eResult<()> {
-        let pattern = regex::Regex::new(pattern).map_err(|e| E2eError::Config(e.to_string()))?;
-        poll(self.timeout, "URL regex".into(), || async {
-            let actual = self.page.url().await?;
-            Ok(if pattern.is_match(&actual) != self.negated {
-                None
-            } else {
-                Some(actual)
-            })
-        })
-        .await
+        self.page
+            .auto_step(
+                "expect.url_matches",
+                crate::StepCategory::Assertion,
+                async {
+                    let pattern =
+                        regex::Regex::new(pattern).map_err(|e| E2eError::Config(e.to_string()))?;
+                    poll(self.timeout, "URL regex".into(), || async {
+                        let actual = self.page.url().await?;
+                        Ok(if pattern.is_match(&actual) != self.negated {
+                            None
+                        } else {
+                            Some(actual)
+                        })
+                    })
+                    .await
+                },
+            )
+            .await
     }
 
     /// Assert the exact title.
     pub async fn title(&self, expected: &str) -> E2eResult<()> {
-        let page = self.page.clone();
-        let expected = expected.to_string();
-        let negated = self.negated;
-        poll(
-            self.timeout,
-            format!("title == {expected:?}{}", not_tag(negated)),
-            || {
-                let page = page.clone();
-                let expected = expected.clone();
-                async move {
-                    let title = match page.title().await {
-                        Ok(title) => title,
-                        Err(error) => return Ok(Some(error.to_string())),
-                    };
-                    if (title == expected) != negated {
-                        Ok(None)
-                    } else {
-                        Ok(Some(format!("title was {title:?}")))
-                    }
-                }
-            },
-        )
-        .await
+        self.page
+            .auto_step("expect.title", crate::StepCategory::Assertion, async {
+                let page = self.page.clone();
+                let expected = expected.to_string();
+                let negated = self.negated;
+                poll(
+                    self.timeout,
+                    format!("title == {expected:?}{}", not_tag(negated)),
+                    || {
+                        let page = page.clone();
+                        let expected = expected.clone();
+                        async move {
+                            let title = match page.title().await {
+                                Ok(title) => title,
+                                Err(error) => return Ok(Some(error.to_string())),
+                            };
+                            if (title == expected) != negated {
+                                Ok(None)
+                            } else {
+                                Ok(Some(format!("title was {title:?}")))
+                            }
+                        }
+                    },
+                )
+                .await
+            })
+            .await
     }
 
     /// Assert the title contains a fragment.
     pub async fn title_contains(&self, fragment: &str) -> E2eResult<()> {
-        let page = self.page.clone();
-        let fragment = fragment.to_string();
-        let negated = self.negated;
-        poll(
-            self.timeout,
-            format!("title contains {fragment:?}{}", not_tag(negated)),
-            || {
-                let page = page.clone();
-                let fragment = fragment.clone();
-                async move {
-                    let title = match page.title().await {
-                        Ok(title) => title,
-                        Err(error) => return Ok(Some(error.to_string())),
-                    };
-                    if title.contains(&fragment) != negated {
-                        Ok(None)
-                    } else {
-                        Ok(Some(format!("title was {title:?}")))
-                    }
-                }
-            },
-        )
-        .await
+        self.page
+            .auto_step(
+                "expect.title_contains",
+                crate::StepCategory::Assertion,
+                async {
+                    let page = self.page.clone();
+                    let fragment = fragment.to_string();
+                    let negated = self.negated;
+                    poll(
+                        self.timeout,
+                        format!("title contains {fragment:?}{}", not_tag(negated)),
+                        || {
+                            let page = page.clone();
+                            let fragment = fragment.clone();
+                            async move {
+                                let title = match page.title().await {
+                                    Ok(title) => title,
+                                    Err(error) => return Ok(Some(error.to_string())),
+                                };
+                                if title.contains(&fragment) != negated {
+                                    Ok(None)
+                                } else {
+                                    Ok(Some(format!("title was {title:?}")))
+                                }
+                            }
+                        },
+                    )
+                    .await
+                },
+            )
+            .await
     }
 
     /// Assert the exact URL, resolving relative expectations against base_url.
     pub async fn url(&self, expected: &str) -> E2eResult<()> {
-        let expected = self.page.resolve_url(expected)?;
-        poll(self.timeout, format!("URL == {expected}"), || async {
-            self.page.run_locator_handlers().await?;
-            let actual = self.page.url().await?;
-            Ok(if (actual == expected) != self.negated {
-                None
-            } else {
-                Some(format!("URL was {actual}"))
+        self.page
+            .auto_step("expect.url", crate::StepCategory::Assertion, async {
+                let expected = self.page.resolve_url(expected)?;
+                poll(self.timeout, format!("URL == {expected}"), || async {
+                    self.page.run_locator_handlers().await?;
+                    let actual = self.page.url().await?;
+                    Ok(if (actual == expected) != self.negated {
+                        None
+                    } else {
+                        Some(format!("URL was {actual}"))
+                    })
+                })
+                .await
             })
-        })
-        .await
+            .await
     }
 
     /// Assert the URL contains a fragment.
     pub async fn url_contains(&self, fragment: &str) -> E2eResult<()> {
-        let page = self.page.clone();
-        let fragment = fragment.to_string();
-        let negated = self.negated;
-        poll(
-            self.timeout,
-            format!("url contains {fragment:?}{}", not_tag(negated)),
-            || {
-                let page = page.clone();
-                let fragment = fragment.clone();
-                async move {
-                    let url = match page.url().await {
-                        Ok(url) => url,
-                        Err(error) => return Ok(Some(error.to_string())),
-                    };
-                    if url.contains(&fragment) != negated {
-                        Ok(None)
-                    } else {
-                        Ok(Some(format!("url was {url:?}")))
-                    }
-                }
-            },
-        )
-        .await
+        self.page
+            .auto_step(
+                "expect.url_contains",
+                crate::StepCategory::Assertion,
+                async {
+                    let page = self.page.clone();
+                    let fragment = fragment.to_string();
+                    let negated = self.negated;
+                    poll(
+                        self.timeout,
+                        format!("url contains {fragment:?}{}", not_tag(negated)),
+                        || {
+                            let page = page.clone();
+                            let fragment = fragment.clone();
+                            async move {
+                                let url = match page.url().await {
+                                    Ok(url) => url,
+                                    Err(error) => return Ok(Some(error.to_string())),
+                                };
+                                if url.contains(&fragment) != negated {
+                                    Ok(None)
+                                } else {
+                                    Ok(Some(format!("url was {url:?}")))
+                                }
+                            }
+                        },
+                    )
+                    .await
+                },
+            )
+            .await
     }
 
     /// Assert a viewport screenshot matches the named snapshot (retries until match).
     pub async fn screenshot(&self, name: &str) -> E2eResult<()> {
-        self.screenshot_with(name, &SnapshotOptions::default())
+        self.page
+            .auto_step("expect.screenshot", crate::StepCategory::Assertion, async {
+                self.screenshot_with(name, &SnapshotOptions::default())
+                    .await
+            })
             .await
     }
 
@@ -358,80 +418,96 @@ impl PageExpect {
     /// Missing snapshots and `update=all` are one-shot (write once, pass);
     /// otherwise captures are compared until they match or the timeout expires.
     pub async fn screenshot_with(&self, name: &str, opts: &SnapshotOptions) -> E2eResult<()> {
-        let mut effective = opts.clone();
-        if effective.dir.is_none() {
-            effective.dir = self.page.snapshot_dir.clone();
-        }
-        let opts = &effective;
-        let path = snap_path_for(name, "png", opts);
-        if !path.is_file() || resolve_update(opts.update) == SnapshotUpdate::All {
-            let actual = self.page.screenshot(ScreenshotOptions::default()).await?;
-            return assert_snapshot_png(name, &actual, opts);
-        }
-        let expected = std::fs::read(&path)?;
-        let page = self.page.clone();
-        let opts = opts.clone();
-        let name = name.to_string();
-        let negated = self.negated;
-        let description = format!("screenshot {name:?}{}", not_tag(negated));
-        let result = poll(self.timeout, description, || {
-            let page = page.clone();
-            let expected = expected.clone();
-            let opts = opts.clone();
-            async move {
-                let actual = match page.screenshot(ScreenshotOptions::default()).await {
-                    Ok(bytes) => bytes,
-                    Err(error) => return Ok(Some(error.to_string())),
-                };
-                match compare_png(&actual, &expected, opts.threshold) {
-                    Ok(diff) if diff.passed(&opts) != negated => Ok(None),
-                    Ok(diff) => Ok(Some(diff.summary())),
-                    // Size mismatches count as different under negation.
-                    Err(_) if negated => Ok(None),
-                    Err(error) => Err(error),
-                }
-            }
-        })
-        .await;
-        match result {
-            Ok(()) => Ok(()),
-            Err(poll_error) => {
-                // Final capture for the `.actual.png` artifact + detailed message.
-                let actual = page.screenshot(ScreenshotOptions::default()).await?;
-                match assert_snapshot_png(&name, &actual, &opts) {
-                    Err(rich) => Err(rich),
-                    // Negated case: still matching at timeout.
-                    Ok(()) => Err(poll_error),
-                }
-            }
-        }
+        self.page
+            .auto_step(
+                "expect.screenshot_with",
+                crate::StepCategory::Assertion,
+                async {
+                    let mut effective = opts.clone();
+                    if effective.dir.is_none() {
+                        effective.dir = self.page.snapshot_dir.clone();
+                    }
+                    let opts = &effective;
+                    let path = snap_path_for(name, "png", opts);
+                    if !path.is_file() || resolve_update(opts.update) == SnapshotUpdate::All {
+                        let actual = self.page.screenshot(ScreenshotOptions::default()).await?;
+                        return assert_snapshot_png(name, &actual, opts);
+                    }
+                    let expected = std::fs::read(&path)?;
+                    let page = self.page.clone();
+                    let opts = opts.clone();
+                    let name = name.to_string();
+                    let negated = self.negated;
+                    let description = format!("screenshot {name:?}{}", not_tag(negated));
+                    let result = poll(self.timeout, description, || {
+                        let page = page.clone();
+                        let expected = expected.clone();
+                        let opts = opts.clone();
+                        async move {
+                            let actual = match page.screenshot(ScreenshotOptions::default()).await {
+                                Ok(bytes) => bytes,
+                                Err(error) => return Ok(Some(error.to_string())),
+                            };
+                            match compare_png(&actual, &expected, opts.threshold) {
+                                Ok(diff) if diff.passed(&opts) != negated => Ok(None),
+                                Ok(diff) => Ok(Some(diff.summary())),
+                                // Size mismatches count as different under negation.
+                                Err(_) if negated => Ok(None),
+                                Err(error) => Err(error),
+                            }
+                        }
+                    })
+                    .await;
+                    match result {
+                        Ok(()) => Ok(()),
+                        Err(poll_error) => {
+                            // Final capture for the `.actual.png` artifact + detailed message.
+                            let actual = page.screenshot(ScreenshotOptions::default()).await?;
+                            match assert_snapshot_png(&name, &actual, &opts) {
+                                Err(rich) => Err(rich),
+                                // Negated case: still matching at timeout.
+                                Ok(()) => Err(poll_error),
+                            }
+                        }
+                    }
+                },
+            )
+            .await
     }
 
     /// Assert the accessibility snapshot equals `expected` exactly.
     pub async fn aria_snapshot(&self, expected: &str) -> E2eResult<()> {
-        let page = self.page.clone();
-        let expected = expected.to_string();
-        let negated = self.negated;
-        poll(
-            self.timeout,
-            format!("aria snapshot == {expected:?}{}", not_tag(negated)),
-            || {
-                let page = page.clone();
-                let expected = expected.clone();
-                async move {
-                    let actual = match page.aria_snapshot().await {
-                        Ok(actual) => actual,
-                        Err(error) => return Ok(Some(error.to_string())),
-                    };
-                    if (actual == expected) != negated {
-                        Ok(None)
-                    } else {
-                        Ok(Some(format!("aria snapshot was {actual:?}")))
-                    }
-                }
-            },
-        )
-        .await
+        self.page
+            .auto_step(
+                "expect.aria_snapshot",
+                crate::StepCategory::Assertion,
+                async {
+                    let page = self.page.clone();
+                    let expected = expected.to_string();
+                    let negated = self.negated;
+                    poll(
+                        self.timeout,
+                        format!("aria snapshot == {expected:?}{}", not_tag(negated)),
+                        || {
+                            let page = page.clone();
+                            let expected = expected.clone();
+                            async move {
+                                let actual = match page.aria_snapshot().await {
+                                    Ok(actual) => actual,
+                                    Err(error) => return Ok(Some(error.to_string())),
+                                };
+                                if (actual == expected) != negated {
+                                    Ok(None)
+                                } else {
+                                    Ok(Some(format!("aria snapshot was {actual:?}")))
+                                }
+                            }
+                        },
+                    )
+                    .await
+                },
+            )
+            .await
     }
 }
 
@@ -457,98 +533,182 @@ impl LocatorExpect {
         F: Fn(Locator) -> Fut,
         Fut: std::future::Future<Output = E2eResult<bool>>,
     {
-        poll(self.timeout, description.to_string(), || async {
-            self.locator.page().run_locator_handlers().await?;
-            match predicate(self.locator.clone()).await {
-                Ok(value) if value != self.negated => Ok(None),
-                Ok(_) => Ok(Some(description.to_string())),
-                Err(error) => Err(error),
-            }
-        })
-        .await
+        self.locator
+            .page()
+            .auto_step_local(
+                format!("expect.satisfies {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async {
+                    poll(self.timeout, description.to_string(), || async {
+                        self.locator.page().run_locator_handlers().await?;
+                        match predicate(self.locator.clone()).await {
+                            Ok(value) if value != self.negated => Ok(None),
+                            Ok(_) => Ok(Some(description.to_string())),
+                            Err(error) => Err(error),
+                        }
+                    })
+                    .await
+                },
+            )
+            .await
     }
 
     /// Assert normalized text with a Rust regular expression.
     pub async fn text_matches(&self, pattern: &str) -> E2eResult<()> {
-        let pattern = regex::Regex::new(pattern).map_err(|e| E2eError::Config(e.to_string()))?;
-        self.satisfies("text regex", |locator| {
-            let pattern = pattern.clone();
-            async move { Ok(pattern.is_match(&locator.text().await?)) }
-        })
-        .await
+        self.locator
+            .page()
+            .auto_step(
+                format!("expect.text_matches {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async {
+                    let pattern =
+                        regex::Regex::new(pattern).map_err(|e| E2eError::Config(e.to_string()))?;
+                    self.satisfies("text regex", |locator| {
+                        let pattern = pattern.clone();
+                        async move { Ok(pattern.is_match(&locator.text().await?)) }
+                    })
+                    .await
+                },
+            )
+            .await
     }
 
     /// Assert an attribute with a Rust regular expression.
     pub async fn attribute_matches(&self, name: &str, pattern: &str) -> E2eResult<()> {
-        let pattern = regex::Regex::new(pattern).map_err(|e| E2eError::Config(e.to_string()))?;
-        self.satisfies("attribute regex", |locator| {
-            let pattern = pattern.clone();
-            async move {
-                Ok(locator
-                    .attribute(name)
-                    .await?
-                    .is_some_and(|value| pattern.is_match(&value)))
-            }
-        })
-        .await
+        self.locator
+            .page()
+            .auto_step(
+                format!("expect.attribute_matches {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async {
+                    let pattern =
+                        regex::Regex::new(pattern).map_err(|e| E2eError::Config(e.to_string()))?;
+                    self.satisfies("attribute regex", |locator| {
+                        let pattern = pattern.clone();
+                        async move {
+                            Ok(locator
+                                .attribute(name)
+                                .await?
+                                .is_some_and(|value| pattern.is_match(&value)))
+                        }
+                    })
+                    .await
+                },
+            )
+            .await
     }
 
     /// Assert the exact class attribute.
     pub async fn class(&self, expected: &str) -> E2eResult<()> {
-        self.attribute("class", expected).await
+        self.locator
+            .page()
+            .auto_step(
+                format!("expect.class {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async { self.attribute("class", expected).await },
+            )
+            .await
     }
 
     /// Assert all selected values of a multiple select.
     pub async fn values(&self, expected: &[&str]) -> E2eResult<()> {
-        self.satisfies("selected values", |locator| async move {
-            Ok(locator.selected_options().await? == expected)
-        })
-        .await
+        self.locator
+            .page()
+            .auto_step(
+                format!("expect.values {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async {
+                    self.satisfies("selected values", |locator| async move {
+                        Ok(locator.selected_options().await? == expected)
+                    })
+                    .await
+                },
+            )
+            .await
     }
 
     /// Assert normalized text contents for the complete ordered element list.
     pub async fn texts(&self, expected: &[&str]) -> E2eResult<()> {
-        let expected: Vec<String> = expected
-            .iter()
-            .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
-            .collect();
-        self.satisfies("element texts", |locator| {
-            let expected = expected.clone();
-            async move {
-                Ok(locator
-                    .all_text_contents()
-                    .await?
-                    .iter()
-                    .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
-                    .collect::<Vec<_>>()
-                    == expected)
-            }
-        })
-        .await
+        self.locator
+            .page()
+            .auto_step(
+                format!("expect.texts {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async {
+                    let expected: Vec<String> = expected
+                        .iter()
+                        .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
+                        .collect();
+                    self.satisfies("element texts", |locator| {
+                        let expected = expected.clone();
+                        async move {
+                            Ok(locator
+                                .all_text_contents()
+                                .await?
+                                .iter()
+                                .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
+                                .collect::<Vec<_>>()
+                                == expected)
+                        }
+                    })
+                    .await
+                },
+            )
+            .await
     }
 
     /// Assert the computed ARIA role.
     pub async fn role(&self, expected: &str) -> E2eResult<()> {
-        self.satisfies("ARIA role", |locator| async move {
-            Ok(locator.role().await?.as_deref() == Some(expected))
-        })
-        .await
+        self.locator
+            .page()
+            .auto_step(
+                format!("expect.role {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async {
+                    self.satisfies("ARIA role", |locator| async move {
+                        Ok(locator.role().await?.as_deref() == Some(expected))
+                    })
+                    .await
+                },
+            )
+            .await
     }
 
     /// Assert the associated ARIA error message.
     pub async fn accessible_error_message(&self, expected: &str) -> E2eResult<()> {
-        self.satisfies("accessible error message", |locator| async move {
-            Ok(locator.accessible_error_message().await?.as_deref() == Some(expected))
-        })
-        .await
+        self.locator
+            .page()
+            .auto_step(
+                format!(
+                    "expect.accessible_error_message {}",
+                    self.locator.selector()
+                ),
+                crate::StepCategory::Assertion,
+                async {
+                    self.satisfies("accessible error message", |locator| async move {
+                        Ok(locator.accessible_error_message().await?.as_deref() == Some(expected))
+                    })
+                    .await
+                },
+            )
+            .await
     }
 
     /// Assert the element's indented accessibility tree.
     pub async fn aria_snapshot(&self, expected: &str) -> E2eResult<()> {
-        self.satisfies("ARIA snapshot", |locator| async move {
-            Ok(locator.aria_snapshot().await? == expected)
-        })
-        .await
+        self.locator
+            .page()
+            .auto_step(
+                format!("expect.aria_snapshot {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async {
+                    self.satisfies("ARIA snapshot", |locator| async move {
+                        Ok(locator.aria_snapshot().await? == expected)
+                    })
+                    .await
+                },
+            )
+            .await
     }
 
     /// Override the retry window.
@@ -568,187 +728,259 @@ impl LocatorExpect {
 
     /// Assert the element is visible.
     pub async fn visible(&self) -> E2eResult<()> {
-        let locator = self.locator.clone();
-        let negated = self.negated;
-        poll(
-            self.timeout,
-            format!("`{}` visible{}", locator.selector(), not_tag(negated)),
-            || {
-                let locator = locator.clone();
-                async move {
-                    let state = match locator.state().await {
-                        Ok(state) => state,
-                        Err(error) => return Ok(Some(error.to_string())),
-                    };
-                    if (state.count > 0 && state.visible) != negated {
-                        Ok(None)
-                    } else {
-                        Ok(Some(format!(
-                            "count={} visible={}",
-                            state.count, state.visible
-                        )))
-                    }
-                }
-            },
-        )
-        .await
+        self.locator
+            .page()
+            .auto_step(
+                format!("expect.visible {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async {
+                    let locator = self.locator.clone();
+                    let negated = self.negated;
+                    poll(
+                        self.timeout,
+                        format!("`{}` visible{}", locator.selector(), not_tag(negated)),
+                        || {
+                            let locator = locator.clone();
+                            async move {
+                                let state = match locator.state().await {
+                                    Ok(state) => state,
+                                    Err(error) => return Ok(Some(error.to_string())),
+                                };
+                                if (state.count > 0 && state.visible) != negated {
+                                    Ok(None)
+                                } else {
+                                    Ok(Some(format!(
+                                        "count={} visible={}",
+                                        state.count, state.visible
+                                    )))
+                                }
+                            }
+                        },
+                    )
+                    .await
+                },
+            )
+            .await
     }
 
     /// Assert the element is hidden or absent.
     pub async fn hidden(&self) -> E2eResult<()> {
-        let locator = self.locator.clone();
-        let negated = self.negated;
-        poll(
-            self.timeout,
-            format!("`{}` hidden{}", locator.selector(), not_tag(negated)),
-            || {
-                let locator = locator.clone();
-                async move {
-                    let state = match locator.state().await {
-                        Ok(state) => state,
-                        Err(error) => return Ok(Some(error.to_string())),
-                    };
-                    if (state.count == 0 || !state.visible) != negated {
-                        Ok(None)
-                    } else {
-                        Ok(Some("still visible".to_string()))
-                    }
-                }
-            },
-        )
-        .await
+        self.locator
+            .page()
+            .auto_step(
+                format!("expect.hidden {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async {
+                    let locator = self.locator.clone();
+                    let negated = self.negated;
+                    poll(
+                        self.timeout,
+                        format!("`{}` hidden{}", locator.selector(), not_tag(negated)),
+                        || {
+                            let locator = locator.clone();
+                            async move {
+                                let state = match locator.state().await {
+                                    Ok(state) => state,
+                                    Err(error) => return Ok(Some(error.to_string())),
+                                };
+                                if (state.count == 0 || !state.visible) != negated {
+                                    Ok(None)
+                                } else {
+                                    Ok(Some("still visible".to_string()))
+                                }
+                            }
+                        },
+                    )
+                    .await
+                },
+            )
+            .await
     }
 
     /// Assert the exact trimmed text.
     pub async fn text(&self, expected: &str) -> E2eResult<()> {
-        let locator = self.locator.clone();
-        let expected = expected.to_string();
-        let negated = self.negated;
-        poll(
-            self.timeout,
-            format!(
-                "`{}` text == {expected:?}{}",
-                locator.selector(),
-                not_tag(negated)
-            ),
-            || {
-                let locator = locator.clone();
-                let expected = expected.clone();
-                async move {
-                    let state = match locator.state().await {
-                        Ok(state) => state,
-                        Err(error) => return Ok(Some(error.to_string())),
-                    };
-                    if (normalize_text(&state.text) == normalize_text(&expected)) != negated {
-                        Ok(None)
-                    } else {
-                        Ok(Some(format!("text was {:?}", state.text)))
-                    }
-                }
-            },
-        )
-        .await
+        self.locator
+            .page()
+            .auto_step(
+                format!("expect.text {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async {
+                    let locator = self.locator.clone();
+                    let expected = expected.to_string();
+                    let negated = self.negated;
+                    poll(
+                        self.timeout,
+                        format!(
+                            "`{}` text == {expected:?}{}",
+                            locator.selector(),
+                            not_tag(negated)
+                        ),
+                        || {
+                            let locator = locator.clone();
+                            let expected = expected.clone();
+                            async move {
+                                let state = match locator.state().await {
+                                    Ok(state) => state,
+                                    Err(error) => return Ok(Some(error.to_string())),
+                                };
+                                if (normalize_text(&state.text) == normalize_text(&expected))
+                                    != negated
+                                {
+                                    Ok(None)
+                                } else {
+                                    Ok(Some(format!("text was {:?}", state.text)))
+                                }
+                            }
+                        },
+                    )
+                    .await
+                },
+            )
+            .await
     }
 
     /// Assert the text contains a fragment.
     pub async fn contains_text(&self, fragment: &str) -> E2eResult<()> {
-        let locator = self.locator.clone();
-        let fragment = fragment.to_string();
-        let negated = self.negated;
-        poll(
-            self.timeout,
-            format!(
-                "`{}` contains {fragment:?}{}",
-                locator.selector(),
-                not_tag(negated)
-            ),
-            || {
-                let locator = locator.clone();
-                let fragment = fragment.clone();
-                async move {
-                    let state = match locator.state().await {
-                        Ok(state) => state,
-                        Err(error) => return Ok(Some(error.to_string())),
-                    };
-                    if normalize_text(&state.text).contains(&normalize_text(&fragment)) != negated {
-                        Ok(None)
-                    } else {
-                        Ok(Some(format!("text was {:?}", state.text)))
-                    }
-                }
-            },
-        )
-        .await
+        self.locator
+            .page()
+            .auto_step(
+                format!("expect.contains_text {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async {
+                    let locator = self.locator.clone();
+                    let fragment = fragment.to_string();
+                    let negated = self.negated;
+                    poll(
+                        self.timeout,
+                        format!(
+                            "`{}` contains {fragment:?}{}",
+                            locator.selector(),
+                            not_tag(negated)
+                        ),
+                        || {
+                            let locator = locator.clone();
+                            let fragment = fragment.clone();
+                            async move {
+                                let state = match locator.state().await {
+                                    Ok(state) => state,
+                                    Err(error) => return Ok(Some(error.to_string())),
+                                };
+                                if normalize_text(&state.text).contains(&normalize_text(&fragment))
+                                    != negated
+                                {
+                                    Ok(None)
+                                } else {
+                                    Ok(Some(format!("text was {:?}", state.text)))
+                                }
+                            }
+                        },
+                    )
+                    .await
+                },
+            )
+            .await
     }
 
     /// Assert the form value.
     pub async fn value(&self, expected: &str) -> E2eResult<()> {
-        let locator = self.locator.clone();
-        let expected = expected.to_string();
-        let negated = self.negated;
-        poll(
-            self.timeout,
-            format!(
-                "`{}` value == {expected:?}{}",
-                locator.selector(),
-                not_tag(negated)
-            ),
-            || {
-                let locator = locator.clone();
-                let expected = expected.clone();
-                async move {
-                    let state = match locator.state().await {
-                        Ok(state) => state,
-                        Err(error) => return Ok(Some(error.to_string())),
-                    };
-                    if (state.value == expected) != negated {
-                        Ok(None)
-                    } else {
-                        Ok(Some(format!("value was {:?}", state.value)))
-                    }
-                }
-            },
-        )
-        .await
+        self.locator
+            .page()
+            .auto_step(
+                format!("expect.value {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async {
+                    let locator = self.locator.clone();
+                    let expected = expected.to_string();
+                    let negated = self.negated;
+                    poll(
+                        self.timeout,
+                        format!(
+                            "`{}` value == {expected:?}{}",
+                            locator.selector(),
+                            not_tag(negated)
+                        ),
+                        || {
+                            let locator = locator.clone();
+                            let expected = expected.clone();
+                            async move {
+                                let state = match locator.state().await {
+                                    Ok(state) => state,
+                                    Err(error) => return Ok(Some(error.to_string())),
+                                };
+                                if (state.value == expected) != negated {
+                                    Ok(None)
+                                } else {
+                                    Ok(Some(format!("value was {:?}", state.value)))
+                                }
+                            }
+                        },
+                    )
+                    .await
+                },
+            )
+            .await
     }
 
     /// Assert the match count.
     pub async fn count(&self, expected: usize) -> E2eResult<()> {
-        let locator = self.locator.clone();
-        let negated = self.negated;
-        poll(
-            self.timeout,
-            format!(
-                "`{}` count == {expected}{}",
-                locator.selector(),
-                not_tag(negated)
-            ),
-            || {
-                let locator = locator.clone();
-                async move {
-                    let state = match locator.state().await {
-                        Ok(state) => state,
-                        Err(error) => return Ok(Some(error.to_string())),
-                    };
-                    if (state.count == expected) != negated {
-                        Ok(None)
-                    } else {
-                        Ok(Some(format!("count was {}", state.count)))
-                    }
-                }
-            },
-        )
-        .await
+        self.locator
+            .page()
+            .auto_step(
+                format!("expect.count {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async {
+                    let locator = self.locator.clone();
+                    let negated = self.negated;
+                    poll(
+                        self.timeout,
+                        format!(
+                            "`{}` count == {expected}{}",
+                            locator.selector(),
+                            not_tag(negated)
+                        ),
+                        || {
+                            let locator = locator.clone();
+                            async move {
+                                let state = match locator.state().await {
+                                    Ok(state) => state,
+                                    Err(error) => return Ok(Some(error.to_string())),
+                                };
+                                if (state.count == expected) != negated {
+                                    Ok(None)
+                                } else {
+                                    Ok(Some(format!("count was {}", state.count)))
+                                }
+                            }
+                        },
+                    )
+                    .await
+                },
+            )
+            .await
     }
 
     /// Assert the element is checked.
     pub async fn checked(&self) -> E2eResult<()> {
-        self.checked_state(true).await
+        self.locator
+            .page()
+            .auto_step(
+                format!("expect.checked {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async { self.checked_state(true).await },
+            )
+            .await
     }
 
     /// Assert the element is unchecked.
     pub async fn unchecked(&self) -> E2eResult<()> {
-        self.checked_state(false).await
+        self.locator
+            .page()
+            .auto_step(
+                format!("expect.unchecked {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async { self.checked_state(false).await },
+            )
+            .await
     }
 
     async fn checked_state(&self, want: bool) -> E2eResult<()> {
@@ -781,391 +1013,526 @@ impl LocatorExpect {
 
     /// Assert the element is enabled.
     pub async fn enabled(&self) -> E2eResult<()> {
-        let locator = self.locator.clone();
-        let negated = self.negated;
-        poll(
-            self.timeout,
-            format!("`{}` enabled{}", locator.selector(), not_tag(negated)),
-            || {
-                let locator = locator.clone();
-                async move {
-                    let state = match locator.state().await {
-                        Ok(state) => state,
-                        Err(error) => return Ok(Some(error.to_string())),
-                    };
-                    if (state.count > 0 && state.enabled) != negated {
-                        Ok(None)
-                    } else {
-                        Ok(Some("disabled or absent".to_string()))
-                    }
-                }
-            },
-        )
-        .await
+        self.locator
+            .page()
+            .auto_step(
+                format!("expect.enabled {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async {
+                    let locator = self.locator.clone();
+                    let negated = self.negated;
+                    poll(
+                        self.timeout,
+                        format!("`{}` enabled{}", locator.selector(), not_tag(negated)),
+                        || {
+                            let locator = locator.clone();
+                            async move {
+                                let state = match locator.state().await {
+                                    Ok(state) => state,
+                                    Err(error) => return Ok(Some(error.to_string())),
+                                };
+                                if (state.count > 0 && state.enabled) != negated {
+                                    Ok(None)
+                                } else {
+                                    Ok(Some("disabled or absent".to_string()))
+                                }
+                            }
+                        },
+                    )
+                    .await
+                },
+            )
+            .await
     }
 
     /// Assert the element is disabled.
     pub async fn disabled(&self) -> E2eResult<()> {
-        let locator = self.locator.clone();
-        let negated = self.negated;
-        poll(
-            self.timeout,
-            format!("`{}` disabled{}", locator.selector(), not_tag(negated)),
-            || {
-                let locator = locator.clone();
-                async move {
-                    let state = match locator.state().await {
-                        Ok(state) => state,
-                        Err(error) => return Ok(Some(error.to_string())),
-                    };
-                    if (state.count > 0 && !state.enabled) != negated {
-                        Ok(None)
-                    } else {
-                        Ok(Some("enabled or absent".to_string()))
-                    }
-                }
-            },
-        )
-        .await
+        self.locator
+            .page()
+            .auto_step(
+                format!("expect.disabled {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async {
+                    let locator = self.locator.clone();
+                    let negated = self.negated;
+                    poll(
+                        self.timeout,
+                        format!("`{}` disabled{}", locator.selector(), not_tag(negated)),
+                        || {
+                            let locator = locator.clone();
+                            async move {
+                                let state = match locator.state().await {
+                                    Ok(state) => state,
+                                    Err(error) => return Ok(Some(error.to_string())),
+                                };
+                                if (state.count > 0 && !state.enabled) != negated {
+                                    Ok(None)
+                                } else {
+                                    Ok(Some("enabled or absent".to_string()))
+                                }
+                            }
+                        },
+                    )
+                    .await
+                },
+            )
+            .await
     }
 
     /// Assert the element is editable (enabled input/textarea/select or contenteditable).
     pub async fn editable(&self) -> E2eResult<()> {
-        let locator = self.locator.clone();
-        let negated = self.negated;
-        poll(
-            self.timeout,
-            format!("`{}` editable{}", locator.selector(), not_tag(negated)),
-            || {
-                let locator = locator.clone();
-                async move {
-                    let state = match locator.state().await {
-                        Ok(state) => state,
-                        Err(error) => return Ok(Some(error.to_string())),
-                    };
-                    if (state.count > 0 && state.editable) != negated {
-                        Ok(None)
-                    } else {
-                        Ok(Some(format!(
-                            "count={} editable={}",
-                            state.count, state.editable
-                        )))
-                    }
-                }
-            },
-        )
-        .await
+        self.locator
+            .page()
+            .auto_step(
+                format!("expect.editable {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async {
+                    let locator = self.locator.clone();
+                    let negated = self.negated;
+                    poll(
+                        self.timeout,
+                        format!("`{}` editable{}", locator.selector(), not_tag(negated)),
+                        || {
+                            let locator = locator.clone();
+                            async move {
+                                let state = match locator.state().await {
+                                    Ok(state) => state,
+                                    Err(error) => return Ok(Some(error.to_string())),
+                                };
+                                if (state.count > 0 && state.editable) != negated {
+                                    Ok(None)
+                                } else {
+                                    Ok(Some(format!(
+                                        "count={} editable={}",
+                                        state.count, state.editable
+                                    )))
+                                }
+                            }
+                        },
+                    )
+                    .await
+                },
+            )
+            .await
     }
 
     /// Assert the element is empty (no text and no form value).
     pub async fn empty(&self) -> E2eResult<()> {
-        let locator = self.locator.clone();
-        let negated = self.negated;
-        poll(
-            self.timeout,
-            format!("`{}` empty{}", locator.selector(), not_tag(negated)),
-            || {
-                let locator = locator.clone();
-                async move {
-                    let state = match locator.state().await {
-                        Ok(state) => state,
-                        Err(error) => return Ok(Some(error.to_string())),
-                    };
-                    let empty = state.count > 0 && state.text.is_empty() && state.value.is_empty();
-                    if empty != negated {
-                        Ok(None)
-                    } else {
-                        Ok(Some(format!(
-                            "text={:?} value={:?}",
-                            state.text, state.value
-                        )))
-                    }
-                }
-            },
-        )
-        .await
+        self.locator
+            .page()
+            .auto_step(
+                format!("expect.empty {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async {
+                    let locator = self.locator.clone();
+                    let negated = self.negated;
+                    poll(
+                        self.timeout,
+                        format!("`{}` empty{}", locator.selector(), not_tag(negated)),
+                        || {
+                            let locator = locator.clone();
+                            async move {
+                                let state = match locator.state().await {
+                                    Ok(state) => state,
+                                    Err(error) => return Ok(Some(error.to_string())),
+                                };
+                                let empty = state.count > 0
+                                    && state.text.is_empty()
+                                    && state.value.is_empty();
+                                if empty != negated {
+                                    Ok(None)
+                                } else {
+                                    Ok(Some(format!(
+                                        "text={:?} value={:?}",
+                                        state.text, state.value
+                                    )))
+                                }
+                            }
+                        },
+                    )
+                    .await
+                },
+            )
+            .await
     }
 
     /// Assert the element is focused.
     pub async fn focused(&self) -> E2eResult<()> {
-        let locator = self.locator.clone();
-        let negated = self.negated;
-        poll(
-            self.timeout,
-            format!("`{}` focused{}", locator.selector(), not_tag(negated)),
-            || {
-                let locator = locator.clone();
-                async move {
-                    let state = match locator.state().await {
-                        Ok(state) => state,
-                        Err(error) => return Ok(Some(error.to_string())),
-                    };
-                    if (state.count > 0 && state.focused) != negated {
-                        Ok(None)
-                    } else {
-                        Ok(Some("unfocused or absent".to_string()))
-                    }
-                }
-            },
-        )
-        .await
+        self.locator
+            .page()
+            .auto_step(
+                format!("expect.focused {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async {
+                    let locator = self.locator.clone();
+                    let negated = self.negated;
+                    poll(
+                        self.timeout,
+                        format!("`{}` focused{}", locator.selector(), not_tag(negated)),
+                        || {
+                            let locator = locator.clone();
+                            async move {
+                                let state = match locator.state().await {
+                                    Ok(state) => state,
+                                    Err(error) => return Ok(Some(error.to_string())),
+                                };
+                                if (state.count > 0 && state.focused) != negated {
+                                    Ok(None)
+                                } else {
+                                    Ok(Some("unfocused or absent".to_string()))
+                                }
+                            }
+                        },
+                    )
+                    .await
+                },
+            )
+            .await
     }
 
     /// Assert the element is attached to the DOM.
     pub async fn attached(&self) -> E2eResult<()> {
-        let locator = self.locator.clone();
-        let negated = self.negated;
-        poll(
-            self.timeout,
-            format!("`{}` attached{}", locator.selector(), not_tag(negated)),
-            || {
-                let locator = locator.clone();
-                async move {
-                    let state = match locator.state().await {
-                        Ok(state) => state,
-                        Err(error) => return Ok(Some(error.to_string())),
-                    };
-                    if (state.count > 0) != negated {
-                        Ok(None)
-                    } else {
-                        Ok(Some("absent".to_string()))
-                    }
-                }
-            },
-        )
-        .await
+        self.locator
+            .page()
+            .auto_step(
+                format!("expect.attached {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async {
+                    let locator = self.locator.clone();
+                    let negated = self.negated;
+                    poll(
+                        self.timeout,
+                        format!("`{}` attached{}", locator.selector(), not_tag(negated)),
+                        || {
+                            let locator = locator.clone();
+                            async move {
+                                let state = match locator.state().await {
+                                    Ok(state) => state,
+                                    Err(error) => return Ok(Some(error.to_string())),
+                                };
+                                if (state.count > 0) != negated {
+                                    Ok(None)
+                                } else {
+                                    Ok(Some("absent".to_string()))
+                                }
+                            }
+                        },
+                    )
+                    .await
+                },
+            )
+            .await
     }
 
     /// Assert an attribute value (exact match).
     pub async fn attribute(&self, name: &str, expected: &str) -> E2eResult<()> {
-        let locator = self.locator.clone();
-        let name = name.to_string();
-        let expected = expected.to_string();
-        let negated = self.negated;
-        poll(
-            self.timeout,
-            format!(
-                "`{}` attribute {name:?} == {expected:?}{}",
-                locator.selector(),
-                not_tag(negated)
-            ),
-            || {
-                let locator = locator.clone();
-                let name = name.clone();
-                let expected = expected.clone();
-                async move {
-                    let actual = match locator.attribute(&name).await {
-                        Ok(actual) => actual,
-                        Err(error) => return Ok(Some(error.to_string())),
-                    };
-                    if (actual.as_deref() == Some(expected.as_str())) != negated {
-                        Ok(None)
-                    } else {
-                        Ok(Some(format!("attribute {name:?} was {actual:?}")))
-                    }
-                }
-            },
-        )
-        .await
+        self.locator
+            .page()
+            .auto_step(
+                format!("expect.attribute {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async {
+                    let locator = self.locator.clone();
+                    let name = name.to_string();
+                    let expected = expected.to_string();
+                    let negated = self.negated;
+                    poll(
+                        self.timeout,
+                        format!(
+                            "`{}` attribute {name:?} == {expected:?}{}",
+                            locator.selector(),
+                            not_tag(negated)
+                        ),
+                        || {
+                            let locator = locator.clone();
+                            let name = name.clone();
+                            let expected = expected.clone();
+                            async move {
+                                let actual = match locator.attribute(&name).await {
+                                    Ok(actual) => actual,
+                                    Err(error) => return Ok(Some(error.to_string())),
+                                };
+                                if (actual.as_deref() == Some(expected.as_str())) != negated {
+                                    Ok(None)
+                                } else {
+                                    Ok(Some(format!("attribute {name:?} was {actual:?}")))
+                                }
+                            }
+                        },
+                    )
+                    .await
+                },
+            )
+            .await
     }
 
     /// Assert the element has a CSS class.
     pub async fn contains_class(&self, class: &str) -> E2eResult<()> {
-        let locator = self.locator.clone();
-        let class = class.to_string();
-        let negated = self.negated;
-        poll(
-            self.timeout,
-            format!(
-                "`{}` has class {class:?}{}",
-                locator.selector(),
-                not_tag(negated)
-            ),
-            || {
-                let locator = locator.clone();
-                let class = class.clone();
-                async move {
-                    let actual = match locator.attribute("class").await {
-                        Ok(actual) => actual,
-                        Err(error) => return Ok(Some(error.to_string())),
-                    };
-                    let has = actual
-                        .as_deref()
-                        .unwrap_or_default()
-                        .split_whitespace()
-                        .any(|c| c == class);
-                    if has != negated {
-                        Ok(None)
-                    } else {
-                        Ok(Some(format!("class was {actual:?}")))
-                    }
-                }
-            },
-        )
-        .await
+        self.locator
+            .page()
+            .auto_step(
+                format!("expect.contains_class {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async {
+                    let locator = self.locator.clone();
+                    let class = class.to_string();
+                    let negated = self.negated;
+                    poll(
+                        self.timeout,
+                        format!(
+                            "`{}` has class {class:?}{}",
+                            locator.selector(),
+                            not_tag(negated)
+                        ),
+                        || {
+                            let locator = locator.clone();
+                            let class = class.clone();
+                            async move {
+                                let actual = match locator.attribute("class").await {
+                                    Ok(actual) => actual,
+                                    Err(error) => return Ok(Some(error.to_string())),
+                                };
+                                let has = actual
+                                    .as_deref()
+                                    .unwrap_or_default()
+                                    .split_whitespace()
+                                    .any(|c| c == class);
+                                if has != negated {
+                                    Ok(None)
+                                } else {
+                                    Ok(Some(format!("class was {actual:?}")))
+                                }
+                            }
+                        },
+                    )
+                    .await
+                },
+            )
+            .await
     }
 
     /// Assert the element id (exact match).
     pub async fn id(&self, expected: &str) -> E2eResult<()> {
-        self.attribute("id", expected).await
+        self.locator
+            .page()
+            .auto_step(
+                format!("expect.id {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async { self.attribute("id", expected).await },
+            )
+            .await
     }
 
     /// Assert a computed CSS property value (exact match).
     pub async fn css(&self, property: &str, expected: &str) -> E2eResult<()> {
-        let locator = self.locator.clone();
-        let property = property.to_string();
-        let expected = expected.to_string();
-        let negated = self.negated;
-        poll(
-            self.timeout,
-            format!(
-                "`{}` css {property:?} == {expected:?}{}",
-                locator.selector(),
-                not_tag(negated)
-            ),
-            || {
-                let locator = locator.clone();
-                let property = property.clone();
-                let expected = expected.clone();
-                async move {
-                    let actual = match locator.css_value(&property).await {
-                        Ok(actual) => actual,
-                        Err(error) => return Ok(Some(error.to_string())),
-                    };
-                    if (actual.as_deref() == Some(expected.as_str())) != negated {
-                        Ok(None)
-                    } else {
-                        Ok(Some(format!("css {property:?} was {actual:?}")))
-                    }
-                }
-            },
-        )
-        .await
+        self.locator
+            .page()
+            .auto_step(
+                format!("expect.css {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async {
+                    let locator = self.locator.clone();
+                    let property = property.to_string();
+                    let expected = expected.to_string();
+                    let negated = self.negated;
+                    poll(
+                        self.timeout,
+                        format!(
+                            "`{}` css {property:?} == {expected:?}{}",
+                            locator.selector(),
+                            not_tag(negated)
+                        ),
+                        || {
+                            let locator = locator.clone();
+                            let property = property.clone();
+                            let expected = expected.clone();
+                            async move {
+                                let actual = match locator.css_value(&property).await {
+                                    Ok(actual) => actual,
+                                    Err(error) => return Ok(Some(error.to_string())),
+                                };
+                                if (actual.as_deref() == Some(expected.as_str())) != negated {
+                                    Ok(None)
+                                } else {
+                                    Ok(Some(format!("css {property:?} was {actual:?}")))
+                                }
+                            }
+                        },
+                    )
+                    .await
+                },
+            )
+            .await
     }
 
     /// Assert a DOM property value (JSON equality).
     pub async fn js_property<T: Serialize>(&self, name: &str, expected: &T) -> E2eResult<()> {
-        let expected = serde_json::to_value(expected).map_err(E2eError::Json)?;
-        let locator = self.locator.clone();
-        let name = name.to_string();
-        let negated = self.negated;
-        poll(
-            self.timeout,
-            format!(
-                "`{}` js property {name:?} == {expected}{}",
-                locator.selector(),
-                not_tag(negated)
-            ),
-            || {
-                let locator = locator.clone();
-                let name = name.clone();
-                let expected = expected.clone();
-                async move {
-                    let actual = match locator.js_property(&name).await {
-                        Ok(actual) => actual,
-                        Err(error) => return Ok(Some(error.to_string())),
-                    };
-                    if (actual.as_ref() == Some(&expected)) != negated {
-                        Ok(None)
-                    } else {
-                        Ok(Some(format!("property {name:?} was {actual:?}")))
-                    }
-                }
-            },
-        )
-        .await
+        self.locator
+            .page()
+            .auto_step_local(
+                format!("expect.js_property {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async {
+                    let expected = serde_json::to_value(expected).map_err(E2eError::Json)?;
+                    let locator = self.locator.clone();
+                    let name = name.to_string();
+                    let negated = self.negated;
+                    poll(
+                        self.timeout,
+                        format!(
+                            "`{}` js property {name:?} == {expected}{}",
+                            locator.selector(),
+                            not_tag(negated)
+                        ),
+                        || {
+                            let locator = locator.clone();
+                            let name = name.clone();
+                            let expected = expected.clone();
+                            async move {
+                                let actual = match locator.js_property(&name).await {
+                                    Ok(actual) => actual,
+                                    Err(error) => return Ok(Some(error.to_string())),
+                                };
+                                if (actual.as_ref() == Some(&expected)) != negated {
+                                    Ok(None)
+                                } else {
+                                    Ok(Some(format!("property {name:?} was {actual:?}")))
+                                }
+                            }
+                        },
+                    )
+                    .await
+                },
+            )
+            .await
     }
 
     /// Assert the element intersects the viewport.
     pub async fn in_viewport(&self) -> E2eResult<()> {
-        let locator = self.locator.clone();
-        let negated = self.negated;
-        poll(
-            self.timeout,
-            format!("`{}` in viewport{}", locator.selector(), not_tag(negated)),
-            || {
-                let locator = locator.clone();
-                async move {
-                    let inside = match locator.in_viewport().await {
-                        Ok(inside) => inside,
-                        Err(error) => return Ok(Some(error.to_string())),
-                    };
-                    if inside != negated {
-                        Ok(None)
-                    } else {
-                        Ok(Some("outside the viewport or absent".to_string()))
-                    }
-                }
-            },
-        )
-        .await
+        self.locator
+            .page()
+            .auto_step(
+                format!("expect.in_viewport {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async {
+                    let locator = self.locator.clone();
+                    let negated = self.negated;
+                    poll(
+                        self.timeout,
+                        format!("`{}` in viewport{}", locator.selector(), not_tag(negated)),
+                        || {
+                            let locator = locator.clone();
+                            async move {
+                                let inside = match locator.in_viewport().await {
+                                    Ok(inside) => inside,
+                                    Err(error) => return Ok(Some(error.to_string())),
+                                };
+                                if inside != negated {
+                                    Ok(None)
+                                } else {
+                                    Ok(Some("outside the viewport or absent".to_string()))
+                                }
+                            }
+                        },
+                    )
+                    .await
+                },
+            )
+            .await
     }
 
     /// Assert the accessible name (exact match).
     pub async fn accessible_name(&self, expected: &str) -> E2eResult<()> {
-        let locator = self.locator.clone();
-        let expected = expected.to_string();
-        let negated = self.negated;
-        poll(
-            self.timeout,
-            format!(
-                "`{}` accessible name == {expected:?}{}",
-                locator.selector(),
-                not_tag(negated)
-            ),
-            || {
-                let locator = locator.clone();
-                let expected = expected.clone();
-                async move {
-                    let actual = match locator.accessible_name().await {
-                        Ok(actual) => actual,
-                        Err(error) => return Ok(Some(error.to_string())),
-                    };
-                    if (actual.as_deref() == Some(expected.as_str())) != negated {
-                        Ok(None)
-                    } else {
-                        Ok(Some(format!("accessible name was {actual:?}")))
-                    }
-                }
-            },
-        )
-        .await
+        self.locator
+            .page()
+            .auto_step(
+                format!("expect.accessible_name {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async {
+                    let locator = self.locator.clone();
+                    let expected = expected.to_string();
+                    let negated = self.negated;
+                    poll(
+                        self.timeout,
+                        format!(
+                            "`{}` accessible name == {expected:?}{}",
+                            locator.selector(),
+                            not_tag(negated)
+                        ),
+                        || {
+                            let locator = locator.clone();
+                            let expected = expected.clone();
+                            async move {
+                                let actual = match locator.accessible_name().await {
+                                    Ok(actual) => actual,
+                                    Err(error) => return Ok(Some(error.to_string())),
+                                };
+                                if (actual.as_deref() == Some(expected.as_str())) != negated {
+                                    Ok(None)
+                                } else {
+                                    Ok(Some(format!("accessible name was {actual:?}")))
+                                }
+                            }
+                        },
+                    )
+                    .await
+                },
+            )
+            .await
     }
 
     /// Assert the accessible description (exact match).
     pub async fn accessible_description(&self, expected: &str) -> E2eResult<()> {
-        let locator = self.locator.clone();
-        let expected = expected.to_string();
-        let negated = self.negated;
-        poll(
-            self.timeout,
-            format!(
-                "`{}` accessible description == {expected:?}{}",
-                locator.selector(),
-                not_tag(negated)
-            ),
-            || {
-                let locator = locator.clone();
-                let expected = expected.clone();
-                async move {
-                    let actual = match locator.accessible_description().await {
-                        Ok(actual) => actual,
-                        Err(error) => return Ok(Some(error.to_string())),
-                    };
-                    if (actual.as_deref() == Some(expected.as_str())) != negated {
-                        Ok(None)
-                    } else {
-                        Ok(Some(format!("accessible description was {actual:?}")))
-                    }
-                }
-            },
-        )
-        .await
+        self.locator
+            .page()
+            .auto_step(
+                format!("expect.accessible_description {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async {
+                    let locator = self.locator.clone();
+                    let expected = expected.to_string();
+                    let negated = self.negated;
+                    poll(
+                        self.timeout,
+                        format!(
+                            "`{}` accessible description == {expected:?}{}",
+                            locator.selector(),
+                            not_tag(negated)
+                        ),
+                        || {
+                            let locator = locator.clone();
+                            let expected = expected.clone();
+                            async move {
+                                let actual = match locator.accessible_description().await {
+                                    Ok(actual) => actual,
+                                    Err(error) => return Ok(Some(error.to_string())),
+                                };
+                                if (actual.as_deref() == Some(expected.as_str())) != negated {
+                                    Ok(None)
+                                } else {
+                                    Ok(Some(format!("accessible description was {actual:?}")))
+                                }
+                            }
+                        },
+                    )
+                    .await
+                },
+            )
+            .await
     }
 
     /// Assert an element screenshot matches the named snapshot (retries until match).
     pub async fn screenshot(&self, name: &str) -> E2eResult<()> {
-        self.screenshot_with(name, &SnapshotOptions::default())
+        self.locator
+            .page()
+            .auto_step(
+                format!("expect.screenshot {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async {
+                    self.screenshot_with(name, &SnapshotOptions::default())
+                        .await
+                },
+            )
             .await
     }
 
@@ -1174,57 +1541,66 @@ impl LocatorExpect {
     /// Missing snapshots and `update=all` are one-shot (write once, pass);
     /// otherwise captures are compared until they match or the timeout expires.
     pub async fn screenshot_with(&self, name: &str, opts: &SnapshotOptions) -> E2eResult<()> {
-        let mut effective = opts.clone();
-        if effective.dir.is_none() {
-            effective.dir = self.locator.page().snapshot_dir.clone();
-        }
-        let opts = &effective;
-        let path = snap_path_for(name, "png", opts);
-        if !path.is_file() || resolve_update(opts.update) == SnapshotUpdate::All {
-            let actual = self.locator.screenshot().await?;
-            return assert_snapshot_png(name, &actual, opts);
-        }
-        let expected = std::fs::read(&path)?;
-        let locator = self.locator.clone();
-        let opts = opts.clone();
-        let name = name.to_string();
-        let negated = self.negated;
-        let description = format!(
-            "`{}` screenshot {name:?}{}",
-            locator.selector(),
-            not_tag(negated)
-        );
-        let result = poll(self.timeout, description, || {
-            let locator = locator.clone();
-            let expected = expected.clone();
-            let opts = opts.clone();
-            async move {
-                let actual = match locator.screenshot().await {
-                    Ok(bytes) => bytes,
-                    Err(error) => return Ok(Some(error.to_string())),
-                };
-                match compare_png(&actual, &expected, opts.threshold) {
-                    Ok(diff) if diff.passed(&opts) != negated => Ok(None),
-                    Ok(diff) => Ok(Some(diff.summary())),
-                    // Size mismatches count as different under negation.
-                    Err(_) if negated => Ok(None),
-                    Err(error) => Err(error),
-                }
-            }
-        })
-        .await;
-        match result {
-            Ok(()) => Ok(()),
-            Err(poll_error) => {
-                // Final capture for the `.actual.png` artifact + detailed message.
-                let actual = locator.screenshot().await?;
-                match assert_snapshot_png(&name, &actual, &opts) {
-                    Err(rich) => Err(rich),
-                    // Negated case: still matching at timeout.
-                    Ok(()) => Err(poll_error),
-                }
-            }
-        }
+        self.locator
+            .page()
+            .auto_step(
+                format!("expect.screenshot_with {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async {
+                    let mut effective = opts.clone();
+                    if effective.dir.is_none() {
+                        effective.dir = self.locator.page().snapshot_dir.clone();
+                    }
+                    let opts = &effective;
+                    let path = snap_path_for(name, "png", opts);
+                    if !path.is_file() || resolve_update(opts.update) == SnapshotUpdate::All {
+                        let actual = self.locator.screenshot().await?;
+                        return assert_snapshot_png(name, &actual, opts);
+                    }
+                    let expected = std::fs::read(&path)?;
+                    let locator = self.locator.clone();
+                    let opts = opts.clone();
+                    let name = name.to_string();
+                    let negated = self.negated;
+                    let description = format!(
+                        "`{}` screenshot {name:?}{}",
+                        locator.selector(),
+                        not_tag(negated)
+                    );
+                    let result = poll(self.timeout, description, || {
+                        let locator = locator.clone();
+                        let expected = expected.clone();
+                        let opts = opts.clone();
+                        async move {
+                            let actual = match locator.screenshot().await {
+                                Ok(bytes) => bytes,
+                                Err(error) => return Ok(Some(error.to_string())),
+                            };
+                            match compare_png(&actual, &expected, opts.threshold) {
+                                Ok(diff) if diff.passed(&opts) != negated => Ok(None),
+                                Ok(diff) => Ok(Some(diff.summary())),
+                                // Size mismatches count as different under negation.
+                                Err(_) if negated => Ok(None),
+                                Err(error) => Err(error),
+                            }
+                        }
+                    })
+                    .await;
+                    match result {
+                        Ok(()) => Ok(()),
+                        Err(poll_error) => {
+                            // Final capture for the `.actual.png` artifact + detailed message.
+                            let actual = locator.screenshot().await?;
+                            match assert_snapshot_png(&name, &actual, &opts) {
+                                Err(rich) => Err(rich),
+                                // Negated case: still matching at timeout.
+                                Ok(()) => Err(poll_error),
+                            }
+                        }
+                    }
+                },
+            )
+            .await
     }
 }
 

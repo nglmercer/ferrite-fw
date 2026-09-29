@@ -281,7 +281,9 @@ screenshot/text/aria snapshot assertions (`missing`/`all`/`none` update modes),
 objects with save/delete, screenshots, video recording, live frame streams,
 traces, `ApiClient` verbs with `fetch`, parallel `Runner` with tags, sharding,
 projects, `repeat_each`, fixtures, `TestInfo` attachments/annotations,
-expected failures, `forbid_only`, dot/list/json/junit/html reporters,
+expected failures, `forbid_only`, controlled steps with timeout/skip/annotations,
+automatic action/assertion/lifecycle diagnostics, portable HTML report bundles,
+dot/list/json/junit/html reporters,
 and `before_all`/`after_all` hooks). Chromium recordings assemble via `ffmpeg`
 (fail-fast hint when missing; `FERRITE_FFMPEG_PATH` override); Firefox
 records natively. Tests and retries receive fresh contexts; use
