@@ -12,7 +12,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
-use crate::bidi::{bytes_to_string, remote_to_json, BidiConnection, BidiEvent};
+use crate::bidi::{remote_to_json, BidiConnection, BidiEvent};
 use crate::cdp::{CdpConnection, CdpEvent};
 use crate::error::{E2eError, E2eResult};
 use crate::jshandle::JSHandle;
@@ -22,6 +22,11 @@ use crate::page::{
     RouteHandlerEntry, RouteInfo, RouteRule, TraceEntry, WebSocketDirection, WebSocketEvent,
 };
 use crate::video::{assemble_webm, SpooledFrame, VideoFrame, VideoOptions};
+
+type ContextEventForwarding = (
+    tokio::sync::broadcast::WeakSender<crate::ContextEvent>,
+    String,
+);
 
 /// Sinks shared between a page and its driver's background listeners.
 #[derive(Clone)]
@@ -40,6 +45,9 @@ pub struct ConsoleSink {
     sockets: Arc<Mutex<HashMap<String, String>>>,
     /// Page event broadcast (console, dialogs, network, downloads, popups).
     events: tokio::sync::broadcast::Sender<PageEvent>,
+    pub(crate) download_dir: Arc<Mutex<Option<PathBuf>>>,
+    downloads_emitted: Arc<Mutex<HashMap<PathBuf, (u64, SystemTime)>>>,
+    context_events: Arc<Mutex<Option<ContextEventForwarding>>>,
 }
 
 /// Maximum recorded requests per page (oldest dropped first).
@@ -64,6 +72,9 @@ impl ConsoleSink {
             requests: Arc::new(Mutex::new(VecDeque::new())),
             sockets: Arc::new(Mutex::new(HashMap::new())),
             events: tokio::sync::broadcast::channel(MAX_EVENT_BUFFER).0,
+            context_events: Arc::new(Mutex::new(None)),
+            download_dir: Arc::new(Mutex::new(None)),
+            downloads_emitted: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -74,9 +85,70 @@ impl ConsoleSink {
 
     /// Emit a page event (dropped when nobody listens).
     pub(crate) fn emit(&self, event: PageEvent) {
+        if let PageEvent::Download(path) = &event {
+            if let Ok(meta) = path.metadata() {
+                let stamp = (meta.len(), meta.modified().unwrap_or(UNIX_EPOCH));
+                if self
+                    .downloads_emitted
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(path.clone(), stamp)
+                    == Some(stamp)
+                {
+                    return;
+                }
+            }
+        }
+        if let Some((weak, page_id)) = &*self
+            .context_events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+        {
+            if let Some(sender) = weak.upgrade() {
+                let _ = sender.send(crate::ContextEvent::PageEvent {
+                    page_id: page_id.clone(),
+                    event: event.clone(),
+                });
+            }
+        }
         let _ = self.events.send(event);
     }
 
+    pub(crate) fn forward_context(
+        &self,
+        events: &tokio::sync::broadcast::Sender<crate::ContextEvent>,
+        page_id: &str,
+    ) {
+        *self
+            .context_events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some((events.downgrade(), page_id.to_owned()));
+    }
+    fn completed_download(&self, filename: &str, filepath: Option<&str>) {
+        let path = filepath.map(PathBuf::from).or_else(|| {
+            self.download_dir
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+                .map(|dir| dir.join(filename))
+        });
+        if let Some(path) = path {
+            let sink = self.clone();
+            tokio::spawn(async move {
+                let deadline = crate::operation::Deadline::new(Duration::from_secs(5));
+                loop {
+                    if path.is_file() {
+                        sink.emit(PageEvent::Download(path));
+                        break;
+                    }
+                    if deadline.expired() {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+            });
+        }
+    }
     /// Record a console message (also appended to the trace).
     pub fn push_console(&self, kind: String, text: String) {
         if let Ok(mut console) = self.console.lock() {
@@ -169,7 +241,10 @@ pub struct CdpDriver {
     cdp: CdpConnection,
     session: String,
     target: String,
-    timeout: Duration,
+    timeout: Arc<Mutex<Duration>>,
+    lifecycle: crate::CancellationToken,
+    cancellation: crate::CancellationToken,
+    context_cancellation: crate::CancellationToken,
     sink: ConsoleSink,
     /// Held modifier bitmask (CDP does not track it across calls).
     modifiers: Arc<Mutex<u8>>,
@@ -213,7 +288,10 @@ fn fetch_enable_params(patterns: Option<&[Value]>, handle_auth: bool) -> Option<
 pub struct BidiDriver {
     bidi: BidiConnection,
     context: String,
-    timeout: Duration,
+    timeout: Arc<Mutex<Duration>>,
+    lifecycle: crate::CancellationToken,
+    cancellation: crate::CancellationToken,
+    context_cancellation: crate::CancellationToken,
     insecure_certs: bool,
     intercept: Arc<Mutex<Option<String>>>,
     sink: ConsoleSink,
@@ -231,6 +309,62 @@ pub enum Driver {
 }
 
 impl Driver {
+    pub(crate) fn share_timeout(&mut self, timeout: Arc<Mutex<Duration>>) {
+        match self {
+            Self::Cdp(driver) => driver.timeout = timeout,
+            Self::Bidi(driver) => driver.timeout = timeout,
+        }
+    }
+    pub(crate) fn with_cancellation(mut self, token: crate::CancellationToken) -> Self {
+        match &mut self {
+            Self::Cdp(driver) => driver.cancellation = token,
+            Self::Bidi(driver) => driver.cancellation = token,
+        }
+        self
+    }
+    pub(crate) fn cancel_lifecycle(&self) {
+        match self {
+            Self::Cdp(driver) => driver.lifecycle.cancel_with_reason("page closed"),
+            Self::Bidi(driver) => driver.lifecycle.cancel_with_reason("page closed"),
+        }
+    }
+    pub(crate) fn bind_context_cancellation(&mut self, token: crate::CancellationToken) {
+        match self {
+            Self::Cdp(driver) => driver.context_cancellation = token,
+            Self::Bidi(driver) => driver.context_cancellation = token,
+        }
+    }
+    pub(crate) fn run<'a, T: 'a>(
+        &'a self,
+        future: impl std::future::Future<Output = E2eResult<T>> + 'a,
+    ) -> impl std::future::Future<Output = E2eResult<T>> + 'a {
+        let future = Box::pin(future);
+        async move {
+            let (lifecycle, context, cancellation) = match self {
+                Self::Cdp(d) => (&d.lifecycle, &d.context_cancellation, &d.cancellation),
+                Self::Bidi(d) => (&d.lifecycle, &d.context_cancellation, &d.cancellation),
+            };
+            lifecycle.check()?;
+            context.check()?;
+            cancellation.check()?;
+            tokio::select! {biased;
+                reason=lifecycle.cancelled()=>Err(E2eError::Cancelled(reason)),
+                reason=context.cancelled()=>Err(E2eError::Cancelled(reason)),
+                reason=cancellation.cancelled()=>Err(E2eError::Cancelled(reason)),
+                result=future=>result,
+            }
+        }
+    }
+    pub(crate) fn run_close_wait<'a, T: 'a>(
+        &'a self,
+        future: impl std::future::Future<Output = E2eResult<T>> + 'a,
+    ) -> impl std::future::Future<Output = E2eResult<T>> + 'a {
+        let token = match self {
+            Self::Cdp(driver) => &driver.cancellation,
+            Self::Bidi(driver) => &driver.cancellation,
+        };
+        token.run(future)
+    }
     /// Target/context id for diagnostics.
     #[must_use]
     pub fn target_id(&self) -> &str {
@@ -253,16 +387,20 @@ impl Driver {
     #[must_use]
     pub fn timeout(&self) -> Duration {
         match self {
-            Self::Cdp(driver) => driver.timeout,
-            Self::Bidi(driver) => driver.timeout,
+            Self::Cdp(driver) => *driver.timeout.lock().unwrap_or_else(|e| e.into_inner()),
+            Self::Bidi(driver) => *driver.timeout.lock().unwrap_or_else(|e| e.into_inner()),
         }
     }
 
     /// Override the protocol timeout.
     pub fn set_timeout(&mut self, timeout: Duration) {
         match self {
-            Self::Cdp(driver) => driver.timeout = timeout,
-            Self::Bidi(driver) => driver.timeout = timeout,
+            Self::Cdp(driver) => {
+                *driver.timeout.lock().unwrap_or_else(|e| e.into_inner()) = timeout
+            }
+            Self::Bidi(driver) => {
+                *driver.timeout.lock().unwrap_or_else(|e| e.into_inner()) = timeout
+            }
         }
     }
 }
@@ -270,6 +408,9 @@ impl Driver {
 // --- construction ------------------------------------------------------------
 
 impl CdpDriver {
+    fn timeout(&self) -> Duration {
+        *self.timeout.lock().unwrap_or_else(|e| e.into_inner())
+    }
     /// Enable domains and spawn the event listener.
     pub async fn spawn(
         cdp: CdpConnection,
@@ -283,7 +424,10 @@ impl CdpDriver {
             cdp,
             session,
             target,
-            timeout,
+            timeout: Arc::new(Mutex::new(timeout)),
+            lifecycle: crate::CancellationToken::new(),
+            cancellation: crate::CancellationToken::new(),
+            context_cancellation: crate::CancellationToken::new(),
             sink,
             modifiers: Arc::new(Mutex::new(0)),
             pressed: Arc::new(Mutex::new(false)),
@@ -302,14 +446,50 @@ impl CdpDriver {
         let mut events = self.cdp.subscribe();
         let session = self.session.clone();
         let sink = self.sink.clone();
+        let target = self.target.clone();
         tokio::spawn(async move {
+            let mut frames = std::collections::HashSet::from([target]);
+            let mut downloads = HashMap::new();
             loop {
                 let event = match events.recv().await {
                     Ok(event) => event,
                     Err(_) => break,
                 };
+                if event.method == "Browser.downloadWillBegin"
+                    && event.params["frameId"]
+                        .as_str()
+                        .is_some_and(|id| frames.contains(id))
+                {
+                    downloads.insert(
+                        event.params["guid"].as_str().unwrap_or_default().to_owned(),
+                        event.params["suggestedFilename"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_owned(),
+                    );
+                }
+                if event.method == "Browser.downloadProgress"
+                    && event.params["state"] == "completed"
+                {
+                    if let Some(filename) = event.params["guid"]
+                        .as_str()
+                        .and_then(|guid| downloads.remove(guid))
+                    {
+                        sink.completed_download(&filename, event.params["filePath"].as_str());
+                    }
+                }
                 if event.session.as_deref() != Some(&session) {
                     continue;
+                }
+                if event.method == "Page.frameAttached" {
+                    if let Some(id) = event.params["frameId"].as_str() {
+                        frames.insert(id.to_owned());
+                    }
+                }
+                if event.method == "Page.frameNavigated" {
+                    if let Some(id) = event.params["frame"]["id"].as_str() {
+                        frames.insert(id.to_owned());
+                    }
                 }
                 handle_cdp_event(&event, &sink);
             }
@@ -318,6 +498,9 @@ impl CdpDriver {
 }
 
 impl BidiDriver {
+    fn timeout(&self) -> Duration {
+        *self.timeout.lock().unwrap_or_else(|e| e.into_inner())
+    }
     /// Spawn the event listener (session-wide subscription already active).
     pub fn spawn(
         bidi: BidiConnection,
@@ -330,7 +513,10 @@ impl BidiDriver {
         let driver = Self {
             bidi,
             context,
-            timeout,
+            timeout: Arc::new(Mutex::new(timeout)),
+            lifecycle: crate::CancellationToken::new(),
+            cancellation: crate::CancellationToken::new(),
+            context_cancellation: crate::CancellationToken::new(),
             insecure_certs,
             intercept: Arc::new(Mutex::new(None)),
             sink,
@@ -345,6 +531,7 @@ impl BidiDriver {
         let context = self.context.clone();
         let sink = self.sink.clone();
         tokio::spawn(async move {
+            let mut downloads = HashMap::new();
             loop {
                 let event = match events.recv().await {
                     Ok(event) => event,
@@ -352,6 +539,27 @@ impl BidiDriver {
                 };
                 if event.context() != Some(context.as_str()) {
                     continue;
+                }
+                if event.method == "browsingContext.downloadWillBegin" {
+                    downloads.insert(
+                        event.params["download"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_owned(),
+                        event.params["suggestedFilename"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_owned(),
+                    );
+                }
+                if event.method == "browsingContext.downloadEnd"
+                    && event.params["status"] == "complete"
+                {
+                    let filename = event.params["download"]
+                        .as_str()
+                        .and_then(|id| downloads.remove(id))
+                        .unwrap_or_default();
+                    sink.completed_download(&filename, event.params["filepath"].as_str());
                 }
                 handle_bidi_event(&event, &sink);
             }
@@ -364,42 +572,59 @@ impl BidiDriver {
 impl Driver {
     /// Navigate and wait for the load state.
     pub async fn navigate(&self, url: &str, wait: LoadState, timeout: Duration) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.navigate(url, wait, timeout).await,
-            Self::Bidi(driver) => driver.navigate(url, wait, timeout).await,
-        }
+        self.run(
+            crate::operation::Deadline::new(timeout).run("navigation", async {
+                match self {
+                    Self::Cdp(driver) => driver.navigate(url, wait, timeout).await,
+                    Self::Bidi(driver) => driver.navigate(url, wait, timeout).await,
+                }
+            }),
+        )
+        .await
     }
 
     /// Reload the page.
     pub async fn reload(&self) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.reload().await,
-            Self::Bidi(driver) => driver.reload().await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.reload().await,
+                Self::Bidi(driver) => driver.reload().await,
+            }
+        })
+        .await
     }
 
     /// Traverse history by `delta` entries.
     pub async fn traverse(&self, delta: i64) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.traverse(delta).await,
-            Self::Bidi(driver) => driver.traverse(delta).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.traverse(delta).await,
+                Self::Bidi(driver) => driver.traverse(delta).await,
+            }
+        })
+        .await
     }
 
     /// Evaluate JavaScript, returning plain JSON.
     pub async fn evaluate(&self, expression: &str) -> E2eResult<Value> {
-        match self {
-            Self::Cdp(driver) => driver.evaluate(expression).await,
-            Self::Bidi(driver) => driver.evaluate(expression).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.evaluate(expression).await,
+                Self::Bidi(driver) => driver.evaluate(expression).await,
+            }
+        })
+        .await
     }
 
     /// Evaluate `expression` and keep the result alive as a [`JSHandle`].
     pub async fn evaluate_handle(&self, expression: &str) -> E2eResult<JSHandle> {
-        match self {
-            Self::Cdp(driver) => driver.evaluate_handle(expression).await,
-            Self::Bidi(driver) => driver.evaluate_handle(expression).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.evaluate_handle(expression).await,
+                Self::Bidi(driver) => driver.evaluate_handle(expression).await,
+            }
+        })
+        .await
     }
 
     /// Serialize a handle's value to JSON.
@@ -408,10 +633,13 @@ impl Driver {
         remote_id: Option<&str>,
         value: Option<Value>,
     ) -> E2eResult<Value> {
-        match self {
-            Self::Cdp(driver) => driver.handle_json_value(remote_id, value).await,
-            Self::Bidi(driver) => driver.handle_json_value(remote_id, value).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.handle_json_value(remote_id, value).await,
+                Self::Bidi(driver) => driver.handle_json_value(remote_id, value).await,
+            }
+        })
+        .await
     }
 
     /// A handle to the named property of a handle's value.
@@ -421,10 +649,13 @@ impl Driver {
         value: Option<Value>,
         name: &str,
     ) -> E2eResult<JSHandle> {
-        match self {
-            Self::Cdp(driver) => driver.handle_get_property(remote_id, value, name).await,
-            Self::Bidi(driver) => driver.handle_get_property(remote_id, value, name).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.handle_get_property(remote_id, value, name).await,
+                Self::Bidi(driver) => driver.handle_get_property(remote_id, value, name).await,
+            }
+        })
+        .await
     }
 
     /// Run `function` with a handle's value as its first argument.
@@ -434,10 +665,13 @@ impl Driver {
         value: Option<Value>,
         function: &str,
     ) -> E2eResult<Value> {
-        match self {
-            Self::Cdp(driver) => driver.handle_evaluate(remote_id, value, function).await,
-            Self::Bidi(driver) => driver.handle_evaluate(remote_id, value, function).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.handle_evaluate(remote_id, value, function).await,
+                Self::Bidi(driver) => driver.handle_evaluate(remote_id, value, function).await,
+            }
+        })
+        .await
     }
 
     pub async fn handle_evaluate_handle(
@@ -446,98 +680,131 @@ impl Driver {
         value: Option<Value>,
         function: &str,
     ) -> E2eResult<JSHandle> {
-        match self {
-            Self::Cdp(driver) => {
-                driver
-                    .handle_evaluate_handle(remote_id, value, function)
-                    .await
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => {
+                    driver
+                        .handle_evaluate_handle(remote_id, value, function)
+                        .await
+                }
+                Self::Bidi(driver) => {
+                    driver
+                        .handle_evaluate_handle(remote_id, value, function)
+                        .await
+                }
             }
-            Self::Bidi(driver) => {
-                driver
-                    .handle_evaluate_handle(remote_id, value, function)
-                    .await
-            }
-        }
+        })
+        .await
     }
 
     /// Release a handle's remote reference.
     pub async fn handle_dispose(&self, remote_id: Option<&str>) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.handle_dispose(remote_id).await,
-            Self::Bidi(driver) => driver.handle_dispose(remote_id).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.handle_dispose(remote_id).await,
+                Self::Bidi(driver) => driver.handle_dispose(remote_id).await,
+            }
+        })
+        .await
     }
 
     /// Bring the page to front.
     pub async fn bring_to_front(&self) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.bring_to_front().await,
-            Self::Bidi(driver) => driver.bring_to_front().await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.bring_to_front().await,
+                Self::Bidi(driver) => driver.bring_to_front().await,
+            }
+        })
+        .await
     }
 
     /// Set the document HTML.
     pub async fn set_content(&self, html: &str) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.set_content(html).await,
-            Self::Bidi(driver) => driver.set_content(html).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.set_content(html).await,
+                Self::Bidi(driver) => driver.set_content(html).await,
+            }
+        })
+        .await
     }
 
     /// Capture a screenshot.
     pub async fn screenshot(&self, full_page: bool, quality: Option<u8>) -> E2eResult<Vec<u8>> {
-        match self {
-            Self::Cdp(driver) => driver.screenshot(full_page, quality).await,
-            Self::Bidi(driver) => driver.screenshot(full_page, quality).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.screenshot(full_page, quality).await,
+                Self::Bidi(driver) => driver.screenshot(full_page, quality).await,
+            }
+        })
+        .await
     }
 
     /// Print to PDF bytes.
     pub async fn print_pdf(&self) -> E2eResult<Vec<u8>> {
-        match self {
-            Self::Cdp(driver) => driver.print_pdf().await,
-            Self::Bidi(driver) => driver.print_pdf().await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.print_pdf().await,
+                Self::Bidi(driver) => driver.print_pdf().await,
+            }
+        })
+        .await
     }
 
     /// Set the viewport size.
     pub async fn set_viewport(&self, width: u32, height: u32) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.set_viewport(width, height).await,
-            Self::Bidi(driver) => driver.set_viewport(width, height).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.set_viewport(width, height).await,
+                Self::Bidi(driver) => driver.set_viewport(width, height).await,
+            }
+        })
+        .await
     }
 
     /// Emulate a device (Chromium: metrics + touch; Firefox: unsupported).
     pub async fn emulate_device(&self, device: crate::page::DeviceDescriptor) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.emulate_device(device).await,
-            Self::Bidi(driver) => driver.emulate_device(device).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.emulate_device(device).await,
+                Self::Bidi(driver) => driver.emulate_device(device).await,
+            }
+        })
+        .await
     }
 
     /// Override the user agent.
     pub async fn set_user_agent(&self, user_agent: &str) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.set_user_agent(user_agent).await,
-            Self::Bidi(driver) => driver.set_user_agent(user_agent).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.set_user_agent(user_agent).await,
+                Self::Bidi(driver) => driver.set_user_agent(user_agent).await,
+            }
+        })
+        .await
     }
 
     /// Direct downloads to `dir` (Chromium; Firefox is launch-time only).
     pub async fn set_download_dir(&self, dir: &Path) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.set_download_dir(dir).await,
-            Self::Bidi(driver) => driver.set_download_dir(dir).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.set_download_dir(dir).await,
+                Self::Bidi(driver) => driver.set_download_dir(dir).await,
+            }
+        })
+        .await
     }
 
     /// Cancel in-flight downloads (Chromium only).
     pub async fn cancel_downloads(&self) -> E2eResult<usize> {
-        match self {
-            Self::Cdp(driver) => driver.cancel_downloads().await,
-            Self::Bidi(driver) => driver.cancel_downloads().await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.cancel_downloads().await,
+                Self::Bidi(driver) => driver.cancel_downloads().await,
+            }
+        })
+        .await
     }
 
     /// Tracked downloads for URL/failure matching (Chromium only).
@@ -550,99 +817,135 @@ impl Driver {
 
     /// Run `source` before page scripts in every future document.
     pub async fn add_init_script(&self, source: &str) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.add_init_script(source).await,
-            Self::Bidi(driver) => driver.add_init_script(source).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.add_init_script(source).await,
+                Self::Bidi(driver) => driver.add_init_script(source).await,
+            }
+        })
+        .await
     }
 
     /// List frames (main frame first).
     pub async fn frames(&self) -> E2eResult<Vec<FrameInfo>> {
-        match self {
-            Self::Cdp(driver) => driver.frames().await,
-            Self::Bidi(driver) => driver.frames().await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.frames().await,
+                Self::Bidi(driver) => driver.frames().await,
+            }
+        })
+        .await
     }
 
     /// Evaluate in a frame by listing id.
     pub async fn frame_evaluate(&self, frame_id: &str, expression: &str) -> E2eResult<Value> {
-        match self {
-            Self::Cdp(driver) => driver.frame_evaluate(frame_id, expression).await,
-            Self::Bidi(driver) => driver.frame_evaluate(frame_id, expression).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.frame_evaluate(frame_id, expression).await,
+                Self::Bidi(driver) => driver.frame_evaluate(frame_id, expression).await,
+            }
+        })
+        .await
     }
 
     /// Navigate one frame (subframe ids from [`Driver::frames`]).
     pub async fn frame_navigate(&self, frame_id: &str, url: &str) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.frame_navigate(frame_id, url).await,
-            Self::Bidi(driver) => driver.frame_navigate(frame_id, url).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.frame_navigate(frame_id, url).await,
+                Self::Bidi(driver) => driver.frame_navigate(frame_id, url).await,
+            }
+        })
+        .await
     }
 
     /// Request a garbage collection (Chromium only).
     pub async fn request_gc(&self) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.request_gc().await,
-            Self::Bidi(driver) => driver.request_gc().await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.request_gc().await,
+                Self::Bidi(driver) => driver.request_gc().await,
+            }
+        })
+        .await
     }
 
     /// Ignore HTTPS certificate errors.
     pub async fn set_ignore_https_errors(&self, ignore: bool) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.set_ignore_https_errors(ignore).await,
-            Self::Bidi(driver) => driver.set_ignore_https_errors(ignore).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.set_ignore_https_errors(ignore).await,
+                Self::Bidi(driver) => driver.set_ignore_https_errors(ignore).await,
+            }
+        })
+        .await
     }
 
     /// Visible cookies.
     pub async fn cookies(&self) -> E2eResult<Vec<Cookie>> {
-        match self {
-            Self::Cdp(driver) => driver.cookies().await,
-            Self::Bidi(driver) => driver.cookies().await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.cookies().await,
+                Self::Bidi(driver) => driver.cookies().await,
+            }
+        })
+        .await
     }
 
     /// Set a cookie (url hint for domain derivation).
     pub async fn set_cookie(&self, name: &str, value: &str, url: &str) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.set_cookie(name, value, url).await,
-            Self::Bidi(driver) => driver.set_cookie(name, value, url).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.set_cookie(name, value, url).await,
+                Self::Bidi(driver) => driver.set_cookie(name, value, url).await,
+            }
+        })
+        .await
     }
 
     /// Set full-fidelity cookies (domain defaults to `url`'s host).
     pub async fn add_cookies(&self, cookies: &[Cookie], url: &str) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.add_cookies(cookies, url).await,
-            Self::Bidi(driver) => driver.add_cookies(cookies, url).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.add_cookies(cookies, url).await,
+                Self::Bidi(driver) => driver.add_cookies(cookies, url).await,
+            }
+        })
+        .await
     }
 
     /// Clear cookies.
     pub async fn clear_cookies(&self) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.clear_cookies().await,
-            Self::Bidi(driver) => driver.clear_cookies().await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.clear_cookies().await,
+                Self::Bidi(driver) => driver.clear_cookies().await,
+            }
+        })
+        .await
     }
 
     /// Move the mouse.
     pub async fn mouse_move(&self, x: f64, y: f64) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.mouse_move(x, y).await,
-            Self::Bidi(driver) => driver.mouse_move(x, y).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.mouse_move(x, y).await,
+                Self::Bidi(driver) => driver.mouse_move(x, y).await,
+            }
+        })
+        .await
     }
 
     /// Trusted click at coordinates.
     pub async fn mouse_click(&self, x: f64, y: f64, click_count: u32) -> E2eResult<()> {
-        let options = crate::page::MouseClickOptions {
-            click_count,
-            ..crate::page::MouseClickOptions::default()
-        };
-        self.mouse_click_with(x, y, &options).await
+        self.run(async {
+            let options = crate::page::MouseClickOptions {
+                click_count,
+                ..crate::page::MouseClickOptions::default()
+            };
+            self.mouse_click_with(x, y, &options).await
+        })
+        .await
     }
 
     /// Trusted click with button/count/delay options.
@@ -652,24 +955,33 @@ impl Driver {
         y: f64,
         options: &crate::page::MouseClickOptions,
     ) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.mouse_click_with(x, y, options).await,
-            Self::Bidi(driver) => driver.mouse_click_with(x, y, options).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.mouse_click_with(x, y, options).await,
+                Self::Bidi(driver) => driver.mouse_click_with(x, y, options).await,
+            }
+        })
+        .await
     }
 
     /// Insert text at the focused element.
     pub async fn insert_text(&self, text: &str) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.insert_text(text).await,
-            Self::Bidi(driver) => driver.insert_text(text).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.insert_text(text).await,
+                Self::Bidi(driver) => driver.insert_text(text).await,
+            }
+        })
+        .await
     }
 
     /// Dispatch a key press.
     pub async fn press_key(&self, key: &str) -> E2eResult<()> {
-        self.press_key_with(key, &crate::page::KeyPressOptions::default())
-            .await
+        self.run(async {
+            self.press_key_with(key, &crate::page::KeyPressOptions::default())
+                .await
+        })
+        .await
     }
 
     /// Dispatch a key press with down/up delay.
@@ -678,170 +990,233 @@ impl Driver {
         key: &str,
         options: &crate::page::KeyPressOptions,
     ) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.press_key_with(key, options).await,
-            Self::Bidi(driver) => driver.press_key_with(key, options).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.press_key_with(key, options).await,
+                Self::Bidi(driver) => driver.press_key_with(key, options).await,
+            }
+        })
+        .await
     }
 
     /// Press the left mouse button at coordinates.
     pub async fn mouse_down(&self, x: f64, y: f64) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.mouse_down(x, y).await,
-            Self::Bidi(driver) => driver.mouse_down(x, y).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.mouse_down(x, y).await,
+                Self::Bidi(driver) => driver.mouse_down(x, y).await,
+            }
+        })
+        .await
     }
 
     /// Release the left mouse button at coordinates.
     pub async fn mouse_up(&self, x: f64, y: f64) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.mouse_up(x, y).await,
-            Self::Bidi(driver) => driver.mouse_up(x, y).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.mouse_up(x, y).await,
+                Self::Bidi(driver) => driver.mouse_up(x, y).await,
+            }
+        })
+        .await
     }
 
     /// Drag from one point to another in `steps` paced moves.
     pub async fn mouse_drag(&self, from: (f64, f64), to: (f64, f64), steps: u32) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.mouse_drag(from, to, steps).await,
-            Self::Bidi(driver) => driver.mouse_drag(from, to, steps).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.mouse_drag(from, to, steps).await,
+                Self::Bidi(driver) => driver.mouse_drag(from, to, steps).await,
+            }
+        })
+        .await
     }
 
     /// Scroll a wheel at coordinates by (`delta_x`, `delta_y`).
     pub async fn mouse_wheel(&self, x: f64, y: f64, delta_x: f64, delta_y: f64) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.mouse_wheel(x, y, delta_x, delta_y).await,
-            Self::Bidi(driver) => driver.mouse_wheel(x, y, delta_x, delta_y).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.mouse_wheel(x, y, delta_x, delta_y).await,
+                Self::Bidi(driver) => driver.mouse_wheel(x, y, delta_x, delta_y).await,
+            }
+        })
+        .await
     }
 
     /// Hold a key down (pair with [`Driver::key_up`]).
     pub async fn key_down(&self, key: &str) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.key_down(key).await,
-            Self::Bidi(driver) => driver.key_down(key).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.key_down(key).await,
+                Self::Bidi(driver) => driver.key_down(key).await,
+            }
+        })
+        .await
     }
 
     /// Release a held key.
     pub async fn key_up(&self, key: &str) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.key_up(key).await,
-            Self::Bidi(driver) => driver.key_up(key).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.key_up(key).await,
+                Self::Bidi(driver) => driver.key_up(key).await,
+            }
+        })
+        .await
     }
 
     /// Tap at coordinates with the touchscreen.
     pub async fn touchscreen_tap(&self, x: f64, y: f64) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.touchscreen_tap(x, y).await,
-            Self::Bidi(driver) => driver.touchscreen_tap(x, y).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.touchscreen_tap(x, y).await,
+                Self::Bidi(driver) => driver.touchscreen_tap(x, y).await,
+            }
+        })
+        .await
     }
 
     /// Grant permissions.
     pub async fn grant_permissions(&self, permissions: &[&str]) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.grant_permissions(permissions).await,
-            Self::Bidi(driver) => driver.grant_permissions(permissions).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.grant_permissions(permissions).await,
+                Self::Bidi(driver) => driver.grant_permissions(permissions).await,
+            }
+        })
+        .await
     }
 
     /// Reset granted permissions.
     pub async fn clear_permissions(&self) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.clear_permissions().await,
-            Self::Bidi(driver) => driver.clear_permissions().await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.clear_permissions().await,
+                Self::Bidi(driver) => driver.clear_permissions().await,
+            }
+        })
+        .await
     }
 
     /// Override the geolocation coordinates.
     pub async fn set_geolocation(&self, latitude: f64, longitude: f64) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.set_geolocation(latitude, longitude).await,
-            Self::Bidi(driver) => driver.set_geolocation(latitude, longitude).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.set_geolocation(latitude, longitude).await,
+                Self::Bidi(driver) => driver.set_geolocation(latitude, longitude).await,
+            }
+        })
+        .await
     }
 
     /// Clear the geolocation override.
     pub async fn clear_geolocation(&self) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.clear_geolocation().await,
-            Self::Bidi(driver) => driver.clear_geolocation().await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.clear_geolocation().await,
+                Self::Bidi(driver) => driver.clear_geolocation().await,
+            }
+        })
+        .await
     }
 
     /// Emulate offline mode.
     pub async fn set_offline(&self, offline: bool) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.set_offline(offline).await,
-            Self::Bidi(driver) => driver.set_offline(offline).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.set_offline(offline).await,
+                Self::Bidi(driver) => driver.set_offline(offline).await,
+            }
+        })
+        .await
     }
 
     /// Set extra HTTP headers for subsequent requests.
     pub async fn set_extra_http_headers(&self, headers: &[(&str, &str)]) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.set_extra_http_headers(headers).await,
-            Self::Bidi(driver) => driver.set_extra_http_headers(headers).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.set_extra_http_headers(headers).await,
+                Self::Bidi(driver) => driver.set_extra_http_headers(headers).await,
+            }
+        })
+        .await
     }
 
     /// Override the locale.
     pub async fn set_locale(&self, locale: &str) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.set_locale(locale).await,
-            Self::Bidi(driver) => driver.set_locale(locale).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.set_locale(locale).await,
+                Self::Bidi(driver) => driver.set_locale(locale).await,
+            }
+        })
+        .await
     }
 
     /// Override the timezone.
     pub async fn set_timezone(&self, timezone_id: &str) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.set_timezone(timezone_id).await,
-            Self::Bidi(driver) => driver.set_timezone(timezone_id).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.set_timezone(timezone_id).await,
+                Self::Bidi(driver) => driver.set_timezone(timezone_id).await,
+            }
+        })
+        .await
     }
 
     /// Enable or disable JavaScript execution.
     pub async fn set_java_script_enabled(&self, enabled: bool) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.set_java_script_enabled(enabled).await,
-            Self::Bidi(driver) => driver.set_java_script_enabled(enabled).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.set_java_script_enabled(enabled).await,
+                Self::Bidi(driver) => driver.set_java_script_enabled(enabled).await,
+            }
+        })
+        .await
     }
 
     /// Bypass Content-Security-Policy checks.
     pub async fn set_bypass_csp(&self, bypass: bool) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.set_bypass_csp(bypass).await,
-            Self::Bidi(driver) => driver.set_bypass_csp(bypass).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.set_bypass_csp(bypass).await,
+                Self::Bidi(driver) => driver.set_bypass_csp(bypass).await,
+            }
+        })
+        .await
     }
 
     /// Allow or deny downloads browser-wide.
     pub async fn set_downloads_allowed(&self, allowed: bool) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.set_downloads_allowed(allowed).await,
-            Self::Bidi(driver) => driver.set_downloads_allowed(allowed).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.set_downloads_allowed(allowed).await,
+                Self::Bidi(driver) => driver.set_downloads_allowed(allowed).await,
+            }
+        })
+        .await
     }
 
     /// Block service workers (Chromium bypasses them; see note there).
     pub async fn set_service_workers_blocked(&self, blocked: bool) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.set_service_workers_blocked(blocked).await,
-            Self::Bidi(driver) => driver.set_service_workers_blocked(blocked).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.set_service_workers_blocked(blocked).await,
+                Self::Bidi(driver) => driver.set_service_workers_blocked(blocked).await,
+            }
+        })
+        .await
     }
 
     /// Clear `storage_types` (e.g. `indexeddb`) for one origin.
     pub async fn clear_data_for_origin(&self, origin: &str, storage_types: &str) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.clear_data_for_origin(origin, storage_types).await,
-            Self::Bidi(driver) => driver.clear_data_for_origin(origin, storage_types).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.clear_data_for_origin(origin, storage_types).await,
+                Self::Bidi(driver) => driver.clear_data_for_origin(origin, storage_types).await,
+            }
+        })
+        .await
     }
 
     /// Answer HTTP auth challenges with `username`/`password` (`None` clears).
@@ -850,20 +1225,23 @@ impl Driver {
         username: Option<&str>,
         password: Option<&str>,
     ) -> E2eResult<()> {
-        let creds = match (username, password) {
-            (Some(user), Some(pass)) => Some((user.to_string(), pass.to_string())),
-            (None, None) => None,
-            _ => {
-                return Err(E2eError::Config(
+        self.run(async {
+            let creds = match (username, password) {
+                (Some(user), Some(pass)) => Some((user.to_string(), pass.to_string())),
+                (None, None) => None,
+                _ => {
+                    return Err(E2eError::Config(
                     "set_auth_credentials needs both username and password (or neither to clear)"
                         .to_string(),
                 ));
+                }
+            };
+            match self {
+                Self::Cdp(driver) => driver.set_auth_credentials(creds).await,
+                Self::Bidi(driver) => driver.set_auth_credentials(creds).await,
             }
-        };
-        match self {
-            Self::Cdp(driver) => driver.set_auth_credentials(creds).await,
-            Self::Bidi(driver) => driver.set_auth_credentials(creds).await,
-        }
+        })
+        .await
     }
 
     /// Emulate media features.
@@ -872,10 +1250,13 @@ impl Driver {
         color_scheme: Option<ColorScheme>,
         reduced_motion: Option<ReducedMotion>,
     ) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.emulate_media(color_scheme, reduced_motion).await,
-            Self::Bidi(driver) => driver.emulate_media(color_scheme, reduced_motion).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.emulate_media(color_scheme, reduced_motion).await,
+                Self::Bidi(driver) => driver.emulate_media(color_scheme, reduced_motion).await,
+            }
+        })
+        .await
     }
 
     /// Start intercepting requests; returns the handler task handle.
@@ -884,10 +1265,13 @@ impl Driver {
         rules: Arc<Vec<RouteRule>>,
         handlers: Arc<Vec<RouteHandlerEntry>>,
     ) -> E2eResult<tokio::task::AbortHandle> {
-        match self {
-            Self::Cdp(driver) => driver.start_routing(rules, handlers).await,
-            Self::Bidi(driver) => driver.start_routing(rules, handlers).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.start_routing(rules, handlers).await,
+                Self::Bidi(driver) => driver.start_routing(rules, handlers).await,
+            }
+        })
+        .await
     }
 
     /// Disable interception.
@@ -913,18 +1297,24 @@ impl Driver {
         prompt_text: Option<String>,
         handler: Option<DialogHandler>,
     ) -> E2eResult<tokio::task::AbortHandle> {
-        match self {
-            Self::Cdp(driver) => Ok(driver.start_dialogs(accept, prompt_text, handler)),
-            Self::Bidi(driver) => Ok(driver.start_dialogs(accept, prompt_text, handler)),
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => Ok(driver.start_dialogs(accept, prompt_text, handler)),
+                Self::Bidi(driver) => Ok(driver.start_dialogs(accept, prompt_text, handler)),
+            }
+        })
+        .await
     }
 
     /// Wait for a document load state.
     pub async fn wait_for_load(&self, state: LoadState, timeout: Duration) -> E2eResult<()> {
-        match self {
-            Self::Cdp(driver) => driver.wait_for_load(state, timeout).await,
-            Self::Bidi(driver) => driver.wait_for_load(state, timeout).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.wait_for_load(state, timeout).await,
+                Self::Bidi(driver) => driver.wait_for_load(state, timeout).await,
+            }
+        })
+        .await
     }
 
     /// Close the page target.
@@ -937,10 +1327,13 @@ impl Driver {
 
     /// Raw protocol call (CDP method or BiDi method with context injected).
     pub async fn raw(&self, method: &str, params: Value, timeout: Duration) -> E2eResult<Value> {
-        match self {
-            Self::Cdp(driver) => driver.raw(method, params, timeout).await,
-            Self::Bidi(driver) => driver.raw(method, params, timeout).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.raw(method, params, timeout).await,
+                Self::Bidi(driver) => driver.raw(method, params, timeout).await,
+            }
+        })
+        .await
     }
 
     /// Start a live frame stream (screencast on Chromium, paced
@@ -950,10 +1343,13 @@ impl Driver {
         &self,
         opts: &VideoOptions,
     ) -> E2eResult<(FrameStream, tokio::task::AbortHandle)> {
-        match self {
-            Self::Cdp(driver) => driver.start_frame_stream(opts).await,
-            Self::Bidi(driver) => driver.start_frame_stream(opts).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.start_frame_stream(opts).await,
+                Self::Bidi(driver) => driver.start_frame_stream(opts).await,
+            }
+        })
+        .await
     }
 
     /// Stop a frame stream at the protocol level (best effort).
@@ -966,10 +1362,13 @@ impl Driver {
 
     /// Start recording video to `opts.dir`.
     pub async fn start_recording(&self, opts: &VideoOptions) -> E2eResult<RecordingState> {
-        match self {
-            Self::Cdp(driver) => driver.start_recording(opts).await,
-            Self::Bidi(driver) => driver.start_recording(opts).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.start_recording(opts).await,
+                Self::Bidi(driver) => driver.start_recording(opts).await,
+            }
+        })
+        .await
     }
 
     /// Stop a recording and produce the output video.
@@ -978,10 +1377,13 @@ impl Driver {
         state: RecordingState,
         output: &std::path::Path,
     ) -> E2eResult<PathBuf> {
-        match self {
-            Self::Cdp(driver) => driver.stop_recording(state, output).await,
-            Self::Bidi(driver) => driver.stop_recording(state, output).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.stop_recording(state, output).await,
+                Self::Bidi(driver) => driver.stop_recording(state, output).await,
+            }
+        })
+        .await
     }
 
     /// Discard a recording without producing output.
@@ -998,10 +1400,13 @@ impl Driver {
         rect: &ElementRect,
         quality: Option<u8>,
     ) -> E2eResult<Vec<u8>> {
-        match self {
-            Self::Cdp(driver) => driver.screenshot_clip(rect, quality).await,
-            Self::Bidi(driver) => driver.screenshot_clip(rect, quality).await,
-        }
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => driver.screenshot_clip(rect, quality).await,
+                Self::Bidi(driver) => driver.screenshot_clip(rect, quality).await,
+            }
+        })
+        .await
     }
 }
 
@@ -1053,7 +1458,7 @@ pub enum RecordingState {
 impl CdpDriver {
     async fn call(&self, method: &str, params: Value) -> E2eResult<Value> {
         self.cdp
-            .call(Some(&self.session), method, params, self.timeout)
+            .call(Some(&self.session), method, params, self.timeout())
             .await
             .map_err(|error| match error {
                 E2eError::Cdp { message, .. } => E2eError::Cdp {
@@ -1092,7 +1497,7 @@ impl CdpDriver {
 
     async fn reload(&self) -> E2eResult<()> {
         self.call("Page.reload", Value::Null).await?;
-        self.wait_for_load(LoadState::Load, self.timeout).await
+        self.wait_for_load(LoadState::Load, self.timeout()).await
     }
 
     async fn traverse(&self, delta: i64) -> E2eResult<()> {
@@ -1116,7 +1521,7 @@ impl CdpDriver {
             serde_json::json!({ "entryId": id }),
         )
         .await?;
-        self.wait_for_load(LoadState::Load, self.timeout).await
+        self.wait_for_load(LoadState::Load, self.timeout()).await
     }
 
     async fn evaluate(&self, expression: &str) -> E2eResult<Value> {
@@ -1477,7 +1882,7 @@ impl CdpDriver {
             params["browserContextId"] = Value::String(context.clone());
         }
         self.cdp
-            .call(None, "Browser.setDownloadBehavior", params, self.timeout)
+            .call(None, "Browser.setDownloadBehavior", params, self.timeout())
             .await?;
         Ok(())
     }
@@ -1495,7 +1900,7 @@ impl CdpDriver {
             }
             let done = self
                 .cdp
-                .call(None, "Browser.cancelDownload", params, self.timeout)
+                .call(None, "Browser.cancelDownload", params, self.timeout())
                 .await;
             if done.is_ok() {
                 canceled += 1;
@@ -1523,20 +1928,12 @@ impl CdpDriver {
     }
 
     async fn cookies(&self) -> E2eResult<Vec<Cookie>> {
-        let mut params = serde_json::json!({});
-        if let Some(id) = &self.browser_context {
-            params["browserContextId"] = Value::String(id.clone());
-        }
-        let cookies = self
-            .cdp
-            .call(None, "Storage.getCookies", params, self.timeout)
-            .await?;
-        let list = cookies
-            .get("cookies")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        serde_json::from_value(Value::Array(list)).map_err(E2eError::Json)
+        crate::context_cookies::cookies(
+            &crate::browser::Backend::Cdp(self.cdp.clone()),
+            self.browser_context.as_deref(),
+            self.timeout(),
+        )
+        .await
     }
 
     async fn set_cookie(&self, name: &str, value: &str, url: &str) -> E2eResult<()> {
@@ -1548,6 +1945,7 @@ impl CdpDriver {
                 path: None,
                 http_only: false,
                 secure: false,
+                same_site: None,
                 expires: None,
             }],
             url,
@@ -1556,32 +1954,23 @@ impl CdpDriver {
     }
 
     async fn add_cookies(&self, cookies: &[Cookie], url: &str) -> E2eResult<()> {
-        let cookies: Vec<Value> = cookies.iter().map(|cookie| {
-            let mut params = serde_json::json!({"name":cookie.name,"value":cookie.value,"url":url,"httpOnly":cookie.http_only,"secure":cookie.secure});
-            if let Some(domain) = &cookie.domain { params["domain"] = Value::String(domain.clone()); }
-            if let Some(path) = &cookie.path { params["path"] = Value::String(path.clone()); }
-            if let Some(expires) = cookie.expires.filter(|expires| *expires >= 0) { params["expires"] = Value::from(expires); }
-            params
-        }).collect();
-        let mut params = serde_json::json!({"cookies":cookies});
-        if let Some(id) = &self.browser_context {
-            params["browserContextId"] = Value::String(id.clone());
-        }
-        self.cdp
-            .call(None, "Storage.setCookies", params, self.timeout)
-            .await?;
-        Ok(())
+        crate::context_cookies::add_cookies(
+            &crate::browser::Backend::Cdp(self.cdp.clone()),
+            self.browser_context.as_deref(),
+            self.timeout(),
+            cookies,
+            url,
+        )
+        .await
     }
 
     async fn clear_cookies(&self) -> E2eResult<()> {
-        let mut params = serde_json::json!({});
-        if let Some(id) = &self.browser_context {
-            params["browserContextId"] = Value::String(id.clone());
-        }
-        self.cdp
-            .call(None, "Storage.clearCookies", params, self.timeout)
-            .await?;
-        Ok(())
+        crate::context_cookies::clear_cookies(
+            &crate::browser::Backend::Cdp(self.cdp.clone()),
+            self.browser_context.as_deref(),
+            self.timeout(),
+        )
+        .await
     }
 
     /// Currently held modifier bitmask.
@@ -1929,7 +2318,7 @@ impl CdpDriver {
             params["browserContextId"] = Value::String(context.clone());
         }
         self.cdp
-            .call(None, "Browser.setDownloadBehavior", params, self.timeout)
+            .call(None, "Browser.setDownloadBehavior", params, self.timeout())
             .await?;
         Ok(())
     }
@@ -2010,7 +2399,7 @@ impl CdpDriver {
         let session = self.session.clone();
         let cdp = self.cdp.clone();
         let sink = self.sink.clone();
-        let timeout = self.timeout;
+        let timeout = self.timeout();
         let handle = tokio::spawn(async move {
             // Handler decisions cached for response-stage replay (handlers
             // run once per request, at the request stage).
@@ -2257,7 +2646,7 @@ impl CdpDriver {
         let mut events = self.cdp.subscribe();
         let session = self.session.clone();
         let cdp = self.cdp.clone();
-        let timeout = self.timeout;
+        let timeout = self.timeout();
         let shared = Arc::clone(&self.fetch_auth);
         tokio::spawn(async move {
             loop {
@@ -2325,7 +2714,7 @@ impl CdpDriver {
         let session = self.session.clone();
         let sink = self.sink.clone();
         let cdp = self.cdp.clone();
-        let timeout = self.timeout;
+        let timeout = self.timeout();
         tokio::spawn(async move {
             let mut pending: HashMap<String, PendingRequest> = HashMap::new();
             let mut responded: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -2480,7 +2869,7 @@ impl CdpDriver {
         let session = self.session.clone();
         let cdp = self.cdp.clone();
         let sink = self.sink.clone();
-        let timeout = self.timeout;
+        let timeout = self.timeout();
         tokio::spawn(async move {
             loop {
                 let event = match events.recv().await {
@@ -2542,35 +2931,31 @@ impl CdpDriver {
             LoadState::Load | LoadState::NetworkIdle => "Page.loadEventFired",
             LoadState::Commit => return Ok(()),
         };
-        let deadline = tokio::time::Instant::now() + timeout;
+        let deadline = crate::operation::Deadline::new(timeout);
         if self.load_state_satisfied(state).await {
             return settle_quiet(&self.sink.inflight, state, deadline).await;
         }
         loop {
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() {
-                return Err(E2eError::Timeout(
-                    timeout.as_millis().min(u128::from(u64::MAX)) as u64,
-                    format!("wait for {want}"),
-                ));
-            }
-            match tokio::time::timeout(remaining, events.recv()).await {
-                Ok(Ok(event)) => {
-                    if event.session.as_deref() == Some(&self.session) && event.method == want {
-                        return settle_quiet(&self.sink.inflight, state, deadline).await;
-                    }
+            match deadline
+                .run(format!("wait for {want}"), async {
+                    events
+                        .recv()
+                        .await
+                        .map_err(|_| E2eError::Disconnected("load event stream closed".into()))
+                })
+                .await
+            {
+                Ok(event)
+                    if event.session.as_deref() == Some(&self.session) && event.method == want =>
+                {
+                    return settle_quiet(&self.sink.inflight, state, deadline).await;
                 }
-                Ok(Err(_)) => {
-                    tokio::time::sleep(Duration::from_millis(20)).await;
-                }
-                Err(_) => {
+                Ok(_) => {}
+                Err(error) => {
                     if self.load_state_satisfied(state).await {
                         return settle_quiet(&self.sink.inflight, state, deadline).await;
                     }
-                    return Err(E2eError::Timeout(
-                        timeout.as_millis().min(u128::from(u64::MAX)) as u64,
-                        format!("wait for {want}"),
-                    ));
+                    return Err(error);
                 }
             }
         }
@@ -2625,7 +3010,7 @@ impl CdpDriver {
         let mut events = self.cdp.subscribe();
         let session = self.session.clone();
         let cdp = self.cdp.clone();
-        let timeout = self.timeout;
+        let timeout = self.timeout();
         let started = tokio::time::Instant::now();
         let min_gap = Duration::from_millis((1000 / u64::from(opts.fps.max(1))).max(1));
         let handle = tokio::spawn(async move {
@@ -2688,7 +3073,7 @@ impl CdpDriver {
         let mut events = self.cdp.subscribe();
         let session = self.session.clone();
         let cdp = self.cdp.clone();
-        let timeout = self.timeout;
+        let timeout = self.timeout();
         let started = std::time::Instant::now();
         let min_gap = Duration::from_millis((1000 / u64::from(opts.fps.max(1))).max(1));
         let pump_spool = spool.clone();
@@ -2881,7 +3266,7 @@ impl BidiDriver {
                 .or_insert_with(|| self.context_param());
         }
         self.bidi
-            .call(method, params, self.timeout)
+            .call(method, params, self.timeout())
             .await
             .map_err(|error| match error {
                 E2eError::Cdp { message, .. } => E2eError::Cdp {
@@ -2923,7 +3308,7 @@ impl BidiDriver {
                 message: error.to_string(),
             })?;
         self.sink.record("navigation", format!("goto {url}"));
-        let deadline = tokio::time::Instant::now() + timeout;
+        let deadline = crate::operation::Deadline::new(timeout);
         settle_quiet(&self.sink.inflight, wait, deadline).await
     }
 
@@ -2966,7 +3351,7 @@ impl BidiDriver {
             .call(
                 "browsingContext.getTree",
                 serde_json::json!({ "root": self.context }),
-                self.timeout,
+                self.timeout(),
             )
             .await?;
         let mut out = Vec::new();
@@ -2991,7 +3376,7 @@ impl BidiDriver {
                     "url": url,
                     "wait": "complete",
                 }),
-                self.timeout,
+                self.timeout(),
             )
             .await
             .map_err(|error| E2eError::Navigation {
@@ -3020,7 +3405,7 @@ impl BidiDriver {
                     "target": { "context": context },
                     "awaitPromise": true,
                 }),
-                self.timeout,
+                self.timeout(),
             )
             .await
             .map_err(|error| match error {
@@ -3056,7 +3441,7 @@ impl BidiDriver {
                     "awaitPromise": true,
                     "resultOwnership": "root",
                 }),
-                self.timeout,
+                self.timeout(),
             )
             .await
             .map_err(|error| script_call_error("script.evaluate", error))?;
@@ -3080,7 +3465,7 @@ impl BidiDriver {
 
     async fn call_script_function(&self, params: Value) -> E2eResult<Value> {
         self.bidi
-            .call("script.callFunction", params, self.timeout)
+            .call("script.callFunction", params, self.timeout())
             .await
             .map_err(|error| script_call_error("script.callFunction", error))
     }
@@ -3187,7 +3572,7 @@ impl BidiDriver {
                 .await;
         }
         let id = remote_id.ok_or_else(|| E2eError::Config("remote handle is missing".into()))?;
-        let result = self.bidi.call("script.callFunction", serde_json::json!({"functionDeclaration":function,"target":{"context":self.context},"arguments":[{"handle":id}],"awaitPromise":true,"resultOwnership":"root"}), self.timeout).await?;
+        let result = self.bidi.call("script.callFunction", serde_json::json!({"functionDeclaration":function,"target":{"context":self.context},"arguments":[{"handle":id}],"awaitPromise":true,"resultOwnership":"root"}), self.timeout()).await?;
         check_script_exception("script.callFunction", &result, function)?;
         Ok(self.bidi_handle(&result["result"]))
     }
@@ -3203,7 +3588,7 @@ impl BidiDriver {
                     "target": { "context": self.context },
                     "handles": [id],
                 }),
-                self.timeout,
+                self.timeout(),
             )
             .await
             .map_err(|error| script_call_error("script.disown", error))?;
@@ -3287,7 +3672,7 @@ impl BidiDriver {
                     "functionDeclaration": function,
                     "contexts": [self.context],
                 }),
-                self.timeout,
+                self.timeout(),
             )
             .await?;
         Ok(())
@@ -3314,33 +3699,15 @@ impl BidiDriver {
     }
 
     async fn cookies(&self) -> E2eResult<Vec<Cookie>> {
-        let result = self
-            .bidi
-            .call(
-                "storage.getCookies",
-                serde_json::json!({
-                    "partition": { "type": "storageKey", "userContext": self.user_context.as_deref().unwrap_or("default") },
-                }),
-                self.timeout,
-            )
-            .await?;
-        let mut cookies = Vec::new();
-        if let Some(list) = result.get("cookies").and_then(Value::as_array) {
-            for cookie in list {
-                cookies.push(Cookie {
-                    name: cookie["name"].as_str().unwrap_or_default().to_string(),
-                    value: bytes_to_string(&cookie["value"]),
-                    domain: cookie["domain"].as_str().map(str::to_string),
-                    path: cookie["path"].as_str().map(str::to_string),
-                    http_only: cookie["httpOnly"].as_bool().unwrap_or(false),
-                    secure: cookie["secure"].as_bool().unwrap_or(false),
-                    expires: cookie["expiry"]
-                        .as_i64()
-                        .or_else(|| cookie["expiry"].as_str().and_then(|raw| raw.parse().ok())),
-                });
-            }
-        }
-        Ok(cookies)
+        crate::context_cookies::cookies(
+            &crate::browser::Backend::Bidi {
+                conn: self.bidi.clone(),
+                insecure_certs: self.insecure_certs,
+            },
+            self.user_context.as_deref(),
+            self.timeout(),
+        )
+        .await
     }
 
     async fn set_cookie(&self, name: &str, value: &str, url: &str) -> E2eResult<()> {
@@ -3359,57 +3726,36 @@ impl BidiDriver {
                     "cookie": cookie,
                     "partition": { "type": "storageKey", "userContext": self.user_context.as_deref().unwrap_or("default") },
                 }),
-                self.timeout,
+                self.timeout(),
             )
             .await?;
         Ok(())
     }
 
     async fn add_cookies(&self, cookies: &[Cookie], url: &str) -> E2eResult<()> {
-        let host = url_host(url);
-        for cookie in cookies {
-            let mut params = serde_json::json!({
-                "name": cookie.name,
-                "value": { "type": "string", "value": cookie.value },
-                "path": cookie.path.as_deref().unwrap_or("/"),
-            });
-            if let Some(domain) = cookie.domain.as_deref().or(host.as_deref()) {
-                params["domain"] = Value::String(domain.to_string());
-            }
-            if cookie.secure {
-                params["secure"] = Value::Bool(true);
-            }
-            if cookie.http_only {
-                params["httpOnly"] = Value::Bool(true);
-            }
-            if let Some(expiry) = cookie.expires.filter(|expiry| *expiry >= 0) {
-                params["expiry"] = Value::from(expiry);
-            }
-            self.bidi
-                .call(
-                    "storage.setCookie",
-                    serde_json::json!({
-                        "cookie": params,
-                        "partition": { "type": "storageKey", "userContext": self.user_context.as_deref().unwrap_or("default") },
-                    }),
-                    self.timeout,
-                )
-                .await?;
-        }
-        Ok(())
+        crate::context_cookies::add_cookies(
+            &crate::browser::Backend::Bidi {
+                conn: self.bidi.clone(),
+                insecure_certs: self.insecure_certs,
+            },
+            self.user_context.as_deref(),
+            self.timeout(),
+            cookies,
+            url,
+        )
+        .await
     }
 
     async fn clear_cookies(&self) -> E2eResult<()> {
-        self.bidi
-            .call(
-                "storage.deleteCookies",
-                serde_json::json!({
-                    "partition": { "type": "storageKey", "userContext": self.user_context.as_deref().unwrap_or("default") },
-                }),
-                self.timeout,
-            )
-            .await?;
-        Ok(())
+        crate::context_cookies::clear_cookies(
+            &crate::browser::Backend::Bidi {
+                conn: self.bidi.clone(),
+                insecure_certs: self.insecure_certs,
+            },
+            self.user_context.as_deref(),
+            self.timeout(),
+        )
+        .await
     }
 
     async fn perform(&self, actions: Value) -> E2eResult<()> {
@@ -3417,7 +3763,7 @@ impl BidiDriver {
             .call(
                 "input.performActions",
                 serde_json::json!({ "context": self.context, "actions": actions }),
-                self.timeout,
+                self.timeout(),
             )
             .await?;
         Ok(())
@@ -3841,7 +4187,7 @@ impl BidiDriver {
                     "contexts": [self.context.clone()],
                     "urlPatterns": [{ "type": "pattern" }],
                 }),
-                self.timeout,
+                self.timeout(),
             )
             .await?;
         if let Some(intercept) = added.get("intercept").and_then(Value::as_str) {
@@ -3851,7 +4197,7 @@ impl BidiDriver {
         let context = self.context.clone();
         let bidi = self.bidi.clone();
         let sink = self.sink.clone();
-        let timeout = self.timeout;
+        let timeout = self.timeout();
         let handle = tokio::spawn(async move {
             loop {
                 let event = match events.recv().await {
@@ -4170,7 +4516,7 @@ impl BidiDriver {
         let context = self.context.clone();
         let bidi = self.bidi.clone();
         let sink = self.sink.clone();
-        let timeout = self.timeout;
+        let timeout = self.timeout();
         tokio::spawn(async move {
             loop {
                 let event = match events.recv().await {
@@ -4211,12 +4557,12 @@ impl BidiDriver {
         if state == LoadState::Commit {
             return Ok(());
         }
-        let deadline = tokio::time::Instant::now() + timeout;
+        let deadline = crate::operation::Deadline::new(timeout);
         loop {
             if self.load_state_satisfied(state).await {
                 return settle_quiet(&self.sink.inflight, state, deadline).await;
             }
-            if tokio::time::Instant::now() > deadline {
+            if deadline.expired() {
                 return Err(E2eError::Timeout(
                     timeout.as_millis().min(u128::from(u64::MAX)) as u64,
                     format!("wait for {state:?}"),
@@ -4268,7 +4614,7 @@ impl BidiDriver {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let bidi = self.bidi.clone();
         let context = self.context.clone();
-        let timeout = self.timeout;
+        let timeout = self.timeout();
         let period = Duration::from_millis((1000 / u64::from(opts.fps.max(1))).max(50));
         let started = tokio::time::Instant::now();
         let handle = tokio::spawn(async move {
@@ -4314,7 +4660,7 @@ impl BidiDriver {
             .call(
                 "browsingContext.startScreencast",
                 serde_json::json!({ "context": self.context, "destinationFolder": dir }),
-                self.timeout,
+                self.timeout(),
             )
             .await?;
         let screencast = started
@@ -4457,10 +4803,7 @@ fn handle_bidi_event(event: &BidiEvent, sink: &ConsoleSink) {
             let kind = if entry_type == "console" {
                 event.params["method"].as_str().unwrap_or("log").to_string()
             } else {
-                event.params["level"]
-                    .as_str()
-                    .unwrap_or("error")
-                    .to_string()
+                "exception".to_string()
             };
             let text = event.params["text"].as_str().unwrap_or_default();
             let text = if text.is_empty() {
@@ -4519,7 +4862,7 @@ fn handle_bidi_event(event: &BidiEvent, sink: &ConsoleSink) {
 async fn settle_quiet(
     inflight: &AtomicUsize,
     state: LoadState,
-    deadline: tokio::time::Instant,
+    deadline: crate::operation::Deadline,
 ) -> E2eResult<()> {
     if state != LoadState::NetworkIdle {
         return Ok(());
@@ -4527,7 +4870,7 @@ async fn settle_quiet(
     let quiet_for = Duration::from_millis(500);
     let mut quiet_since = None;
     loop {
-        if tokio::time::Instant::now() > deadline {
+        if deadline.expired() {
             return Err(E2eError::Timeout(0, "network never went idle".to_string()));
         }
         if inflight.load(Ordering::SeqCst) == 0 {

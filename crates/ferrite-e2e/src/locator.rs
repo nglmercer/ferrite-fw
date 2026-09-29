@@ -734,6 +734,20 @@ impl Locator {
         Self { page, selector }
     }
 
+    /// Apply a caller cancellation signal to operations on this clone.
+    pub fn with_cancellation(&self, token: crate::CancellationToken) -> Self {
+        Self {
+            page: self.page.with_cancellation(token),
+            selector: self.selector.clone(),
+        }
+    }
+    /// Override action, protocol and wait defaults for this clone; zero disables them.
+    pub fn with_timeout(&self, timeout: Duration) -> Self {
+        Self {
+            page: self.page.with_timeout(timeout),
+            selector: self.selector.clone(),
+        }
+    }
     pub(crate) fn selector_value(&self) -> Selector {
         self.selector.clone()
     }
@@ -780,11 +794,18 @@ impl Locator {
         function: &str,
         argument: &A,
     ) -> E2eResult<T> {
-        self.evaluate(&format!(
-            "el => ({function})(el, {})",
-            serde_json::to_string(argument)?
-        ))
-        .await
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator evaluate_with_arg `{}`", self.selector.raw()),
+                async {
+                    self.evaluate(&format!(
+                        "el => ({function})(el, {})",
+                        serde_json::to_string(argument)?
+                    ))
+                    .await
+                },
+            ))
+            .await
     }
 
     /// Evaluate a function against every matched element.
@@ -793,80 +814,145 @@ impl Locator {
         function: &str,
     ) -> E2eResult<T> {
         self.page
-            .evaluate(&format!("({function})({})", self.selector.resolve_js()))
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator evaluate_all `{}`", self.selector.raw()),
+                async {
+                    self.page
+                        .evaluate(&format!("({function})({})", self.selector.resolve_js()))
+                        .await
+                },
+            ))
             .await
     }
 
     /// Raw textContent values, without trimming.
     pub async fn all_text_contents(&self) -> E2eResult<Vec<String>> {
-        self.evaluate_all("els => els.map(el => el.textContent || '')")
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator all_text_contents `{}`", self.selector.raw()),
+                async {
+                    self.evaluate_all("els => els.map(el => el.textContent || '')")
+                        .await
+                },
+            ))
             .await
     }
 
     /// Rendered innerText values.
     pub async fn all_inner_texts(&self) -> E2eResult<Vec<String>> {
-        self.evaluate_all("els => els.map(el => el.innerText)")
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator all_inner_texts `{}`", self.selector.raw()),
+                async {
+                    self.evaluate_all("els => els.map(el => el.innerText)")
+                        .await
+                },
+            ))
             .await
     }
 
     /// Read raw textContent of the unique element.
     pub async fn text_content(&self) -> E2eResult<Option<String>> {
-        Ok(self
-            .eval_first("el.textContent")
-            .await?
-            .as_str()
-            .map(str::to_string))
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator text_content `{}`", self.selector.raw()),
+                async {
+                    Ok(self
+                        .eval_first("el.textContent")
+                        .await?
+                        .as_str()
+                        .map(str::to_string))
+                },
+            ))
+            .await
     }
 
     /// Read rendered innerText of the unique element.
     pub async fn inner_text(&self) -> E2eResult<Option<String>> {
-        Ok(self
-            .eval_first("el.innerText")
-            .await?
-            .as_str()
-            .map(str::to_string))
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator inner_text `{}`", self.selector.raw()),
+                async {
+                    Ok(self
+                        .eval_first("el.innerText")
+                        .await?
+                        .as_str()
+                        .map(str::to_string))
+                },
+            ))
+            .await
     }
 
     /// Remove outlines created by highlight().
     pub async fn hide_highlight(&self) -> E2eResult<()> {
+        self.page.run_operation(crate::operation::Deadline::new(self.page.timeout()).run(format!("locator hide_highlight `{}`",self.selector.raw()), async {
         self.evaluate_all::<Value>("els => { els.forEach(el => {el.style.outline = ''; el.style.outlineOffset = '';}); return true; }").await?;
         Ok(())
+
+ })).await
     }
 
     /// Capture the structured ARIA tree rooted at this element.
     pub async fn aria_snapshot_json(&self) -> E2eResult<Value> {
-        self.eval_first(&format!("({}).aria(el)", include_str!("dom.js")))
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator aria_snapshot_json `{}`", self.selector.raw()),
+                async {
+                    self.eval_first(&format!("({}).aria(el)", include_str!("dom.js")))
+                        .await
+                },
+            ))
             .await
     }
 
     /// Capture indented ARIA snapshot text.
     pub async fn aria_snapshot(&self) -> E2eResult<String> {
-        self.evaluate(&format!(
-            "el => {{ const f = {}; return f.render(f.aria(el)).join('\\n'); }}",
-            include_str!("dom.js")
-        ))
-        .await
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator aria_snapshot `{}`", self.selector.raw()),
+                async {
+                    self.evaluate(&format!(
+                        "el => {{ const f = {}; return f.render(f.aria(el)).join('\\n'); }}",
+                        include_str!("dom.js")
+                    ))
+                    .await
+                },
+            ))
+            .await
     }
 
     /// Wait for an element-scoped function to become truthy.
     pub async fn wait_for_function(&self, function: &str, timeout: Duration) -> E2eResult<()> {
-        let deadline = tokio::time::Instant::now() + timeout;
-        loop {
-            if self
-                .evaluate::<bool>(&format!("async el => Boolean(await ({function})(el))"))
-                .await
-                .unwrap_or(false)
-            {
-                return Ok(());
-            }
-            if !timeout.is_zero() && tokio::time::Instant::now() > deadline {
-                return Err(E2eError::Timeout(
-                    timeout.as_millis() as u64,
-                    format!("locator function: {}", self.selector()),
-                ));
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
+        self.page
+            .run_operation(crate::operation::Deadline::new(timeout).run(
+                format!(
+                    "wait for locator wait_for_function `{}`",
+                    self.selector.raw()
+                ),
+                async {
+                    let scoped = self.with_timeout(timeout);
+                    let deadline = crate::operation::Deadline::new(timeout);
+                    loop {
+                        if scoped
+                            .evaluate::<bool>(&format!(
+                                "async el => Boolean(await ({function})(el))"
+                            ))
+                            .await
+                            .unwrap_or(false)
+                        {
+                            return Ok(());
+                        }
+                        if deadline.expired() {
+                            return Err(E2eError::Timeout(
+                                timeout.as_millis() as u64,
+                                format!("locator function: {}", scoped.selector()),
+                            ));
+                        }
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                },
+            ))
+            .await
     }
 
     /// Underlying selector text.
@@ -1038,8 +1124,15 @@ impl Locator {
 
     /// One locator per match.
     pub async fn all(&self) -> E2eResult<Vec<Self>> {
-        let count = self.count().await?;
-        Ok((0..count).map(|index| self.nth(index)).collect())
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator all `{}`", self.selector.raw()),
+                async {
+                    let count = self.count().await?;
+                    Ok((0..count).map(|index| self.nth(index)).collect())
+                },
+            ))
+            .await
     }
 
     /// Locate `[data-testid]` within this locator's matches.
@@ -1092,58 +1185,92 @@ impl Locator {
 
     /// Number of matching elements.
     pub async fn count(&self) -> E2eResult<usize> {
-        Ok(self.page.query_state(&self.selector).await?.count)
+        self.page
+            .run_operation(
+                crate::operation::Deadline::new(self.page.timeout())
+                    .run(format!("locator count `{}`", self.selector.raw()), async {
+                        Ok(self.page.query_state(&self.selector).await?.count)
+                    }),
+            )
+            .await
     }
 
     async fn single_state(&self) -> E2eResult<ElementState> {
-        let state = self.page.query_state(&self.selector).await?;
-        if self.selector.strict && state.count > 1 {
-            return Err(E2eError::Locator {
-                selector: self.selector().into(),
-                message: "strict mode violation: multiple elements match".into(),
-            });
-        }
-        Ok(state)
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator single_state `{}`", self.selector.raw()),
+                async {
+                    let state = self.page.query_state(&self.selector).await?;
+                    if self.selector.strict && state.count > 1 {
+                        return Err(E2eError::Locator {
+                            selector: self.selector().into(),
+                            message: "strict mode violation: multiple elements match".into(),
+                        });
+                    }
+                    Ok(state)
+                },
+            ))
+            .await
     }
 
     /// Current state snapshot.
     pub async fn state(&self) -> E2eResult<ElementState> {
-        self.page.run_locator_handlers().await?;
-        self.page.query_state(&self.selector).await
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator state `{}`", self.selector.raw()),
+                async {
+                    self.page.run_locator_handlers().await?;
+                    self.page.query_state(&self.selector).await
+                },
+            ))
+            .await
     }
 
     /// Wait until at least one match exists.
     pub async fn wait_for(&self, timeout: Duration) -> E2eResult<()> {
-        self.wait_for_state(WaitForState::Attached, timeout).await
+        self.page
+            .run_operation(crate::operation::Deadline::new(timeout).run(
+                format!("wait for locator wait_for `{}`", self.selector.raw()),
+                async { self.wait_for_state(WaitForState::Attached, timeout).await },
+            ))
+            .await
     }
 
     /// Wait until the locator reaches `state`.
     pub async fn wait_for_state(&self, state: WaitForState, timeout: Duration) -> E2eResult<()> {
-        let deadline = tokio::time::Instant::now() + timeout;
-        loop {
-            if let Ok(current) = self.page.query_state(&self.selector).await {
-                let done = match state {
-                    WaitForState::Attached => current.count > 0,
-                    WaitForState::Detached => current.count == 0,
-                    WaitForState::Visible => current.count > 0 && current.visible,
-                    WaitForState::Hidden => current.count == 0 || !current.visible,
-                };
-                if done {
-                    return Ok(());
-                }
-            }
-            if !timeout.is_zero() && tokio::time::Instant::now() > deadline {
-                return Err(E2eError::Timeout(
-                    timeout.as_millis().min(u128::from(u64::MAX)) as u64,
-                    format!(
-                        "wait for `{}` to be {}",
-                        self.selector.raw(),
-                        state.as_str()
-                    ),
-                ));
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
+        self.page
+            .run_operation(crate::operation::Deadline::new(timeout).run(
+                format!("wait for locator wait_for_state `{}`", self.selector.raw()),
+                async {
+                    let scoped = self.with_timeout(timeout);
+                    let deadline = crate::operation::Deadline::new(timeout);
+                    loop {
+                        if let Ok(current) = scoped.page.query_state(&scoped.selector).await {
+                            let done = match state {
+                                WaitForState::Attached => current.count > 0,
+                                WaitForState::Detached => current.count == 0,
+                                WaitForState::Visible => current.count > 0 && current.visible,
+                                WaitForState::Hidden => current.count == 0 || !current.visible,
+                            };
+                            if done {
+                                return Ok(());
+                            }
+                        }
+                        if deadline.expired() {
+                            return Err(E2eError::Timeout(
+                                timeout.as_millis().min(u128::from(u64::MAX)) as u64,
+                                format!(
+                                    "wait for `{}` to be {}",
+                                    scoped.selector.raw(),
+                                    state.as_str()
+                                ),
+                            ));
+                        }
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                },
+            ))
+            .await
     }
 
     async fn ready_state(
@@ -1152,40 +1279,53 @@ impl Locator {
         enabled: bool,
         receives: bool,
     ) -> E2eResult<ElementState> {
-        let timeout = options.timeout.unwrap_or_else(|| self.page.timeout());
-        let deadline = tokio::time::Instant::now() + timeout;
-        let mut previous = None;
-        loop {
-            self.page.run_locator_handlers().await?;
-            let state = self.page.query_state(&self.selector).await?;
-            if self.selector.strict && state.count > 1 {
-                return Err(E2eError::Locator {
-                    selector: self.selector.raw().into(),
-                    message: "strict mode violation: multiple elements match".into(),
-                });
-            }
-            if state.count == 1
-                && state.visible
-                && (!enabled || state.enabled)
-                && (!receives || state.receives_events)
-            {
-                let rect = state.rects.first().cloned();
-                if previous == rect {
-                    return Ok(state);
-                }
-                previous = rect;
-            } else {
-                previous = None;
-            }
-            if !timeout.is_zero() && tokio::time::Instant::now() > deadline {
-                return Err(E2eError::Locator {
+        self.page
+            .run_operation(
+                crate::operation::Deadline::new(
+                    options.timeout.unwrap_or_else(|| self.page.timeout()),
+                )
+                .run(
+                    format!("locator ready_state `{}`", self.selector.raw()),
+                    async {
+                        let timeout = options.timeout.unwrap_or_else(|| self.page.timeout());
+                        let deadline = crate::operation::Deadline::new(timeout);
+                        let mut previous = None;
+                        loop {
+                            self.page.run_locator_handlers().await?;
+                            let state = self.page.query_state(&self.selector).await?;
+                            if self.selector.strict && state.count > 1 {
+                                return Err(E2eError::Locator {
+                                    selector: self.selector.raw().into(),
+                                    message: "strict mode violation: multiple elements match"
+                                        .into(),
+                                });
+                            }
+                            if state.count == 1
+                                && state.visible
+                                && (!enabled || state.enabled)
+                                && (!receives || state.receives_events)
+                            {
+                                let rect = state.rects.first().cloned();
+                                if previous == rect {
+                                    return Ok(state);
+                                }
+                                previous = rect;
+                            } else {
+                                previous = None;
+                            }
+                            if deadline.expired() {
+                                return Err(E2eError::Locator {
                     selector: self.selector.raw().into(),
                     message: "element not actionable: missing, hidden, disabled, moving or covered"
                         .into(),
                 });
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
+                            }
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                        }
+                    },
+                ),
+            )
+            .await
     }
 
     fn center(state: &ElementState) -> Option<(f64, f64)> {
@@ -1197,153 +1337,233 @@ impl Locator {
 
     /// Click the element (trusted mouse input by default).
     pub async fn click(&self) -> E2eResult<()> {
-        self.click_with_options(ClickOptions::default()).await
+        self.page
+            .run_operation(
+                crate::operation::Deadline::new(self.page.timeout())
+                    .run(format!("locator click `{}`", self.selector.raw()), async {
+                        self.click_with_options(ClickOptions::default()).await
+                    }),
+            )
+            .await
     }
 
     /// Click with explicit options.
     pub async fn click_with_options(&self, options: ClickOptions) -> E2eResult<()> {
-        let locator_options = LocatorOptions { timeout: None };
-        self.page.action(&self.selector, "scroll", None).await?;
-        let state = if options.force {
-            self.page.query_state(&self.selector).await?
-        } else {
-            self.ready_state(&locator_options, true, true).await?
-        };
-        match Self::center(&state) {
-            Some((x, y)) => {
-                self.page
-                    .mouse_click_with(
-                        x,
-                        y,
-                        crate::page::MouseClickOptions {
-                            button: options.button,
-                            click_count: options.click_count.max(1),
-                            delay: options.delay,
-                        },
-                    )
-                    .await?;
-                Ok(())
-            }
-            None => Err(E2eError::Locator {
-                selector: self.selector.raw().to_string(),
-                message: "element has no bounding box".to_string(),
-            }),
-        }
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator click_with_options `{}`", self.selector.raw()),
+                async {
+                    let locator_options = LocatorOptions { timeout: None };
+                    self.page.action(&self.selector, "scroll", None).await?;
+                    let state = if options.force {
+                        self.page.query_state(&self.selector).await?
+                    } else {
+                        self.ready_state(&locator_options, true, true).await?
+                    };
+                    match Self::center(&state) {
+                        Some((x, y)) => {
+                            self.page
+                                .mouse_click_with(
+                                    x,
+                                    y,
+                                    crate::page::MouseClickOptions {
+                                        button: options.button,
+                                        click_count: options.click_count.max(1),
+                                        delay: options.delay,
+                                    },
+                                )
+                                .await?;
+                            Ok(())
+                        }
+                        None => Err(E2eError::Locator {
+                            selector: self.selector.raw().to_string(),
+                            message: "element has no bounding box".to_string(),
+                        }),
+                    }
+                },
+            ))
+            .await
     }
 
     /// Double-click the element.
     pub async fn dblclick(&self) -> E2eResult<()> {
-        self.click_with_options(ClickOptions {
-            force: false,
-            click_count: 2,
-            button: crate::page::MouseButton::Left,
-            delay: Duration::ZERO,
-        })
-        .await
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator dblclick `{}`", self.selector.raw()),
+                async {
+                    self.click_with_options(ClickOptions {
+                        force: false,
+                        click_count: 2,
+                        button: crate::page::MouseButton::Left,
+                        delay: Duration::ZERO,
+                    })
+                    .await
+                },
+            ))
+            .await
     }
 
     /// Hover the element.
     pub async fn hover(&self) -> E2eResult<()> {
-        self.page.action(&self.selector, "scroll", None).await?;
-        let state = self
-            .ready_state(&LocatorOptions { timeout: None }, false, true)
-            .await?;
-        match Self::center(&state) {
-            Some((x, y)) => self.page.mouse_move(x, y).await,
-            None => Err(E2eError::Locator {
-                selector: self.selector.raw().to_string(),
-                message: "element has no bounding box".to_string(),
-            }),
-        }
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator hover `{}`", self.selector.raw()),
+                async {
+                    self.page.action(&self.selector, "scroll", None).await?;
+                    let state = self
+                        .ready_state(&LocatorOptions { timeout: None }, false, true)
+                        .await?;
+                    match Self::center(&state) {
+                        Some((x, y)) => self.page.mouse_move(x, y).await,
+                        None => Err(E2eError::Locator {
+                            selector: self.selector.raw().to_string(),
+                            message: "element has no bounding box".to_string(),
+                        }),
+                    }
+                },
+            ))
+            .await
     }
 
     /// Focus the element.
     pub async fn focus(&self) -> E2eResult<()> {
-        self.page.action(&self.selector, "focus", None).await?;
-        Ok(())
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator focus `{}`", self.selector.raw()),
+                async {
+                    self.page.action(&self.selector, "focus", None).await?;
+                    Ok(())
+                },
+            ))
+            .await
     }
 
     /// Blur the element.
     pub async fn blur(&self) -> E2eResult<()> {
-        self.page.action(&self.selector, "blur", None).await?;
-        Ok(())
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator blur `{}`", self.selector.raw()),
+                async {
+                    self.page.action(&self.selector, "blur", None).await?;
+                    Ok(())
+                },
+            ))
+            .await
     }
 
     /// Tap the element's center via the touchscreen.
     pub async fn tap(&self) -> E2eResult<()> {
-        self.page.action(&self.selector, "scroll", None).await?;
-        let state = self
-            .ready_state(&LocatorOptions { timeout: None }, true, true)
-            .await?;
-        match Self::center(&state) {
-            Some((x, y)) => self.page.touchscreen_tap(x, y).await,
-            None => Err(E2eError::Locator {
-                selector: self.selector.raw().to_string(),
-                message: "element has no bounding box".to_string(),
-            }),
-        }
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator tap `{}`", self.selector.raw()),
+                async {
+                    self.page.action(&self.selector, "scroll", None).await?;
+                    let state = self
+                        .ready_state(&LocatorOptions { timeout: None }, true, true)
+                        .await?;
+                    match Self::center(&state) {
+                        Some((x, y)) => self.page.touchscreen_tap(x, y).await,
+                        None => Err(E2eError::Locator {
+                            selector: self.selector.raw().to_string(),
+                            message: "element has no bounding box".to_string(),
+                        }),
+                    }
+                },
+            ))
+            .await
     }
 
     /// Drag the element's center onto `target` in `steps` moves (min 1).
     /// Both locators must live on the same page.
     pub async fn drag_to(&self, target: &Locator, steps: u32) -> E2eResult<()> {
-        if self.page.target_id() != target.page.target_id() {
-            return Err(E2eError::Locator {
-                selector: self.selector.raw().to_string(),
-                message: "drag_to needs locators on the same page".to_string(),
-            });
-        }
-        if steps == 0 {
-            return Err(E2eError::Config(
-                "drag_to needs at least 1 step".to_string(),
-            ));
-        }
-        self.page.action(&self.selector, "scroll", None).await?;
-        let from = self
-            .ready_state(&LocatorOptions { timeout: None }, false, true)
-            .await?;
-        let to = target
-            .ready_state(&LocatorOptions { timeout: None }, false, true)
-            .await?;
-        let (Some((x0, y0)), Some((x1, y1))) = (Self::center(&from), Self::center(&to)) else {
-            return Err(E2eError::Locator {
-                selector: self.selector.raw().to_string(),
-                message: "element has no bounding box".to_string(),
-            });
-        };
-        self.page.mouse_drag((x0, y0), (x1, y1), steps).await
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator drag_to `{}`", self.selector.raw()),
+                async {
+                    if self.page.target_id() != target.page.target_id() {
+                        return Err(E2eError::Locator {
+                            selector: self.selector.raw().to_string(),
+                            message: "drag_to needs locators on the same page".to_string(),
+                        });
+                    }
+                    if steps == 0 {
+                        return Err(E2eError::Config(
+                            "drag_to needs at least 1 step".to_string(),
+                        ));
+                    }
+                    self.page.action(&self.selector, "scroll", None).await?;
+                    let from = self
+                        .ready_state(&LocatorOptions { timeout: None }, false, true)
+                        .await?;
+                    let to = target
+                        .ready_state(&LocatorOptions { timeout: None }, false, true)
+                        .await?;
+                    let (Some((x0, y0)), Some((x1, y1))) = (Self::center(&from), Self::center(&to))
+                    else {
+                        return Err(E2eError::Locator {
+                            selector: self.selector.raw().to_string(),
+                            message: "element has no bounding box".to_string(),
+                        });
+                    };
+                    self.page.mouse_drag((x0, y0), (x1, y1), steps).await
+                },
+            ))
+            .await
     }
 
     /// Scroll the element into the center of the viewport.
     pub async fn scroll_into_view(&self) -> E2eResult<()> {
-        self.page.action(&self.selector, "scroll", None).await?;
-        Ok(())
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator scroll_into_view `{}`", self.selector.raw()),
+                async {
+                    self.page.action(&self.selector, "scroll", None).await?;
+                    Ok(())
+                },
+            ))
+            .await
     }
 
     /// Dispatch a bubbling `CustomEvent` with an optional JSON `detail`.
     pub async fn dispatch_event(&self, name: &str, detail: Option<&Value>) -> E2eResult<()> {
-        let name_json = serde_json::to_string(name).unwrap_or_default();
-        let detail_json = detail
-            .map(|value| serde_json::to_string(value).unwrap_or_else(|_| "null".to_string()))
-            .unwrap_or_else(|| "null".to_string());
-        let value = self
-            .eval_first(&format!(
-                "el.dispatchEvent(new CustomEvent({name_json}, \
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator dispatch_event `{}`", self.selector.raw()),
+                async {
+                    let name_json = serde_json::to_string(name).unwrap_or_default();
+                    let detail_json = detail
+                        .map(|value| {
+                            serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
+                        })
+                        .unwrap_or_else(|| "null".to_string());
+                    let value = self
+                        .eval_first(&format!(
+                            "el.dispatchEvent(new CustomEvent({name_json}, \
                  {{ bubbles: true, detail: {detail_json} }}))"
+                        ))
+                        .await?;
+                    self.require_match(value)
+                },
             ))
-            .await?;
-        self.require_match(value)
+            .await
     }
 
     /// Select the element's text (input value or rendered text).
     pub async fn select_text(&self) -> E2eResult<()> {
-        let value = self
-            .eval_first(
-                "(() => { if (el.select) el.select(); \
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator select_text `{}`", self.selector.raw()),
+                async {
+                    let value = self
+                        .eval_first(
+                            "(() => { if (el.select) el.select(); \
                  else getSelection().selectAllChildren(el); return true; })()",
-            )
-            .await?;
-        self.require_match(value)
+                        )
+                        .await?;
+                    self.require_match(value)
+                },
+            ))
+            .await
     }
 
     /// A null `eval_first` projection means nothing matched: fail loudly.
@@ -1359,41 +1579,76 @@ impl Locator {
 
     /// Screenshot just this element (PNG bytes).
     pub async fn screenshot(&self) -> E2eResult<Vec<u8>> {
-        self.page.action(&self.selector, "scroll", None).await?;
-        let state = self
-            .ready_state(&LocatorOptions { timeout: None }, false, false)
-            .await?;
-        match state.rects.first() {
-            Some(rect) => self.page.screenshot_clip(rect, None).await,
-            None => Err(E2eError::Locator {
-                selector: self.selector.raw().to_string(),
-                message: "element has no bounding box".to_string(),
-            }),
-        }
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator screenshot `{}`", self.selector.raw()),
+                async {
+                    self.page.action(&self.selector, "scroll", None).await?;
+                    let state = self
+                        .ready_state(&LocatorOptions { timeout: None }, false, false)
+                        .await?;
+                    match state.rects.first() {
+                        Some(rect) => self.page.screenshot_clip(rect, None).await,
+                        None => Err(E2eError::Locator {
+                            selector: self.selector.raw().to_string(),
+                            message: "element has no bounding box".to_string(),
+                        }),
+                    }
+                },
+            ))
+            .await
     }
 
     /// Fill an input/textarea/select with text (replaces the value).
     pub async fn fill(&self, text: &str) -> E2eResult<()> {
-        self.page.action(&self.selector, "fill", Some(text)).await?;
-        Ok(())
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator fill `{}`", self.selector.raw()),
+                async {
+                    self.page.action(&self.selector, "fill", Some(text)).await?;
+                    Ok(())
+                },
+            ))
+            .await
     }
 
     /// Type text char-by-char with trusted input (keeps existing value).
     pub async fn press_sequentially(&self, text: &str) -> E2eResult<()> {
-        self.press_sequentially_with(text, KeyPressOptions::default())
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator press_sequentially `{}`", self.selector.raw()),
+                async {
+                    self.press_sequentially_with(text, KeyPressOptions::default())
+                        .await
+                },
+            ))
             .await
     }
 
     /// Press a key while the element is focused.
     pub async fn press(&self, key: &str) -> E2eResult<()> {
-        self.focus().await?;
-        self.page.press_key(key).await
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator press `{}`", self.selector.raw()),
+                async {
+                    self.focus().await?;
+                    self.page.press_key(key).await
+                },
+            ))
+            .await
     }
 
     /// Press a key with explicit options (down/up delay).
     pub async fn press_with(&self, key: &str, options: KeyPressOptions) -> E2eResult<()> {
-        self.focus().await?;
-        self.page.press_key_with(key, options).await
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator press_with `{}`", self.selector.raw()),
+                async {
+                    self.focus().await?;
+                    self.page.press_key_with(key, options).await
+                },
+            ))
+            .await
     }
 
     /// Type text with a delay between keystrokes.
@@ -1402,75 +1657,109 @@ impl Locator {
         text: &str,
         options: KeyPressOptions,
     ) -> E2eResult<()> {
-        self.focus().await?;
-        for ch in text.chars() {
-            self.page
-                .press_key_with(&ch.to_string(), options.clone())
-                .await?;
-        }
-        // Notify frameworks that poll for input events.
         self.page
-            .evaluate_value(
-                "(() => { const el = document.activeElement; if (!el) return false; \
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator press_sequentially_with `{}`", self.selector.raw()),
+                async {
+                    self.focus().await?;
+                    for ch in text.chars() {
+                        self.page
+                            .press_key_with(&ch.to_string(), options.clone())
+                            .await?;
+                    }
+                    // Notify frameworks that poll for input events.
+                    self.page
+                        .evaluate_value(
+                            "(() => { const el = document.activeElement; if (!el) return false; \
                  el.dispatchEvent(new Event('input', { bubbles: true })); \
                  el.dispatchEvent(new Event('change', { bubbles: true })); \
                  return true; })()",
-            )
-            .await?;
-        Ok(())
+                        )
+                        .await?;
+                    Ok(())
+                },
+            ))
+            .await
     }
 
     /// Clear an input/textarea.
     pub async fn clear(&self) -> E2eResult<()> {
-        self.page.action(&self.selector, "clear", None).await?;
-        Ok(())
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator clear `{}`", self.selector.raw()),
+                async {
+                    self.page.action(&self.selector, "clear", None).await?;
+                    Ok(())
+                },
+            ))
+            .await
     }
 
     /// Set files on a file input (an empty list clears it). Files are read
     /// from disk (64 MiB total cap) and injected via `DataTransfer`, firing
     /// `input`/`change`.
     pub async fn set_input_files<P: AsRef<Path>>(&self, paths: &[P]) -> E2eResult<()> {
-        let mut files = Vec::with_capacity(paths.len());
-        let mut total = 0usize;
-        for path in paths {
-            let path = path.as_ref();
-            let bytes = std::fs::read(path).map_err(|error| {
-                E2eError::Config(format!("cannot read {}: {error}", path.display()))
-            })?;
-            total += bytes.len();
-            if total > 64 * 1024 * 1024 {
-                return Err(E2eError::Config(
-                    "set_input_files payload exceeds 64 MiB".to_string(),
-                ));
-            }
-            let name = path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            files.push(serde_json::json!({
-                "name": name,
-                "mime": guess_mime(&name),
-                "data": base64_encode(&bytes),
-            }));
-        }
-        let payload = serde_json::to_string(&files).map_err(E2eError::Json)?;
         self.page
-            .action(&self.selector, "set_input_files", Some(&payload))
-            .await?;
-        Ok(())
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator set_input_files `{}`", self.selector.raw()),
+                async {
+                    let mut files = Vec::with_capacity(paths.len());
+                    let mut total = 0usize;
+                    for path in paths {
+                        let path = path.as_ref();
+                        let bytes = std::fs::read(path).map_err(|error| {
+                            E2eError::Config(format!("cannot read {}: {error}", path.display()))
+                        })?;
+                        total += bytes.len();
+                        if total > 64 * 1024 * 1024 {
+                            return Err(E2eError::Config(
+                                "set_input_files payload exceeds 64 MiB".to_string(),
+                            ));
+                        }
+                        let name = path
+                            .file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        files.push(serde_json::json!({
+                            "name": name,
+                            "mime": guess_mime(&name),
+                            "data": base64_encode(&bytes),
+                        }));
+                    }
+                    let payload = serde_json::to_string(&files).map_err(E2eError::Json)?;
+                    self.page
+                        .action(&self.selector, "set_input_files", Some(&payload))
+                        .await?;
+                    Ok(())
+                },
+            ))
+            .await
     }
 
     /// Check a checkbox/radio.
     pub async fn check(&self) -> E2eResult<()> {
-        self.change_checked(true).await
+        self.page
+            .run_operation(
+                crate::operation::Deadline::new(self.page.timeout())
+                    .run(format!("locator check `{}`", self.selector.raw()), async {
+                        self.change_checked(true).await
+                    }),
+            )
+            .await
     }
 
     /// Uncheck a checkbox.
     pub async fn uncheck(&self) -> E2eResult<()> {
-        self.change_checked(false).await
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator uncheck `{}`", self.selector.raw()),
+                async { self.change_checked(false).await },
+            ))
+            .await
     }
 
     async fn change_checked(&self, checked: bool) -> E2eResult<()> {
+        self.page.run_operation(crate::operation::Deadline::new(self.page.timeout()).run(format!("locator change_checked `{}`",self.selector.raw()), async {
         let current = self.eval_first("(() => { if (!(el instanceof HTMLInputElement) || !['checkbox', 'radio'].includes(el.type)) throw new Error('element is not a checkbox or radio'); return el.checked; })()").await?;
         if current.as_bool() == Some(checked) {
             return Ok(());
@@ -1483,248 +1772,415 @@ impl Locator {
             )));
         }
         Ok(())
+
+ })).await
     }
 
     /// Select an `<option>` by value.
     pub async fn select_option(&self, value: &str) -> E2eResult<()> {
         self.page
-            .action(&self.selector, "select", Some(value))
-            .await?;
-        Ok(())
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator select_option `{}`", self.selector.raw()),
+                async {
+                    self.page
+                        .action(&self.selector, "select", Some(value))
+                        .await?;
+                    Ok(())
+                },
+            ))
+            .await
     }
 
     /// Select `<option>`s by value, label, or index (every entry must match;
     /// single-selects keep the last match).
     pub async fn select_options(&self, options: &[SelectOption]) -> E2eResult<()> {
-        let wants: Vec<Value> = options
-            .iter()
-            .map(|option| match option {
-                SelectOption::Value(value) => serde_json::json!({ "value": value }),
-                SelectOption::Label(label) => serde_json::json!({ "label": label }),
-                SelectOption::Index(index) => serde_json::json!({ "index": index }),
-            })
-            .collect();
-        let argument = serde_json::to_string(&wants).unwrap_or_default();
         self.page
-            .action(&self.selector, "select_many", Some(&argument))
-            .await?;
-        Ok(())
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator select_options `{}`", self.selector.raw()),
+                async {
+                    let wants: Vec<Value> = options
+                        .iter()
+                        .map(|option| match option {
+                            SelectOption::Value(value) => serde_json::json!({ "value": value }),
+                            SelectOption::Label(label) => serde_json::json!({ "label": label }),
+                            SelectOption::Index(index) => serde_json::json!({ "index": index }),
+                        })
+                        .collect();
+                    let argument = serde_json::to_string(&wants).unwrap_or_default();
+                    self.page
+                        .action(&self.selector, "select_many", Some(&argument))
+                        .await?;
+                    Ok(())
+                },
+            ))
+            .await
     }
 
     /// Values of the selected `<option>`s (empty when not a select).
     pub async fn selected_options(&self) -> E2eResult<Vec<String>> {
-        let value = self
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator selected_options `{}`", self.selector.raw()),
+                async {
+                    let value = self
             .eval_first(
                 "el instanceof HTMLSelectElement ? [...el.selectedOptions].map(o => o.value) : []",
             )
             .await?;
-        serde_json::from_value(value).map_err(E2eError::Json)
+                    serde_json::from_value(value).map_err(E2eError::Json)
+                },
+            ))
+            .await
     }
 
     /// Read trimmed text content.
     pub async fn text(&self) -> E2eResult<String> {
-        self.evaluate("el => (el.textContent || '').trim()").await
+        self.page
+            .run_operation(
+                crate::operation::Deadline::new(self.page.timeout())
+                    .run(format!("locator text `{}`", self.selector.raw()), async {
+                        self.evaluate("el => (el.textContent || '').trim()").await
+                    }),
+            )
+            .await
     }
 
     /// Read the form value of the unique input.
     pub async fn input_value(&self) -> E2eResult<String> {
+        self.page.run_operation(crate::operation::Deadline::new(self.page.timeout()).run(format!("locator input_value `{}`",self.selector.raw()), async {
         self.evaluate("el => { if (!el.matches('input,textarea,select')) throw new Error('not an input element'); return el.value; }").await
+
+ })).await
     }
 
     /// Evaluate `projection` (an expression over `el`) on the first match.
     ///
     /// Returns [`Value::Null`] when nothing matches.
     async fn eval_first(&self, projection: &str) -> E2eResult<Value> {
-        let timeout = self.page.timeout();
-        let deadline = tokio::time::Instant::now() + timeout;
-        loop {
-            self.page.run_locator_handlers().await?;
-            let state = self.single_state().await?;
-            if state.count > 0 {
-                break;
-            }
-            if !timeout.is_zero() && tokio::time::Instant::now() >= deadline {
-                return Err(E2eError::Timeout(
-                    timeout.as_millis().min(u64::MAX as u128) as u64,
-                    format!("waiting for {}", self.selector()),
-                ));
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        let resolve = self.selector.resolve_js();
-        let guard = if self.selector.strict {
-            "if (els.length !== 1) throw new Error('strict mode violation: \
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator eval_first `{}`", self.selector.raw()),
+                async {
+                    let timeout = self.page.timeout();
+                    let deadline = crate::operation::Deadline::new(timeout);
+                    loop {
+                        self.page.run_locator_handlers().await?;
+                        let state = self.single_state().await?;
+                        if state.count > 0 {
+                            break;
+                        }
+                        if deadline.expired() {
+                            return Err(E2eError::Timeout(
+                                timeout.as_millis().min(u64::MAX as u128) as u64,
+                                format!("waiting for {}", self.selector()),
+                            ));
+                        }
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                    let resolve = self.selector.resolve_js();
+                    let guard = if self.selector.strict {
+                        "if (els.length !== 1) throw new Error('strict mode violation: \
              expected exactly one match, got ' + els.length); "
-        } else {
-            ""
-        };
-        let expression = format!(
-            "(() => {{ const els = {resolve}; {guard}const el = els[0]; \
+                    } else {
+                        ""
+                    };
+                    let expression = format!(
+                        "(() => {{ const els = {resolve}; {guard}const el = els[0]; \
              if (!el) return null; return ({projection}); }})()"
-        );
-        self.page.evaluate_value(&expression).await
+                    );
+                    self.page.evaluate_value(&expression).await
+                },
+            ))
+            .await
     }
 
     /// Wait for one element and read an attribute (`None` if the attribute is absent).
     pub async fn attribute(&self, name: &str) -> E2eResult<Option<String>> {
-        let name_json = serde_json::to_string(name).unwrap_or_default();
-        let value = self
-            .eval_first(&format!("el.getAttribute({name_json})"))
-            .await?;
-        Ok(value.as_str().map(str::to_string))
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator attribute `{}`", self.selector.raw()),
+                async {
+                    let name_json = serde_json::to_string(name).unwrap_or_default();
+                    let value = self
+                        .eval_first(&format!("el.getAttribute({name_json})"))
+                        .await?;
+                    Ok(value.as_str().map(str::to_string))
+                },
+            ))
+            .await
     }
 
     /// Wait for one element and read a computed CSS property.
     pub async fn css_value(&self, property: &str) -> E2eResult<Option<String>> {
-        let property_json = serde_json::to_string(property).unwrap_or_default();
-        let value = self
-            .eval_first(&format!(
-                "getComputedStyle(el).getPropertyValue({property_json})"
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator css_value `{}`", self.selector.raw()),
+                async {
+                    let property_json = serde_json::to_string(property).unwrap_or_default();
+                    let value = self
+                        .eval_first(&format!(
+                            "getComputedStyle(el).getPropertyValue({property_json})"
+                        ))
+                        .await?;
+                    Ok(value.as_str().map(str::to_string))
+                },
             ))
-            .await?;
-        Ok(value.as_str().map(str::to_string))
+            .await
     }
 
     /// Wait for one element and read a DOM property as JSON (`None` when the
     /// property is `null`/`undefined`).
     pub async fn js_property(&self, name: &str) -> E2eResult<Option<Value>> {
-        let name_json = serde_json::to_string(name).unwrap_or_default();
-        let value = self.eval_first(&format!("el[{name_json}]")).await?;
-        if value.is_null() {
-            Ok(None)
-        } else {
-            Ok(Some(value))
-        }
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator js_property `{}`", self.selector.raw()),
+                async {
+                    let name_json = serde_json::to_string(name).unwrap_or_default();
+                    let value = self.eval_first(&format!("el[{name_json}]")).await?;
+                    if value.is_null() {
+                        Ok(None)
+                    } else {
+                        Ok(Some(value))
+                    }
+                },
+            ))
+            .await
     }
 
     /// Wait for one element and read its innerHTML.
     pub async fn inner_html(&self) -> E2eResult<Option<String>> {
-        let value = self.eval_first("el.innerHTML").await?;
-        Ok(value.as_str().map(str::to_string))
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator inner_html `{}`", self.selector.raw()),
+                async {
+                    let value = self.eval_first("el.innerHTML").await?;
+                    Ok(value.as_str().map(str::to_string))
+                },
+            ))
+            .await
     }
 
     /// Whether the first match intersects the viewport.
     pub async fn in_viewport(&self) -> E2eResult<bool> {
-        let value = self
-            .eval_first(
-                "(() => { const r = el.getBoundingClientRect(); \
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator in_viewport `{}`", self.selector.raw()),
+                async {
+                    let value = self
+                        .eval_first(
+                            "(() => { const r = el.getBoundingClientRect(); \
                  return r.bottom > 0 && r.right > 0 \
                  && r.top < innerHeight && r.left < innerWidth; })()",
-            )
-            .await?;
-        Ok(value.as_bool().unwrap_or(false))
+                        )
+                        .await?;
+                    Ok(value.as_bool().unwrap_or(false))
+                },
+            ))
+            .await
     }
 
     /// Accessible name (`aria-label`, `alt`, then text).
     ///
     /// An approximation of the full accessible-name computation.
     pub async fn accessible_name(&self) -> E2eResult<Option<String>> {
-        let value = self
-            .eval_first(&format!("({}).name(el)", include_str!("dom.js")))
-            .await?;
-        Ok(value.as_str().map(str::to_string))
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator accessible_name `{}`", self.selector.raw()),
+                async {
+                    let value = self
+                        .eval_first(&format!("({}).name(el)", include_str!("dom.js")))
+                        .await?;
+                    Ok(value.as_str().map(str::to_string))
+                },
+            ))
+            .await
     }
 
     /// Accessible description from referenced elements, aria-description or title.
     pub async fn accessible_description(&self) -> E2eResult<Option<String>> {
-        let value = self
-            .eval_first(&format!("({}).description(el)", include_str!("dom.js")))
-            .await?;
-        Ok(value.as_str().map(str::to_string))
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator accessible_description `{}`", self.selector.raw()),
+                async {
+                    let value = self
+                        .eval_first(&format!("({}).description(el)", include_str!("dom.js")))
+                        .await?;
+                    Ok(value.as_str().map(str::to_string))
+                },
+            ))
+            .await
     }
 
     /// Implicit or explicit ARIA role.
     pub async fn role(&self) -> E2eResult<Option<String>> {
-        let value = self
-            .eval_first(&format!("({}).role(el)", include_str!("dom.js")))
-            .await?;
-        Ok(value.as_str().map(str::to_string))
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator role `{}`", self.selector.raw()),
+                async {
+                    let value = self
+                        .eval_first(&format!("({}).role(el)", include_str!("dom.js")))
+                        .await?;
+                    Ok(value.as_str().map(str::to_string))
+                },
+            ))
+            .await
     }
 
     /// Accessible error message referenced by aria-errormessage.
     pub async fn accessible_error_message(&self) -> E2eResult<Option<String>> {
+        self.page.run_operation(crate::operation::Deadline::new(self.page.timeout()).run(format!("locator accessible_error_message `{}`",self.selector.raw()), async {
         let value = self.eval_first("(el.getAttribute('aria-errormessage') || '').split(/\\s+/).map(id => document.getElementById(id)?.textContent || '').join(' ').trim()").await?;
         Ok(value.as_str().map(str::to_string))
+
+ })).await
     }
 
     /// Whether the first match is visible (immediate, no retry).
     pub async fn is_visible(&self) -> E2eResult<bool> {
-        Ok(self.single_state().await?.visible)
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator is_visible `{}`", self.selector.raw()),
+                async { Ok(self.single_state().await?.visible) },
+            ))
+            .await
     }
 
     /// Whether the first match is hidden or absent (immediate, no retry).
     pub async fn is_hidden(&self) -> E2eResult<bool> {
-        let state = self.single_state().await?;
-        Ok(state.count == 0 || !state.visible)
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator is_hidden `{}`", self.selector.raw()),
+                async {
+                    let state = self.single_state().await?;
+                    Ok(state.count == 0 || !state.visible)
+                },
+            ))
+            .await
     }
 
     /// Whether the first match is enabled (immediate, no retry).
     pub async fn is_enabled(&self) -> E2eResult<bool> {
-        Ok(self.single_state().await?.enabled)
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator is_enabled `{}`", self.selector.raw()),
+                async { Ok(self.single_state().await?.enabled) },
+            ))
+            .await
     }
 
     /// Whether the first match is disabled (immediate, no retry).
     pub async fn is_disabled(&self) -> E2eResult<bool> {
-        Ok(!self.single_state().await?.enabled)
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator is_disabled `{}`", self.selector.raw()),
+                async { Ok(!self.single_state().await?.enabled) },
+            ))
+            .await
     }
 
     /// Whether the first match is checked (immediate, no retry).
     pub async fn is_checked(&self) -> E2eResult<bool> {
-        Ok(self.single_state().await?.checked)
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator is_checked `{}`", self.selector.raw()),
+                async { Ok(self.single_state().await?.checked) },
+            ))
+            .await
     }
 
     /// Whether the first match is editable (immediate, no retry).
     pub async fn is_editable(&self) -> E2eResult<bool> {
-        Ok(self.single_state().await?.editable)
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator is_editable `{}`", self.selector.raw()),
+                async { Ok(self.single_state().await?.editable) },
+            ))
+            .await
     }
 
     /// Whether the first match is focused (immediate, no retry).
     pub async fn is_focused(&self) -> E2eResult<bool> {
-        Ok(self.single_state().await?.focused)
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator is_focused `{}`", self.selector.raw()),
+                async { Ok(self.single_state().await?.focused) },
+            ))
+            .await
     }
 
     /// Whether at least one element matches (immediate, no retry).
     pub async fn is_attached(&self) -> E2eResult<bool> {
-        Ok(self.single_state().await?.count > 0)
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator is_attached `{}`", self.selector.raw()),
+                async { Ok(self.single_state().await?.count > 0) },
+            ))
+            .await
     }
 
     /// Bounding box of the first match (`None` when nothing matches).
     pub async fn bounding_box(&self) -> E2eResult<Option<crate::page::ElementRect>> {
-        Ok(self.single_state().await?.rects.into_iter().next())
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator bounding_box `{}`", self.selector.raw()),
+                async { Ok(self.single_state().await?.rects.into_iter().next()) },
+            ))
+            .await
     }
 
     /// Outline the first match with a red box for a moment (debugging).
     pub async fn highlight(&self) -> E2eResult<()> {
-        let value = self
-            .eval_first(
-                "(() => { el.style.outline = '2px solid #ff0000'; \
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator highlight `{}`", self.selector.raw()),
+                async {
+                    let value = self
+                        .eval_first(
+                            "(() => { el.style.outline = '2px solid #ff0000'; \
                  el.style.outlineOffset = '1px'; return true; })()",
-            )
-            .await?;
-        self.require_match(value)
+                        )
+                        .await?;
+                    self.require_match(value)
+                },
+            ))
+            .await
     }
 
     /// Check or uncheck a checkbox to reach `checked`.
     pub async fn set_checked(&self, checked: bool) -> E2eResult<()> {
-        if checked {
-            self.check().await
-        } else {
-            self.uncheck().await
-        }
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator set_checked `{}`", self.selector.raw()),
+                async {
+                    if checked {
+                        self.check().await
+                    } else {
+                        self.uncheck().await
+                    }
+                },
+            ))
+            .await
     }
 
     /// Run `function` with the first match as its argument.
     ///
     /// `function` is a JS function expression, e.g. `(el) => el.id`.
     pub async fn evaluate<T: serde::de::DeserializeOwned>(&self, function: &str) -> E2eResult<T> {
-        let value = self.eval_first(&format!("(({function}))(el)")).await?;
-        if value.is_null() {
-            return Err(E2eError::Locator {
-                selector: self.selector.raw().to_string(),
-                message: "no matching element".to_string(),
-            });
-        }
-        Ok(serde_json::from_value(value)?)
+        self.page
+            .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                format!("locator evaluate `{}`", self.selector.raw()),
+                async {
+                    let value = self.eval_first(&format!("(({function}))(el)")).await?;
+                    if value.is_null() {
+                        return Err(E2eError::Locator {
+                            selector: self.selector.raw().to_string(),
+                            message: "no matching element".to_string(),
+                        });
+                    }
+                    Ok(serde_json::from_value(value)?)
+                },
+            ))
+            .await
     }
 }
 

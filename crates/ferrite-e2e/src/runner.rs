@@ -645,6 +645,10 @@ pub struct Runner {
     workers: usize,
     retries: u32,
     test_timeout: Duration,
+    global_timeout: Duration,
+    cleanup_timeout: Duration,
+    max_failures: usize,
+    cancellation: crate::CancellationToken,
     filter: Option<String>,
     grep: Option<String>,
     grep_invert: Option<String>,
@@ -709,6 +713,10 @@ impl Runner {
             workers: config.workers.max(1),
             retries: config.retries,
             test_timeout: Duration::from_millis(config.timeout_ms),
+            global_timeout: Duration::from_millis(config.global_timeout_ms),
+            cleanup_timeout: Duration::from_millis(config.cleanup_timeout_ms),
+            max_failures: config.max_failures,
+            cancellation: crate::CancellationToken::new(),
             filter: None,
             grep: None,
             grep_invert: None,
@@ -754,6 +762,49 @@ impl Runner {
         self
     }
 
+    /// Whole-run deadline; zero disables it. Cleanup has its own grace period.
+    pub fn global_timeout(mut self, timeout: Duration) -> Self {
+        self.global_timeout = timeout;
+        self
+    }
+    /// Stop scheduling after this many final unexpected failures; zero disables it.
+    /// Tests already running finish normally, and retries count as one test.
+    pub fn max_failures(mut self, count: usize) -> Self {
+        self.max_failures = count;
+        self
+    }
+    /// Independent deadline for each cleanup callback or browser operation.
+    pub fn cleanup_timeout(mut self, timeout: Duration) -> Self {
+        self.cleanup_timeout = timeout;
+        self
+    }
+    /// Interrupt this runner's work; teardown still runs.
+    pub fn with_cancellation(mut self, token: crate::CancellationToken) -> Self {
+        self.cancellation = token;
+        self
+    }
+    async fn finish_run(&self, mut report: TestReport) -> TestReport {
+        for (label, hooks) in [
+            ("<after_all>", &self.after_all),
+            ("<global teardown>", &self.global_teardown),
+        ] {
+            for hook in hooks {
+                if let Err(error) = bounded(
+                    crate::operation::Deadline::new(self.cleanup_timeout),
+                    None,
+                    label,
+                    async { hook().await },
+                )
+                .await
+                {
+                    report.results.push(failed_result(label, error.to_string()));
+                }
+            }
+        }
+        report.results.sort_by(|a, b| a.name.cmp(&b.name));
+        self.write_artifacts(&report, &self.reporter);
+        report
+    }
     /// Only run tests whose name or tags contain `filter`.
     ///
     /// Builder values win over `FERRITE_E2E_FILTER` (set by `--filter`).
@@ -1001,12 +1052,32 @@ impl Runner {
     /// (`worker_index` in [`TestInfo`]); progress prints in completion order.
     pub async fn run(&self, browser: &Browser, tests: Vec<Test>) -> TestReport {
         let mut report = TestReport::default();
+        let control = crate::CancellationToken::new();
+        if let Some(reason) = self.cancellation.reason() {
+            control.cancel_with_reason(reason);
+        }
+        let timer_token = control.clone();
+        let external = self.cancellation.clone();
+        let deadline = crate::operation::Deadline::new(self.global_timeout);
+        let _timer = AbortTask(tokio::spawn(async move {
+            tokio::select! {
+                ()=deadline.elapsed()=>timer_token.cancel_with_reason("global timeout exceeded"),
+                reason=external.cancelled()=>timer_token.cancel_with_reason(reason),
+            }
+        }));
         for setup in &self.global_setup {
-            if let Err(error) = setup().await {
+            if let Err(error) = bounded(
+                crate::operation::Deadline::new(self.test_timeout),
+                Some(&control),
+                "global setup",
+                async { setup().await },
+            )
+            .await
+            {
                 report
                     .results
                     .push(failed_result("<global setup>", error.to_string()));
-                return report;
+                return self.finish_run(report).await;
             }
         }
         let filter = self
@@ -1031,7 +1102,7 @@ impl Runner {
             Ok(projects) => projects,
             Err(error) => {
                 report.results.push(failed_result("<project>", error));
-                return report;
+                return self.finish_run(report).await;
             }
         };
         let (runnable, skipped) = build_work_items(
@@ -1052,7 +1123,7 @@ impl Runner {
                 "<forbid-only>",
                 "test.only is forbidden (forbid_only/CI)".to_string(),
             ));
-            return report;
+            return self.finish_run(report).await;
         }
         for (test, project) in &skipped {
             let name = display_name(project.as_deref(), &test.name);
@@ -1075,11 +1146,18 @@ impl Runner {
             });
         }
         for hook in &self.before_all {
-            if let Err(error) = hook().await {
+            if let Err(error) = bounded(
+                crate::operation::Deadline::new(self.test_timeout),
+                Some(&control),
+                "before_all",
+                async { hook().await },
+            )
+            .await
+            {
                 report
                     .results
                     .push(failed_result("<before_all>", error.to_string()));
-                return report;
+                return self.finish_run(report).await;
             }
         }
         let mut project_browsers = HashMap::new();
@@ -1092,7 +1170,14 @@ impl Runner {
                     .launch_options
                     .clone()
                     .unwrap_or_else(|| LaunchOptions::default().browser(kind));
-                match Browser::launch(options).await {
+                match bounded(
+                    crate::operation::Deadline::new(self.test_timeout),
+                    Some(&control),
+                    "browser launch",
+                    Browser::launch(options),
+                )
+                .await
+                {
                     Ok(mut launched) => {
                         launched.set_base_url(browser.base_url().map(str::to_string));
                         let launched = Arc::new(launched);
@@ -1122,16 +1207,32 @@ impl Runner {
         // Worker pool: stable worker index; isolated context per attempt.
         let queue = Arc::new(Mutex::new(VecDeque::from(runnable)));
         let browser = Arc::new(browser.worker_handle());
+        let failures = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut workers = tokio::task::JoinSet::new();
         for worker_index in 0..self.workers {
             let queue = Arc::clone(&queue);
             let runner = self.clone();
             let browser = Arc::clone(&browser);
             let project_browsers = project_browsers.clone();
+            let control = control.clone();
+            let failures = failures.clone();
             workers.spawn(async move {
                 let mut results = Vec::new();
                 loop {
-                    let item = queue.lock().map(|mut q| q.pop_front()).unwrap_or(None);
+                    let item = queue
+                        .lock()
+                        .map(|mut q| {
+                            if control.is_cancelled()
+                                || (runner.max_failures > 0
+                                    && failures.load(std::sync::atomic::Ordering::SeqCst)
+                                        >= runner.max_failures)
+                            {
+                                None
+                            } else {
+                                q.pop_front()
+                            }
+                        })
+                        .unwrap_or(None);
                     match item {
                         Some(item) => {
                             let selected = item
@@ -1139,7 +1240,12 @@ impl Runner {
                                 .as_ref()
                                 .and_then(|name| project_browsers.get(name))
                                 .unwrap_or(&browser);
-                            results.push(run_one(&runner, selected, &item, worker_index).await);
+                            let result =
+                                run_one(&runner, selected, &item, worker_index, &control).await;
+                            if result.status == TestStatus::Failed {
+                                failures.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            }
+                            results.push(result);
                         }
                         None => break,
                     }
@@ -1171,29 +1277,45 @@ impl Runner {
                     .push(failed_result("<join>", error.to_string())),
             }
         }
+        if let Ok(mut pending) = queue.lock() {
+            for item in pending.drain(..) {
+                let mut result = failed_result(
+                    &item.display_name(),
+                    control
+                        .reason()
+                        .unwrap_or_else(|| "max_failures reached".into()),
+                );
+                result.status = TestStatus::Skipped;
+                result.attempts = 0;
+                result.project = item.project;
+                result.repeat_each_index = item.repeat_each_index;
+                result.annotations = item.test.annotations;
+                report.results.push(result);
+            }
+        }
+        if let Some(reason) = control.reason() {
+            report
+                .results
+                .push(failed_result("<run interrupted>", reason));
+        }
         drop(project_browsers);
         for browser in owned_browsers {
             if let Ok(browser) = Arc::try_unwrap(browser) {
-                browser.close().await.ok();
+                if let Err(error) = bounded(
+                    crate::operation::Deadline::new(self.cleanup_timeout),
+                    None,
+                    "browser close",
+                    browser.close(),
+                )
+                .await
+                {
+                    report
+                        .results
+                        .push(failed_result("<browser close>", error.to_string()));
+                }
             }
         }
-        for hook in &self.after_all {
-            if let Err(error) = hook().await {
-                report
-                    .results
-                    .push(failed_result("<after_all>", error.to_string()));
-            }
-        }
-        for teardown in &self.global_teardown {
-            if let Err(error) = teardown().await {
-                report
-                    .results
-                    .push(failed_result("<global teardown>", error.to_string()));
-            }
-        }
-        report.results.sort_by(|a, b| a.name.cmp(&b.name));
-        self.write_artifacts(&report, &self.reporter);
-        report
+        self.finish_run(report).await
     }
 
     /// Write file artifacts for the reporters in `spec` (comma-separated).
@@ -1230,11 +1352,44 @@ impl Runner {
     }
 }
 
+struct AbortTask(tokio::task::JoinHandle<()>);
+impl Drop for AbortTask {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+async fn bounded<T>(
+    deadline: crate::operation::Deadline,
+    token: Option<&crate::CancellationToken>,
+    label: &str,
+    future: impl Future<Output = E2eResult<T>>,
+) -> E2eResult<T> {
+    let work = async {
+        match std::panic::AssertUnwindSafe(future).catch_unwind().await {
+            Ok(result) => result,
+            Err(panic) => Err(E2eError::Config(format!(
+                "{label} panicked: {}",
+                panic
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+                    .or_else(|| panic.downcast_ref::<&str>().copied())
+                    .unwrap_or("non-string panic")
+            ))),
+        }
+    };
+    let work = deadline.run(label, work);
+    match token {
+        Some(token) => token.run(work).await,
+        None => work.await,
+    }
+}
+
 async fn run_one(
     runner: &Runner,
     browser: &Browser,
     item: &WorkItem,
     worker_index: usize,
+    control: &crate::CancellationToken,
 ) -> TestResult {
     let test = &item.test;
     let mut names = test.locks.clone();
@@ -1258,7 +1413,10 @@ async fn run_one(
     };
     let mut guards = Vec::new();
     for lock in locks {
-        guards.push(lock.lock_owned().await);
+        match control.run(async { Ok(lock.lock_owned().await) }).await {
+            Ok(guard) => guards.push(guard),
+            Err(error) => return failed_result(&item.display_name(), error.to_string()),
+        }
     }
     let started = Instant::now();
     let mut attempts = 0;
@@ -1281,14 +1439,24 @@ async fn run_one(
     let mut expected_failure_observed = false;
 
     for _ in 0..=item.retries {
+        if control.is_cancelled() {
+            last_error = control.reason().unwrap();
+            break;
+        }
         attempts += 1;
-        let context = match browser
-            .new_context(
+        expected_failure_observed = false;
+        let deadline = crate::operation::Deadline::new(timeout);
+        let context = match bounded(
+            deadline,
+            Some(control),
+            "context setup",
+            browser.new_context(
                 item.context_options
                     .clone()
                     .unwrap_or_else(|| runner.context_options.clone()),
-            )
-            .await
+            ),
+        )
+        .await
         {
             Ok(context) => context,
             Err(error) => {
@@ -1296,77 +1464,30 @@ async fn run_one(
                 break;
             }
         };
-        let mut page = match context.new_page().await {
-            Ok(page) => page,
-            Err(error) => {
-                last_error = error.to_string();
-                context.close().await.ok();
-                continue;
-            }
-        };
+        let mut page =
+            match bounded(deadline, Some(control), "page setup", context.new_page()).await {
+                Ok(page) => page,
+                Err(error) => {
+                    last_error = error.to_string();
+                    let _ = bounded(
+                        crate::operation::Deadline::new(runner.cleanup_timeout),
+                        None,
+                        "context close",
+                        context.close(),
+                    )
+                    .await;
+                    continue;
+                }
+            };
         page.set_expect_timeout(runner.expect_timeout);
         page.snapshot_dir = Some(
             std::env::var("FERRITE_SNAPSHOT_DIR")
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|_| std::path::Path::new(&runner.output_dir).join("snapshots")),
         );
-        let mut hooked = None;
-        for hook in &runner.before_each {
-            if let Err(error) = hook(page.clone()).await {
-                hooked = Some(format!("before_each: {error}"));
-                break;
-            }
-        }
-        if let Some(error) = hooked {
-            last_error = error;
-            page.close().await.ok();
-            context.clone().close().await.ok();
-            continue;
-        }
-        // Fixtures build fresh per attempt; teardown runs in reverse below.
-        let mut fixtures = FixtureMap::default();
         let mut built = Vec::with_capacity(runner.fixtures.len());
-        let mut fixture_error = None;
-        for def in &runner.fixtures {
-            match (def.setup)().await {
-                Ok(value) => {
-                    fixtures.inner.insert(def.type_id, Arc::clone(&value));
-                    built.push(value);
-                }
-                Err(error) => {
-                    fixture_error = Some(format!("fixture setup: {error}"));
-                    break;
-                }
-            }
-        }
-        if let Some(error) = fixture_error {
-            last_error = error;
-            teardown_fixtures(runner, &built).await;
-            page.close().await.ok();
-            context.clone().close().await.ok();
-            continue;
-        }
-        let recording = if runner.video.records() {
-            match page
-                .start_video(VideoOptions {
-                    dir: std::path::PathBuf::from(&runner.output_dir),
-                    fps: runner.video_fps,
-                    ..VideoOptions::default()
-                })
-                .await
-            {
-                Ok(()) => true,
-                Err(error) => {
-                    last_error = format!("start video: {error}");
-                    teardown_fixtures(runner, &built).await;
-                    page.close().await.ok();
-                    context.clone().close().await.ok();
-                    continue;
-                }
-            }
-        } else {
-            false
-        };
+        let mut recording = false;
+        let mut body_started = false;
         let info = TestInfo {
             title: test.name.clone(),
             file: test.file.clone(),
@@ -1383,36 +1504,57 @@ async fn run_one(
             project: item.project.clone(),
             attachments: Arc::clone(&attachments),
         };
-        let body = match &test.ctx_func {
-            Some(func) => func(TestContext {
-                page: page.clone(),
-                info,
-                fixtures: fixtures.clone(),
-            }),
-            None => (test.func)(page.clone()),
-        };
-        let body = std::panic::AssertUnwindSafe(body).catch_unwind();
-        let outcome = if timeout.is_zero() {
-            Ok(body.await)
-        } else {
-            tokio::time::timeout(timeout, body).await
-        };
-        let mut failed = match outcome {
-            Ok(Ok(Ok(()))) => None,
-            Ok(Ok(Err(error))) => Some(error.to_string()),
-            Ok(Err(panic)) => Some(format!(
-                "test panicked: {}",
-                panic
-                    .downcast_ref::<String>()
-                    .map(String::as_str)
-                    .or_else(|| panic.downcast_ref::<&str>().copied())
-                    .unwrap_or("non-string panic")
-            )),
-            Err(_) => Some(format!("test timed out after {}ms", timeout.as_millis())),
-        };
-        expected_failure_observed = expected_fail && failed.is_some();
+        // One budget covers beforeEach, fixture setup, recording setup and body.
+        let outcome = bounded(deadline, Some(control), "test setup/body", async {
+            for hook in &runner.before_each {
+                hook(page.clone())
+                    .await
+                    .map_err(|e| E2eError::Config(format!("before_each: {e}")))?;
+            }
+            let mut fixtures = FixtureMap::default();
+            for def in &runner.fixtures {
+                let value = (def.setup)()
+                    .await
+                    .map_err(|e| E2eError::Config(format!("fixture setup: {e}")))?;
+                fixtures.inner.insert(def.type_id, Arc::clone(&value));
+                built.push(value);
+            }
+            if runner.video.records() {
+                page.start_video(VideoOptions {
+                    dir: std::path::PathBuf::from(&runner.output_dir),
+                    fps: runner.video_fps,
+                    ..VideoOptions::default()
+                })
+                .await?;
+                recording = true;
+            }
+            body_started = true;
+            match &test.ctx_func {
+                Some(func) => {
+                    func(TestContext {
+                        page: page.clone(),
+                        info,
+                        fixtures,
+                    })
+                    .await
+                }
+                None => (test.func)(page.clone()).await,
+            }
+        })
+        .await;
+        let mut failed = outcome.err().map(|e| e.to_string());
+        expected_failure_observed =
+            expected_fail && body_started && failed.is_some() && !control.is_cancelled();
         for hook in &runner.after_each {
-            if let Err(error) = hook(page.clone()).await {
+            if let Err(error) = bounded(
+                crate::operation::Deadline::new(runner.cleanup_timeout),
+                None,
+                "after_each",
+                async { hook(page.clone()).await },
+            )
+            .await
+            {
+                expected_failure_observed = false;
                 let note = format!("after_each: {error}");
                 failed = Some(match failed {
                     Some(prior) => format!("{prior} ({note})"),
@@ -1421,6 +1563,7 @@ async fn run_one(
             }
         }
         if let Some(note) = teardown_fixtures(runner, &built).await {
+            expected_failure_observed = false;
             failed = Some(match failed {
                 Some(prior) => format!("{prior} ({note})"),
                 None => note,
@@ -1436,7 +1579,14 @@ async fn run_one(
             if keep {
                 let path = std::path::Path::new(&runner.output_dir)
                     .join(format!("{slug}-attempt{attempts}.webm"));
-                match page.stop_video(&path).await {
+                match bounded(
+                    crate::operation::Deadline::new(runner.cleanup_timeout),
+                    None,
+                    "stop video",
+                    page.stop_video(&path),
+                )
+                .await
+                {
                     Ok(done) => video_path = Some(done.display().to_string()),
                     Err(error) => {
                         let note = format!("stop video: {error}");
@@ -1447,7 +1597,16 @@ async fn run_one(
                     }
                 }
             } else {
-                page.cancel_video().await;
+                let _ = bounded(
+                    crate::operation::Deadline::new(runner.cleanup_timeout),
+                    None,
+                    "cancel video",
+                    async {
+                        page.cancel_video().await;
+                        Ok(())
+                    },
+                )
+                .await;
             }
         }
         let take_shot =
@@ -1455,10 +1614,14 @@ async fn run_one(
         if take_shot {
             let path = std::path::Path::new(&runner.output_dir)
                 .join(format!("{slug}-attempt{attempts}.png"));
-            if page
-                .save_screenshot(&path, ScreenshotOptions::default())
-                .await
-                .is_ok()
+            if bounded(
+                crate::operation::Deadline::new(runner.cleanup_timeout),
+                None,
+                "screenshot",
+                page.save_screenshot(&path, ScreenshotOptions::default()),
+            )
+            .await
+            .is_ok()
             {
                 screenshots.push(path.display().to_string());
             }
@@ -1485,8 +1648,38 @@ async fn run_one(
                 trace_path = Some(path.display().to_string());
             }
         }
-        page.close().await.ok();
-        context.clone().close().await.ok();
+        for (label, result) in [
+            (
+                "page close",
+                bounded(
+                    crate::operation::Deadline::new(runner.cleanup_timeout),
+                    None,
+                    "page close",
+                    page.close(),
+                )
+                .await,
+            ),
+            (
+                "context close",
+                bounded(
+                    crate::operation::Deadline::new(runner.cleanup_timeout),
+                    None,
+                    "context close",
+                    context.close(),
+                )
+                .await,
+            ),
+        ] {
+            if let Err(error) = result {
+                expected_failure_observed = false;
+                let note = format!("{label}: {error}");
+                failed = Some(
+                    failed
+                        .map(|prior| format!("{prior}; {note}"))
+                        .unwrap_or(note),
+                );
+            }
+        }
         // Unexpected passes fail immediately (no retry can redeem a pass).
         if unexpected_pass {
             return TestResult {
@@ -1551,7 +1744,14 @@ async fn teardown_fixtures(
     let mut errors = Vec::new();
     for (def, value) in runner.fixtures.iter().zip(built.iter()).rev() {
         if let Some(teardown) = &def.teardown {
-            if let Err(error) = teardown(Arc::clone(value)).await {
+            if let Err(error) = bounded(
+                crate::operation::Deadline::new(runner.cleanup_timeout),
+                None,
+                "fixture teardown",
+                async { teardown(Arc::clone(value)).await },
+            )
+            .await
+            {
                 errors.push(format!("fixture teardown: {error}"));
             }
         }

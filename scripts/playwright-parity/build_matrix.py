@@ -159,7 +159,7 @@ put('Clock','resume','Page.clock_resume','Only toggles a flag; it does not resta
 put('Clock','pauseAt','Page.clock_pause','No pause-at-time argument or skip-to-time semantics; toggles paused flag only.')
 # Network value objects.
 put('APIRequest','newContext','ApiClient.new','Standalone client constructor; no options/configurable cookie storage.')
-for m,t in {'delete':'delete','fetch':'fetch','get':'get','head':'head','patch':'patch_json','post':'post_json','put':'put_json'}.items():put('APIRequestContext',m,'ApiClient.'+t,'HTTP verb available; use fetch_with for query/body/header/timeout/retry/status options. Client has cookies/auth/proxy/redirect settings; no API storage-state export/disposal lifecycle.')
+for m,t in {'delete':'delete','fetch':'fetch','get':'get','head':'head','patch':'patch_json','post':'post_json','put':'put_json'}.items():put('APIRequestContext',m,'ApiClient.'+t,'HTTP verb available; use fetch_with for query/body/header/timeout/retry/status options. Client has cookies/auth/proxy/redirect settings; API state import/export and shared disposal/cancellation exist; narrower retry and redirect options.')
 for m,t in {'body':'bytes','headers':'headers','headersArray':'headers','json':'json','ok':'ok','status':'status','text':'text'}.items():put('APIResponse',m,'ApiResponse.'+t,'Buffered response equivalent for basic HTTP values; headers are pairs and text uses lossy UTF-8.',status='Equivalent' if m in ['body','json','ok','status'] else 'Partial')
 group('Request',{'allHeaders':'RecordedRequest.headers','headers':'RecordedRequest.headers','headersArray':'RecordedRequest.headers','method':'RecordedRequest.method','postData':'RecordedRequest.post_data','url':'RecordedRequest.url'},'Captured record fields, not a live Request object; post_data is Chromium-only and response/request metadata are merged.')
 put('Request','postDataJSON','RecordedRequest.post_data','Caller parses the captured request text with serde_json; body_json() is RESPONSE JSON, not request postDataJSON.','Partial')
@@ -233,11 +233,11 @@ put('Locator','visible','Locator.visible','Lazy visibility filter reapplied when
 put('Browser','newPage','Browser.new_page','Fresh owning context; closing the page disposes it, including its popups.')
 put('BrowserType','launchPersistentContext','LaunchOptions.user_data_dir','Reusable Chromium/Firefox profile; obtain browser.default_context(). Dedicated contexts remain isolated from persistent storage.')
 put('BrowserType','connectOverCDP','Browser.connect_over_cdp','Chromium HTTP or browser WebSocket endpoint; no Playwright remote protocol or headers/options surface.')
-put('BrowserContext','request','BrowserContext.request','Context-linked HTTP client sharing cookies. Transport settings are configured separately through ApiClientOptions.')
-put('Page','request','Page.request','HTTP client sharing the owning context cookies; returns an error after context disposal. Transport settings configured separately.')
+put('BrowserContext','request','BrowserContext.request','Context-linked HTTP client sharing cookies and inheriting headers, Basic auth, TLS, proxy and timeout settings at creation. Transport overrides use ApiClientOptions.')
+put('Page','request','Page.request','HTTP client sharing owning-context cookies and inheriting its transport defaults; cancellation follows context disposal.')
 put('BrowserContext','storageState','BrowserContext.storage_state','Playwright cookies/origins JSON, localStorage from live pages across origins; closed-origin inventory and IndexedDB/OPFS are deferred.')
 put('BrowserContext','setStorageState','BrowserContext.load_storage_state','Playwright multi-origin state and legacy files; cookies restore before navigation and localStorage before app scripts. IndexedDB/OPFS not persisted.')
-for m,t in {'setDefaultTimeout':'set_default_timeout','setDefaultNavigationTimeout':'set_default_navigation_timeout'}.items():put('BrowserContext',m,'BrowserContext.'+t,'Shared settings update existing and future pages; protocol calls still have backend timeouts.')
+for m,t in {'setDefaultTimeout':'set_default_timeout','setDefaultNavigationTimeout':'set_default_navigation_timeout'}.items():put('BrowserContext',m,'BrowserContext.'+t,'Shared action/protocol defaults update existing and future pages; zero disables timeout, cancellation is independently supported.')
 put('Page','context','Page.context','Owning context while registered; returns Option and becomes None after context disposal.')
 put('Page','setDefaultNavigationTimeout','Page.set_navigation_timeout','Navigation default distinct from locator timeout.')
 for m,t in {'clearConsoleMessages':'clear_console_messages','pageErrors':'page_errors','clearPageErrors':'clear_page_errors','coverage':'coverage','frameLocator':'frame_locator'}.items():put('Page',m,'Page.'+t,'Dedicated API exists; coverage is Chromium-only, lazy frame locators are same-origin, exceptions have ConsoleMessage shape.')
@@ -253,7 +253,7 @@ for m,t in {'fastForward':'clock_fast_forward','runFor':'clock_run_for','pauseAt
 for m,t in {'startJSCoverage':'start_js_coverage','stopJSCoverage':'stop_js_coverage','startCSSCoverage':'start_css_coverage','stopCSSCoverage':'stop_css_coverage'}.items():put('Coverage',m,'Coverage.'+t,'Chromium only; returns native V8 function/block or CSS rule-use ranges, not flattened Playwright disjoint ranges. Navigation options absent.')
 for m,t in {'frameLocator':'frame_locator','locator':'locator','owner':'owner','first':'first','last':'last','nth':'nth','getByRole':'get_by_role','getByText':'get_by_text','getByLabel':'get_by_label','getByTestId':'get_by_test_id','getByPlaceholder':'get_by_placeholder','getByAltText':'get_by_alt','getByTitle':'get_by_title'}.items():put('FrameLocator',m,'FrameLocator.'+t,'Lazy nested/replacement frame selection through same-origin DOM evaluation; cross-origin/OOPIF and selector-free cross-frame traversal deferred.')
 for m,t in {'url':'url','statusText':'status_text','dispose':'dispose'}.items():put('APIResponse',m,'ApiResponse.'+t,'Final response URL/status text and explicit body-buffer disposal; clones own their buffers.')
-put('APIRequestContext','fetch','ApiClient.fetch_with','Generic HTTP method; headers/query/JSON/form/multipart/raw payloads, timeout, status checks and connection retries. Narrower redirect/storage/disposal options.')
+put('APIRequestContext','fetch','ApiClient.fetch_with','Generic HTTP method; headers/query/JSON/form/multipart/raw payloads, timeout, status checks and connection retries. Zero timeout disables the request budget, including body reads; cancellation/disposal supported, narrower redirect/retry options.')
 put('APIRequest','newContext','ApiClient.with_options','Cookie jar, base URL, headers, TLS, proxy, timeout, redirects and Basic auth; optional browser cookie link, no full Playwright options.')
 put('TestInfo','outputPath','TestInfo.output_path','Attempt-specific artifact path; parent traversal and absolute paths rejected. No snapshot-path templates.')
 put('Test','locks','Test.lock','Named sorted locks serialize matching tests within this runner; Tokio workers, no multi-process worker coordination.')
@@ -266,6 +266,18 @@ put('TestOptions','contextOptions','Project.context_options','Isolated context p
 put('Page','ariaSnapshot','Page.aria_snapshot','Structured role/name/state DOM approximation, including open shadow roots; no full ARIA/YAML matching, mode/depth/boxes options.')
 put('Page','ariaSnapshotJSON','Page.aria_snapshot_json','Nested role/name/state DOM tree without name/node truncation; not the complete accessibility algorithm.')
 put('Page','addLocatorHandler','Page.add_locator_handler_with','Visibility-based overlay handlers run before actions and state/custom assertions; no full dismissal/noWaitAfter semantics.')
+# Reliability, API authentication state, frame helpers, limits and context events.
+for m,t in {'page':'page','setContent':'set_content','waitForFunction':'wait_for_function','waitForURL':'wait_for_url','waitForLoadState':'wait_for_load_state','waitForSelector':'wait_for_selector'}.items():
+ put('Frame',m,'Frame.'+t,'Frame-scoped counterpart; unit-returning waits, fewer predicate/options modes; frame NetworkIdle remains unsupported. current_url() reads navigation updates.')
+for m,t in {'storageState':'storage_state','setStorageState':'apply_storage_state','dispose':'dispose'}.items():
+ put('APIRequestContext',m,'ApiClient.'+t,'Enumerable cookies with domain/path/expiry/HttpOnly/Secure/SameSite state import/export; origin data retained, IndexedDB deferred. Disposal cancels clones; returned Rust response buffers remain independently owned.')
+put('APIRequest','newContext','ApiClient.with_options','Base URL, headers, TLS, proxy, timeout, redirects, Basic auth and imported storage state; no full Playwright options.')
+put('BrowserContext','waitForEvent','BrowserContext.wait_for_event','Context-wide page/popup, console/error, network, download and close events with source page identity; enum-based filtering, no listener callback API or rich live Request/WebError objects.')
+for m,t in {'page':'Page','console':'Console','weberror':'PageError','request':'Request','response':'Response','close':'Closed'}.items():
+ put('BrowserContext',m,'BrowserContext.subscribe','ContextEventKind::'+t+'; context subscriptions forward observations from every current/future page; enum payloads have a narrower live object/options model.','Partial','event')
+for c in ['FullConfig','TestConfig']:
+ for m,t in {'globalTimeout':'global_timeout_ms','maxFailures':'max_failures'}.items():
+  put(c,m,'E2eConfig.'+t,'Consumed by Runner and CLI; global cancellation with bounded teardown and final unexpected-failure scheduling limit. Active workers finish on maxFailures; no process-worker orchestration.')
 # Fill every remaining upstream member explicitly as absent, with class-specific explanations.
 def default_note(c,e):
  if c.startswith('Android') or c in ['Electron','ElectronApplication']:return 'Experimental upstream API; Ferrite has no Android/ADB/WebView or Electron backend.'

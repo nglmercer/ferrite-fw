@@ -321,10 +321,69 @@ impl TracingState {
     }
 }
 
+/// Kinds of events emitted by a context across all its pages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextEventKind {
+    Page,
+    Closed,
+    Console,
+    PageError,
+    Dialog,
+    Request,
+    Response,
+    Download,
+    Popup,
+    PageClose,
+    WebSocket,
+}
+/// A context event with its source page identity. New pages and popups are
+/// adopted into the context before their events are emitted.
+#[derive(Debug, Clone)]
+pub enum ContextEvent {
+    Page(Box<Page>),
+    Closed,
+    PageEvent {
+        page_id: String,
+        event: crate::PageEvent,
+    },
+}
+impl ContextEvent {
+    pub fn page_id(&self) -> Option<&str> {
+        match self {
+            Self::Page(page) => Some(page.target_id()),
+            Self::PageEvent { page_id, .. } => Some(page_id),
+            Self::Closed => None,
+        }
+    }
+    pub fn kind(&self) -> ContextEventKind {
+        use crate::{PageEvent, PageEventKind};
+        match self {
+            Self::Page(_) => ContextEventKind::Page,
+            Self::Closed => ContextEventKind::Closed,
+            Self::PageEvent {
+                event: PageEvent::Console(message),
+                ..
+            } if message.kind == "exception" => ContextEventKind::PageError,
+            Self::PageEvent { event, .. } => match event.kind() {
+                PageEventKind::Console => ContextEventKind::Console,
+                PageEventKind::Dialog => ContextEventKind::Dialog,
+                PageEventKind::Request => ContextEventKind::Request,
+                PageEventKind::Response => ContextEventKind::Response,
+                PageEventKind::Download => ContextEventKind::Download,
+                PageEventKind::Popup => ContextEventKind::Popup,
+                PageEventKind::Closed => ContextEventKind::PageClose,
+                PageEventKind::WebSocket => ContextEventKind::WebSocket,
+            },
+        }
+    }
+}
+
 /// An isolated browser context; pages inside it share cookies and storage.
 #[derive(Clone)]
 pub struct BrowserContext {
     closed: Arc<std::sync::atomic::AtomicBool>,
+    cancellation: crate::CancellationToken,
+    events: tokio::sync::broadcast::Sender<ContextEvent>,
     backend: Backend,
     id: Option<String>,
     options: ContextOptions,
@@ -367,6 +426,8 @@ impl BrowserContext {
         let geolocation = options.geolocation;
         Self {
             closed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            cancellation: crate::CancellationToken::new(),
+            events: tokio::sync::broadcast::channel(512).0,
             backend,
             id,
             options,
@@ -385,6 +446,69 @@ impl BrowserContext {
         }
     }
 
+    /// Subscribe before triggering an action to observe context and page events.
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<ContextEvent> {
+        self.events.subscribe()
+    }
+    pub async fn wait_for_event(
+        &self,
+        kind: ContextEventKind,
+        timeout: Duration,
+    ) -> E2eResult<ContextEvent> {
+        self.wait_for_event_with_options(
+            kind,
+            crate::OperationOptions {
+                timeout: Some(timeout),
+                ..Default::default()
+            },
+        )
+        .await
+    }
+    pub async fn wait_for_event_with_options(
+        &self,
+        kind: ContextEventKind,
+        options: crate::OperationOptions,
+    ) -> E2eResult<ContextEvent> {
+        if kind == ContextEventKind::Closed && self.is_closed() {
+            return Ok(ContextEvent::Closed);
+        }
+        if kind == ContextEventKind::WebSocket && matches!(self.backend, Backend::Bidi { .. }) {
+            return Err(E2eError::Config(
+                "websocket events are not supported on Firefox".into(),
+            ));
+        }
+        let mut events = self.subscribe();
+        let wait = crate::operation::Deadline::new(options.timeout.unwrap_or(self.timeout)).run(
+            format!("wait for context {kind:?}"),
+            async {
+                loop {
+                    match events.recv().await {
+                        Ok(event) if event.kind() == kind => return Ok(event),
+                        Ok(ContextEvent::Closed) => {
+                            return Err(E2eError::Cancelled("browser context closed".into()))
+                        }
+                        Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            return Err(E2eError::Disconnected(
+                                "context event stream closed".into(),
+                            ))
+                        }
+                    }
+                }
+            },
+        );
+        let wait = async {
+            if kind == ContextEventKind::Closed {
+                wait.await
+            } else {
+                self.cancellation.run(wait).await
+            }
+        };
+        match options.cancellation {
+            Some(token) => token.run(wait).await,
+            None => wait.await,
+        }
+    }
     /// Context id (`None` for the default context).
     #[must_use]
     pub fn id(&self) -> Option<&str> {
@@ -469,7 +593,14 @@ impl BrowserContext {
 
     /// Wrap a live driver as a context page (shared by `new_page` and popup
     /// adoption): options, stored rules/grants, registration.
-    pub(crate) async fn finish_page(&self, driver: Driver, sink: ConsoleSink) -> E2eResult<Page> {
+    pub(crate) async fn finish_page(
+        &self,
+        mut driver: Driver,
+        sink: ConsoleSink,
+    ) -> E2eResult<Page> {
+        driver.bind_context_cancellation(self.cancellation.clone());
+        let target_id = driver.target_id().to_owned();
+        sink.forward_context(&self.events, &target_id);
         let mut page = Page::new(
             driver,
             sink,
@@ -529,6 +660,7 @@ impl BrowserContext {
             page.set_ignore_https_errors(true).await?;
         }
         self.apply_live_state(&page).await?;
+        page.sync_protocol_timeout();
         if !self
             .routes
             .lock()
@@ -537,13 +669,25 @@ impl BrowserContext {
         {
             page.restart_routing().await?;
         }
-        if let Some(dir) = &self.download_dir {
-            page.remember_download_dir(dir);
+        let (downloads_path, downloads_allowed) = {
+            let live = self.live.lock().unwrap_or_else(|e| e.into_inner());
+            (live.downloads_path.clone(), live.downloads_allowed)
+        };
+        if let Some(dir) = downloads_path.as_ref().or(self.download_dir.as_ref()) {
+            if downloads_path.is_none()
+                && downloads_allowed
+                && matches!(self.backend, Backend::Cdp(_))
+            {
+                page.set_download_dir(dir).await?;
+            } else {
+                page.remember_download_dir(dir);
+            }
         }
         self.pages
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .push(page.clone());
+        let _ = self.events.send(ContextEvent::Page(Box::new(page.clone())));
         Ok(page)
     }
 
@@ -588,35 +732,67 @@ impl BrowserContext {
 
     /// HTTP request client sharing this context's cookies.
     pub fn request(&self) -> crate::ApiClient {
-        match &self.base_url {
-            Some(base) => crate::ApiClient::with_base_url(base),
-            None => crate::ApiClient::new(),
+        crate::ApiClient::with_options(self.api_options())
+            .expect("validated browser context HTTP settings")
+            .with_context(self.clone())
+    }
+
+    pub fn api_options(&self) -> crate::ApiClientOptions {
+        let live = self.live.lock().unwrap_or_else(|e| e.into_inner());
+        crate::ApiClientOptions {
+            base_url: self.base_url.clone(),
+            headers: live.extra_http_headers.clone(),
+            credentials: live.http_credentials.clone(),
+            timeout: live.action_timeout.unwrap_or(self.timeout),
+            ignore_https_errors: self.options.ignore_https_errors,
+            proxy: self.options.proxy_server.clone().map(|proxy| {
+                if proxy.contains("://") {
+                    proxy
+                } else {
+                    format!("http://{proxy}")
+                }
+            }),
+            ..crate::ApiClientOptions::default()
         }
-        .with_context(self.clone())
+    }
+
+    pub fn cancellation_token(&self) -> crate::CancellationToken {
+        self.cancellation.clone()
     }
 
     /// Read cookies visible to this context.
     pub async fn cookies(&self) -> E2eResult<Vec<Cookie>> {
-        let page = self.new_page().await?;
-        let cookies = page.cookies().await?;
-        page.close().await?;
-        Ok(cookies)
+        self.cancellation
+            .run(crate::context_cookies::cookies(
+                &self.backend,
+                self.id.as_deref(),
+                self.timeout,
+            ))
+            .await
     }
 
     /// Clear all cookies in this context.
     pub async fn clear_cookies(&self) -> E2eResult<()> {
-        let page = self.new_page().await?;
-        page.clear_cookies().await?;
-        page.close().await?;
-        Ok(())
+        self.cancellation
+            .run(crate::context_cookies::clear_cookies(
+                &self.backend,
+                self.id.as_deref(),
+                self.timeout,
+            ))
+            .await
     }
 
-    /// Set cookies for `url` (navigates a scratch page there; context-wide).
+    /// Set cookies for `url` without opening or navigating a page.
     pub async fn add_cookies(&self, cookies: &[Cookie], url: &str) -> E2eResult<()> {
-        let page = self.new_page().await?;
-        let result = page.add_cookies_for_url(cookies, url).await;
-        page.close().await?;
-        result
+        self.cancellation
+            .run(crate::context_cookies::add_cookies(
+                &self.backend,
+                self.id.as_deref(),
+                self.timeout,
+                cookies,
+                url,
+            ))
+            .await
     }
 
     /// Route matching requests on every current and future page.
@@ -1126,14 +1302,39 @@ impl BrowserContext {
                 path.as_ref().display()
             ))
         })?;
+        self.apply_storage_state(&state).await
+    }
+
+    /// Restore cookies immediately and localStorage before future application scripts.
+    pub async fn apply_storage_state(&self, state: &StorageState) -> E2eResult<()> {
+        self.cancellation.check()?;
+        let state = state.clone();
         for page in self.pages() {
             page.apply_storage_state(&state).await?;
         }
-        self.live.lock().unwrap_or_else(|e| e.into_inner()).storage = Some(state);
-        // Restore cookies even when there are no existing pages.
-        if self.pages().is_empty() {
-            let page = self.new_page().await?;
-            page.close().await?;
+        self.live.lock().unwrap_or_else(|e| e.into_inner()).storage = Some(state.clone());
+        // Cookie import is context-wide and does not create observable scratch pages.
+        for cookie in &state.cookies {
+            let url = cookie
+                .domain
+                .as_deref()
+                .map(|domain| {
+                    format!(
+                        "{}://{}/",
+                        if cookie.secure { "https" } else { "http" },
+                        domain.trim_start_matches('.')
+                    )
+                })
+                .or_else(|| {
+                    state
+                        .all_origins()
+                        .first()
+                        .map(|origin| origin.origin.clone())
+                })
+                .ok_or_else(|| {
+                    E2eError::Config("storage-state cookie needs a domain or origin".into())
+                })?;
+            self.add_cookies(std::slice::from_ref(cookie), &url).await?;
         }
         Ok(())
     }
@@ -1176,6 +1377,9 @@ impl BrowserContext {
         if self.closed.swap(true, std::sync::atomic::Ordering::AcqRel) {
             return Ok(());
         }
+        let _ = self.events.send(ContextEvent::Closed);
+        self.cancellation
+            .cancel_with_reason("browser context closed");
         if let Some(registry) = self.registry.upgrade() {
             registry
                 .lock()

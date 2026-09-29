@@ -14,6 +14,7 @@ image = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true, features = ["cookies", "multipart"] }
 cookie = "0.18"
+cookie_store = "0.22"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }

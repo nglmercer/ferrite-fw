@@ -26,6 +26,9 @@ pub enum E2eError {
     /// Operation timed out.
     #[error("timed out after {0}ms: {1}")]
     Timeout(u64, String),
+    /// An operation was canceled by its caller or owning lifecycle.
+    #[error("operation canceled: {0}")]
+    Cancelled(String),
     /// Selector resolved to zero (or ambiguous) elements.
     #[error("locator error for `{selector}`: {message}")]
     Locator {
@@ -72,6 +75,7 @@ impl E2eError {
             Self::Cdp { .. } => "FERRITE_E2E_CDP",
             Self::Disconnected(_) => "FERRITE_E2E_DISCONNECTED",
             Self::Timeout(_, _) => "FERRITE_E2E_TIMEOUT",
+            Self::Cancelled(_) => "FERRITE_E2E_CANCELLED",
             Self::Locator { .. } => "FERRITE_E2E_LOCATOR",
             Self::Expect(_) => "FERRITE_E2E_EXPECT",
             Self::Navigation { .. } => "FERRITE_E2E_NAVIGATION",

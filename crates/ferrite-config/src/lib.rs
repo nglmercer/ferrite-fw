@@ -407,13 +407,19 @@ pub struct E2eConfig {
     pub proxy_server: Option<String>,
     /// Accept insecure TLS certificates session-wide.
     pub ignore_https_errors: bool,
-    /// Download directory (unset = browser default).
+    /// Download directory (unset = managed directory in the browser profile).
     pub download_dir: Option<String>,
     /// Base URL for relative navigations (`page.goto("/")`).
     /// Defaults to the booted dev server or `FERRITE_E2E_BASE_URL`.
     pub base_url: Option<String>,
     /// Per-test timeout in milliseconds.
     pub timeout_ms: u64,
+    /// Whole-run timeout (zero disables it).
+    pub global_timeout_ms: u64,
+    /// Stop scheduling after this many unexpected failures (zero disables it).
+    pub max_failures: usize,
+    /// Independent timeout for cleanup operations (zero disables it).
+    pub cleanup_timeout_ms: u64,
     /// Default assertion retry window in milliseconds.
     pub expect_timeout_ms: u64,
     /// Retries per test after the first attempt.
@@ -453,6 +459,9 @@ impl Default for E2eConfig {
             download_dir: None,
             base_url: None,
             timeout_ms: 30_000,
+            global_timeout_ms: 0,
+            max_failures: 0,
+            cleanup_timeout_ms: 5_000,
             expect_timeout_ms: 5_000,
             retries: 0,
             workers: 4,
@@ -732,6 +741,15 @@ fn merge_e2e(mut base: E2eConfig, over: E2eConfig) -> E2eConfig {
     }
     if over.timeout_ms != defaults.timeout_ms {
         base.timeout_ms = over.timeout_ms;
+    }
+    if over.global_timeout_ms != defaults.global_timeout_ms {
+        base.global_timeout_ms = over.global_timeout_ms;
+    }
+    if over.max_failures != defaults.max_failures {
+        base.max_failures = over.max_failures;
+    }
+    if over.cleanup_timeout_ms != defaults.cleanup_timeout_ms {
+        base.cleanup_timeout_ms = over.cleanup_timeout_ms;
     }
     if over.expect_timeout_ms != defaults.expect_timeout_ms {
         base.expect_timeout_ms = over.expect_timeout_ms;

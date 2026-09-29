@@ -54,6 +54,21 @@ struct Inner {
     next_id: AtomicU64,
 }
 
+/// Reclaims a command when its waiting future is dropped.
+struct PendingCall {
+    inner: Arc<Inner>,
+    id: u64,
+}
+impl Drop for PendingCall {
+    fn drop(&mut self) {
+        self.inner
+            .pending
+            .lock()
+            .map(|mut pending| pending.remove(&self.id))
+            .ok();
+    }
+}
+
 /// Cloneable handle to a browser-level BiDi connection.
 #[derive(Clone)]
 pub struct BidiConnection {
@@ -131,18 +146,20 @@ impl BidiConnection {
             .lock()
             .map_err(|_| E2eError::Disconnected("pending lock poisoned".to_string()))?
             .insert(id, tx);
+        let _pending = PendingCall {
+            inner: self.inner.clone(),
+            id,
+        };
         self.inner
             .tx
             .send(Outbound::Text(text))
             .map_err(|_| E2eError::Disconnected("bidi writer gone".to_string()))?;
-        let timeout_ms = timeout.as_millis().min(u128::from(u64::MAX)) as u64;
-        tokio::time::timeout(timeout, rx)
+        crate::operation::Deadline::new(timeout)
+            .run(format!("bidi {method}"), async {
+                rx.await
+                    .map_err(|_| E2eError::Disconnected(format!("bidi {method} dropped")))?
+            })
             .await
-            .map_err(|_| {
-                self.inner.pending.lock().map(|mut p| p.remove(&id)).ok();
-                E2eError::Timeout(timeout_ms, format!("bidi {method}"))
-            })?
-            .map_err(|_| E2eError::Disconnected(format!("bidi {method} dropped")))?
     }
 
     /// Close the underlying socket.
@@ -268,6 +285,33 @@ pub fn bytes_to_string(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn zero_timeout_waits_for_reply_and_cancellation_reclaims_pending_call() {
+        let (events, _) = broadcast::channel(4);
+        let (tx, mut outgoing) = mpsc::unbounded_channel();
+        let inner = Arc::new(Inner {
+            tx,
+            pending: Mutex::new(HashMap::new()),
+            events,
+            next_id: AtomicU64::new(1),
+        });
+        let connection = BidiConnection {
+            inner: inner.clone(),
+        };
+        let token = crate::CancellationToken::new();
+        let (result, ()) = tokio::join!(
+            token.run(connection.call("test", Value::Null, Duration::ZERO)),
+            async {
+                outgoing.recv().await.unwrap();
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                assert_eq!(inner.pending.lock().unwrap().len(), 1);
+                token.cancel();
+            }
+        );
+        assert!(matches!(result, Err(E2eError::Cancelled(_))));
+        assert!(inner.pending.lock().unwrap().is_empty());
+    }
+
     use serde_json::json;
 
     #[test]

@@ -921,6 +921,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "cookie",
+ "cookie_store",
  "ferrite-config",
  "ferrite-core",
  "futures",

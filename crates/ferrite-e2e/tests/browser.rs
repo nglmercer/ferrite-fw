@@ -2114,6 +2114,7 @@ async fn strict_cookies_device_clock_screenshot() {
             path: Some("/".to_string()),
             http_only: true,
             secure: false,
+            same_site: None,
             expires: Some(fresh),
         }])
         .await
@@ -2930,6 +2931,7 @@ async fn context_rules_apply_to_pages() {
                     path: Some("/".to_string()),
                     http_only: false,
                     secure: false,
+                    same_site: None,
                     expires: None,
                 }],
                 &base,

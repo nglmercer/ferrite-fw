@@ -38,11 +38,13 @@
 //! ```
 
 mod api;
+mod api_cookies;
 mod bidi;
 mod browser;
 mod cdp;
 mod config;
 mod context;
+mod context_cookies;
 mod coverage;
 mod driver;
 mod error;
@@ -51,6 +53,7 @@ mod frame_locator;
 mod har;
 mod jshandle;
 mod locator;
+mod operation;
 mod page;
 mod report;
 mod runner;
@@ -63,7 +66,10 @@ pub use bidi::BidiConnection;
 pub use browser::{find_chromium, find_firefox, Browser, BrowserKind, LaunchOptions};
 pub use cdp::CdpConnection;
 pub use config::config_from_env;
-pub use context::{BrowserContext, ContextOptions, ServiceWorkerMode, TracingOptions};
+pub use context::{
+    BrowserContext, ContextEvent, ContextEventKind, ContextOptions, ServiceWorkerMode,
+    TracingOptions,
+};
 pub use coverage::{Coverage, CoverageFunction, CoverageRange, CssCoverageEntry, JsCoverageEntry};
 pub use driver::FrameStream;
 pub use error::{E2eError, E2eResult};
@@ -75,6 +81,7 @@ pub use locator::{
     set_test_id_attribute, test_id_attribute, FilterOptions, GetByRoleOptions, Locator,
     LocatorOptions, SelectOption, Selector, WaitForState,
 };
+pub use operation::{CancellationToken, OperationOptions};
 pub use page::{
     AbortReason, ClickOptions, ColorScheme, ConsoleMessage, Cookie, DeviceDescriptor,
     DialogDecision, DialogInfo, Download, ElementRect, ElementState, Frame, HttpCredentials,

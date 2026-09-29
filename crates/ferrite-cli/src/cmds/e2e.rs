@@ -107,6 +107,15 @@ fn apply_flag_overrides(e2e: &mut ferrite::config::E2eConfig, args: &E2eArgs) {
     if let Some(retries) = args.retries {
         e2e.retries = retries;
     }
+    if let Some(value) = args.global_timeout {
+        e2e.global_timeout_ms = value;
+    }
+    if let Some(value) = args.max_failures {
+        e2e.max_failures = value;
+    }
+    if let Some(value) = args.cleanup_timeout {
+        e2e.cleanup_timeout_ms = value;
+    }
     if let Some(workers) = args.workers {
         e2e.workers = workers;
     }
@@ -323,6 +332,29 @@ fn test_command(root: &Path, explicit: &[String]) -> ferrite::Result<Vec<String>
 mod tests {
     use super::*;
 
+    #[test]
+    fn runner_limit_flags_override_config() {
+        use clap::Parser;
+        let crate::cli::Command::E2e(args) = crate::cli::Cli::parse_from([
+            "ferrite",
+            "e2e",
+            "--global-timeout",
+            "900",
+            "--max-failures",
+            "2",
+            "--cleanup-timeout",
+            "70",
+        ])
+        .command
+        else {
+            panic!("e2e args")
+        };
+        let mut config = ferrite::config::E2eConfig::default();
+        apply_flag_overrides(&mut config, &args);
+        assert_eq!(config.global_timeout_ms, 900);
+        assert_eq!(config.max_failures, 2);
+        assert_eq!(config.cleanup_timeout_ms, 70);
+    }
     #[test]
     fn port_parses() {
         assert_eq!(url_port("http://127.0.0.1:5190/"), Some(5190));

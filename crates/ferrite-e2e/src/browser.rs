@@ -77,7 +77,8 @@ pub struct LaunchOptions {
     pub proxy_server: Option<String>,
     /// Accept insecure TLS certificates session-wide.
     pub ignore_https_errors: bool,
-    /// Download directory (Chromium pref / Firefox profile pref).
+    /// Download directory (Chromium/Firefox profile prefs); defaults to a
+    /// managed downloads directory inside the browser profile.
     pub download_dir: Option<PathBuf>,
 }
 
@@ -330,6 +331,7 @@ pub struct Browser {
     contexts: Arc<Mutex<Vec<BrowserContext>>>,
     default: OnceLock<BrowserContext>,
     launch_download_dir: Option<PathBuf>,
+    ignore_https_errors: bool,
 }
 
 impl Browser {
@@ -357,6 +359,7 @@ impl Browser {
             contexts: Arc::clone(&self.contexts),
             default: OnceLock::new(),
             launch_download_dir: self.launch_download_dir.clone(),
+            ignore_https_errors: self.ignore_https_errors,
         }
     }
 
@@ -368,7 +371,7 @@ impl Browser {
         }
     }
 
-    async fn launch_chromium(options: LaunchOptions) -> E2eResult<Self> {
+    async fn launch_chromium(mut options: LaunchOptions) -> E2eResult<Self> {
         let executable = options
             .executable_path
             .clone()
@@ -382,6 +385,9 @@ impl Browser {
             })?;
         let debug_port = free_port()?;
         let (mut profile, profile_path) = create_profile(&options)?;
+        if options.download_dir.is_none() {
+            options.download_dir = Some(profile_path.join("downloads"));
+        }
         if let Some(dir) = &options.download_dir {
             write_chromium_download_pref(profile_path.as_path(), dir)?;
         }
@@ -484,12 +490,13 @@ impl Browser {
             contexts: Arc::new(Mutex::new(Vec::new())),
             default: OnceLock::new(),
             launch_download_dir: options.download_dir.clone(),
+            ignore_https_errors: options.ignore_https_errors,
         };
         browser.spawn_popup_pump();
         Ok(browser)
     }
 
-    async fn launch_firefox(options: LaunchOptions) -> E2eResult<Self> {
+    async fn launch_firefox(mut options: LaunchOptions) -> E2eResult<Self> {
         let executable = options
             .executable_path
             .clone()
@@ -503,6 +510,9 @@ impl Browser {
             })?;
         let debug_port = free_port()?;
         let (mut profile, profile_path) = create_profile(&options)?;
+        if options.download_dir.is_none() {
+            options.download_dir = Some(profile_path.join("downloads"));
+        }
         write_firefox_prefs(
             profile_path.as_path(),
             options.user_agent.as_deref(),
@@ -613,6 +623,9 @@ impl Browser {
             options.timeout,
         )
         .await?;
+        // Newer BiDi engines expose scoped download lifecycle events. Older
+        // engines keep the existing explicit filesystem download waits.
+        let _=bidi.call("session.subscribe",serde_json::json!({"events":["browsingContext.downloadWillBegin","browsingContext.downloadEnd"]}),options.timeout).await;
         tracing::info!(%product, "firefox launched");
         let browser = Self {
             child: Some(child),
@@ -638,6 +651,7 @@ impl Browser {
             contexts: Arc::new(Mutex::new(Vec::new())),
             default: OnceLock::new(),
             launch_download_dir: options.download_dir.clone(),
+            ignore_https_errors: options.ignore_https_errors,
         };
         browser.spawn_popup_pump();
         Ok(browser)
@@ -689,6 +703,7 @@ impl Browser {
             contexts: Arc::new(Mutex::new(Vec::new())),
             default: OnceLock::new(),
             launch_download_dir: None,
+            ignore_https_errors: false,
         };
         browser.spawn_popup_pump();
         Ok(browser)
@@ -921,7 +936,7 @@ impl Browser {
     }
 
     /// Create an isolated browser context (incognito-equivalent).
-    pub async fn new_context(&self, options: ContextOptions) -> E2eResult<BrowserContext> {
+    pub async fn new_context(&self, mut options: ContextOptions) -> E2eResult<BrowserContext> {
         // Stock engines apply proxies browser-wide at launch; a context that
         // asks for a different proxy fails loudly instead of lying.
         if options.proxy_server.is_some() && options.proxy_server != self.proxy_server {
@@ -932,6 +947,8 @@ impl Browser {
                     .to_string(),
             ));
         }
+        options.proxy_server = options.proxy_server.or_else(|| self.proxy_server.clone());
+        options.ignore_https_errors |= self.ignore_https_errors;
         let id = match &self.backend {
             Backend::Cdp(cdp) => {
                 let result = cdp
@@ -998,7 +1015,11 @@ impl Browser {
                 let context = BrowserContext::new(
                     self.backend.clone(),
                     None,
-                    ContextOptions::default(),
+                    ContextOptions {
+                        proxy_server: self.proxy_server.clone(),
+                        ignore_https_errors: self.ignore_https_errors,
+                        ..ContextOptions::default()
+                    },
                     self.slow_mo,
                     self.timeout,
                     self.base_url.clone(),
@@ -1051,6 +1072,9 @@ impl Browser {
     /// Close the browser (ends the BiDi session, kills the child when this
     /// instance launched it).
     pub async fn close(mut self) -> E2eResult<()> {
+        for context in self.contexts() {
+            let _ = tokio::time::timeout(Duration::from_secs(5), context.close()).await;
+        }
         // Graceful shutdown flushes persistent cookies and storage to disk.
         if self.child.is_some() {
             match &self.backend {

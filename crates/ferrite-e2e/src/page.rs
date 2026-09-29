@@ -327,6 +327,9 @@ pub struct Cookie {
     /// Secure flag.
     #[serde(default)]
     pub secure: bool,
+    /// SameSite policy (`Strict`, `Lax`, or `None`).
+    #[serde(default, rename = "sameSite", skip_serializing_if = "Option::is_none")]
+    pub same_site: Option<String>,
     /// Expiry as epoch seconds (`None`/negative = session cookie).
     #[serde(default, deserialize_with = "de_cookie_expires")]
     pub expires: Option<i64>,
@@ -402,6 +405,51 @@ impl std::fmt::Debug for Frame {
 }
 
 impl Frame {
+    /// The top-level page owning this frame.
+    pub fn page(&self) -> Page {
+        self.page.owning_page()
+    }
+
+    /// Replace only this frame's document.
+    pub async fn set_content(&self, html: &str) -> E2eResult<()> {
+        self.scoped_page().set_content(html).await
+    }
+
+    pub async fn wait_for_function(&self, expression: &str, timeout: Duration) -> E2eResult<()> {
+        self.scoped_page()
+            .wait_for_function(expression, timeout)
+            .await
+    }
+
+    pub async fn wait_for_function_with_options(
+        &self,
+        expression: &str,
+        options: crate::OperationOptions,
+    ) -> E2eResult<()> {
+        self.scoped_page()
+            .wait_for_function_with_options(expression, options)
+            .await
+    }
+
+    /// Read the current URL, including navigations after this handle was created.
+    pub async fn current_url(&self) -> E2eResult<String> {
+        self.scoped_page().url().await
+    }
+
+    pub async fn wait_for_url(&self, fragment: &str, timeout: Duration) -> E2eResult<()> {
+        self.scoped_page().wait_for_url(fragment, timeout).await
+    }
+
+    pub async fn wait_for_load_state(&self, state: LoadState) -> E2eResult<()> {
+        self.scoped_page().wait_for_load_state(state).await
+    }
+
+    pub async fn wait_for_selector(&self, selector: &str, timeout: Duration) -> E2eResult<Locator> {
+        self.scoped_page()
+            .wait_for_selector(selector, timeout)
+            .await
+    }
+
     /// Frame name (empty on Firefox).
     #[must_use]
     pub fn name(&self) -> &str {
@@ -1411,7 +1459,7 @@ enum CaptureState {
 impl Page {
     #[allow(clippy::too_many_arguments)] // Internal constructor; called from one context site.
     pub(crate) fn new(
-        driver: Driver,
+        mut driver: Driver,
         sink: ConsoleSink,
         slow_mo: Duration,
         base_url: Option<String>,
@@ -1420,7 +1468,9 @@ impl Page {
         context_handlers: Arc<Mutex<Vec<RouteHandlerEntry>>>,
         tracing: Arc<Mutex<Option<TracingState>>>,
     ) -> Self {
-        let action_timeout = driver.timeout();
+        let action_timeout = Arc::new(Mutex::new(driver.timeout()));
+        driver.share_timeout(action_timeout.clone());
+        let download_dir = sink.download_dir.clone();
         Self {
             driver,
             coverage_state: Arc::new(tokio::sync::Mutex::new(Default::default())),
@@ -1437,7 +1487,7 @@ impl Page {
             expect_timeout: Arc::new(Mutex::new(Duration::from_millis(
                 crate::expect::DEFAULT_EXPECT_MS,
             ))),
-            action_timeout: Arc::new(Mutex::new(action_timeout)),
+            action_timeout,
             navigation_timeout: Arc::new(Mutex::new(None)),
             snapshot_dir: None,
             pending_grants: Arc::new(Mutex::new(Vec::new())),
@@ -1453,7 +1503,7 @@ impl Page {
             frame_id: None,
             lazy_frames: Vec::new(),
             download_consumed: Arc::new(Mutex::new(HashMap::new())),
-            download_dir: Arc::new(Mutex::new(None)),
+            download_dir,
             tracing,
             closed: Arc::new(Mutex::new(false)),
             opener_target: Arc::new(Mutex::new(None)),
@@ -1473,6 +1523,74 @@ impl Page {
         page.frame_id = None;
         page.lazy_frames.clear();
         page
+    }
+
+    pub(crate) fn sync_protocol_timeout(&mut self) {
+        self.driver.share_timeout(self.action_timeout.clone());
+    }
+
+    /// Scope cancellation to this clone and locators/assertions created from it.
+    pub fn with_cancellation(&self, token: crate::CancellationToken) -> Self {
+        let mut page = self.clone();
+        page.driver = page.driver.with_cancellation(token);
+        page
+    }
+
+    pub(crate) fn run_operation<'a, T: 'a>(
+        &'a self,
+        future: impl std::future::Future<Output = E2eResult<T>> + 'a,
+    ) -> impl std::future::Future<Output = E2eResult<T>> + 'a {
+        self.driver.run(future)
+    }
+    /// Override action/protocol timeouts for this clone without changing siblings.
+    /// Zero disables the timeout.
+    pub fn with_timeout(&self, timeout: Duration) -> Self {
+        let mut page = self.clone();
+        page.action_timeout = Arc::new(Mutex::new(timeout));
+        page.driver.share_timeout(page.action_timeout.clone());
+        page
+    }
+
+    fn operation_page(&self, options: &crate::OperationOptions) -> Self {
+        let mut page = options
+            .timeout
+            .map(|timeout| self.with_timeout(timeout))
+            .unwrap_or_else(|| self.clone());
+        if let Some(token) = &options.cancellation {
+            page = page.with_cancellation(token.clone());
+        }
+        page
+    }
+
+    pub async fn evaluate_with_options<T: serde::de::DeserializeOwned>(
+        &self,
+        expression: &str,
+        options: crate::OperationOptions,
+    ) -> E2eResult<T> {
+        self.operation_page(&options).evaluate(expression).await
+    }
+
+    pub async fn wait_for_function_with_options(
+        &self,
+        expression: &str,
+        options: crate::OperationOptions,
+    ) -> E2eResult<()> {
+        self.operation_page(&options)
+            .wait_for_function(
+                expression,
+                options.timeout.unwrap_or_else(|| self.timeout()),
+            )
+            .await
+    }
+
+    pub async fn wait_for_event_with_options(
+        &self,
+        kind: PageEventKind,
+        options: crate::OperationOptions,
+    ) -> E2eResult<PageEvent> {
+        self.operation_page(&options)
+            .wait_for_event(kind, options.timeout.unwrap_or_else(|| self.timeout()))
+            .await
     }
 
     /// Lazily locate an iframe. Nested same-origin frames and frame replacements
@@ -1586,55 +1704,76 @@ impl Page {
         kind: PageEventKind,
         timeout: Duration,
     ) -> E2eResult<PageEvent> {
-        if kind == PageEventKind::WebSocket && matches!(self.driver, Driver::Bidi(_)) {
-            return Err(E2eError::Config(
-                "websocket events are not supported on Firefox \
+        // A close event must be delivered even though it cancels page operations.
+        if kind == PageEventKind::Closed {
+            if self.is_closed() {
+                return Ok(PageEvent::Closed);
+            }
+            let mut events = self.subscribe();
+            return self
+                .driver
+                .run_close_wait(crate::operation::Deadline::new(timeout).run(
+                    "wait for page closed",
+                    async {
+                        loop {
+                            match events.recv().await {
+                                Ok(PageEvent::Closed) => return Ok(PageEvent::Closed),
+                                Ok(_)
+                                | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                    return Err(E2eError::Disconnected(
+                                        "page event stream closed".into(),
+                                    ))
+                                }
+                            }
+                        }
+                    },
+                ))
+                .await;
+        }
+        self.driver
+            .run(async {
+                if kind == PageEventKind::WebSocket && matches!(self.driver, Driver::Bidi(_)) {
+                    return Err(E2eError::Config(
+                        "websocket events are not supported on Firefox \
                  (BiDi has no socket-frame events)"
-                    .to_string(),
-            ));
-        }
-        if kind == PageEventKind::Download {
-            let dir = self
-                .download_dir
-                .lock()
-                .map(|dir| dir.clone())
-                .unwrap_or(None)
-                .ok_or_else(|| {
-                    E2eError::Config(
-                        "download events need a download dir (call set_download_dir first)"
                             .to_string(),
-                    )
-                })?;
-            let path = self.wait_for_download_in(&dir, timeout).await?;
-            return Ok(PageEvent::Download(path));
-        }
-        let mut events = self.subscribe();
-        let deadline = tokio::time::Instant::now() + timeout;
-        loop {
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() {
-                return Err(E2eError::Timeout(
-                    timeout.as_millis().min(u128::from(u64::MAX)) as u64,
-                    format!("wait for {kind:?} event"),
-                ));
-            }
-            match tokio::time::timeout(remaining, events.recv()).await {
-                Ok(Ok(event)) if event.kind() == kind => return Ok(event),
-                Ok(Ok(_)) | Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {}
-                Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
-                    return Err(E2eError::Timeout(
-                        timeout.as_millis().min(u128::from(u64::MAX)) as u64,
-                        format!("wait for {kind:?} event (bus closed)"),
                     ));
                 }
-                Err(_) => {
-                    return Err(E2eError::Timeout(
-                        timeout.as_millis().min(u128::from(u64::MAX)) as u64,
-                        format!("wait for {kind:?} event"),
-                    ));
+                if kind == PageEventKind::Download {
+                    let dir = self
+                        .download_dir
+                        .lock()
+                        .map(|dir| dir.clone())
+                        .unwrap_or(None)
+                        .ok_or_else(|| {
+                            E2eError::Config(
+                                "download events need a download dir (call set_download_dir first)"
+                                    .to_string(),
+                            )
+                        })?;
+                    let path = self.wait_for_download_in(&dir, timeout).await?;
+                    return Ok(PageEvent::Download(path));
                 }
-            }
-        }
+                let mut events = self.subscribe();
+                crate::operation::Deadline::new(timeout)
+                    .run(format!("wait for {kind:?} event"), async {
+                        loop {
+                            match events.recv().await {
+                                Ok(event) if event.kind() == kind => return Ok(event),
+                                Ok(_)
+                                | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                    return Err(E2eError::Disconnected(
+                                        "page event stream closed".into(),
+                                    ))
+                                }
+                            }
+                        }
+                    })
+                    .await
+            })
+            .await
     }
 
     /// Push an event to this page's subscribers.
@@ -1644,8 +1783,13 @@ impl Page {
 
     /// Mark the page closed and emit [`PageEvent::Closed`] once.
     pub(crate) fn mark_closed(&self) {
-        *self.closed.lock().unwrap_or_else(|e| e.into_inner()) = true;
+        let mut closed = self.closed.lock().unwrap_or_else(|e| e.into_inner());
+        if *closed {
+            return;
+        }
+        *closed = true;
         self.emit(PageEvent::Closed);
+        self.driver.cancel_lifecycle();
     }
 
     /// Whether the page was closed (explicitly or by the browser).
@@ -1656,9 +1800,13 @@ impl Page {
 
     /// Wait until `selector` matches, then return the [`Locator`].
     pub async fn wait_for_selector(&self, selector: &str, timeout: Duration) -> E2eResult<Locator> {
-        let locator = self.locator(selector.to_string());
-        locator.wait_for(timeout).await?;
-        Ok(locator)
+        self.driver
+            .run(async {
+                let locator = self.locator(selector.to_string());
+                locator.wait_for(timeout).await?;
+                Ok(locator)
+            })
+            .await
     }
 
     /// Wait until `selector` reaches `state`, returning the locator.
@@ -1668,17 +1816,25 @@ impl Page {
         state: crate::locator::WaitForState,
         timeout: Duration,
     ) -> E2eResult<Locator> {
-        let locator = self.locator(selector.to_string());
-        locator.wait_for_state(state, timeout).await?;
-        Ok(locator)
+        self.driver
+            .run(async {
+                let locator = self.locator(selector.to_string());
+                locator.wait_for_state(state, timeout).await?;
+                Ok(locator)
+            })
+            .await
     }
 
     /// Wait for a popup opened from this page (already adopted and usable).
     pub async fn wait_for_popup(&self, timeout: Duration) -> E2eResult<Page> {
-        match self.wait_for_event(PageEventKind::Popup, timeout).await? {
-            PageEvent::Popup(page) => Ok(*page),
-            _ => unreachable!("filtered by kind"),
-        }
+        self.driver
+            .run(async {
+                match self.wait_for_event(PageEventKind::Popup, timeout).await? {
+                    PageEvent::Popup(page) => Ok(*page),
+                    _ => unreachable!("filtered by kind"),
+                }
+            })
+            .await
     }
 
     /// The page that opened this popup (`None` for tabs and closed openers).
@@ -1715,14 +1871,23 @@ impl Page {
     /// Auto-handling is armed with `accept` when it is not already running,
     /// so the dialog is both observed and answered.
     pub async fn wait_for_dialog(&self, accept: bool, timeout: Duration) -> E2eResult<DialogInfo> {
-        let armed = self.dialogs.lock().map(|d| d.is_some()).unwrap_or(false);
-        if !armed {
-            self.handle_dialogs(accept).await?;
-        }
-        match self.wait_for_event(PageEventKind::Dialog, timeout).await? {
-            PageEvent::Dialog(info) => Ok(info),
-            _ => unreachable!("filtered by kind"),
-        }
+        let scoped = self.with_timeout(timeout);
+        scoped
+            .driver
+            .run(async {
+                let armed = scoped.dialogs.lock().map(|d| d.is_some()).unwrap_or(false);
+                if !armed {
+                    scoped.handle_dialogs(accept).await?;
+                }
+                match scoped
+                    .wait_for_event(PageEventKind::Dialog, timeout)
+                    .await?
+                {
+                    PageEvent::Dialog(info) => Ok(info),
+                    _ => unreachable!("filtered by kind"),
+                }
+            })
+            .await
     }
 
     /// Default timeout for protocol calls.
@@ -1761,7 +1926,9 @@ impl Page {
     /// Raw protocol call with the page timeout (CDP method on Chromium,
     /// BiDi method with context injected on Firefox).
     pub async fn call(&self, method: &str, params: Value) -> E2eResult<Value> {
-        self.driver.raw(method, params, self.timeout()).await
+        self.driver
+            .run(async { self.driver.raw(method, params, self.timeout()).await })
+            .await
     }
 
     /// Raw protocol call with an explicit timeout.
@@ -1771,7 +1938,9 @@ impl Page {
         params: Value,
         timeout: Duration,
     ) -> E2eResult<Value> {
-        self.driver.raw(method, params, timeout).await
+        self.driver
+            .run(async { self.driver.raw(method, params, timeout).await })
+            .await
     }
 
     async fn slow_mo(&self) {
@@ -1833,27 +2002,35 @@ impl Page {
 
     /// Navigate to a URL and wait for the load state.
     pub async fn goto(&self, url: &str) -> E2eResult<()> {
-        self.goto_with_options(url, NavigationOptions::default())
+        self.driver
+            .run(async {
+                self.goto_with_options(url, NavigationOptions::default())
+                    .await
+            })
             .await
     }
 
     /// Navigate with explicit options.
     pub async fn goto_with_options(&self, url: &str, options: NavigationOptions) -> E2eResult<()> {
-        let url = self.resolve_url(url)?;
-        let timeout = options.timeout.unwrap_or_else(|| self.navigation_timeout());
         self.driver
-            .navigate(&url, options.wait_until, timeout)
+            .run(async {
+                let url = self.resolve_url(url)?;
+                let timeout = options.timeout.unwrap_or_else(|| self.navigation_timeout());
+                self.driver
+                    .navigate(&url, options.wait_until, timeout)
+                    .await
+                    .map_err(|error| match error {
+                        E2eError::Navigation { .. } => error,
+                        other => E2eError::Navigation {
+                            url: url.clone(),
+                            message: other.to_string(),
+                        },
+                    })?;
+                self.slow_mo().await;
+                self.apply_pending_grants(&url).await?;
+                Ok(())
+            })
             .await
-            .map_err(|error| match error {
-                E2eError::Navigation { .. } => error,
-                other => E2eError::Navigation {
-                    url: url.clone(),
-                    message: other.to_string(),
-                },
-            })?;
-        self.slow_mo().await;
-        self.apply_pending_grants(&url).await?;
-        Ok(())
     }
 
     /// Queue context grants until the first http(s) navigation (Firefox).
@@ -1883,6 +2060,8 @@ impl Page {
 
     /// Restore cookies before the first request and localStorage before app scripts.
     pub(crate) async fn apply_storage_state(&self, state: &StorageState) -> E2eResult<()> {
+        self.driver.run(async {
+
         let origins = state.all_origins();
         for cookie in &state.cookies {
             let url = cookie
@@ -1908,47 +2087,75 @@ impl Page {
         self.add_init_script(&script).await?;
         self.evaluate_value(&script).await?;
         Ok(())
+        }).await
     }
 
     /// Reload the page.
     pub async fn reload(&self) -> E2eResult<()> {
-        self.driver.reload().await
+        self.driver.run(async { self.driver.reload().await }).await
     }
 
     /// Go back in history.
     pub async fn go_back(&self) -> E2eResult<()> {
-        self.driver.traverse(-1).await
+        self.driver
+            .run(async { self.driver.traverse(-1).await })
+            .await
     }
 
     /// Go forward in history.
     pub async fn go_forward(&self) -> E2eResult<()> {
-        self.driver.traverse(1).await
+        self.driver
+            .run(async { self.driver.traverse(1).await })
+            .await
     }
 
     /// Current page title.
     pub async fn title(&self) -> E2eResult<String> {
-        self.evaluate_string("document.title").await
+        self.driver
+            .run(async { self.evaluate_string("document.title").await })
+            .await
     }
 
     /// Current page URL.
     pub async fn url(&self) -> E2eResult<String> {
-        self.evaluate_string("location.href").await
+        self.driver
+            .run(async { self.evaluate_string("location.href").await })
+            .await
     }
 
     /// Full HTML content.
     pub async fn content(&self) -> E2eResult<String> {
-        self.evaluate_string("document.documentElement.outerHTML")
+        self.driver
+            .run(async {
+                self.evaluate_string("document.documentElement.outerHTML")
+                    .await
+            })
             .await
     }
 
     /// Set the document HTML.
     pub async fn set_content(&self, html: &str) -> E2eResult<()> {
-        self.driver.set_content(html).await
+        self.driver
+            .run(async {
+                if self.frame_id.is_some() || !self.lazy_frames.is_empty() {
+                    self.evaluate_value(&format!(
+                        "document.open(); document.write({}); document.close(); true",
+                        serde_json::to_string(html)?
+                    ))
+                    .await?;
+                    Ok(())
+                } else {
+                    self.driver.set_content(html).await
+                }
+            })
+            .await
     }
 
     /// Bring the page to front.
     pub async fn bring_to_front(&self) -> E2eResult<()> {
-        self.driver.bring_to_front().await
+        self.driver
+            .run(async { self.driver.bring_to_front().await })
+            .await
     }
 
     /// Evaluate a function with a JSON-serializable argument.
@@ -1957,11 +2164,15 @@ impl Page {
         function: &str,
         argument: &A,
     ) -> E2eResult<T> {
-        self.evaluate(&format!(
-            "({function})({})",
-            serde_json::to_string(argument)?
-        ))
-        .await
+        self.driver
+            .run(async {
+                self.evaluate(&format!(
+                    "({function})({})",
+                    serde_json::to_string(argument)?
+                ))
+                .await
+            })
+            .await
     }
 
     /// Evaluate JavaScript and deserialize the returned value.
@@ -1969,12 +2180,23 @@ impl Page {
     where
         T: serde::de::DeserializeOwned,
     {
-        let value = self.evaluate_value(expression).await?;
-        serde_json::from_value(value).map_err(E2eError::Json)
+        self.driver
+            .run(async {
+                let value = self.evaluate_value(expression).await?;
+                serde_json::from_value(value).map_err(E2eError::Json)
+            })
+            .await
     }
 
     /// Evaluate JavaScript and return the raw JSON value.
-    pub async fn evaluate_value(&self, expression: &str) -> E2eResult<Value> {
+    pub fn evaluate_value<'a>(
+        &'a self,
+        expression: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = E2eResult<Value>> + Send + 'a>> {
+        // An erased future keeps downstream Send proofs and async stacks small.
+        Box::pin(async move {
+            self.driver.run(async {
+
         let wrapped;
         let expression = if self.lazy_frames.is_empty() {
             expression
@@ -1993,6 +2215,8 @@ impl Page {
             Some(id) => self.driver.frame_evaluate(id, expression).await,
             None => self.driver.evaluate(expression).await,
         }
+        }).await
+        })
     }
 
     /// Evaluate JavaScript and keep the result alive as a [`JSHandle`]
@@ -2001,12 +2225,16 @@ impl Page {
     /// Frame-scoped pages are not supported: handles need the top-level
     /// execution context.
     pub async fn evaluate_handle(&self, expression: &str) -> E2eResult<JSHandle> {
-        if self.frame_id.is_some() {
-            return Err(E2eError::Config(
-                "evaluate_handle on a frame-scoped page is not supported".to_string(),
-            ));
-        }
-        self.driver.evaluate_handle(expression).await
+        self.driver
+            .run(async {
+                if self.frame_id.is_some() {
+                    return Err(E2eError::Config(
+                        "evaluate_handle on a frame-scoped page is not supported".to_string(),
+                    ));
+                }
+                self.driver.evaluate_handle(expression).await
+            })
+            .await
     }
 
     async fn evaluate_string(&self, expression: &str) -> E2eResult<String> {
@@ -2016,53 +2244,90 @@ impl Page {
 
     /// Wait until a JS expression returns truthy.
     pub async fn wait_for_function(&self, expression: &str, timeout: Duration) -> E2eResult<()> {
-        let deadline = tokio::time::Instant::now() + timeout;
-        let wrapped = format!("(async () => Boolean(await ({expression})))()");
-        loop {
-            if let Ok(value) = self.evaluate_value(&wrapped).await {
-                if value.as_bool().unwrap_or(false) {
-                    return Ok(());
-                }
-            }
-            if tokio::time::Instant::now() > deadline {
-                return Err(E2eError::Timeout(
-                    timeout.as_millis().min(u128::from(u64::MAX)) as u64,
-                    format!("wait_for_function({expression})"),
-                ));
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
+        let scoped = self.with_timeout(timeout);
+        scoped
+            .driver
+            .run(async {
+                crate::operation::Deadline::new(timeout)
+                    .run("wait_for_function", async {
+                        let deadline = crate::operation::Deadline::new(timeout);
+                        let wrapped = format!("(async () => Boolean(await ({expression})))()");
+                        loop {
+                            scoped.driver.run(async { Ok(()) }).await?;
+                            if let Ok(value) = scoped.evaluate_value(&wrapped).await {
+                                if value.as_bool().unwrap_or(false) {
+                                    return Ok(());
+                                }
+                            }
+                            if deadline.expired() {
+                                return Err(E2eError::Timeout(
+                                    timeout.as_millis().min(u128::from(u64::MAX)) as u64,
+                                    format!("wait_for_function({expression})"),
+                                ));
+                            }
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                        }
+                    })
+                    .await
+            })
+            .await
     }
 
     /// Wait a fixed amount of time.
     pub async fn wait_for_timeout(&self, duration: Duration) -> E2eResult<()> {
-        tokio::time::sleep(duration).await;
-        Ok(())
+        self.driver
+            .run(async {
+                tokio::time::sleep(duration).await;
+                Ok(())
+            })
+            .await
     }
 
     /// Wait until the URL contains `fragment`.
     pub async fn wait_for_url(&self, fragment: &str, timeout: Duration) -> E2eResult<()> {
-        let deadline = tokio::time::Instant::now() + timeout;
-        loop {
-            if let Ok(url) = self.url().await {
-                if url.contains(fragment) {
-                    return Ok(());
-                }
-            }
-            if tokio::time::Instant::now() > deadline {
-                return Err(E2eError::Timeout(
-                    timeout.as_millis().min(u128::from(u64::MAX)) as u64,
-                    format!("wait_for_url({fragment})"),
-                ));
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
+        let scoped = self.with_timeout(timeout);
+        scoped
+            .driver
+            .run(async {
+                crate::operation::Deadline::new(timeout)
+                    .run("wait_for_url", async {
+                        let deadline = crate::operation::Deadline::new(timeout);
+                        loop {
+                            if let Ok(url) = scoped.url().await {
+                                if url.contains(fragment) {
+                                    return Ok(());
+                                }
+                            }
+                            if deadline.expired() {
+                                return Err(E2eError::Timeout(
+                                    timeout.as_millis().min(u128::from(u64::MAX)) as u64,
+                                    format!("wait_for_url({fragment})"),
+                                ));
+                            }
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                        }
+                    })
+                    .await
+            })
+            .await
     }
 
     /// Wait for a document load state.
     pub async fn wait_for_load_state(&self, state: LoadState) -> E2eResult<()> {
-        let timeout = self.timeout();
-        self.driver.wait_for_load(state, timeout).await
+        self.driver
+            .run(async {
+                let timeout = self.navigation_timeout();
+                if self.frame_id.is_some() || !self.lazy_frames.is_empty() {
+                    let expression = match state {
+                        LoadState::Commit => "true",
+                        LoadState::DomContentLoaded => "document.readyState !== 'loading'",
+                        LoadState::Load => "document.readyState === 'complete'",
+                        LoadState::NetworkIdle => return Err(E2eError::Config("frame network-idle tracking is not available; use document load or an application predicate".into())),
+                    };
+                    self.wait_for_function(expression, timeout).await
+                } else { self.driver.wait_for_load(state, timeout).await }
+            })
+            .await
     }
 
     /// Build a locator for a selector.
@@ -2101,7 +2366,7 @@ impl Page {
 
     /// Locate a `<label>` by its text.
     ///
-    /// Matches the label element itself (not the labeled control).
+    /// Matches the control associated with the label.
     #[must_use]
     pub fn get_by_label(&self, text: &str) -> Locator {
         Locator::new(self.clone(), Selector::by_label(text))
@@ -2127,9 +2392,13 @@ impl Page {
 
     /// Snapshot the state of a selector (count, visibility, text, ...).
     pub async fn query_state(&self, selector: &Selector) -> E2eResult<ElementState> {
-        let expression = selector.state_expression();
-        let value = self.evaluate_value(&expression).await?;
-        serde_json::from_value(value).map_err(E2eError::Json)
+        self.driver
+            .run(async {
+                let expression = selector.state_expression();
+                let value = self.evaluate_value(&expression).await?;
+                serde_json::from_value(value).map_err(E2eError::Json)
+            })
+            .await
     }
 
     /// Register a locator handler, run before element actions while
@@ -2177,22 +2446,26 @@ impl Page {
 
     /// Run due handlers (each matching locator, within budget).
     pub(crate) async fn run_locator_handlers(&self) -> E2eResult<()> {
-        {
-            let mut running = self
-                .handlers_running
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if *running {
-                return Ok(());
-            }
-            *running = true;
-        }
-        let result = self.run_locator_handlers_inner().await;
-        *self
-            .handlers_running
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = false;
-        result
+        self.driver
+            .run(async {
+                {
+                    let mut running = self
+                        .handlers_running
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    if *running {
+                        return Ok(());
+                    }
+                    *running = true;
+                }
+                let result = self.run_locator_handlers_inner().await;
+                *self
+                    .handlers_running
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = false;
+                result
+            })
+            .await
     }
 
     /// Handler pass: match, invoke, count hits.
@@ -2231,76 +2504,90 @@ impl Page {
         action: &str,
         argument: Option<&str>,
     ) -> E2eResult<Value> {
-        let deadline = tokio::time::Instant::now() + self.timeout();
-        let value = loop {
-            self.run_locator_handlers().await?;
-            let state = self.query_state(selector).await?;
-            if selector.is_strict() && state.count > 1 {
-                return Err(E2eError::Locator {
-                    selector: selector.raw().into(),
-                    message: "strict mode violation: multiple elements match".into(),
-                });
-            }
-            let needs_visible = matches!(
-                action,
-                "fill" | "clear" | "check" | "select" | "select_many"
-            );
-            let needs_editable = matches!(action, "fill" | "clear");
-            if state.count > 0
-                && (!needs_visible || (state.visible && state.enabled))
-                && (!needs_editable || state.editable)
-            {
-                let expression = selector.action_expression(action, argument);
-                let value = self.evaluate_value(&expression).await?;
-                if value.get("ok").and_then(Value::as_bool) != Some(false) {
-                    break value;
-                }
-                let message = value
-                    .get("error")
-                    .and_then(Value::as_str)
-                    .unwrap_or("action failed");
-                if message != "option not found" {
-                    return Err(E2eError::Locator {
-                        selector: selector.raw().into(),
-                        message: message.into(),
-                    });
-                }
-            }
-            if !self.timeout().is_zero() && tokio::time::Instant::now() > deadline {
-                return Err(E2eError::Timeout(
-                    self.timeout().as_millis() as u64,
-                    format!("{action} {}: element not ready", selector.raw()),
-                ));
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        };
-        self.sink
-            .record("action", format!("{action} {}", selector.raw()));
-        self.slow_mo().await;
-        Ok(value)
+        self.driver
+            .run(async {
+                let deadline = crate::operation::Deadline::new(self.timeout());
+                let value = loop {
+                    self.run_locator_handlers().await?;
+                    let state = self.query_state(selector).await?;
+                    if selector.is_strict() && state.count > 1 {
+                        return Err(E2eError::Locator {
+                            selector: selector.raw().into(),
+                            message: "strict mode violation: multiple elements match".into(),
+                        });
+                    }
+                    let needs_visible = matches!(
+                        action,
+                        "fill" | "clear" | "check" | "select" | "select_many"
+                    );
+                    let needs_editable = matches!(action, "fill" | "clear");
+                    if state.count > 0
+                        && (!needs_visible || (state.visible && state.enabled))
+                        && (!needs_editable || state.editable)
+                    {
+                        let expression = selector.action_expression(action, argument);
+                        let value = self.evaluate_value(&expression).await?;
+                        if value.get("ok").and_then(Value::as_bool) != Some(false) {
+                            break value;
+                        }
+                        let message = value
+                            .get("error")
+                            .and_then(Value::as_str)
+                            .unwrap_or("action failed");
+                        if message != "option not found" {
+                            return Err(E2eError::Locator {
+                                selector: selector.raw().into(),
+                                message: message.into(),
+                            });
+                        }
+                    }
+                    if !self.timeout().is_zero() && deadline.expired() {
+                        return Err(E2eError::Timeout(
+                            self.timeout().as_millis() as u64,
+                            format!("{action} {}: element not ready", selector.raw()),
+                        ));
+                    }
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                };
+                self.sink
+                    .record("action", format!("{action} {}", selector.raw()));
+                self.slow_mo().await;
+                Ok(value)
+            })
+            .await
     }
 
     /// Current viewport size in CSS pixels.
     pub async fn viewport_size(&self) -> E2eResult<Viewport> {
-        let value = self
-            .evaluate_value("({ w: window.innerWidth, h: window.innerHeight })")
-            .await?;
-        Ok(Viewport {
-            width: value["w"].as_u64().unwrap_or(0) as u32,
-            height: value["h"].as_u64().unwrap_or(0) as u32,
-        })
+        self.driver
+            .run(async {
+                let value = self
+                    .evaluate_value("({ w: window.innerWidth, h: window.innerHeight })")
+                    .await?;
+                Ok(Viewport {
+                    width: value["w"].as_u64().unwrap_or(0) as u32,
+                    height: value["h"].as_u64().unwrap_or(0) as u32,
+                })
+            })
+            .await
     }
 
     /// Request a garbage collection (Chromium only; BiDi fails loudly).
     pub async fn request_gc(&self) -> E2eResult<()> {
-        self.driver.request_gc().await
+        self.driver
+            .run(async { self.driver.request_gc().await })
+            .await
     }
 
     /// Trusted mouse click at CSS-pixel coordinates.
     pub async fn mouse_click(&self, x: f64, y: f64, click_count: u32) -> E2eResult<()> {
-        self.driver.mouse_click(x, y, click_count).await?;
-        self.slow_mo().await;
-        Ok(())
+        self.driver
+            .run(async {
+                self.driver.mouse_click(x, y, click_count).await?;
+                self.slow_mo().await;
+                Ok(())
+            })
+            .await
     }
 
     /// Trusted mouse click with button/count/delay options.
@@ -2310,37 +2597,57 @@ impl Page {
         y: f64,
         options: MouseClickOptions,
     ) -> E2eResult<()> {
-        self.driver.mouse_click_with(x, y, &options).await?;
-        self.slow_mo().await;
-        Ok(())
+        self.driver
+            .run(async {
+                self.driver.mouse_click_with(x, y, &options).await?;
+                self.slow_mo().await;
+                Ok(())
+            })
+            .await
     }
 
     /// Move the mouse to CSS-pixel coordinates.
     pub async fn mouse_move(&self, x: f64, y: f64) -> E2eResult<()> {
-        self.driver.mouse_move(x, y).await?;
-        self.slow_mo().await;
-        Ok(())
+        self.driver
+            .run(async {
+                self.driver.mouse_move(x, y).await?;
+                self.slow_mo().await;
+                Ok(())
+            })
+            .await
     }
 
     /// Insert text at the focused element (trusted input).
     pub async fn insert_text(&self, text: &str) -> E2eResult<()> {
-        self.driver.insert_text(text).await?;
-        self.slow_mo().await;
-        Ok(())
+        self.driver
+            .run(async {
+                self.driver.insert_text(text).await?;
+                self.slow_mo().await;
+                Ok(())
+            })
+            .await
     }
 
     /// Dispatch a key press (name like `Enter` or a single char).
     pub async fn press_key(&self, key: &str) -> E2eResult<()> {
-        self.driver.press_key(key).await?;
-        self.slow_mo().await;
-        Ok(())
+        self.driver
+            .run(async {
+                self.driver.press_key(key).await?;
+                self.slow_mo().await;
+                Ok(())
+            })
+            .await
     }
 
     /// Dispatch a key press with down/up delay.
     pub async fn press_key_with(&self, key: &str, options: KeyPressOptions) -> E2eResult<()> {
-        self.driver.press_key_with(key, &options).await?;
-        self.slow_mo().await;
-        Ok(())
+        self.driver
+            .run(async {
+                self.driver.press_key_with(key, &options).await?;
+                self.slow_mo().await;
+                Ok(())
+            })
+            .await
     }
 
     /// Press the left mouse button at CSS-pixel coordinates.
@@ -2349,51 +2656,79 @@ impl Page {
     /// state resets after each action sequence), so build drags with
     /// [`Page::mouse_drag`], not manual down/move/up sequences.
     pub async fn mouse_down(&self, x: f64, y: f64) -> E2eResult<()> {
-        self.driver.mouse_down(x, y).await?;
-        self.slow_mo().await;
-        Ok(())
+        self.driver
+            .run(async {
+                self.driver.mouse_down(x, y).await?;
+                self.slow_mo().await;
+                Ok(())
+            })
+            .await
     }
 
     /// Release the left mouse button at CSS-pixel coordinates.
     pub async fn mouse_up(&self, x: f64, y: f64) -> E2eResult<()> {
-        self.driver.mouse_up(x, y).await?;
-        self.slow_mo().await;
-        Ok(())
+        self.driver
+            .run(async {
+                self.driver.mouse_up(x, y).await?;
+                self.slow_mo().await;
+                Ok(())
+            })
+            .await
     }
 
     /// Drag from one CSS-pixel point to another in `steps` paced moves.
     pub async fn mouse_drag(&self, from: (f64, f64), to: (f64, f64), steps: u32) -> E2eResult<()> {
-        self.driver.mouse_drag(from, to, steps).await?;
-        self.slow_mo().await;
-        Ok(())
+        self.driver
+            .run(async {
+                self.driver.mouse_drag(from, to, steps).await?;
+                self.slow_mo().await;
+                Ok(())
+            })
+            .await
     }
 
     /// Scroll a wheel at CSS-pixel coordinates by (`delta_x`, `delta_y`).
     pub async fn mouse_wheel(&self, x: f64, y: f64, delta_x: f64, delta_y: f64) -> E2eResult<()> {
-        self.driver.mouse_wheel(x, y, delta_x, delta_y).await?;
-        self.slow_mo().await;
-        Ok(())
+        self.driver
+            .run(async {
+                self.driver.mouse_wheel(x, y, delta_x, delta_y).await?;
+                self.slow_mo().await;
+                Ok(())
+            })
+            .await
     }
 
     /// Hold a key down (pair with [`Page::key_up`]).
     pub async fn key_down(&self, key: &str) -> E2eResult<()> {
-        self.driver.key_down(key).await?;
-        self.slow_mo().await;
-        Ok(())
+        self.driver
+            .run(async {
+                self.driver.key_down(key).await?;
+                self.slow_mo().await;
+                Ok(())
+            })
+            .await
     }
 
     /// Release a held key.
     pub async fn key_up(&self, key: &str) -> E2eResult<()> {
-        self.driver.key_up(key).await?;
-        self.slow_mo().await;
-        Ok(())
+        self.driver
+            .run(async {
+                self.driver.key_up(key).await?;
+                self.slow_mo().await;
+                Ok(())
+            })
+            .await
     }
 
     /// Tap at CSS-pixel coordinates with the touchscreen.
     pub async fn touchscreen_tap(&self, x: f64, y: f64) -> E2eResult<()> {
-        self.driver.touchscreen_tap(x, y).await?;
-        self.slow_mo().await;
-        Ok(())
+        self.driver
+            .run(async {
+                self.driver.touchscreen_tap(x, y).await?;
+                self.slow_mo().await;
+                Ok(())
+            })
+            .await
     }
 
     /// Run a named step, recording it (with duration) in the trace.
@@ -2446,52 +2781,76 @@ impl Page {
 
     /// Read a localStorage entry (`None` when missing).
     pub async fn local_storage_get(&self, key: &str) -> E2eResult<Option<String>> {
-        Self::storage_get("localStorage", key, &self.driver).await
+        self.driver
+            .run(async { Self::storage_get("localStorage", key, &self.driver).await })
+            .await
     }
 
     /// Write a localStorage entry.
     pub async fn local_storage_set(&self, key: &str, value: &str) -> E2eResult<()> {
-        Self::storage_set("localStorage", key, value, &self.driver).await
+        self.driver
+            .run(async { Self::storage_set("localStorage", key, value, &self.driver).await })
+            .await
     }
 
     /// Remove a localStorage entry.
     pub async fn local_storage_remove(&self, key: &str) -> E2eResult<()> {
-        let key_json = serde_json::to_string(key).unwrap_or_default();
         self.driver
-            .evaluate(&format!("localStorage.removeItem({key_json})"))
-            .await?;
-        Ok(())
+            .run(async {
+                let key_json = serde_json::to_string(key).unwrap_or_default();
+                self.driver
+                    .evaluate(&format!("localStorage.removeItem({key_json})"))
+                    .await?;
+                Ok(())
+            })
+            .await
     }
 
     /// Clear localStorage.
     pub async fn local_storage_clear(&self) -> E2eResult<()> {
-        self.driver.evaluate("localStorage.clear()").await?;
-        Ok(())
+        self.driver
+            .run(async {
+                self.driver.evaluate("localStorage.clear()").await?;
+                Ok(())
+            })
+            .await
     }
 
     /// Read a sessionStorage entry (`None` when missing).
     pub async fn session_storage_get(&self, key: &str) -> E2eResult<Option<String>> {
-        Self::storage_get("sessionStorage", key, &self.driver).await
+        self.driver
+            .run(async { Self::storage_get("sessionStorage", key, &self.driver).await })
+            .await
     }
 
     /// Write a sessionStorage entry.
     pub async fn session_storage_set(&self, key: &str, value: &str) -> E2eResult<()> {
-        Self::storage_set("sessionStorage", key, value, &self.driver).await
+        self.driver
+            .run(async { Self::storage_set("sessionStorage", key, value, &self.driver).await })
+            .await
     }
 
     /// Remove a sessionStorage entry.
     pub async fn session_storage_remove(&self, key: &str) -> E2eResult<()> {
-        let key_json = serde_json::to_string(key).unwrap_or_default();
         self.driver
-            .evaluate(&format!("sessionStorage.removeItem({key_json})"))
-            .await?;
-        Ok(())
+            .run(async {
+                let key_json = serde_json::to_string(key).unwrap_or_default();
+                self.driver
+                    .evaluate(&format!("sessionStorage.removeItem({key_json})"))
+                    .await?;
+                Ok(())
+            })
+            .await
     }
 
     /// Clear sessionStorage.
     pub async fn session_storage_clear(&self) -> E2eResult<()> {
-        self.driver.evaluate("sessionStorage.clear()").await?;
-        Ok(())
+        self.driver
+            .run(async {
+                self.driver.evaluate("sessionStorage.clear()").await?;
+                Ok(())
+            })
+            .await
     }
 
     /// Read a web-storage entry.
@@ -2515,24 +2874,29 @@ impl Page {
 
     /// Capture a screenshot (PNG by default, JPEG with `quality`).
     pub async fn screenshot(&self, options: ScreenshotOptions) -> E2eResult<Vec<u8>> {
-        if options.full_page && !options.mask.is_empty() {
-            return Err(E2eError::Config(
+        self.driver
+            .run(async {
+                if options.full_page && !options.mask.is_empty() {
+                    return Err(E2eError::Config(
                 "screenshot mask needs a viewport capture (mask + full_page is not supported)"
                     .to_string(),
             ));
-        }
-        let prepared = !options.mask.is_empty() || options.disable_animations || options.hide_caret;
-        if prepared {
-            self.prepare_screenshot(&options).await?;
-        }
-        let shot = self
-            .driver
-            .screenshot(options.full_page, options.quality)
-            .await;
-        if prepared {
-            self.cleanup_screenshot().await.ok();
-        }
-        shot
+                }
+                let prepared =
+                    !options.mask.is_empty() || options.disable_animations || options.hide_caret;
+                if prepared {
+                    self.prepare_screenshot(&options).await?;
+                }
+                let shot = self
+                    .driver
+                    .screenshot(options.full_page, options.quality)
+                    .await;
+                if prepared {
+                    self.cleanup_screenshot().await.ok();
+                }
+                shot
+            })
+            .await
     }
 
     /// Inject mask overlays and capture CSS.
@@ -2589,110 +2953,154 @@ impl Page {
         path: &std::path::Path,
         options: ScreenshotOptions,
     ) -> E2eResult<()> {
-        let bytes = self.screenshot(options).await?;
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(path, bytes)?;
-        Ok(())
+        self.driver
+            .run(async {
+                let bytes = self.screenshot(options).await?;
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(path, bytes)?;
+                Ok(())
+            })
+            .await
     }
 
     /// Print the page to PDF bytes.
     pub async fn pdf(&self) -> E2eResult<Vec<u8>> {
-        self.driver.print_pdf().await
+        self.driver
+            .run(async { self.driver.print_pdf().await })
+            .await
     }
 
     /// Set the viewport size.
     pub async fn set_viewport(&self, viewport: Viewport) -> E2eResult<()> {
         self.driver
-            .set_viewport(viewport.width, viewport.height)
+            .run(async {
+                self.driver
+                    .set_viewport(viewport.width, viewport.height)
+                    .await
+            })
             .await
     }
 
     /// Emulate a device preset (Chromium only; loud error on Firefox).
     pub async fn emulate_device(&self, device: DeviceDescriptor) -> E2eResult<()> {
-        self.driver.emulate_device(device).await
+        self.driver
+            .run(async { self.driver.emulate_device(device).await })
+            .await
     }
 
     /// Install a fake clock in the current document (freezes `Date`,
     /// `setTimeout`/`setInterval`, `requestAnimationFrame`, `performance.now`).
     /// Installs in current and future documents; starts paused for compatibility.
     pub async fn clock_install(&self) -> E2eResult<()> {
-        self.add_init_script(CLOCK_SCRIPT).await?;
-        self.evaluate_value(CLOCK_SCRIPT).await?;
-        Ok(())
+        self.driver
+            .run(async {
+                self.add_init_script(CLOCK_SCRIPT).await?;
+                self.evaluate_value(CLOCK_SCRIPT).await?;
+                Ok(())
+            })
+            .await
     }
 
     /// Advance the fake clock by `ms`, firing due timers in order.
     /// Fails loudly when no clock is installed.
     pub async fn clock_advance(&self, ms: u64) -> E2eResult<()> {
-        let now: Option<i64> = self
-            .evaluate(&format!(
-                "window.__ferriteClock ? window.__ferriteClock.tick({ms}) : null"
-            ))
-            .await?;
-        match now {
-            Some(_) => Ok(()),
-            None => Err(E2eError::Config(
-                "clock_advance needs clock_install first".to_string(),
-            )),
-        }
+        self.driver
+            .run(async {
+                let now: Option<i64> = self
+                    .evaluate(&format!(
+                        "window.__ferriteClock ? window.__ferriteClock.tick({ms}) : null"
+                    ))
+                    .await?;
+                match now {
+                    Some(_) => Ok(()),
+                    None => Err(E2eError::Config(
+                        "clock_advance needs clock_install first".to_string(),
+                    )),
+                }
+            })
+            .await
     }
 
     /// Freeze Date at an exact epoch-millisecond time while timers continue.
     /// Fails loudly when no clock is installed.
     pub async fn clock_set_fixed_time(&self, ms: i64) -> E2eResult<()> {
-        let now: Option<i64> = self
-            .evaluate(&format!(
-                "window.__ferriteClock ? window.__ferriteClock.setFixed({ms}) : null"
-            ))
-            .await?;
-        match now {
-            Some(_) => Ok(()),
-            None => Err(E2eError::Config(
-                "clock_set_fixed_time needs clock_install first".to_string(),
-            )),
-        }
+        self.driver
+            .run(async {
+                let now: Option<i64> = self
+                    .evaluate(&format!(
+                        "window.__ferriteClock ? window.__ferriteClock.setFixed({ms}) : null"
+                    ))
+                    .await?;
+                match now {
+                    Some(_) => Ok(()),
+                    None => Err(E2eError::Config(
+                        "clock_set_fixed_time needs clock_install first".to_string(),
+                    )),
+                }
+            })
+            .await
     }
 
     /// Restore the native clock (idempotent).
     pub async fn clock_uninstall(&self) -> E2eResult<()> {
-        self.add_init_script("window.__ferriteClock ? window.__ferriteClock.uninstall() : true")
-            .await?;
-        self.evaluate_value("window.__ferriteClock ? window.__ferriteClock.uninstall() : true")
-            .await?;
-        Ok(())
+        self.driver
+            .run(async {
+                self.add_init_script(
+                    "window.__ferriteClock ? window.__ferriteClock.uninstall() : true",
+                )
+                .await?;
+                self.evaluate_value(
+                    "window.__ferriteClock ? window.__ferriteClock.uninstall() : true",
+                )
+                .await?;
+                Ok(())
+            })
+            .await
     }
 
     /// Jump forward, firing each due timer at most once.
     pub async fn clock_fast_forward(&self, ms: u64) -> E2eResult<()> {
-        self.clock_command(&format!("fastForward({ms})")).await
+        self.driver
+            .run(async { self.clock_command(&format!("fastForward({ms})")).await })
+            .await
     }
 
     /// Run the fake clock forward by `ms` (alias for [`Page::clock_advance`]).
     pub async fn clock_run_for(&self, ms: u64) -> E2eResult<()> {
-        self.clock_advance(ms).await
+        self.driver
+            .run(async { self.clock_advance(ms).await })
+            .await
     }
 
     /// Change system time without shifting timer deadlines or firing timers.
     pub async fn clock_set_system_time(&self, ms: i64) -> E2eResult<()> {
-        self.clock_command(&format!("setSystem({ms})")).await
+        self.driver
+            .run(async { self.clock_command(&format!("setSystem({ms})")).await })
+            .await
     }
 
     /// Jump to an epoch time and pause; each due timer fires at most once.
     pub async fn clock_pause_at(&self, ms: i64) -> E2eResult<()> {
-        self.clock_command(&format!("pauseAt({ms})")).await
+        self.driver
+            .run(async { self.clock_command(&format!("pauseAt({ms})")).await })
+            .await
     }
 
     /// Install with an initial epoch time and optional real-time progression.
     pub async fn clock_install_at(&self, ms: i64, paused: bool) -> E2eResult<()> {
-        let script = format!(
+        self.driver
+            .run(async {
+                let script = format!(
             "{CLOCK_SCRIPT}; window.__ferriteClock.setSystem({ms}); window.__ferriteClock.{}();",
             if paused { "pause" } else { "resume" }
         );
-        self.add_init_script(&script).await?;
-        self.evaluate_value(&script).await?;
-        Ok(())
+                self.add_init_script(&script).await?;
+                self.evaluate_value(&script).await?;
+                Ok(())
+            })
+            .await
     }
 
     async fn clock_command(&self, command: &str) -> E2eResult<()> {
@@ -2708,102 +3116,134 @@ impl Page {
 
     /// Current fake-clock time in epoch milliseconds.
     pub async fn clock_now(&self) -> E2eResult<i64> {
-        let now: Option<i64> = self
-            .evaluate("window.__ferriteClock ? window.__ferriteClock.now() : null")
-            .await?;
-        now.ok_or_else(|| E2eError::Config("clock_now needs clock_install first".to_string()))
+        self.driver
+            .run(async {
+                let now: Option<i64> = self
+                    .evaluate("window.__ferriteClock ? window.__ferriteClock.now() : null")
+                    .await?;
+                now.ok_or_else(|| {
+                    E2eError::Config("clock_now needs clock_install first".to_string())
+                })
+            })
+            .await
     }
 
     /// Pause the fake clock (records the paused flag; timers only fire via
     /// explicit advances while paused).
     pub async fn clock_pause(&self) -> E2eResult<()> {
-        let now: Option<i64> = self
-            .evaluate("window.__ferriteClock ? window.__ferriteClock.pause() : null")
-            .await?;
-        match now {
-            Some(_) => Ok(()),
-            None => Err(E2eError::Config(
-                "clock_pause needs clock_install first".to_string(),
-            )),
-        }
+        self.driver
+            .run(async {
+                let now: Option<i64> = self
+                    .evaluate("window.__ferriteClock ? window.__ferriteClock.pause() : null")
+                    .await?;
+                match now {
+                    Some(_) => Ok(()),
+                    None => Err(E2eError::Config(
+                        "clock_pause needs clock_install first".to_string(),
+                    )),
+                }
+            })
+            .await
     }
 
     /// Resume a paused fake clock.
     pub async fn clock_resume(&self) -> E2eResult<()> {
-        let now: Option<i64> = self
-            .evaluate("window.__ferriteClock ? window.__ferriteClock.resume() : null")
-            .await?;
-        match now {
-            Some(_) => Ok(()),
-            None => Err(E2eError::Config(
-                "clock_resume needs clock_install first".to_string(),
-            )),
-        }
+        self.driver
+            .run(async {
+                let now: Option<i64> = self
+                    .evaluate("window.__ferriteClock ? window.__ferriteClock.resume() : null")
+                    .await?;
+                match now {
+                    Some(_) => Ok(()),
+                    None => Err(E2eError::Config(
+                        "clock_resume needs clock_install first".to_string(),
+                    )),
+                }
+            })
+            .await
     }
 
     /// Override the user agent.
     pub async fn set_user_agent(&self, user_agent: &str) -> E2eResult<()> {
-        self.driver.set_user_agent(user_agent).await
+        self.driver
+            .run(async { self.driver.set_user_agent(user_agent).await })
+            .await
     }
 
     /// Ignore HTTPS certificate errors.
     pub async fn set_ignore_https_errors(&self, ignore: bool) -> E2eResult<()> {
-        self.driver.set_ignore_https_errors(ignore).await
+        self.driver
+            .run(async { self.driver.set_ignore_https_errors(ignore).await })
+            .await
     }
 
     /// Cookies visible to this page.
     pub async fn cookies(&self) -> E2eResult<Vec<Cookie>> {
-        self.driver.cookies().await
+        self.driver.run(async { self.driver.cookies().await }).await
     }
 
     /// Set a cookie for the current page URL.
     pub async fn set_cookie(&self, name: &str, value: &str) -> E2eResult<()> {
-        let url = self.url().await?;
-        self.driver.set_cookie(name, value, &url).await
+        self.driver
+            .run(async {
+                let url = self.url().await?;
+                self.driver.set_cookie(name, value, &url).await
+            })
+            .await
     }
 
     /// Set full-fidelity cookies (path, flags, expiry honored).
     pub async fn add_cookies(&self, cookies: &[Cookie]) -> E2eResult<()> {
-        let url = self.url().await?;
-        self.driver.add_cookies(cookies, &url).await
-    }
-
-    pub(crate) async fn add_cookies_for_url(&self, cookies: &[Cookie], url: &str) -> E2eResult<()> {
-        self.driver.add_cookies(cookies, url).await
+        self.driver
+            .run(async {
+                let url = self.url().await?;
+                self.driver.add_cookies(cookies, &url).await
+            })
+            .await
     }
 
     /// Clear browser cookies.
     pub async fn clear_cookies(&self) -> E2eResult<()> {
-        self.driver.clear_cookies().await
+        self.driver
+            .run(async { self.driver.clear_cookies().await })
+            .await
     }
 
     /// Capture this page's storage state (origin, cookies, localStorage).
     pub async fn storage_state(&self) -> E2eResult<StorageState> {
-        let origin = self.evaluate_string("location.origin").await?;
-        let local_storage: HashMap<String, String> =
-            serde_json::from_value(self.evaluate_value("({ ...localStorage })").await?)?;
-        Ok(StorageState {
-            origins: vec![StorageOrigin {
-                origin: origin.clone(),
-                local_storage: local_storage
-                    .iter()
-                    .map(|(name, value)| StorageEntry {
-                        name: name.clone(),
-                        value: value.clone(),
-                    })
-                    .collect(),
-            }],
-            origin,
-            cookies: self.cookies().await?,
-            local_storage,
-        })
+        self.driver
+            .run(async {
+                let origin = self.evaluate_string("location.origin").await?;
+                let local_storage: HashMap<String, String> =
+                    serde_json::from_value(self.evaluate_value("({ ...localStorage })").await?)?;
+                Ok(StorageState {
+                    origins: vec![StorageOrigin {
+                        origin: origin.clone(),
+                        local_storage: local_storage
+                            .iter()
+                            .map(|(name, value)| StorageEntry {
+                                name: name.clone(),
+                                value: value.clone(),
+                            })
+                            .collect(),
+                    }],
+                    origin,
+                    cookies: self.cookies().await?,
+                    local_storage,
+                })
+            })
+            .await
     }
 
     /// Save cookies plus current-origin localStorage to a JSON file.
     pub async fn save_storage_state(&self, path: impl AsRef<Path>) -> E2eResult<()> {
-        let state = self.storage_state().await?;
-        std::fs::write(path, serde_json::to_string_pretty(&state)?)?;
-        Ok(())
+        self.driver
+            .run(async {
+                let state = self.storage_state().await?;
+                std::fs::write(path, serde_json::to_string_pretty(&state)?)?;
+                Ok(())
+            })
+            .await
     }
 
     /// Load storage state saved by [`Page::save_storage_state`].
@@ -2811,20 +3251,24 @@ impl Page {
     /// The page must already be on the saved origin; cookies restore with
     /// full fidelity and localStorage is replaced wholesale.
     pub async fn load_storage_state(&self, path: impl AsRef<Path>) -> E2eResult<()> {
-        let raw = std::fs::read_to_string(path)?;
-        let state: StorageState = serde_json::from_str(&raw)?;
-        let origin = self.evaluate_string("location.origin").await?;
-        if !state
-            .all_origins()
-            .iter()
-            .any(|entry| entry.origin == origin)
-        {
-            return Err(E2eError::Config(format!(
+        self.driver
+            .run(async {
+                let raw = std::fs::read_to_string(path)?;
+                let state: StorageState = serde_json::from_str(&raw)?;
+                let origin = self.evaluate_string("location.origin").await?;
+                if !state
+                    .all_origins()
+                    .iter()
+                    .any(|entry| entry.origin == origin)
+                {
+                    return Err(E2eError::Config(format!(
                 "storage state has no origin {origin}, navigate there first (to a saved origin)"
             )));
-        }
-        self.apply_storage_state(&state).await?;
-        Ok(())
+                }
+                self.apply_storage_state(&state).await?;
+                Ok(())
+            })
+            .await
     }
 
     /// Grant permissions (`geolocation`, `notifications`, ...).
@@ -2832,12 +3276,16 @@ impl Page {
     /// Chromium grants to all origins; Firefox grants to the current page
     /// origin (navigate first).
     pub async fn grant_permissions(&self, permissions: &[&str]) -> E2eResult<()> {
-        self.driver.grant_permissions(permissions).await
+        self.driver
+            .run(async { self.driver.grant_permissions(permissions).await })
+            .await
     }
 
     /// Reset granted permissions to the browser default.
     pub async fn clear_permissions(&self) -> E2eResult<()> {
-        self.driver.clear_permissions().await
+        self.driver
+            .run(async { self.driver.clear_permissions().await })
+            .await
     }
 
     /// Override the geolocation coordinates.
@@ -2845,12 +3293,16 @@ impl Page {
     /// Pair with [`Page::grant_permissions`]; Firefox supports this only on
     /// recent builds and otherwise fails loudly.
     pub async fn set_geolocation(&self, latitude: f64, longitude: f64) -> E2eResult<()> {
-        self.driver.set_geolocation(latitude, longitude).await
+        self.driver
+            .run(async { self.driver.set_geolocation(latitude, longitude).await })
+            .await
     }
 
     /// Clear the geolocation override.
     pub async fn clear_geolocation(&self) -> E2eResult<()> {
-        self.driver.clear_geolocation().await
+        self.driver
+            .run(async { self.driver.clear_geolocation().await })
+            .await
     }
 
     /// Send HTTP credentials with subsequent requests (Chromium only).
@@ -2864,7 +3316,9 @@ impl Page {
         username: Option<&str>,
         password: Option<&str>,
     ) -> E2eResult<()> {
-        let credentials =
+        self.driver
+            .run(async {
+                let credentials =
             match (username, password) {
                 (Some(user), Some(pass)) => Some((user.to_string(), pass.to_string())),
                 (None, None) => None,
@@ -2873,56 +3327,73 @@ impl Page {
                         .into(),
                 )),
             };
-        self.driver.set_auth_credentials(username, password).await?;
-        *self
-            .auth_credentials
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = None;
-        *self.cleared_auth.lock().unwrap_or_else(|e| e.into_inner()) = credentials.is_none();
-        let headers = self
-            .extra_headers
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        let headers: Vec<_> = headers
-            .iter()
-            .map(|(key, value)| (key.as_str(), value.as_str()))
-            .collect();
-        self.set_extra_http_headers(&headers).await
+                self.driver.set_auth_credentials(username, password).await?;
+                *self
+                    .auth_credentials
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = None;
+                *self.cleared_auth.lock().unwrap_or_else(|e| e.into_inner()) =
+                    credentials.is_none();
+                let headers = self
+                    .extra_headers
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone();
+                let headers: Vec<_> = headers
+                    .iter()
+                    .map(|(key, value)| (key.as_str(), value.as_str()))
+                    .collect();
+                self.set_extra_http_headers(&headers).await
+            })
+            .await
     }
 
     /// Enable or disable JavaScript execution (Chromium only).
     pub async fn set_java_script_enabled(&self, enabled: bool) -> E2eResult<()> {
-        self.driver.set_java_script_enabled(enabled).await
+        self.driver
+            .run(async { self.driver.set_java_script_enabled(enabled).await })
+            .await
     }
 
     /// Bypass Content-Security-Policy checks (Chromium only).
     pub async fn set_bypass_csp(&self, bypass: bool) -> E2eResult<()> {
-        self.driver.set_bypass_csp(bypass).await
+        self.driver
+            .run(async { self.driver.set_bypass_csp(bypass).await })
+            .await
     }
 
     /// Allow or deny downloads (Chromium only; browser-wide).
     pub async fn set_downloads_allowed(&self, allowed: bool) -> E2eResult<()> {
-        self.driver.set_downloads_allowed(allowed).await
+        self.driver
+            .run(async { self.driver.set_downloads_allowed(allowed).await })
+            .await
     }
 
     /// Block service workers (Chromium only; approximated by bypassing
     /// workers, so fetches skip them entirely).
     pub async fn set_service_workers_blocked(&self, blocked: bool) -> E2eResult<()> {
-        self.driver.set_service_workers_blocked(blocked).await
+        self.driver
+            .run(async { self.driver.set_service_workers_blocked(blocked).await })
+            .await
     }
 
     /// Clear this origin's IndexedDB databases (Chromium only).
     pub async fn clear_indexed_db(&self) -> E2eResult<()> {
-        let origin = self.evaluate_string("location.origin").await?;
         self.driver
-            .clear_data_for_origin(&origin, "indexeddb")
+            .run(async {
+                let origin = self.evaluate_string("location.origin").await?;
+                self.driver
+                    .clear_data_for_origin(&origin, "indexeddb")
+                    .await
+            })
             .await
     }
 
     /// Emulate offline mode (Chromium only).
     pub async fn set_offline(&self, offline: bool) -> E2eResult<()> {
-        self.driver.set_offline(offline).await
+        self.driver
+            .run(async { self.driver.set_offline(offline).await })
+            .await
     }
 
     /// Send Basic credentials preemptively, for servers without a challenge.
@@ -2932,68 +3403,76 @@ impl Page {
         username: &str,
         password: &str,
     ) -> E2eResult<()> {
-        self.set_http_credentials(Some(username), Some(password))
-            .await?;
-        *self
-            .auth_credentials
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some((username.into(), password.into()));
-        let headers = self
-            .extra_headers
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        self.set_extra_http_headers(
-            &headers
-                .iter()
-                .map(|(key, value)| (key.as_str(), value.as_str()))
-                .collect::<Vec<_>>(),
-        )
-        .await
+        self.driver
+            .run(async {
+                self.set_http_credentials(Some(username), Some(password))
+                    .await?;
+                *self
+                    .auth_credentials
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some((username.into(), password.into()));
+                let headers = self
+                    .extra_headers
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone();
+                self.set_extra_http_headers(
+                    &headers
+                        .iter()
+                        .map(|(key, value)| (key.as_str(), value.as_str()))
+                        .collect::<Vec<_>>(),
+                )
+                .await
+            })
+            .await
     }
 
     /// Set extra HTTP headers for subsequent requests (Chromium only).
     pub async fn set_extra_http_headers(&self, headers: &[(&str, &str)]) -> E2eResult<()> {
-        let mut combined: Vec<(String, String)> = headers
-            .iter()
-            .map(|(key, value)| (key.to_string(), value.to_string()))
-            .collect();
-        let credentials = self
-            .auth_credentials
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        if let Some((user, pass)) = credentials {
-            if !combined
-                .iter()
-                .any(|(key, _)| key.eq_ignore_ascii_case("authorization"))
-            {
-                combined.push((
-                    "Authorization".into(),
-                    format!(
-                        "Basic {}",
-                        base64_encode(format!("{user}:{pass}").as_bytes())
-                    ),
-                ));
-            }
-        }
-        if *self.cleared_auth.lock().unwrap_or_else(|e| e.into_inner())
-            && !combined
-                .iter()
-                .any(|(key, _)| key.eq_ignore_ascii_case("authorization"))
-        {
-            combined.push(("Authorization".into(), String::new()));
-        }
-        let borrowed: Vec<_> = combined
-            .iter()
-            .map(|(key, value)| (key.as_str(), value.as_str()))
-            .collect();
-        self.driver.set_extra_http_headers(&borrowed).await?;
-        *self.extra_headers.lock().unwrap_or_else(|e| e.into_inner()) = headers
-            .iter()
-            .map(|(key, value)| (key.to_string(), value.to_string()))
-            .collect();
-        Ok(())
+        self.driver
+            .run(async {
+                let mut combined: Vec<(String, String)> = headers
+                    .iter()
+                    .map(|(key, value)| (key.to_string(), value.to_string()))
+                    .collect();
+                let credentials = self
+                    .auth_credentials
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone();
+                if let Some((user, pass)) = credentials {
+                    if !combined
+                        .iter()
+                        .any(|(key, _)| key.eq_ignore_ascii_case("authorization"))
+                    {
+                        combined.push((
+                            "Authorization".into(),
+                            format!(
+                                "Basic {}",
+                                base64_encode(format!("{user}:{pass}").as_bytes())
+                            ),
+                        ));
+                    }
+                }
+                if *self.cleared_auth.lock().unwrap_or_else(|e| e.into_inner())
+                    && !combined
+                        .iter()
+                        .any(|(key, _)| key.eq_ignore_ascii_case("authorization"))
+                {
+                    combined.push(("Authorization".into(), String::new()));
+                }
+                let borrowed: Vec<_> = combined
+                    .iter()
+                    .map(|(key, value)| (key.as_str(), value.as_str()))
+                    .collect();
+                self.driver.set_extra_http_headers(&borrowed).await?;
+                *self.extra_headers.lock().unwrap_or_else(|e| e.into_inner()) = headers
+                    .iter()
+                    .map(|(key, value)| (key.to_string(), value.to_string()))
+                    .collect();
+                Ok(())
+            })
+            .await
     }
 
     /// Override the locale (Chromium only).
@@ -3002,14 +3481,18 @@ impl Page {
     /// Drives `Intl` and `Accept-Language`; `navigator.language` follows the
     /// launch `--lang` flag instead.
     pub async fn set_locale(&self, locale: &str) -> E2eResult<()> {
-        self.driver.set_locale(locale).await
+        self.driver
+            .run(async { self.driver.set_locale(locale).await })
+            .await
     }
 
     /// Override the timezone (Chromium only).
     ///
     /// Applies to subsequently loaded documents; navigate or reload after.
     pub async fn set_timezone(&self, timezone_id: &str) -> E2eResult<()> {
-        self.driver.set_timezone(timezone_id).await
+        self.driver
+            .run(async { self.driver.set_timezone(timezone_id).await })
+            .await
     }
 
     /// Emulate media features (Chromium only).
@@ -3020,11 +3503,15 @@ impl Page {
         color_scheme: Option<ColorScheme>,
         reduced_motion: Option<ReducedMotion>,
     ) -> E2eResult<()> {
-        if color_scheme.is_none() && reduced_motion.is_none() {
-            return Ok(());
-        }
         self.driver
-            .emulate_media(color_scheme, reduced_motion)
+            .run(async {
+                if color_scheme.is_none() && reduced_motion.is_none() {
+                    return Ok(());
+                }
+                self.driver
+                    .emulate_media(color_scheme, reduced_motion)
+                    .await
+            })
             .await
     }
 
@@ -3032,8 +3519,12 @@ impl Page {
     /// context rules still apply as fallback, page rules win on overlap).
     /// Route handlers (see [`Page::route_with_handler`]) run before rules.
     pub async fn route(&self, rules: Vec<RouteRule>) -> E2eResult<()> {
-        *self.routes.lock().unwrap_or_else(|e| e.into_inner()) = rules;
-        self.restart_routing().await
+        self.driver
+            .run(async {
+                *self.routes.lock().unwrap_or_else(|e| e.into_inner()) = rules;
+                self.restart_routing().await
+            })
+            .await
     }
 
     /// Intercept matching requests with an async handler (Playwright
@@ -3045,7 +3536,9 @@ impl Page {
         F: Fn(RouteInfo) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = E2eResult<RouteAction>> + Send + 'static,
     {
-        self.route_entry(pattern, handler, None).await
+        self.driver
+            .run(async { self.route_entry(pattern, handler, None).await })
+            .await
     }
 
     /// [`Page::route_with_handler`] limited to `n` matches.
@@ -3059,7 +3552,9 @@ impl Page {
         F: Fn(RouteInfo) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = E2eResult<RouteAction>> + Send + 'static,
     {
-        self.route_entry(pattern, handler, Some(n)).await
+        self.driver
+            .run(async { self.route_entry(pattern, handler, Some(n)).await })
+            .await
     }
 
     /// Register a handler entry with an optional match limit.
@@ -3097,44 +3592,52 @@ impl Page {
     /// Remove rules and handlers with `pattern`; returns how many were
     /// removed (both kinds counted).
     pub async fn unroute(&self, pattern: &str) -> E2eResult<usize> {
-        let removed = self
-            .routes
-            .lock()
-            .map(|mut routes| {
-                let before = routes.len();
-                routes.retain(|rule| rule.pattern != pattern);
-                before - routes.len()
+        self.driver
+            .run(async {
+                let removed = self
+                    .routes
+                    .lock()
+                    .map(|mut routes| {
+                        let before = routes.len();
+                        routes.retain(|rule| rule.pattern != pattern);
+                        before - routes.len()
+                    })
+                    .unwrap_or(0);
+                let removed_handlers = self
+                    .handlers
+                    .lock()
+                    .map(|mut handlers| {
+                        let before = handlers.len();
+                        handlers.retain(|entry| entry.pattern != pattern);
+                        before - handlers.len()
+                    })
+                    .unwrap_or(0);
+                self.restart_routing().await?;
+                Ok(removed + removed_handlers)
             })
-            .unwrap_or(0);
-        let removed_handlers = self
-            .handlers
-            .lock()
-            .map(|mut handlers| {
-                let before = handlers.len();
-                handlers.retain(|entry| entry.pattern != pattern);
-                before - handlers.len()
-            })
-            .unwrap_or(0);
-        self.restart_routing().await?;
-        Ok(removed + removed_handlers)
+            .await
     }
 
     /// Remove all page-level rules and handlers (context entries still apply).
     ///
     /// Returns how many entries were removed (both kinds counted).
     pub async fn unroute_all(&self) -> E2eResult<usize> {
-        let removed = self
-            .routes
-            .lock()
-            .map(|mut routes| std::mem::take(&mut *routes).len())
-            .unwrap_or(0);
-        let removed_handlers = self
-            .handlers
-            .lock()
-            .map(|mut handlers| std::mem::take(&mut *handlers).len())
-            .unwrap_or(0);
-        self.restart_routing().await?;
-        Ok(removed + removed_handlers)
+        self.driver
+            .run(async {
+                let removed = self
+                    .routes
+                    .lock()
+                    .map(|mut routes| std::mem::take(&mut *routes).len())
+                    .unwrap_or(0);
+                let removed_handlers = self
+                    .handlers
+                    .lock()
+                    .map(|mut handlers| std::mem::take(&mut *handlers).len())
+                    .unwrap_or(0);
+                self.restart_routing().await?;
+                Ok(removed + removed_handlers)
+            })
+            .await
     }
 
     /// Replay responses from a HAR 1.2 file (Playwright `routeFromHAR`).
@@ -3148,81 +3651,89 @@ impl Page {
         path: impl AsRef<Path>,
         options: RouteFromHarOptions,
     ) -> E2eResult<usize> {
-        let file = crate::har::HarFile::load(path)?;
-        let matcher = match options.url_filter.as_deref() {
-            Some(glob) => Some(globset::Glob::new(glob).map_err(|error| {
-                E2eError::Config(format!("invalid HAR url filter {glob:?}: {error}"))
-            })?),
-            None => None,
-        }
-        .map(|glob| glob.compile_matcher());
-        let mut map = file.lookup();
-        if let Some(matcher) = &matcher {
-            map.retain(|_, entry| matcher.is_match(&entry.url));
-        }
-        let count = map.len();
-        if count == 0 {
-            return Ok(0);
-        }
-        let map = Arc::new(map);
-        self.route_with_handler("**", move |info: RouteInfo| {
-            let map = Arc::clone(&map);
-            async move {
-                let key = (info.method.to_ascii_uppercase(), info.url.clone());
-                match map.get(&key) {
-                    Some(entry) => Ok(RouteAction::fulfill_full(
-                        entry.status,
-                        entry.status_text.clone(),
-                        entry.headers.clone(),
-                        entry.body.clone(),
-                    )),
-                    None => Ok(RouteAction::Fallback),
+        self.driver
+            .run(async {
+                let file = crate::har::HarFile::load(path)?;
+                let matcher = match options.url_filter.as_deref() {
+                    Some(glob) => Some(globset::Glob::new(glob).map_err(|error| {
+                        E2eError::Config(format!("invalid HAR url filter {glob:?}: {error}"))
+                    })?),
+                    None => None,
                 }
-            }
-        })
-        .await?;
-        Ok(count)
+                .map(|glob| glob.compile_matcher());
+                let mut map = file.lookup();
+                if let Some(matcher) = &matcher {
+                    map.retain(|_, entry| matcher.is_match(&entry.url));
+                }
+                let count = map.len();
+                if count == 0 {
+                    return Ok(0);
+                }
+                let map = Arc::new(map);
+                self.route_with_handler("**", move |info: RouteInfo| {
+                    let map = Arc::clone(&map);
+                    async move {
+                        let key = (info.method.to_ascii_uppercase(), info.url.clone());
+                        match map.get(&key) {
+                            Some(entry) => Ok(RouteAction::fulfill_full(
+                                entry.status,
+                                entry.status_text.clone(),
+                                entry.headers.clone(),
+                                entry.body.clone(),
+                            )),
+                            None => Ok(RouteAction::Fallback),
+                        }
+                    }
+                })
+                .await?;
+                Ok(count)
+            })
+            .await
     }
 
     /// Apply the stored rules and handlers (page first, context fallback;
     /// no pump when both are empty).
     pub(crate) async fn restart_routing(&self) -> E2eResult<()> {
-        let handle = self.routing.lock().map(|mut r| r.take()).unwrap_or(None);
-        if let Some(handle) = handle {
-            handle.abort();
-            self.driver.stop_routing().await;
-        }
-        let mut rules = self
-            .routes
-            .lock()
-            .map(|routes| routes.clone())
-            .unwrap_or_default();
-        rules.extend(
-            self.context_routes
-                .lock()
-                .map(|routes| routes.clone())
-                .unwrap_or_default(),
-        );
-        let mut handlers = self
-            .handlers
-            .lock()
-            .map(|handlers| handlers.clone())
-            .unwrap_or_default();
-        handlers.extend(
-            self.context_handlers
-                .lock()
-                .map(|handlers| handlers.clone())
-                .unwrap_or_default(),
-        );
-        if rules.is_empty() && handlers.is_empty() {
-            return Ok(());
-        }
-        let handle = self
-            .driver
-            .start_routing(Arc::new(rules), Arc::new(handlers))
-            .await?;
-        *self.routing.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
-        Ok(())
+        self.driver
+            .run(async {
+                let handle = self.routing.lock().map(|mut r| r.take()).unwrap_or(None);
+                if let Some(handle) = handle {
+                    handle.abort();
+                    self.driver.stop_routing().await;
+                }
+                let mut rules = self
+                    .routes
+                    .lock()
+                    .map(|routes| routes.clone())
+                    .unwrap_or_default();
+                rules.extend(
+                    self.context_routes
+                        .lock()
+                        .map(|routes| routes.clone())
+                        .unwrap_or_default(),
+                );
+                let mut handlers = self
+                    .handlers
+                    .lock()
+                    .map(|handlers| handlers.clone())
+                    .unwrap_or_default();
+                handlers.extend(
+                    self.context_handlers
+                        .lock()
+                        .map(|handlers| handlers.clone())
+                        .unwrap_or_default(),
+                );
+                if rules.is_empty() && handlers.is_empty() {
+                    return Ok(());
+                }
+                let handle = self
+                    .driver
+                    .start_routing(Arc::new(rules), Arc::new(handlers))
+                    .await?;
+                *self.routing.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
+                Ok(())
+            })
+            .await
     }
 
     /// Start recording requests; clears previously recorded ones.
@@ -3283,16 +3794,22 @@ impl Page {
         selector: &str,
         paths: &[P],
     ) -> E2eResult<()> {
-        self.locator(selector).set_input_files(paths).await
+        self.driver
+            .run(async { self.locator(selector).set_input_files(paths).await })
+            .await
     }
 
     /// Direct downloads to `dir` (created when missing). Chromium only;
     /// Firefox configures the download dir at launch
     /// ([`LaunchOptions::download_dir`](crate::LaunchOptions::download_dir)).
     pub async fn set_download_dir(&self, dir: impl AsRef<Path>) -> E2eResult<()> {
-        self.driver.set_download_dir(dir.as_ref()).await?;
-        self.remember_download_dir(dir.as_ref());
-        Ok(())
+        self.driver
+            .run(async {
+                self.driver.set_download_dir(dir.as_ref()).await?;
+                self.remember_download_dir(dir.as_ref());
+                Ok(())
+            })
+            .await
     }
 
     /// Record the download dir without touching the engine (launch-wide dirs
@@ -3305,96 +3822,126 @@ impl Page {
     /// page (applies after the next navigation; on Firefox the source is
     /// wrapped in a function, so avoid top-level `return`).
     pub async fn add_init_script(&self, source: &str) -> E2eResult<()> {
-        self.driver.add_init_script(source).await
+        self.driver
+            .run(async { self.driver.add_init_script(source).await })
+            .await
     }
 
     /// Add a `<script src>` tag and wait for it to load.
     pub async fn add_script_tag_url(&self, url: &str) -> E2eResult<()> {
-        let url_json = serde_json::to_string(url).map_err(E2eError::Json)?;
-        self.evaluate_value(&format!(
-            "new Promise((resolve, reject) => {{ \
+        self.driver
+            .run(async {
+                let url_json = serde_json::to_string(url).map_err(E2eError::Json)?;
+                self.evaluate_value(&format!(
+                    "new Promise((resolve, reject) => {{ \
              const s = document.createElement('script'); s.src = {url_json}; \
              s.onload = () => resolve(true); \
              s.onerror = () => reject(new Error('script load failed')); \
              document.head.appendChild(s); }})"
-        ))
-        .await?;
-        Ok(())
+                ))
+                .await?;
+                Ok(())
+            })
+            .await
     }
 
     /// Add an inline `<script>` tag (runs immediately).
     pub async fn add_script_tag_content(&self, code: &str) -> E2eResult<()> {
-        let code_json = serde_json::to_string(code).map_err(E2eError::Json)?;
-        self.evaluate_value(&format!(
-            "(() => {{ const s = document.createElement('script'); \
+        self.driver
+            .run(async {
+                let code_json = serde_json::to_string(code).map_err(E2eError::Json)?;
+                self.evaluate_value(&format!(
+                    "(() => {{ const s = document.createElement('script'); \
              s.textContent = {code_json}; document.head.appendChild(s); \
              return true; }})()"
-        ))
-        .await?;
-        Ok(())
+                ))
+                .await?;
+                Ok(())
+            })
+            .await
     }
 
     /// Add a stylesheet `<link>` tag and wait for it to load.
     pub async fn add_style_tag_url(&self, url: &str) -> E2eResult<()> {
-        let url_json = serde_json::to_string(url).map_err(E2eError::Json)?;
-        self.evaluate_value(&format!(
-            "new Promise((resolve, reject) => {{ \
+        self.driver
+            .run(async {
+                let url_json = serde_json::to_string(url).map_err(E2eError::Json)?;
+                self.evaluate_value(&format!(
+                    "new Promise((resolve, reject) => {{ \
              const l = document.createElement('link'); l.rel = 'stylesheet'; \
              l.href = {url_json}; l.onload = () => resolve(true); \
              l.onerror = () => reject(new Error('stylesheet load failed')); \
              document.head.appendChild(l); }})"
-        ))
-        .await?;
-        Ok(())
+                ))
+                .await?;
+                Ok(())
+            })
+            .await
     }
 
     /// Add an inline `<style>` tag.
     pub async fn add_style_tag_content(&self, css: &str) -> E2eResult<()> {
-        let css_json = serde_json::to_string(css).map_err(E2eError::Json)?;
-        self.evaluate_value(&format!(
-            "(() => {{ const s = document.createElement('style'); \
+        self.driver
+            .run(async {
+                let css_json = serde_json::to_string(css).map_err(E2eError::Json)?;
+                self.evaluate_value(&format!(
+                    "(() => {{ const s = document.createElement('style'); \
              s.textContent = {css_json}; document.head.appendChild(s); \
              return true; }})()"
-        ))
-        .await?;
-        Ok(())
+                ))
+                .await?;
+                Ok(())
+            })
+            .await
     }
 
     /// All document frames (main frame first; named `document_frames`
     /// because [`Page::frames`] streams video frames). Frame names are
     /// Chromium-only (empty on Firefox, which reports no names).
     pub async fn document_frames(&self) -> E2eResult<Vec<Frame>> {
-        Ok(self
-            .driver
-            .frames()
-            .await?
-            .into_iter()
-            .map(|info| Frame {
-                page: self.clone(),
-                id: info.id,
-                parent_id: info.parent_id,
-                name: info.name,
-                url: info.url,
+        self.driver
+            .run(async {
+                Ok(self
+                    .driver
+                    .frames()
+                    .await?
+                    .into_iter()
+                    .map(|info| Frame {
+                        page: self.clone(),
+                        id: info.id,
+                        parent_id: info.parent_id,
+                        name: info.name,
+                        url: info.url,
+                    })
+                    .collect())
             })
-            .collect())
+            .await
     }
 
     /// First frame with exactly `name`.
     pub async fn frame_by_name(&self, name: &str) -> E2eResult<Option<Frame>> {
-        Ok(self
-            .document_frames()
-            .await?
-            .into_iter()
-            .find(|frame| frame.name == name))
+        self.driver
+            .run(async {
+                Ok(self
+                    .document_frames()
+                    .await?
+                    .into_iter()
+                    .find(|frame| frame.name == name))
+            })
+            .await
     }
 
     /// First frame whose URL contains `pattern`.
     pub async fn frame_by_url(&self, pattern: &str) -> E2eResult<Option<Frame>> {
-        Ok(self
-            .document_frames()
-            .await?
-            .into_iter()
-            .find(|frame| frame.url.contains(pattern)))
+        self.driver
+            .run(async {
+                Ok(self
+                    .document_frames()
+                    .await?
+                    .into_iter()
+                    .find(|frame| frame.url.contains(pattern)))
+            })
+            .await
     }
 
     /// Expose a Rust function to page JS as `window[name]`. The page calls
@@ -3406,14 +3953,16 @@ impl Page {
     where
         F: Fn(Vec<Value>) -> Value + Send + Sync + 'static,
     {
-        if !valid_expose_name(name) {
-            return Err(E2eError::Config(format!(
-                "expose_function needs a JS identifier, got {name:?}"
-            )));
-        }
-        let name_json = serde_json::to_string(name).map_err(E2eError::Json)?;
-        let source = format!(
-            "(() => {{ \
+        self.driver
+            .run(async {
+                if !valid_expose_name(name) {
+                    return Err(E2eError::Config(format!(
+                        "expose_function needs a JS identifier, got {name:?}"
+                    )));
+                }
+                let name_json = serde_json::to_string(name).map_err(E2eError::Json)?;
+                let source = format!(
+                    "(() => {{ \
              window.__ferriteExpose = window.__ferriteExpose \
              || {{ seq: 0, queue: [], pending: {{}} }}; \
              const bx = window.__ferriteExpose; \
@@ -3422,16 +3971,18 @@ impl Page {
              bx.pending[id] = {{ resolve, reject }}; \
              bx.queue.push([{name_json}, id, args]); }}); \
              return true; }})()"
-        );
-        self.add_init_script(&source).await?;
-        self.evaluate_value(&source).await?;
-        self.exposed
-            .fns
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(name.to_string(), Arc::new(f));
-        self.start_expose_pump();
-        Ok(())
+                );
+                self.add_init_script(&source).await?;
+                self.evaluate_value(&source).await?;
+                self.exposed
+                    .fns
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(name.to_string(), Arc::new(f));
+                self.start_expose_pump();
+                Ok(())
+            })
+            .await
     }
 
     /// Remove exposed functions and stop their dispatch pump.
@@ -3555,7 +4106,9 @@ impl Page {
         dir: impl AsRef<Path>,
         timeout: Duration,
     ) -> E2eResult<PathBuf> {
-        Ok(self.wait_for_download_file(dir, timeout).await?.path)
+        self.driver
+            .run(async { Ok(self.wait_for_download_file(dir, timeout).await?.path) })
+            .await
     }
 
     /// Wait for a download and wrap it as a [`Download`] (save/delete helpers).
@@ -3564,43 +4117,51 @@ impl Page {
         dir: impl AsRef<Path>,
         timeout: Duration,
     ) -> E2eResult<Download> {
-        let path = self.wait_for_download_in(dir.as_ref(), timeout).await?;
-        self.emit(PageEvent::Download(path.clone()));
-        let mut download = Download::from_path(path);
-        // Chromium fills URL/failure from download events (newest match wins).
-        let name = download.suggested_filename.clone();
-        if let Some(record) = self
-            .driver
-            .download_records()
-            .into_iter()
-            .rev()
-            .find(|record| record.filename == name)
-        {
-            if !record.url.is_empty() {
-                download.url = Some(record.url.clone());
-            }
-            if record.state == "canceled" || record.state == "interrupted" {
-                download.failure = Some(record.state.clone());
-            }
-            download.guid = Some(record.guid.clone());
-        }
-        Ok(download)
+        self.driver
+            .run(async {
+                let path = self.wait_for_download_in(dir.as_ref(), timeout).await?;
+                self.emit(PageEvent::Download(path.clone()));
+                let mut download = Download::from_path(path);
+                // Chromium fills URL/failure from download events (newest match wins).
+                let name = download.suggested_filename.clone();
+                if let Some(record) = self
+                    .driver
+                    .download_records()
+                    .into_iter()
+                    .rev()
+                    .find(|record| record.filename == name)
+                {
+                    if !record.url.is_empty() {
+                        download.url = Some(record.url.clone());
+                    }
+                    if record.state == "canceled" || record.state == "interrupted" {
+                        download.failure = Some(record.state.clone());
+                    }
+                    download.guid = Some(record.guid.clone());
+                }
+                Ok(download)
+            })
+            .await
     }
 
     /// Cancel in-flight downloads (Chromium only); returns how many were
     /// canceled. Firefox has no download-cancel command and fails loudly.
     pub async fn cancel_downloads(&self) -> E2eResult<usize> {
-        self.driver.cancel_downloads().await
+        self.driver
+            .run(async { self.driver.cancel_downloads().await })
+            .await
     }
 
     /// Fetch `url` from inside the page (cookies included) and return the
     /// raw bytes (Playwright `response.body()` equivalent for re-fetchable
     /// resources; same-origin or CORS-open URLs only).
     pub async fn response_body(&self, url: &str) -> E2eResult<Vec<u8>> {
-        let url_json = serde_json::to_string(url).unwrap_or_default();
-        let value: Value = self
-            .evaluate(&format!(
-                "fetch({url_json}).then(async r => {{ \
+        self.driver
+            .run(async {
+                let url_json = serde_json::to_string(url).unwrap_or_default();
+                let value: Value = self
+                    .evaluate(&format!(
+                        "fetch({url_json}).then(async r => {{ \
                  if (!r.ok) throw new Error('fetch ' + r.status); \
                  const buf = await r.arrayBuffer(); \
                  const bytes = new Uint8Array(buf); \
@@ -3608,107 +4169,126 @@ impl Page {
                  for (let i = 0; i < bytes.length; i++) \
                    bin += String.fromCharCode(bytes[i]); \
                  return btoa(bin); }})"
-            ))
-            .await?;
-        let b64 = value
-            .as_str()
-            .ok_or_else(|| E2eError::Config(format!("response_body({url}) returned no body")))?;
-        use base64::Engine as _;
-        base64::engine::general_purpose::STANDARD
-            .decode(b64)
-            .map_err(|_| E2eError::Config(format!("response_body({url}) returned invalid base64")))
+                    ))
+                    .await?;
+                let b64 = value.as_str().ok_or_else(|| {
+                    E2eError::Config(format!("response_body({url}) returned no body"))
+                })?;
+                use base64::Engine as _;
+                base64::engine::general_purpose::STANDARD
+                    .decode(b64)
+                    .map_err(|_| {
+                        E2eError::Config(format!("response_body({url}) returned invalid base64"))
+                    })
+            })
+            .await
     }
 
     /// Structured accessibility tree using implicit roles, associated labels,
     /// visibility, states and open shadow roots. This is a DOM approximation.
     pub async fn aria_snapshot_json(&self) -> E2eResult<Value> {
-        self.evaluate_value(&format!("({}).aria(document.body)", include_str!("dom.js")))
+        self.driver
+            .run(async {
+                self.evaluate_value(&format!("({}).aria(document.body)", include_str!("dom.js")))
+                    .await
+            })
             .await
     }
 
     /// Indented accessibility snapshot, without truncating names or node counts.
     pub async fn aria_snapshot(&self) -> E2eResult<String> {
-        self.evaluate_string(&format!(
+        self.driver
+            .run(async {
+                self.evaluate_string(&format!(
             "(() => {{ const f = {}; return f.render(f.aria(document.body)).join('\\n'); }})()",
             include_str!("dom.js")
         ))
-        .await
+                .await
+            })
+            .await
     }
 
     /// Download watcher without the event emission (shared implementation).
     async fn wait_for_download_in(&self, dir: &Path, timeout: Duration) -> E2eResult<PathBuf> {
-        let before = dir_names(dir)?;
-        let cutoff = std::time::SystemTime::now()
-            .checked_sub(PREEXISTING_DOWNLOAD_GRACE)
-            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-        let deadline = tokio::time::Instant::now() + timeout;
-        let mut stable: Option<(PathBuf, u64)> = None;
-        loop {
-            let mut candidate: Option<(PathBuf, u64)> = None;
-            // Most recently modified fresh pre-existing file (fallback when
-            // nothing new appears: the download may have landed first).
-            let mut fallback: Option<(PathBuf, u64, std::time::SystemTime)> = None;
-            if let Ok(entries) = std::fs::read_dir(dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    let name = entry.file_name().to_string_lossy().into_owned();
-                    if !path.is_file() || is_temp_download(&name) {
-                        continue;
-                    }
-                    let size = entry.metadata().map(|meta| meta.len()).unwrap_or(0);
-                    let mtime = entry
-                        .metadata()
-                        .and_then(|meta| meta.modified())
+        self.driver
+            .run(
+                crate::operation::Deadline::new(timeout).run("wait for download", async {
+                    let before = dir_names(dir)?;
+                    let cutoff = std::time::SystemTime::now()
+                        .checked_sub(PREEXISTING_DOWNLOAD_GRACE)
                         .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-                    if self
-                        .download_consumed
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .get(&path)
-                        == Some(&(size, mtime))
-                    {
-                        continue;
+                    let deadline = crate::operation::Deadline::new(timeout);
+                    let mut stable: Option<(PathBuf, u64)> = None;
+                    loop {
+                        let mut candidate: Option<(PathBuf, u64)> = None;
+                        // Most recently modified fresh pre-existing file (fallback when
+                        // nothing new appears: the download may have landed first).
+                        let mut fallback: Option<(PathBuf, u64, std::time::SystemTime)> = None;
+                        if let Ok(entries) = std::fs::read_dir(dir) {
+                            for entry in entries.flatten() {
+                                let path = entry.path();
+                                let name = entry.file_name().to_string_lossy().into_owned();
+                                if !path.is_file() || is_temp_download(&name) {
+                                    continue;
+                                }
+                                let size = entry.metadata().map(|meta| meta.len()).unwrap_or(0);
+                                let mtime = entry
+                                    .metadata()
+                                    .and_then(|meta| meta.modified())
+                                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                                if self
+                                    .download_consumed
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .get(&path)
+                                    == Some(&(size, mtime))
+                                {
+                                    continue;
+                                }
+                                if !before.contains(&name) {
+                                    candidate = Some((path, size));
+                                    break;
+                                }
+                                let mtime = entry
+                                    .metadata()
+                                    .and_then(|meta| meta.modified())
+                                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                                if mtime >= cutoff
+                                    && fallback
+                                        .as_ref()
+                                        .map(|(_, _, prev)| mtime > *prev)
+                                        .unwrap_or(true)
+                                {
+                                    fallback = Some((path, size, mtime));
+                                }
+                            }
+                        }
+                        let candidate =
+                            candidate.or_else(|| fallback.map(|(path, size, _)| (path, size)));
+                        if let Some((path, size)) = candidate {
+                            if stable.as_ref() == Some(&(path.clone(), size)) {
+                                let modified = path.metadata()?.modified()?;
+                                self.download_consumed
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .insert(path.clone(), (size, modified));
+                                return Ok(path);
+                            }
+                            stable = Some((path, size));
+                        } else {
+                            stable = None;
+                        }
+                        if deadline.expired() {
+                            return Err(E2eError::Timeout(
+                                timeout.as_millis().min(u128::from(u64::MAX)) as u64,
+                                format!("wait_for_download({})", dir.display()),
+                            ));
+                        }
+                        tokio::time::sleep(Duration::from_millis(100)).await;
                     }
-                    if !before.contains(&name) {
-                        candidate = Some((path, size));
-                        break;
-                    }
-                    let mtime = entry
-                        .metadata()
-                        .and_then(|meta| meta.modified())
-                        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-                    if mtime >= cutoff
-                        && fallback
-                            .as_ref()
-                            .map(|(_, _, prev)| mtime > *prev)
-                            .unwrap_or(true)
-                    {
-                        fallback = Some((path, size, mtime));
-                    }
-                }
-            }
-            let candidate = candidate.or_else(|| fallback.map(|(path, size, _)| (path, size)));
-            if let Some((path, size)) = candidate {
-                if stable.as_ref() == Some(&(path.clone(), size)) {
-                    let modified = path.metadata()?.modified()?;
-                    self.download_consumed
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .insert(path.clone(), (size, modified));
-                    return Ok(path);
-                }
-                stable = Some((path, size));
-            } else {
-                stable = None;
-            }
-            if tokio::time::Instant::now() > deadline {
-                return Err(E2eError::Timeout(
-                    timeout.as_millis().min(u128::from(u64::MAX)) as u64,
-                    format!("wait_for_download({})", dir.display()),
-                ));
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
+                }),
+            )
+            .await
     }
 
     /// Start capture when it isn't running (keeps history when it is).
@@ -3731,27 +4311,37 @@ impl Page {
         pattern: &str,
         timeout: Duration,
     ) -> E2eResult<RecordedRequest> {
-        self.ensure_request_capture();
-        let skip = self.requests().len();
-        let deadline = tokio::time::Instant::now() + timeout;
-        loop {
-            if let Some(found) = self
-                .requests()
-                .iter()
-                .skip(skip)
-                .find(|request| request.url.contains(pattern))
-                .cloned()
-            {
-                return Ok(found);
-            }
-            if tokio::time::Instant::now() > deadline {
-                return Err(E2eError::Timeout(
-                    timeout.as_millis().min(u128::from(u64::MAX)) as u64,
-                    format!("wait_for_request({pattern})"),
-                ));
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
+        let scoped = self.with_timeout(timeout);
+        scoped
+            .driver
+            .run(async {
+                crate::operation::Deadline::new(timeout)
+                    .run("wait_for_request", async {
+                        scoped.ensure_request_capture();
+                        let skip = scoped.requests().len();
+                        let deadline = crate::operation::Deadline::new(timeout);
+                        loop {
+                            if let Some(found) = scoped
+                                .requests()
+                                .iter()
+                                .skip(skip)
+                                .find(|request| request.url.contains(pattern))
+                                .cloned()
+                            {
+                                return Ok(found);
+                            }
+                            if deadline.expired() {
+                                return Err(E2eError::Timeout(
+                                    timeout.as_millis().min(u128::from(u64::MAX)) as u64,
+                                    format!("wait_for_request({pattern})"),
+                                ));
+                            }
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                        }
+                    })
+                    .await
+            })
+            .await
     }
 
     /// Wait for a response (nonzero status) whose URL contains `pattern`.
@@ -3762,35 +4352,51 @@ impl Page {
         pattern: &str,
         timeout: Duration,
     ) -> E2eResult<RecordedRequest> {
-        self.ensure_request_capture();
-        let skip = self.requests().len();
-        let deadline = tokio::time::Instant::now() + timeout;
-        loop {
-            if let Some(found) = self
-                .requests()
-                .iter()
-                .skip(skip)
-                .find(|request| request.url.contains(pattern) && request.status != 0)
-                .cloned()
-            {
-                return Ok(found);
-            }
-            if tokio::time::Instant::now() > deadline {
-                return Err(E2eError::Timeout(
-                    timeout.as_millis().min(u128::from(u64::MAX)) as u64,
-                    format!("wait_for_response({pattern})"),
-                ));
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
+        let scoped = self.with_timeout(timeout);
+        scoped
+            .driver
+            .run(async {
+                crate::operation::Deadline::new(timeout)
+                    .run("wait_for_response", async {
+                        scoped.ensure_request_capture();
+                        let skip = scoped.requests().len();
+                        let deadline = crate::operation::Deadline::new(timeout);
+                        loop {
+                            if let Some(found) = scoped
+                                .requests()
+                                .iter()
+                                .skip(skip)
+                                .find(|request| {
+                                    request.url.contains(pattern) && request.status != 0
+                                })
+                                .cloned()
+                            {
+                                return Ok(found);
+                            }
+                            if deadline.expired() {
+                                return Err(E2eError::Timeout(
+                                    timeout.as_millis().min(u128::from(u64::MAX)) as u64,
+                                    format!("wait_for_response({pattern})"),
+                                ));
+                            }
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                        }
+                    })
+                    .await
+            })
+            .await
     }
 
     /// Auto-handle JavaScript dialogs (`accept` = OK vs dismiss).
     pub async fn handle_dialogs(&self, accept: bool) -> E2eResult<()> {
-        self.stop_dialog_handling().await;
-        let handle = self.driver.start_dialogs(accept, None, None).await?;
-        *self.dialogs.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
-        Ok(())
+        self.driver
+            .run(async {
+                self.stop_dialog_handling().await;
+                let handle = self.driver.start_dialogs(accept, None, None).await?;
+                *self.dialogs.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
+                Ok(())
+            })
+            .await
     }
 
     /// Auto-handle dialogs, answering prompts with `prompt_text`.
@@ -3799,13 +4405,17 @@ impl Page {
         accept: bool,
         prompt_text: &str,
     ) -> E2eResult<()> {
-        self.stop_dialog_handling().await;
-        let handle = self
-            .driver
-            .start_dialogs(accept, Some(prompt_text.to_string()), None)
-            .await?;
-        *self.dialogs.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
-        Ok(())
+        self.driver
+            .run(async {
+                self.stop_dialog_handling().await;
+                let handle = self
+                    .driver
+                    .start_dialogs(accept, Some(prompt_text.to_string()), None)
+                    .await?;
+                *self.dialogs.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
+                Ok(())
+            })
+            .await
     }
 
     /// Answer each dialog with a handler (Playwright `page.on("dialog")`
@@ -3814,13 +4424,17 @@ impl Page {
         &self,
         handler: impl Fn(DialogInfo) -> DialogDecision + Send + Sync + 'static,
     ) -> E2eResult<()> {
-        self.stop_dialog_handling().await;
-        let handle = self
-            .driver
-            .start_dialogs(true, None, Some(Arc::new(handler)))
-            .await?;
-        *self.dialogs.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
-        Ok(())
+        self.driver
+            .run(async {
+                self.stop_dialog_handling().await;
+                let handle = self
+                    .driver
+                    .start_dialogs(true, None, Some(Arc::new(handler)))
+                    .await?;
+                *self.dialogs.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
+                Ok(())
+            })
+            .await
     }
 
     /// Dialogs observed while auto-handling (oldest first).
@@ -3854,15 +4468,19 @@ impl Page {
     /// Firefox records natively. Fully static recordings with zero
     /// repaints fail loudly at stop time on Chromium.
     pub async fn start_video(&self, opts: VideoOptions) -> E2eResult<()> {
-        if self.capture.lock().map(|c| c.is_some()).unwrap_or(true) {
-            return Err(E2eError::Config(
-                "capture already active on this page; stop it first".to_string(),
-            ));
-        }
-        let state = self.driver.start_recording(&opts).await?;
-        *self.capture.lock().unwrap_or_else(|e| e.into_inner()) =
-            Some(CaptureState::Recording(state));
-        Ok(())
+        self.driver
+            .run(async {
+                if self.capture.lock().map(|c| c.is_some()).unwrap_or(true) {
+                    return Err(E2eError::Config(
+                        "capture already active on this page; stop it first".to_string(),
+                    ));
+                }
+                let state = self.driver.start_recording(&opts).await?;
+                *self.capture.lock().unwrap_or_else(|e| e.into_inner()) =
+                    Some(CaptureState::Recording(state));
+                Ok(())
+            })
+            .await
     }
 
     /// Take the capture state only when it is a recording.
@@ -3923,15 +4541,19 @@ impl Page {
     /// until damage occurs (use `next_timeout`). Firefox polls screenshots
     /// at `opts.fps` regardless of motion.
     pub async fn frames(&self, opts: VideoOptions) -> E2eResult<FrameStream> {
-        if self.capture.lock().map(|c| c.is_some()).unwrap_or(true) {
-            return Err(E2eError::Config(
-                "capture already active on this page; stop it first".to_string(),
-            ));
-        }
-        let (stream, pump) = self.driver.start_frame_stream(&opts).await?;
-        *self.capture.lock().unwrap_or_else(|e| e.into_inner()) =
-            Some(CaptureState::Streaming(pump));
-        Ok(stream)
+        self.driver
+            .run(async {
+                if self.capture.lock().map(|c| c.is_some()).unwrap_or(true) {
+                    return Err(E2eError::Config(
+                        "capture already active on this page; stop it first".to_string(),
+                    ));
+                }
+                let (stream, pump) = self.driver.start_frame_stream(&opts).await?;
+                *self.capture.lock().unwrap_or_else(|e| e.into_inner()) =
+                    Some(CaptureState::Streaming(pump));
+                Ok(stream)
+            })
+            .await
     }
 
     /// Stop the live frame stream.
@@ -3948,7 +4570,9 @@ impl Page {
         rect: &ElementRect,
         quality: Option<u8>,
     ) -> E2eResult<Vec<u8>> {
-        self.driver.screenshot_clip(rect, quality).await
+        self.driver
+            .run(async { self.driver.screenshot_clip(rect, quality).await })
+            .await
     }
 
     /// Close the page target.
@@ -4039,6 +4663,7 @@ mod tests {
                 path: None,
                 http_only: false,
                 secure: false,
+                same_site: None,
                 expires: None,
             }],
             local_storage,

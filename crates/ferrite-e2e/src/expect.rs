@@ -100,21 +100,28 @@ where
     F: FnMut() -> Fut,
     Fut: Future<Output = E2eResult<Option<String>>>,
 {
-    let deadline = tokio::time::Instant::now() + timeout;
-    let mut last: Option<String>;
-    loop {
-        match check().await {
-            Ok(None) => return Ok(()),
-            Ok(Some(mismatch)) => last = Some(mismatch),
-            Err(error) => last = Some(error.to_string()),
-        }
-        if tokio::time::Instant::now() > deadline {
-            return Err(E2eError::Expect(format!(
-                "{description} (last: {})",
-                last.as_deref().unwrap_or("no data yet")
-            )));
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+    let mut last = None;
+    let result = crate::operation::Deadline::new(timeout)
+        .run(description.clone(), async {
+            loop {
+                match check().await {
+                    Ok(None) => return Ok(()),
+                    Ok(Some(mismatch)) => last = Some(mismatch),
+                    Err(error @ (E2eError::Cancelled(_) | E2eError::Disconnected(_))) => {
+                        return Err(error)
+                    }
+                    Err(error) => last = Some(error.to_string()),
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await;
+    match result {
+        Err(E2eError::Timeout(..)) => Err(E2eError::Expect(format!(
+            "{description} (last: {})",
+            last.as_deref().unwrap_or("no data yet")
+        ))),
+        result => result,
     }
 }
 
@@ -160,7 +167,7 @@ where
                     Ok(None)
                 }
                 Ok(None) => Ok(Some("pending".to_string())),
-                Err(error) => Ok(Some(error.to_string())),
+                Err(error) => Err(error),
             }
         }
     })
@@ -180,7 +187,7 @@ where
     Fut: Future<Output = E2eResult<()>>,
 {
     poll(timeout.into().duration(), description.into(), || async {
-        Ok(check().await.err().map(|error| error.to_string()))
+        check().await.map(|()| None)
     })
     .await
 }
@@ -381,7 +388,7 @@ impl PageExpect {
                     Ok(diff) => Ok(Some(diff.summary())),
                     // Size mismatches count as different under negation.
                     Err(_) if negated => Ok(None),
-                    Err(error) => Ok(Some(error.to_string())),
+                    Err(error) => Err(error),
                 }
             }
         })
@@ -455,7 +462,7 @@ impl LocatorExpect {
             match predicate(self.locator.clone()).await {
                 Ok(value) if value != self.negated => Ok(None),
                 Ok(_) => Ok(Some(description.to_string())),
-                Err(error) => Ok(Some(error.to_string())),
+                Err(error) => Err(error),
             }
         })
         .await
@@ -1201,7 +1208,7 @@ impl LocatorExpect {
                     Ok(diff) => Ok(Some(diff.summary())),
                     // Size mismatches count as different under negation.
                     Err(_) if negated => Ok(None),
-                    Err(error) => Ok(Some(error.to_string())),
+                    Err(error) => Err(error),
                 }
             }
         })
@@ -1270,6 +1277,34 @@ impl Locator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn polling_bounds_a_hung_check_and_does_not_swallow_cancellation() {
+        let result = expect_to_pass("hung", Duration::from_millis(20), || {
+            std::future::pending::<E2eResult<()>>()
+        })
+        .await;
+        assert!(matches!(result, Err(E2eError::Expect(_))));
+        let result = expect_poll::<u32, _, _>("cancel", Duration::ZERO, || async {
+            Err(E2eError::Cancelled("stop".into()))
+        })
+        .await;
+        assert!(matches!(result, Err(E2eError::Cancelled(_))));
+        let checks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = checks.clone();
+        expect_to_pass("zero", Duration::ZERO, move || {
+            let count = count.clone();
+            async move {
+                if count.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    Err(E2eError::Expect("retry".into()))
+                } else {
+                    Ok(())
+                }
+            }
+        })
+        .await
+        .unwrap();
+    }
+
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]

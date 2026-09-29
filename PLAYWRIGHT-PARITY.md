@@ -19,9 +19,9 @@ reporter, Android and Electron APIs:
 | Classification | Members | Meaning |
 |---|---:|---|
 | Equivalent | 15 | Counterpart for the basic operation/value, without full options or engine compatibility |
-| Partial | 511 | Related exposed operation with material semantic, option or engine differences |
+| Partial | 529 | Related exposed operation with material semantic, option or engine differences |
 | Idiomatic | 42 | Comparable operation through Rust language/library facilities |
-| Missing | 450 | No dedicated public counterpart |
+| Missing | 432 | No dedicated public counterpart |
 
 These counts describe an inventory, **not a behavioral compatibility
 percentage**. The earlier inventory had 458 Partial and 503 Missing members.
@@ -52,11 +52,11 @@ implementation.
 | Semantic locators | Associated labels target controls; roles and accessible names use shared DOM helpers; open shadow-root traversal | Full accessible-name specification and closed shadow roots remain outside this implementation |
 | Actions | Retry readiness, visibility/stability/hit testing, trusted forced clicks, trusted checkbox/key input; delayed fill/select and contenteditable support | Some actions use DOM setters/events; full native input/event/layout semantics remain narrower |
 | DOM access | Separate textContent/innerText, arrays, evaluate-all/JSON arguments, highlight removal; single-target getters wait and enforce strictness | JSON values only, without arbitrary JS/JSHandle argument serialization |
-| Frames and handles | Same-origin lazy/nested/replacement `FrameLocator`, frame ownership conversion, remote handle evaluation/properties | Cross-origin/OOPIF lazy selection and ElementHandle are deferred |
+| Frames and handles | Same-origin lazy/nested/replacement `FrameLocator`, frame ownership, content/function/URL/load/selector helpers, remote handle evaluation/properties | Cross-origin/OOPIF lazy selection and ElementHandle are deferred |
 | Assertions | Exact/regex page title/URL, normalized ordered texts, classes, values, role/error message, custom predicates, `expect_to_pass` | No custom matcher registry/asymmetric matchers or full options parity |
 | Accessibility snapshots | Structured DOM role/name/state tree and locator/page exact snapshot assertions | Approximation, without complete ARIA/YAML matching or all upstream modes |
 | Clock | Separate fixed Date/system time, run-for/fast-forward, promise/timer ordering, pause-at/resume and installation time | Page-local; navigation reinstalls initial state; idle callbacks approximate browser behavior |
-| API testing | Query/headers/JSON/form/raw/multipart, cookies, TLS/proxy/auth, timeout, redirects, status checks and connect retries | No full APIRequest lifecycle/storage-state API or all redirect/retry semantics |
+| API testing | Query/headers/JSON/form/raw/multipart, cookies, TLS/proxy/auth, timeout, redirects, status checks and connect retries | IndexedDB state and all redirect/retry semantics remain deferred; returned response buffers are independently owned |
 | Browser/API storage | Context-linked cookies in both directions; isolated protocol cookie partitions; Playwright cookies/origins localStorage JSON | API transport options configured separately; redirect/partition/SameSite details remain narrower; no IndexedDB/OPFS snapshots |
 | HTTP credentials | Browser challenge authentication on Chromium, preserving extra headers; explicit preemptive Basic helper | Firefox challenge credentials unsupported; cached-auth clearing is approximate |
 | Callbacks and buffers | Page-exposed functions survive navigation; console/error retrieval and clearing | No context-wide bindings, async Rust callbacks or complete frame/worker dispatch |
@@ -93,9 +93,13 @@ presence does not establish full Playwright behavior:
   TestStep plugin graph, blob merging or all upstream report formats.
 - Screenshot comparison, update modes and paths differ. PDF options, device
   descriptors, emulation and permissions have smaller surfaces.
-- URL/event/network waits retain narrower matching/result options. Timeout
-  defaults can be shared across pages, but protocol calls also retain backend
-  timeouts; zero-timeout behavior is not uniformly Playwright-compatible.
+- URL/event/network waits retain narrower matching/result options. Zero disables
+  the operation timeout; action/protocol defaults are shared across page clones.
+  Cancellation drops the outstanding wait; already issued browser commands or
+  JavaScript may still finish remotely. It is cooperative and cannot interrupt
+  blocking synchronous Rust code.
+  Cleanup has an independent per-operation budget rather than Playwright's shared
+  afterEach/fixture-teardown budget.
 - Hooks are runner-wide rather than describe-suite scoped. Fixture dependency
   resolution, worker lifecycle and runtime test metadata mutation remain partial.
 
@@ -114,14 +118,48 @@ These are exclusions from the practical implementation, not implemented APIs:
 - Inspector/UI mode, code generation, component mounting, Android/ADB/WebView
   and Electron backends.
 - Process-based workers, project dependencies, suite execution scopes, fixture
-  dependency/worker graphs, global timeout/max-failure orchestration, live
-  custom reporters, Trace Viewer archives and advanced report merging.
+  dependency/worker graphs, live custom reporters, Trace Viewer archives and advanced report merging.
 - Full accessibility/selector algorithms, YAML ARIA matchers, all JS value
   serialization, IndexedDB/OPFS state persistence and complete backend parity.
 
 The matrix preserves each missing member so future work can be selected
 without treating raw CDP, arbitrary evaluation or Rust assertions as evidence
 that a dedicated feature was implemented.
+
+## Reliability and API additions
+
+- `CancellationToken`, `OperationOptions`, page/locator clones with cancellation
+  and timeout overrides, and cancellation on page/context/client disposal.
+  Protocol futures reclaim their pending-command entries when dropped. Zero
+  disables API, protocol, wait and assertion deadlines; a hanging predicate/check
+  remains bounded by the outer finite operation budget.
+- `ApiClient::storage_state`, `apply_storage_state`, save/load helpers and
+  `ApiClientOptions::storage_state`. Cookies preserve domain, path, session/expiry,
+  HttpOnly, Secure and SameSite, including redirect cookies and expiry deletions.
+  Context-linked clients inherit headers, Basic credentials, timeout, TLS and
+  proxy settings at creation; cookie operations never create temporary pages.
+  Browser auth challenges and browser emulation restrictions remain unchanged.
+- Frame owning page, document content replacement, function/URL/load/selector
+  waits and live `current_url`. Promise predicates are awaited in the frame.
+  Frame NetworkIdle tracking and full wait argument/result options are deferred.
+- `Runner::global_timeout`, `max_failures`, `cleanup_timeout` and cancellation.
+  A single attempt budget covers context/page setup, beforeEach, fixture setup
+  and the test body. Teardown runs after setup/body timeout or panic; callbacks
+  and artifact/close operations are bounded separately. Final unexpected failures
+  count after retries, pending tests are reported skipped, and already active
+  workers finish on maxFailures. Global interruption still produces failure.
+- `BrowserContext::subscribe`, enum event kinds, `wait_for_event` and options.
+  Current/future pages and adopted popups forward console/error, network,
+  download and page-close observations with their source page ID. Page/context
+  closure emits once; caller cancellation and zero timeout are supported.
+  Download lifecycle events use CDP and recent Firefox BiDi; older Firefox
+  versions retain the explicit filesystem download-wait fallback. Dialogs still
+  require handling to be armed; WebSocket events remain Chromium-only.
+
+Configuration/CLI additions: `global_timeout_ms` / `--global-timeout`,
+`max_failures` / `--max-failures`, and `cleanup_timeout_ms` /
+`--cleanup-timeout`. Global timeout and maxFailures default to zero (disabled);
+cleanup defaults to 5 seconds per operation.
 
 ## Engine and validation evidence
 
@@ -148,13 +186,13 @@ cargo clippy -p ferrite-e2e -p ferrite-cli --all-targets -- -D warnings
 
 Validation completed successfully:
 
-- `ferrite-e2e`: **100 unit tests, 3 API tests, 93 browser tests and 2 doctests**.
+- `ferrite-e2e`: **105 unit tests, 3 API tests, 93 browser tests, 4 new regression groups and 2 doctests**.
   Chromium and Firefox were both installed and exercised. Unsupported-engine
   branches remain explicit; these are not full cross-engine conformance claims.
-- CLI/configuration: **4 CLI tests, 17 configuration tests and 1 doctest**.
-- A repeat run of all **8 practical parity regressions** passed;
-  the strict bounding-box getter and shorter missing-element waits also passed
-  their targeted two-engine tests.
+- CLI/configuration: **5 CLI tests, 17 configuration tests and 1 doctest**.
+- All **8 practical parity regressions** passed in the full run; the final wait
+  changes passed three targeted two-engine checks, and the four new regression
+  groups passed again after API retry and zero-timeout refinements.
 - `cargo clippy -p ferrite-e2e -p ferrite-cli --all-targets -- -D warnings`
   passed, as did formatting checks for both changed packages and diff checks.
 - Matrix regeneration was deterministic, and incomplete source sets were

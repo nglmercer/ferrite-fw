@@ -1,10 +1,13 @@
 //! Standalone HTTP API client (no browser needed).
 
-use crate::{BrowserContext, Cookie, HttpCredentials};
+use crate::{BrowserContext, HttpCredentials};
 use reqwest::cookie::CookieStore;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use crate::error::{E2eError, E2eResult};
 
@@ -90,6 +93,7 @@ pub struct ApiClientOptions {
     pub ignore_https_errors: bool,
     pub proxy: Option<String>,
     pub credentials: Option<HttpCredentials>,
+    pub storage_state: Option<crate::StorageState>,
 }
 
 impl Default for ApiClientOptions {
@@ -102,6 +106,7 @@ impl Default for ApiClientOptions {
             ignore_https_errors: false,
             proxy: None,
             credentials: None,
+            storage_state: None,
         }
     }
 }
@@ -119,6 +124,7 @@ pub struct ApiRequestOptions {
     pub fail_on_status_code: bool,
     /// Retry connection failures only; HTTP error statuses are never retried.
     pub max_retries: u32,
+    pub cancellation: Option<crate::CancellationToken>,
 }
 
 /// In-memory multipart field or file.
@@ -136,12 +142,83 @@ pub struct ApiClient {
     client: reqwest::Client,
     base_url: Option<String>,
     headers: Vec<(String, String)>,
-    jar: Arc<reqwest::cookie::Jar>,
+    jar: Arc<crate::api_cookies::ApiCookieJar>,
+    timeout: Duration,
+    lifecycle: crate::CancellationToken,
+    cancellation: crate::CancellationToken,
+    origins: Arc<Mutex<Vec<crate::StorageOrigin>>>,
+    linked_request: Arc<tokio::sync::Mutex<()>>,
     context: Option<BrowserContext>,
     credentials: Option<HttpCredentials>,
 }
 
 impl ApiClient {
+    pub fn with_cancellation(&self, cancellation: crate::CancellationToken) -> Self {
+        let mut client = self.clone();
+        client.cancellation = cancellation;
+        client
+    }
+    async fn run<T>(
+        &self,
+        future: impl std::future::Future<Output = E2eResult<T>>,
+    ) -> E2eResult<T> {
+        self.lifecycle
+            .run(self.cancellation.run(async {
+                if let Some(context) = &self.context {
+                    context.cancellation_token().run(future).await
+                } else {
+                    future.await
+                }
+            }))
+            .await
+    }
+    /// Invalidate all clones and interrupt in-flight requests. Response buffers
+    /// already returned remain owned by their individual responses.
+    pub fn dispose(&self) {
+        self.lifecycle.cancel_with_reason("API client disposed");
+        self.jar.clear();
+    }
+    pub async fn storage_state(&self) -> E2eResult<crate::StorageState> {
+        self.run(async {
+            if let Some(context) = &self.context {
+                return context.storage_state().await;
+            }
+            Ok(crate::StorageState {
+                origin: String::new(),
+                local_storage: Default::default(),
+                cookies: self.jar.snapshot(),
+                origins: self
+                    .origins
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone(),
+            })
+        })
+        .await
+    }
+    pub async fn save_storage_state(&self, path: impl AsRef<std::path::Path>) -> E2eResult<()> {
+        tokio::fs::write(
+            path,
+            serde_json::to_vec_pretty(&self.storage_state().await?)?,
+        )
+        .await?;
+        Ok(())
+    }
+    pub async fn apply_storage_state(&self, state: &crate::StorageState) -> E2eResult<()> {
+        self.run(async {
+            if let Some(context) = &self.context {
+                context.apply_storage_state(state).await?;
+            }
+            self.jar.restore(&state.cookies, self.base_url.as_deref())?;
+            *self.origins.lock().unwrap_or_else(|e| e.into_inner()) = state.all_origins();
+            Ok(())
+        })
+        .await
+    }
+    pub async fn load_storage_state(&self, path: impl AsRef<std::path::Path>) -> E2eResult<()> {
+        self.apply_storage_state(&serde_json::from_slice(&tokio::fs::read(path).await?)?)
+            .await
+    }
     /// Client without a base URL (absolute URLs only).
     pub fn new() -> Self {
         Self::with_options(ApiClientOptions::default()).expect("default HTTP client configuration")
@@ -158,7 +235,10 @@ impl ApiClient {
 
     /// Configure cookies, proxy, TLS, authentication, redirects and timeouts.
     pub fn with_options(options: ApiClientOptions) -> E2eResult<Self> {
-        let jar = Arc::new(reqwest::cookie::Jar::default());
+        let jar = Arc::new(crate::api_cookies::ApiCookieJar::default());
+        if let Some(state) = &options.storage_state {
+            jar.restore(&state.cookies, options.base_url.as_deref())?;
+        }
         let mut builder = reqwest::Client::builder()
             .cookie_provider(jar.clone())
             .danger_accept_invalid_certs(options.ignore_https_errors)
@@ -167,9 +247,6 @@ impl ApiClient {
             } else {
                 reqwest::redirect::Policy::limited(options.max_redirects)
             });
-        if !options.timeout.is_zero() {
-            builder = builder.timeout(options.timeout);
-        }
         if let Some(proxy) = &options.proxy {
             builder = builder.proxy(reqwest::Proxy::all(proxy)?);
         }
@@ -178,6 +255,17 @@ impl ApiClient {
             base_url: options.base_url,
             headers: options.headers,
             jar,
+            timeout: options.timeout,
+            lifecycle: crate::CancellationToken::new(),
+            cancellation: crate::CancellationToken::new(),
+            origins: Arc::new(Mutex::new(
+                options
+                    .storage_state
+                    .as_ref()
+                    .map(|s| s.all_origins())
+                    .unwrap_or_default(),
+            )),
+            linked_request: Arc::new(tokio::sync::Mutex::new(())),
             context: None,
             credentials: options.credentials,
         })
@@ -206,75 +294,93 @@ impl ApiClient {
         path: &str,
         options: ApiRequestOptions,
     ) -> E2eResult<ApiResponse> {
-        let bodies = [
-            options.body.is_some(),
-            options.json.is_some(),
-            options.form.is_some(),
-            options.multipart.is_some(),
-        ]
-        .into_iter()
-        .filter(|v| *v)
-        .count();
-        if bodies > 1 {
-            return Err(E2eError::Config(
-                "API payload options are mutually exclusive".into(),
-            ));
-        }
-        let method = method
-            .parse::<reqwest::Method>()
-            .map_err(|e| E2eError::Config(e.to_string()))?;
-        let mut attempt = 0;
-        loop {
-            let mut request = self
-                .client
-                .request(method.clone(), self.url(path)?)
-                .query(&options.query);
-            for (name, value) in &options.headers {
-                request = request.header(name, value);
-            }
-            if let Some(timeout) = options.timeout.filter(|t| !t.is_zero()) {
-                request = request.timeout(timeout);
-            }
-            if let Some(body) = &options.body {
-                request = request.body(body.clone());
-            }
-            if let Some(json) = &options.json {
-                request = request.json(json);
-            }
-            if let Some(form) = &options.form {
-                request = request.form(form);
-            }
-            if let Some(fields) = &options.multipart {
-                let mut form = reqwest::multipart::Form::new();
-                for field in fields {
-                    let mut part = reqwest::multipart::Part::bytes(field.bytes.clone());
-                    if let Some(filename) = &field.filename {
-                        part = part.file_name(filename.clone());
-                    }
-                    if let Some(content_type) = &field.content_type {
-                        part = part.mime_str(content_type)?;
-                    }
-                    form = form.part(field.name.clone(), part);
-                }
-                request = request.multipart(form);
-            }
-            match self.send(request).await {
-                Err(E2eError::Http(error))
-                    if error.is_connect() && attempt < options.max_retries =>
-                {
-                    attempt += 1;
-                }
-                Ok(response) if options.fail_on_status_code && response.status() >= 400 => {
-                    return Err(E2eError::Config(format!(
-                        "HTTP {} {} for {}",
-                        response.status(),
-                        response.status_text(),
-                        response.url()
-                    )))
-                }
-                result => return result,
-            }
-        }
+        let client = options
+            .cancellation
+            .as_ref()
+            .map(|token| self.with_cancellation(token.clone()))
+            .unwrap_or_else(|| self.clone());
+        // Retries consume the same total budget as headers, cookies and body reads.
+        client
+            .run(
+                crate::operation::Deadline::new(options.timeout.unwrap_or(self.timeout)).run(
+                    "API fetch",
+                    async {
+                        let bodies = [
+                            options.body.is_some(),
+                            options.json.is_some(),
+                            options.form.is_some(),
+                            options.multipart.is_some(),
+                        ]
+                        .into_iter()
+                        .filter(|v| *v)
+                        .count();
+                        if bodies > 1 {
+                            return Err(E2eError::Config(
+                                "API payload options are mutually exclusive".into(),
+                            ));
+                        }
+                        let method = method
+                            .parse::<reqwest::Method>()
+                            .map_err(|e| E2eError::Config(e.to_string()))?;
+                        let mut attempt = 0;
+                        loop {
+                            let mut request = self
+                                .client
+                                .request(method.clone(), self.url(path)?)
+                                .query(&options.query);
+                            for (name, value) in &options.headers {
+                                request = request.header(name, value);
+                            }
+                            if let Some(timeout) = options.timeout {
+                                request = request.timeout(timeout);
+                            }
+                            if let Some(body) = &options.body {
+                                request = request.body(body.clone());
+                            }
+                            if let Some(json) = &options.json {
+                                request = request.json(json);
+                            }
+                            if let Some(form) = &options.form {
+                                request = request.form(form);
+                            }
+                            if let Some(fields) = &options.multipart {
+                                let mut form = reqwest::multipart::Form::new();
+                                for field in fields {
+                                    let mut part =
+                                        reqwest::multipart::Part::bytes(field.bytes.clone());
+                                    if let Some(filename) = &field.filename {
+                                        part = part.file_name(filename.clone());
+                                    }
+                                    if let Some(content_type) = &field.content_type {
+                                        part = part.mime_str(content_type)?;
+                                    }
+                                    form = form.part(field.name.clone(), part);
+                                }
+                                request = request.multipart(form);
+                            }
+                            match client.send(request).await {
+                                Err(E2eError::Http(error))
+                                    if error.is_connect() && attempt < options.max_retries =>
+                                {
+                                    attempt += 1;
+                                }
+                                Ok(response)
+                                    if options.fail_on_status_code && response.status() >= 400 =>
+                                {
+                                    return Err(E2eError::Config(format!(
+                                        "HTTP {} {} for {}",
+                                        response.status(),
+                                        response.status_text(),
+                                        response.url()
+                                    )))
+                                }
+                                result => return result,
+                            }
+                        }
+                    },
+                ),
+            )
+            .await
     }
 
     /// Add a default header sent with every request.
@@ -420,101 +526,78 @@ impl ApiClient {
     /// Send a request with default headers; transport errors are `Http`.
     async fn send(&self, request: reqwest::RequestBuilder) -> E2eResult<ApiResponse> {
         let mut request = request.build()?;
-        for (name, value) in &self.headers {
-            let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
-                .map_err(|e| E2eError::Config(e.to_string()))?;
-            if !request.headers().contains_key(&name) {
-                request.headers_mut().insert(
-                    name,
-                    value
-                        .parse()
-                        .map_err(|e| E2eError::Config(format!("invalid API header: {e}")))?,
-                );
-            }
-        }
-        let mut request = reqwest::RequestBuilder::from_parts(self.client.clone(), request);
-        if let Some(credentials) = &self.credentials {
-            request = request.basic_auth(&credentials.username, Some(&credentials.password));
-        }
-        let mut request = request.build()?;
-        if let Some(context) = &self.context {
-            let url = request.url().clone();
-            let cookies = context.cookies().await?;
-            let header = cookies
-                .iter()
-                .filter(|c| cookie_matches(c, &url))
-                .map(|c| format!("{}={}", c.name, c.value))
-                .collect::<Vec<_>>()
-                .join("; ");
-            if !request.headers().contains_key(reqwest::header::COOKIE) {
-                request.headers_mut().insert(
-                    reqwest::header::COOKIE,
-                    header
-                        .parse()
-                        .map_err(|e| E2eError::Config(format!("invalid cookie header: {e}")))?,
-                );
-            }
-        }
-        let response = self.client.execute(request).await?;
-        let url = response.url().to_string();
-        let status_text = response
-            .status()
-            .canonical_reason()
-            .unwrap_or("")
-            .to_string();
-        if let Some(context) = &self.context {
-            let cookies: Vec<Cookie> = response
-                .headers()
-                .get_all(reqwest::header::SET_COOKIE)
-                .iter()
-                .filter_map(|header| {
-                    let parsed = cookie::Cookie::parse(header.to_str().ok()?.to_string()).ok()?;
-                    Some(Cookie {
-                        name: parsed.name().into(),
-                        value: parsed.value().into(),
-                        domain: parsed.domain().map(str::to_string),
-                        path: parsed
-                            .path()
-                            .map(str::to_string)
-                            .or_else(|| Some(default_cookie_path(response.url()))),
-                        http_only: parsed.http_only().unwrap_or(false),
-                        secure: parsed.secure().unwrap_or(false),
-                        expires: parsed
-                            .max_age()
-                            .map(|age| {
-                                std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_secs() as i64
-                                    + age.whole_seconds()
-                            })
-                            .or_else(|| {
-                                parsed.expires_datetime().map(|time| time.unix_timestamp())
-                            }),
-                    })
+        let timeout = request.timeout_mut().take().unwrap_or(self.timeout);
+
+        self.run(
+            crate::operation::Deadline::new(timeout).run("API request", async {
+                for (name, value) in &self.headers {
+                    let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+                        .map_err(|e| E2eError::Config(e.to_string()))?;
+                    if !request.headers().contains_key(&name) {
+                        request.headers_mut().insert(
+                            name,
+                            value.parse().map_err(|e| {
+                                E2eError::Config(format!("invalid API header: {e}"))
+                            })?,
+                        );
+                    }
+                }
+                if !request
+                    .headers()
+                    .contains_key(reqwest::header::AUTHORIZATION)
+                {
+                    if let Some(credentials) = &self.credentials {
+                        request = reqwest::RequestBuilder::from_parts(self.client.clone(), request)
+                            .basic_auth(&credentials.username, Some(&credentials.password))
+                            .build()?;
+                    }
+                }
+                let _linked = if self.context.is_some() {
+                    Some(self.linked_request.lock().await)
+                } else {
+                    None
+                };
+                if let Some(context) = &self.context {
+                    self.jar
+                        .restore(&context.cookies().await?, self.base_url.as_deref())?;
+                }
+                let response = self.client.execute(request).await;
+                // Apply all accepted Set-Cookie headers even when a redirect or body fails.
+                if let Some(context) = &self.context {
+                    for (cookie, url) in self.jar.take_changes() {
+                        context.add_cookies(&[cookie], &url).await?;
+                    }
+                }
+                if self.context.is_none() {
+                    self.jar.take_changes();
+                }
+                let response = response?;
+                let url = response.url().to_string();
+                let status_text = response
+                    .status()
+                    .canonical_reason()
+                    .unwrap_or("")
+                    .to_string();
+                let status = response.status().as_u16();
+                let mut headers = Vec::new();
+                for (name, value) in response.headers() {
+                    let text = value
+                        .to_str()
+                        .map(str::to_string)
+                        .unwrap_or_else(|_| String::from_utf8_lossy(value.as_bytes()).into_owned());
+                    headers.push((name.to_string(), text));
+                }
+                let body = response.bytes().await?.to_vec();
+                Ok(ApiResponse {
+                    url,
+                    status_text,
+                    status,
+                    headers,
+                    body,
                 })
-                .collect();
-            if !cookies.is_empty() {
-                context.add_cookies(&cookies, &url).await?;
-            }
-        }
-        let status = response.status().as_u16();
-        let mut headers = Vec::new();
-        for (name, value) in response.headers() {
-            let text = value
-                .to_str()
-                .map(str::to_string)
-                .unwrap_or_else(|_| String::from_utf8_lossy(value.as_bytes()).into_owned());
-            headers.push((name.to_string(), text));
-        }
-        let body = response.bytes().await?.to_vec();
-        Ok(ApiResponse {
-            url,
-            status_text,
-            status,
-            headers,
-            body,
-        })
+            }),
+        )
+        .await
     }
 }
 
@@ -531,36 +614,4 @@ impl std::fmt::Debug for ApiClient {
             .field("context_linked", &self.context.is_some())
             .finish_non_exhaustive()
     }
-}
-
-fn default_cookie_path(url: &reqwest::Url) -> String {
-    url.path()
-        .rsplit_once('/')
-        .map(|(prefix, _)| if prefix.is_empty() { "/" } else { prefix })
-        .unwrap_or("/")
-        .to_string()
-}
-
-fn cookie_matches(cookie: &Cookie, url: &reqwest::Url) -> bool {
-    let host = url.host_str().unwrap_or("");
-    let domain = cookie.domain.as_deref().unwrap_or(host);
-    let domain_match = if domain.starts_with('.') {
-        host == domain.trim_start_matches('.') || host.ends_with(domain)
-    } else {
-        host == domain
-    };
-    let path = cookie.path.as_deref().unwrap_or("/");
-    let path_match = url.path() == path
-        || (url.path().starts_with(path)
-            && (path.ends_with('/') || url.path().as_bytes().get(path.len()) == Some(&b'/')));
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
-    domain_match
-        && path_match
-        && (!cookie.secure || url.scheme() == "https")
-        && cookie
-            .expires
-            .is_none_or(|expiry| expiry < 0 || expiry > now)
 }

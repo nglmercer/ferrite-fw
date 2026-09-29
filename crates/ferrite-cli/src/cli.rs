@@ -252,6 +252,15 @@ pub(crate) struct E2eArgs {
     /// Parallel workers.
     #[arg(long)]
     pub(crate) workers: Option<usize>,
+    /// Whole-run timeout in milliseconds (zero disables it).
+    #[arg(long)]
+    pub(crate) global_timeout: Option<u64>,
+    /// Stop scheduling after this many unexpected failures.
+    #[arg(long)]
+    pub(crate) max_failures: Option<usize>,
+    /// Cleanup timeout in milliseconds.
+    #[arg(long)]
+    pub(crate) cleanup_timeout: Option<u64>,
     /// Only run tests whose name contains this.
     #[arg(long)]
     pub(crate) filter: Option<String>,

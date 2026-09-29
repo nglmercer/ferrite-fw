@@ -38,6 +38,9 @@ fn config_from_variables(read: impl Fn(&str) -> Option<String>) -> E2eResult<E2e
         "TIMEOUT_MS",
         "EXPECT_TIMEOUT_MS",
         "VIDEO_FPS",
+        "GLOBAL_TIMEOUT_MS",
+        "MAX_FAILURES",
+        "CLEANUP_TIMEOUT_MS",
     ] {
         if let Some(value) = read(&format!("FERRITE_E2E_{name}")) {
             let n: u64 = value
@@ -57,6 +60,12 @@ fn config_from_variables(read: impl Fn(&str) -> Option<String>) -> E2eResult<E2e
                         .map_err(|_| E2eError::Config("video_fps overflow".into()))?
                 }
                 "TIMEOUT_MS" => config.timeout_ms = n,
+                "GLOBAL_TIMEOUT_MS" => config.global_timeout_ms = n,
+                "CLEANUP_TIMEOUT_MS" => config.cleanup_timeout_ms = n,
+                "MAX_FAILURES" => {
+                    config.max_failures = usize::try_from(n)
+                        .map_err(|_| E2eError::Config("max_failures overflow".into()))?
+                }
                 _ => config.expect_timeout_ms = n,
             }
         }
@@ -70,6 +79,25 @@ fn config_from_variables(read: impl Fn(&str) -> Option<String>) -> E2eResult<E2e
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runner_limits_survive_json_and_legacy_overrides() {
+        let config = config_from_variables(|name| match name {
+            "FERRITE_E2E_CONFIG" => Some(
+                r#"{"global_timeout_ms":800,"max_failures":2,"cleanup_timeout_ms":250}"#.into(),
+            ),
+            "FERRITE_E2E_MAX_FAILURES" => Some("3".into()),
+            _ => None,
+        })
+        .unwrap();
+        assert_eq!(config.global_timeout_ms, 800);
+        assert_eq!(config.max_failures, 3);
+        assert_eq!(config.cleanup_timeout_ms, 250);
+        let default = E2eConfig::default();
+        assert_eq!(default.global_timeout_ms, 0);
+        assert_eq!(default.max_failures, 0);
+        assert_eq!(default.cleanup_timeout_ms, 5000);
+    }
     #[test]
     fn complete_config_preserved_and_legacy_overrides_win() {
         let json = serde_json::json!({"browser":"firefox","headless":false,"args":["--custom"],"user_agent":"agent","proxy_server":"http://proxy:8080","viewport":{"width":800,"height":600},"expect_timeout_ms":900,"slow_mo_ms":12}).to_string();
