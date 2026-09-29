@@ -45,3 +45,55 @@ cancellation to their clones. `with_timeout` overrides their action/protocol
 budgets without changing siblings. Frame helpers include `page`, `set_content`,
 `current_url` and function/URL/load/selector waits. See
 [the parity audit](../../PLAYWRIGHT-PARITY.md) for engine and API limitations.
+
+Define fixtures with explicit Rust dependencies and scopes:
+
+```rust
+use ferrite_e2e::*;
+
+struct Token(String);
+struct Profile(String);
+
+let runner = Runner::default()
+    .fixture_definition(
+        Fixture::<Token>::new(|_| async { Ok(Token("session".into())) })
+            .scope(FixtureScope::Worker),
+    )
+    .fixture_definition(
+        Fixture::<Profile>::new(|dependencies| async move {
+            Ok(Profile(dependencies.require::<Token>()?.0.clone()))
+        })
+        .dependency::<Token>(),
+    );
+let tests = Suite::new("account")
+    .retries(1)
+    .before_each(|page| async move { page.goto("/").await })
+    .tests(vec![
+        test_with_context("profile", |ctx| async move {
+            assert_eq!(ctx.get::<Profile>().unwrap().0, "session");
+            Ok(())
+        })
+        .fixture::<Profile>(),
+    ]);
+```
+
+New definitions are lazy; `.automatic(true)` opts into unconditional setup.
+The legacy `Runner::fixture` helpers remain automatic and per-attempt.
+Worker fixtures are shared within one worker/project. Test fixtures rebuild on
+retries. Unexpected failures retire logical worker fixture and suite state before
+reuse. Dependencies must be registered and worker fixtures cannot depend on test
+fixtures. `.teardown(...)` cleans dependents first, including after partial setup.
+
+Nest suites by passing an inner `Suite::tests(...)` result into the outer suite.
+Timeouts, retries, context options and tags inherit, with descendant overrides
+winning. `beforeAll`/`afterAll` run once per participating worker/project;
+`afterAll` runs after the remaining descendants. Before/after-each order follows
+outer-to-inner/inner-to-outer nesting. Skipped and filtered suites do not run hooks.
+
+Network events now distinguish response headers, request completion and transport
+failure. `PageEvent::RequestFinished(NetworkRequest)` supplies request ID, method
+and URL; `RequestFailed` additionally supplies error text and a backend cancellation
+flag. HTTP 4xx/5xx responses finish normally. Context subscriptions forward both
+kinds with the source page ID. `Request` and `Response` also include `request_id`;
+use `..` in patterns when you only need URL/status. Firefox BiDi does not supply an
+explicit cancellation flag (`cancelled` is `None`). Subscribe before triggering requests.

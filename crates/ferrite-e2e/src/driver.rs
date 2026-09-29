@@ -18,7 +18,7 @@ use crate::error::{E2eError, E2eResult};
 use crate::jshandle::JSHandle;
 use crate::page::{
     ColorScheme, ConsoleMessage, Cookie, DialogDecision, DialogHandler, DialogInfo, ElementRect,
-    FrameInfo, LoadState, PageEvent, RecordedRequest, ReducedMotion, RouteAction,
+    FrameInfo, LoadState, NetworkRequest, PageEvent, RecordedRequest, ReducedMotion, RouteAction,
     RouteHandlerEntry, RouteInfo, RouteRule, TraceEntry, WebSocketDirection, WebSocketEvent,
 };
 use crate::video::{assemble_webm, SpooledFrame, VideoFrame, VideoOptions};
@@ -41,6 +41,7 @@ pub struct ConsoleSink {
     pub dialogs: Arc<Mutex<Vec<DialogInfo>>>,
     /// Recorded network requests (oldest first, capped).
     requests: Arc<Mutex<VecDeque<RecordedRequest>>>,
+    active_requests: Arc<Mutex<HashMap<String, NetworkRequest>>>,
     /// WebSocket request id to URL (resolves frame events to sockets).
     sockets: Arc<Mutex<HashMap<String, String>>>,
     /// Page event broadcast (console, dialogs, network, downloads, popups).
@@ -71,10 +72,45 @@ impl ConsoleSink {
             dialogs: Arc::new(Mutex::new(Vec::new())),
             requests: Arc::new(Mutex::new(VecDeque::new())),
             sockets: Arc::new(Mutex::new(HashMap::new())),
+            active_requests: Arc::new(Mutex::new(HashMap::new())),
             events: tokio::sync::broadcast::channel(MAX_EVENT_BUFFER).0,
             context_events: Arc::new(Mutex::new(None)),
             download_dir: Arc::new(Mutex::new(None)),
             downloads_emitted: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn start_network_request(&self, request: NetworkRequest) {
+        // CDP reuses identifiers for redirects. The old hop has finished.
+        self.finish_network_request(&request.request_id, None);
+        self.active_requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(request.request_id.clone(), request.clone());
+        self.inflight.fetch_add(1, Ordering::SeqCst);
+        self.emit(PageEvent::Request {
+            request_id: request.request_id,
+            method: request.method,
+            url: request.url,
+        });
+    }
+
+    fn finish_network_request(&self, id: &str, failure: Option<(String, Option<bool>)>) {
+        let request = self
+            .active_requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(id);
+        if let Some(request) = request {
+            self.inflight.fetch_sub(1, Ordering::SeqCst);
+            self.emit(match failure {
+                Some((error_text, cancelled)) => PageEvent::RequestFailed {
+                    request,
+                    error_text,
+                    cancelled,
+                },
+                None => PageEvent::RequestFinished(request),
+            });
         }
     }
 
@@ -4822,37 +4858,55 @@ fn handle_bidi_event(event: &BidiEvent, sink: &ConsoleSink) {
             sink.push_console(kind, text);
         }
         "network.beforeRequestSent" => {
-            sink.inflight.fetch_add(1, Ordering::SeqCst);
-            sink.emit(PageEvent::Request {
+            sink.start_network_request(NetworkRequest {
+                request_id: event.params["request"]["request"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .into(),
                 method: event.params["request"]["method"]
                     .as_str()
                     .unwrap_or_default()
-                    .to_string(),
+                    .into(),
                 url: event.params["request"]["url"]
                     .as_str()
                     .unwrap_or_default()
-                    .to_string(),
+                    .into(),
             });
         }
-        "network.responseCompleted" => {
-            sink.inflight.fetch_sub(1, Ordering::SeqCst);
+        "network.responseStarted" => {
             sink.emit(PageEvent::Response {
+                request_id: event.params["request"]["request"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .into(),
                 url: event.params["request"]["url"]
                     .as_str()
                     .unwrap_or_default()
-                    .to_string(),
+                    .into(),
                 status: event.params["response"]["status"].as_u64().unwrap_or(0) as u16,
             });
         }
-        "network.fetchError" => {
-            sink.inflight.fetch_sub(1, Ordering::SeqCst);
-            sink.emit(PageEvent::Response {
-                url: event.params["request"]["url"]
+        "network.responseCompleted" => {
+            sink.finish_network_request(
+                event.params["request"]["request"]
                     .as_str()
-                    .unwrap_or_default()
-                    .to_string(),
-                status: 0,
-            });
+                    .unwrap_or_default(),
+                None,
+            );
+        }
+        "network.fetchError" => {
+            sink.finish_network_request(
+                event.params["request"]["request"]
+                    .as_str()
+                    .unwrap_or_default(),
+                Some((
+                    event.params["errorText"]
+                        .as_str()
+                        .unwrap_or("network request failed")
+                        .into(),
+                    None,
+                )),
+            );
         }
         _ => {}
     }
@@ -5382,29 +5436,56 @@ fn handle_cdp_event(event: &CdpEvent, sink: &ConsoleSink) {
             sink.push_console(kind, text);
         }
         "Network.requestWillBeSent" => {
-            sink.inflight.fetch_add(1, Ordering::SeqCst);
-            sink.emit(PageEvent::Request {
+            let id = event.params["requestId"].as_str().unwrap_or_default();
+            if let Some(response) = event.params.get("redirectResponse") {
+                sink.emit(PageEvent::Response {
+                    request_id: id.into(),
+                    url: response["url"].as_str().unwrap_or_default().into(),
+                    status: response["status"].as_u64().unwrap_or(0) as u16,
+                });
+            }
+            sink.start_network_request(NetworkRequest {
+                request_id: id.into(),
                 method: event.params["request"]["method"]
                     .as_str()
                     .unwrap_or_default()
-                    .to_string(),
+                    .into(),
                 url: event.params["request"]["url"]
                     .as_str()
                     .unwrap_or_default()
-                    .to_string(),
+                    .into(),
             });
         }
         "Network.responseReceived" => {
             sink.emit(PageEvent::Response {
+                request_id: event.params["requestId"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .into(),
                 url: event.params["response"]["url"]
                     .as_str()
                     .unwrap_or_default()
-                    .to_string(),
+                    .into(),
                 status: event.params["response"]["status"].as_u64().unwrap_or(0) as u16,
             });
         }
-        "Network.loadingFinished" | "Network.loadingFailed" => {
-            sink.inflight.fetch_sub(1, Ordering::SeqCst);
+        "Network.loadingFinished" => {
+            sink.finish_network_request(
+                event.params["requestId"].as_str().unwrap_or_default(),
+                None,
+            );
+        }
+        "Network.loadingFailed" => {
+            sink.finish_network_request(
+                event.params["requestId"].as_str().unwrap_or_default(),
+                Some((
+                    event.params["errorText"]
+                        .as_str()
+                        .unwrap_or("network request failed")
+                        .into(),
+                    Some(event.params["canceled"].as_bool().unwrap_or(false)),
+                )),
+            );
         }
         "Network.webSocketCreated" => {
             let id = event.params["requestId"].as_str().unwrap_or_default();
@@ -5527,5 +5608,140 @@ mod tests {
         assert_eq!(bidi_key_value("Alt"), "\u{E00A}");
         assert_eq!(bidi_key_value("Meta"), "\u{E00D}");
         assert_eq!(bidi_key_value("Enter"), "\u{E007}");
+    }
+}
+
+#[cfg(test)]
+mod network_lifecycle_tests {
+    use super::*;
+    use crate::PageEventKind;
+    fn cdp(method: &str, params: Value) -> CdpEvent {
+        CdpEvent {
+            session: None,
+            method: method.into(),
+            params,
+        }
+    }
+    #[test]
+    fn redirects_complete_each_hop_and_terminals_do_not_underflow_idle() {
+        let sink = ConsoleSink::new();
+        let mut events = sink.subscribe();
+        handle_cdp_event(
+            &cdp(
+                "Network.requestWillBeSent",
+                serde_json::json!({"requestId":"id","request":{"method":"GET","url":"http://host/old"}}),
+            ),
+            &sink,
+        );
+        handle_cdp_event(
+            &cdp(
+                "Network.requestWillBeSent",
+                serde_json::json!({"requestId":"id","redirectResponse":{"url":"http://host/old","status":302},"request":{"method":"GET","url":"http://host/new"}}),
+            ),
+            &sink,
+        );
+        assert_eq!(sink.inflight.load(Ordering::SeqCst), 1);
+        handle_cdp_event(
+            &cdp(
+                "Network.responseReceived",
+                serde_json::json!({"requestId":"id","response":{"url":"http://host/new","status":500}}),
+            ),
+            &sink,
+        );
+        handle_cdp_event(
+            &cdp(
+                "Network.loadingFinished",
+                serde_json::json!({"requestId":"id"}),
+            ),
+            &sink,
+        );
+        handle_cdp_event(
+            &cdp(
+                "Network.loadingFinished",
+                serde_json::json!({"requestId":"id"}),
+            ),
+            &sink,
+        );
+        handle_cdp_event(
+            &cdp(
+                "Network.loadingFailed",
+                serde_json::json!({"requestId":"unknown"}),
+            ),
+            &sink,
+        );
+        assert_eq!(sink.inflight.load(Ordering::SeqCst), 0);
+        let observed: Vec<_> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+        assert_eq!(
+            observed.iter().map(PageEvent::kind).collect::<Vec<_>>(),
+            [
+                PageEventKind::Request,
+                PageEventKind::Response,
+                PageEventKind::RequestFinished,
+                PageEventKind::Request,
+                PageEventKind::Response,
+                PageEventKind::RequestFinished
+            ]
+        );
+        assert!(
+            matches!(&observed[2], PageEvent::RequestFinished(request) if request.url.ends_with("old"))
+        );
+    }
+    #[test]
+    fn cdp_failure_after_headers_keeps_identity_error_and_cancellation() {
+        let sink = ConsoleSink::new();
+        let mut events = sink.subscribe();
+        handle_cdp_event(
+            &cdp(
+                "Network.requestWillBeSent",
+                serde_json::json!({"requestId":"post-id","request":{"method":"POST","url":"http://host/body"}}),
+            ),
+            &sink,
+        );
+        handle_cdp_event(
+            &cdp(
+                "Network.responseReceived",
+                serde_json::json!({"requestId":"post-id","response":{"url":"http://host/body","status":200}}),
+            ),
+            &sink,
+        );
+        handle_cdp_event(
+            &cdp(
+                "Network.loadingFailed",
+                serde_json::json!({"requestId":"post-id","errorText":"net::ERR_ABORTED","canceled":true}),
+            ),
+            &sink,
+        );
+        events.try_recv().unwrap();
+        events.try_recv().unwrap();
+        assert!(
+            matches!(events.try_recv().unwrap(), PageEvent::RequestFailed {request, error_text, cancelled:Some(true)} if request.method == "POST" && request.request_id == "post-id" && error_text == "net::ERR_ABORTED")
+        );
+        assert_eq!(sink.inflight.load(Ordering::SeqCst), 0);
+    }
+    #[test]
+    fn bidi_failure_is_not_a_synthetic_response() {
+        let sink = ConsoleSink::new();
+        let mut events = sink.subscribe();
+        let params = serde_json::json!({"request":{"request":"id","method":"GET","url":"http://host/offline"},"errorText":"connection refused"});
+        handle_bidi_event(
+            &BidiEvent {
+                method: "network.beforeRequestSent".into(),
+                params: params.clone(),
+            },
+            &sink,
+        );
+        handle_bidi_event(
+            &BidiEvent {
+                method: "network.fetchError".into(),
+                params,
+            },
+            &sink,
+        );
+        assert_eq!(events.try_recv().unwrap().kind(), PageEventKind::Request);
+        assert!(
+            matches!(events.try_recv().unwrap(), PageEvent::RequestFailed {error_text, cancelled:None, ..} if error_text == "connection refused")
+        );
+        assert!(events.try_recv().is_err());
+        assert_eq!(sink.inflight.load(Ordering::SeqCst), 0);
     }
 }

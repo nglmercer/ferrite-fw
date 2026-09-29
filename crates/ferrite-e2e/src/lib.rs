@@ -86,15 +86,15 @@ pub use page::{
     AbortReason, ClickOptions, ColorScheme, ConsoleMessage, Cookie, DeviceDescriptor,
     DialogDecision, DialogInfo, Download, ElementRect, ElementState, Frame, HttpCredentials,
     KeyPress, KeyPressOptions, LoadState, LocatorHandlerFn, LocatorHandlerOptions, MouseButton,
-    MouseClickOptions, NavigationOptions, Page, PageEvent, PageEventKind, RecordedRequest,
-    ReducedMotion, RouteAction, RouteFromHarOptions, RouteHandler, RouteHandlerEntry, RouteInfo,
-    RouteRule, ScreenshotOptions, StorageEntry, StorageOrigin, StorageState, Viewport,
-    WebSocketDirection, WebSocketEvent,
+    MouseClickOptions, NavigationOptions, NetworkRequest, Page, PageEvent, PageEventKind,
+    RecordedRequest, ReducedMotion, RouteAction, RouteFromHarOptions, RouteHandler,
+    RouteHandlerEntry, RouteInfo, RouteRule, ScreenshotOptions, StorageEntry, StorageOrigin,
+    StorageState, Viewport, WebSocketDirection, WebSocketEvent,
 };
 pub use report::{Attachment, TestReport, TestResult, TestStatus};
 pub use runner::{
-    describe, test, test_with_context, FixtureMap, GlobalHook, HookFn, Project, Runner, Test,
-    TestContext, TestContextFn, TestInfo, TestMode,
+    describe, test, test_with_context, Fixture, FixtureMap, FixtureScope, GlobalHook, HookFn,
+    Project, Runner, Suite, Test, TestContext, TestContextFn, TestInfo, TestMode,
 };
 pub use snapshot::{
     assert_snapshot_png, assert_snapshot_text, compare_png, match_text_snapshot,

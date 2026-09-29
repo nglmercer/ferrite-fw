@@ -19,9 +19,9 @@ reporter, Android and Electron APIs:
 | Classification | Members | Meaning |
 |---|---:|---|
 | Equivalent | 15 | Counterpart for the basic operation/value, without full options or engine compatibility |
-| Partial | 529 | Related exposed operation with material semantic, option or engine differences |
+| Partial | 537 | Related exposed operation with material semantic, option or engine differences |
 | Idiomatic | 42 | Comparable operation through Rust language/library facilities |
-| Missing | 432 | No dedicated public counterpart |
+| Missing | 424 | No dedicated public counterpart |
 
 These counts describe an inventory, **not a behavioral compatibility
 percentage**. The earlier inventory had 458 Partial and 503 Missing members.
@@ -42,10 +42,10 @@ implementation.
 
 | Area | Implemented behavior | Remaining limit |
 |---|---|---|
-| Test isolation | Fresh context/page for every test attempt and retry; teardown on errors, timeouts and body panics | Fixtures remain per-attempt, without dependency graphs or worker scope |
+| Test isolation | Fresh context/page for every test attempt and retry; teardown on errors, timeouts and body panics | Typed dependency graphs, lazy requests and worker/project lifetimes; no built-in page fixture injection or named fixture overrides |
 | Page ownership | `Browser::new_page()` owns a fresh context and closes its popups on disposal | Use `default_context().new_page()` for intentional shared storage |
 | Browser lifecycle | Persistent Chromium/Firefox profiles, graceful close, Chromium HTTP/WebSocket CDP connections | No Playwright remote protocol, browser server, channels or managed browser installer |
-| Configuration | Complete resolved CLI configuration forwarded as JSON; browser launch/runner consume it, with legacy overrides | Custom suites must use the consuming constructors; no suite-scoped fixture options |
+| Configuration | Complete resolved CLI configuration forwarded as JSON; browser launch/runner consume it, with legacy overrides | Suite/test context, timeout, retry and tag inheritance; no named fixture option override hierarchy |
 | Projects and scheduling | Independent project browsers/launch/context settings; parallel Tokio tasks, retries, repetition, filters and named resource locks | No process workers, project dependency graph or distributed locks |
 | Artifacts | Per-attempt output directories, validated `TestInfo::output_path()`, attachments, screenshots and video policies | No Playwright snapshot templates or full reporter object model |
 | Locator selection | Strict single-target operations, genuine first/last/nth slicing, relative has/hasNot filters, exact/regex/visibility builders | No complete Playwright selector extension/custom-engine surface |
@@ -100,8 +100,10 @@ presence does not establish full Playwright behavior:
   blocking synchronous Rust code.
   Cleanup has an independent per-operation budget rather than Playwright's shared
   afterEach/fixture-teardown budget.
-- Hooks are runner-wide rather than describe-suite scoped. Fixture dependency
-  resolution, worker lifecycle and runtime test metadata mutation remain partial.
+- Nested suites scope hooks and inherit settings. Workers remain Tokio tasks,
+  with logical fixture/suite state retired after unexpected failures; no process
+  restart or runtime test metadata mutation. Rust fixture requests/dependencies
+  are explicit type declarations rather than inferred callback parameters.
 
 ## Deliberately deferred substantial work
 
@@ -117,8 +119,8 @@ These are exclusions from the practical implementation, not implemented APIs:
   file-chooser interception and virtual credentials/WebAuthn.
 - Inspector/UI mode, code generation, component mounting, Android/ADB/WebView
   and Electron backends.
-- Process-based workers, project dependencies, suite execution scopes, fixture
-  dependency/worker graphs, live custom reporters, Trace Viewer archives and advanced report merging.
+- Process-based workers, project dependencies, named fixture overrides,
+  live custom reporters, Trace Viewer archives and advanced report merging.
 - Full accessibility/selector algorithms, YAML ARIA matchers, all JS value
   serialization, IndexedDB/OPFS state persistence and complete backend parity.
 
@@ -204,3 +206,43 @@ strict/shadow/semantic locators and delayed actions, callback navigation,
 clock semantics, frame replacements/handles, storage/API cookie sharing,
 HTTP payload/options, configuration forwarding and coverage. Existing tests
 also exercise downloads, credentials, routing, snapshots, input and reports.
+
+## Fixture scopes, suites and network lifecycle
+
+- `Fixture<T>` definitions declare dependencies, test/worker scope, lazy or
+  automatic setup and optional teardown. Tests request lazy values with
+  `Test::fixture::<T>()`; setup reads only declared dependencies through
+  `FixtureMap::require`. Legacy `Runner::fixture` remains automatic/per-attempt.
+  Registration order is independent of dependency order. Missing/duplicate
+  types, cycles and worker-to-test scope inversions fail before setup.
+- Test values are rebuilt on retries. Worker values are reused by tests on the
+  same worker/project and cleaned up after dependent test values. Unexpected
+  attempt failures retire logical worker resources before reuse; the Tokio
+  worker index stays stable. Teardowns run in reverse dependency order, even
+  after partial setup, errors or cancellation, with independent cleanup budgets.
+- `Suite::tests` preserves nested identity. `beforeAll` runs once per participating
+  worker/project; `afterAll` runs after its remaining descendants, inner suites
+  first. Per-attempt hooks run outer-to-inner before the body and inner-to-outer
+  afterward. Timeout/retry/context overrides and tags inherit through nesting;
+  skipped or filtered suites do not execute hooks. BeforeAll uses its own budget.
+- Page/context subscriptions expose request IDs and distinct `RequestFinished`
+  and `RequestFailed` events with method, URL and backend failure text. Response
+  means headers received on both engines; HTTP errors still finish successfully.
+  Redirect hops finish separately, and unknown/duplicate terminal events do not
+  underflow network-idle accounting. Chromium reports explicit cancellation;
+  Firefox BiDi reports cancellation as unknown (`None`).
+- Regression evidence: `tests/scopes_and_network.rs` runs both native engines,
+  including worker/project isolation, parallel workers, retry lifetimes, nested
+  hook ordering/settings, cleanup errors, redirects, streamed responses and
+  transport failures. Unit tests cover graph validation, partial setup teardown
+  and protocol failure/redirect accounting.
+
+Full Chrome 153's unauthenticated Digest challenge timed out in the existing
+`context_digest_auth` regression, identically on the previous `402bd89` commit;
+Chrome Headless Shell passed that regression. This browser-variant limitation
+is separate from the new fixture/suite/network tests, which run with full Chrome
+and Firefox. Chromium launch now disables popup blocking, matching
+[Playwright's automation defaults](https://github.com/microsoft/playwright/blob/v1.63.0/packages/playwright-core/src/server/chromium/chromiumSwitches.ts),
+so context popup event waits also work in full Chrome.
+The IndexedDB regression closes its setup connection before clearing storage,
+preventing a live connection from blocking deletion.

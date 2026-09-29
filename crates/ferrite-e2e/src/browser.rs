@@ -397,6 +397,7 @@ impl Browser {
         cmd.arg("--no-first-run")
             .arg("--no-default-browser-check")
             .arg("--disable-dev-shm-usage")
+            .arg("--disable-popup-blocking")
             .arg(format!("--remote-debugging-port={debug_port}"))
             .arg("--remote-allow-origins=*")
             .arg(profile_arg)
@@ -611,6 +612,7 @@ impl Browser {
                 "events": [
                     "log.entryAdded",
                     "network.beforeRequestSent",
+                    "network.responseStarted",
                     "network.responseCompleted",
                     "network.fetchError",
                     "browsingContext.contextCreated",

@@ -223,8 +223,12 @@ pub enum PageEventKind {
     Dialog,
     /// Network request started.
     Request,
-    /// Network response finished (status 0 when failed).
+    /// Network response headers received.
     Response,
+    /// Response body finished downloading (also for HTTP error statuses).
+    RequestFinished,
+    /// Request failed at the transport layer.
+    RequestFailed,
     /// File download completed in the download dir.
     Download,
     /// Popup page opened from this page.
@@ -260,6 +264,17 @@ pub struct WebSocketEvent {
     pub payload: String,
 }
 
+/// Identity and metadata for one network request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NetworkRequest {
+    /// Backend request identifier, scoped to this page.
+    pub request_id: String,
+    /// HTTP method.
+    pub method: String,
+    /// Request URL.
+    pub url: String,
+}
+
 /// An observed page event.
 #[derive(Debug, Clone)]
 pub enum PageEvent {
@@ -269,17 +284,32 @@ pub enum PageEvent {
     Dialog(DialogInfo),
     /// Network request started.
     Request {
+        /// Backend request identifier, scoped to this page.
+        request_id: String,
         /// HTTP method.
         method: String,
         /// Request URL.
         url: String,
     },
-    /// Network response finished.
+    /// Network response headers received.
     Response {
+        /// Backend request identifier, scoped to this page.
+        request_id: String,
         /// Request URL.
         url: String,
-        /// Response status (0 when failed).
+        /// HTTP response status.
         status: u16,
+    },
+    /// Response body finished downloading, including HTTP errors.
+    RequestFinished(NetworkRequest),
+    /// Request failed without successfully completing the response body.
+    RequestFailed {
+        /// The failed request.
+        request: NetworkRequest,
+        /// Backend error description.
+        error_text: String,
+        /// Explicit cancellation, or `None` when the backend does not supply it.
+        cancelled: Option<bool>,
     },
     /// File download completed.
     Download(PathBuf),
@@ -300,6 +330,8 @@ impl PageEvent {
             Self::Dialog(_) => PageEventKind::Dialog,
             Self::Request { .. } => PageEventKind::Request,
             Self::Response { .. } => PageEventKind::Response,
+            Self::RequestFinished(_) => PageEventKind::RequestFinished,
+            Self::RequestFailed { .. } => PageEventKind::RequestFailed,
             Self::Download(_) => PageEventKind::Download,
             Self::Popup(_) => PageEventKind::Popup,
             Self::Closed => PageEventKind::Closed,

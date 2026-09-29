@@ -3117,7 +3117,7 @@ async fn page_events_and_popups() {
         );
         let _: String = done.unwrap();
         assert!(
-            matches!(&event, Ok(PageEvent::Response { url, status: 200 })
+            matches!(&event, Ok(PageEvent::Response { url, status: 200, .. })
                 if url.ends_with("api/hi")),
             "{tag}: {event:?}"
         );
@@ -5203,7 +5203,7 @@ async fn context_clear_indexed_db() {
                     "(async () => { await new Promise((res, rej) => { \
                      const open = indexedDB.open('w8db', 1); \
                      open.onupgradeneeded = () => open.result.createObjectStore('s'); \
-                     open.onsuccess = () => res(0); open.onerror = () => rej(open.error); }); \
+                     open.onsuccess = () => { open.result.close(); res(0); }; open.onerror = () => rej(open.error); }); \
                      return 'made'; })()",
                 )
                 .await

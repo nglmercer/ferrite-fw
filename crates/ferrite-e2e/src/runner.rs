@@ -45,6 +45,12 @@ pub enum TestMode {
 /// One named test.
 #[derive(Clone)]
 pub struct Test {
+    /// Context options overriding suite/project/runner defaults.
+    pub context_options: Option<ContextOptions>,
+    /// Fixtures requested by this test (including their dependencies).
+    pub required_fixtures: Vec<TypeId>,
+    /// Enclosing suites, outermost first.
+    pub suites: Vec<Arc<Suite>>,
     /// Named resources held exclusively while this test runs.
     pub locks: Vec<String>,
     /// Test name.
@@ -72,6 +78,16 @@ pub struct Test {
 }
 
 impl Test {
+    /// Override context defaults for this test.
+    pub fn context_options(mut self, options: ContextOptions) -> Self {
+        self.context_options = Some(options);
+        self
+    }
+    /// Request a lazily registered fixture and its dependency graph.
+    pub fn fixture<T: Send + Sync + 'static>(mut self) -> Self {
+        self.required_fixtures.push(TypeId::of::<T>());
+        self
+    }
     /// Prevent concurrent execution of tests sharing this resource name.
     pub fn lock(mut self, name: impl Into<String>) -> Self {
         self.locks.push(name.into());
@@ -151,6 +167,9 @@ where
 {
     let caller = Location::caller();
     Test {
+        context_options: None,
+        required_fixtures: Vec::new(),
+        suites: Vec::new(),
         locks: Vec::new(),
         name: name.into(),
         func: Arc::new(move |page| Box::pin(func(page))),
@@ -183,13 +202,137 @@ where
 /// Group tests under `name` (`"group > test"`); nests naturally.
 #[must_use]
 pub fn describe(name: &str, tests: Vec<Test>) -> Vec<Test> {
-    tests
-        .into_iter()
-        .map(|mut test| {
-            test.name = format!("{name} > {}", test.name);
-            test
-        })
-        .collect()
+    Suite::new(name).tests(tests)
+}
+
+/// A nested suite with hooks scoped to its descendants.
+/// `before_all`/`after_all` run once per worker and project that executes it.
+#[derive(Clone, Default)]
+pub struct Suite {
+    context_options: Option<ContextOptions>,
+    name: String,
+    before_each: Vec<HookFn>,
+    after_each: Vec<HookFn>,
+    before_all: Vec<GlobalHook>,
+    after_all: Vec<GlobalHook>,
+    timeout: Option<Duration>,
+    retries: Option<u32>,
+    tags: Vec<String>,
+    mode: Option<TestMode>,
+    slow: bool,
+}
+
+impl Suite {
+    /// Context defaults inherited by descendants without an override.
+    pub fn context_options(mut self, options: ContextOptions) -> Self {
+        self.context_options = Some(options);
+        self
+    }
+    /// Start a named suite; call [`Suite::tests`] to finish it.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            ..Self::default()
+        }
+    }
+    /// Inherit a timeout when a descendant has no override.
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+    /// Inherit retries when a descendant has no override.
+    pub fn retries(mut self, retries: u32) -> Self {
+        self.retries = Some(retries);
+        self
+    }
+    /// Add a tag to all descendants.
+    pub fn tag(mut self, tag: impl Into<String>) -> Self {
+        self.tags.push(tag.into());
+        self
+    }
+    /// Skip all descendants.
+    pub fn skip(mut self) -> Self {
+        self.mode = Some(TestMode::Skip);
+        self
+    }
+    /// Skip descendants as known failures.
+    pub fn fixme(mut self) -> Self {
+        self.mode = Some(TestMode::Fixme);
+        self
+    }
+    /// Focus runnable descendants.
+    pub fn only(mut self) -> Self {
+        self.mode = Some(TestMode::Only);
+        self
+    }
+    /// Triple descendant timeouts.
+    pub fn slow(mut self) -> Self {
+        self.slow = true;
+        self
+    }
+    /// Run before each descendant attempt, outer suites first.
+    pub fn before_each<F, Fut>(mut self, hook: F) -> Self
+    where
+        F: Fn(Page) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = E2eResult<()>> + Send + 'static,
+    {
+        self.before_each
+            .push(Arc::new(move |page| Box::pin(hook(page))));
+        self
+    }
+    /// Run after each descendant attempt, inner suites first.
+    pub fn after_each<F, Fut>(mut self, hook: F) -> Self
+    where
+        F: Fn(Page) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = E2eResult<()>> + Send + 'static,
+    {
+        self.after_each
+            .push(Arc::new(move |page| Box::pin(hook(page))));
+        self
+    }
+    /// Run once before this worker executes descendants in a project.
+    pub fn before_all<F, Fut>(mut self, hook: F) -> Self
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = E2eResult<()>> + Send + 'static,
+    {
+        self.before_all.push(Arc::new(move || Box::pin(hook())));
+        self
+    }
+    /// Run once at worker cleanup, inner suites first, even after setup failure.
+    pub fn after_all<F, Fut>(mut self, hook: F) -> Self
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = E2eResult<()>> + Send + 'static,
+    {
+        self.after_all.push(Arc::new(move || Box::pin(hook())));
+        self
+    }
+    /// Finish the suite, preserving nested scopes and descendant overrides.
+    pub fn tests(self, tests: Vec<Test>) -> Vec<Test> {
+        let suite = Arc::new(self);
+        tests
+            .into_iter()
+            .map(|mut test| {
+                test.context_options = test
+                    .context_options
+                    .or_else(|| suite.context_options.clone());
+                test.name = format!("{} > {}", suite.name, test.name);
+                test.timeout = test.timeout.or(suite.timeout);
+                test.retries = test.retries.or(suite.retries);
+                test.tags.extend(suite.tags.clone());
+                test.slow |= suite.slow;
+                if matches!(suite.mode, Some(TestMode::Skip | TestMode::Fixme))
+                    || (suite.mode == Some(TestMode::Only)
+                        && !matches!(test.mode, TestMode::Skip | TestMode::Fixme))
+                {
+                    test.mode = suite.mode.unwrap();
+                }
+                test.suites.insert(0, suite.clone());
+                test
+            })
+            .collect()
+    }
 }
 
 /// Metadata for one test execution (Playwright `TestInfo`).
@@ -290,14 +433,23 @@ fn attach_extension(content_type: &str) -> &'static str {
     }
 }
 
-/// Values built by [`Runner::fixture`] setup closures, keyed by type.
+/// Values built by registered fixture setup closures, keyed by type.
 #[derive(Clone, Default)]
 pub struct FixtureMap {
     inner: HashMap<TypeId, Arc<dyn Any + Send + Sync>>,
 }
 
 impl FixtureMap {
-    /// The fixture value of type `T`, if one was registered.
+    /// Read a required fixture, returning a configuration error if unavailable.
+    pub fn require<T: Send + Sync + 'static>(&self) -> E2eResult<Arc<T>> {
+        self.get().ok_or_else(|| {
+            E2eError::Config(format!(
+                "fixture {} is unavailable; declare its dependency/request",
+                std::any::type_name::<T>()
+            ))
+        })
+    }
+    /// The fixture value of type `T`, if it has been set up in this scope.
     #[must_use]
     pub fn get<T: Send + Sync + 'static>(&self) -> Option<Arc<T>> {
         self.inner
@@ -328,7 +480,7 @@ impl Deref for TestContext {
 }
 
 impl TestContext {
-    /// The fixture value of type `T`, if one was registered.
+    /// The fixture value of type `T`, if it has been set up in this scope.
     #[must_use]
     pub fn get<T: Send + Sync + 'static>(&self) -> Option<Arc<T>> {
         self.fixtures.get()
@@ -346,8 +498,288 @@ type TeardownFn = Arc<dyn Fn(Arc<dyn Any + Send + Sync>) -> BoxTestFuture + Send
 #[derive(Clone)]
 struct FixtureDef {
     type_id: TypeId,
-    setup: Arc<dyn Fn() -> SetupFuture + Send + Sync>,
+    name: &'static str,
+    dependencies: Vec<TypeId>,
+    scope: FixtureScope,
+    automatic: bool,
+    setup: Arc<dyn Fn(FixtureMap) -> SetupFuture + Send + Sync>,
     teardown: Option<TeardownFn>,
+}
+
+/// Lifetime of a fixture value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FixtureScope {
+    /// Fresh for each attempt, including retries.
+    #[default]
+    Test,
+    /// Shared by tests on one worker in one project, until worker cleanup.
+    Worker,
+}
+
+/// Typed fixture definition. Lazy by default; tests request it with [`Test::fixture`].
+pub struct Fixture<T> {
+    def: FixtureDef,
+    marker: std::marker::PhantomData<fn() -> T>,
+}
+
+impl<T: Send + Sync + 'static> Fixture<T> {
+    /// Setup receives the values of declared dependencies.
+    pub fn new<F, Fut>(setup: F) -> Self
+    where
+        F: Fn(FixtureMap) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = E2eResult<T>> + Send + 'static,
+    {
+        Self {
+            def: FixtureDef {
+                type_id: TypeId::of::<T>(),
+                name: std::any::type_name::<T>(),
+                dependencies: Vec::new(),
+                scope: FixtureScope::Test,
+                automatic: false,
+                setup: Arc::new(move |map| {
+                    let future = setup(map);
+                    Box::pin(async move {
+                        future
+                            .await
+                            .map(|value| Arc::new(value) as Arc<dyn Any + Send + Sync>)
+                    })
+                }),
+                teardown: None,
+            },
+            marker: std::marker::PhantomData,
+        }
+    }
+    /// Declare a dependency; registration order does not matter.
+    pub fn dependency<D: Send + Sync + 'static>(mut self) -> Self {
+        self.def.dependencies.push(TypeId::of::<D>());
+        self
+    }
+    /// Select test or worker lifetime. Worker fixtures may only depend on worker fixtures.
+    pub fn scope(mut self, scope: FixtureScope) -> Self {
+        self.def.scope = scope;
+        self
+    }
+    /// Set up automatically even when no test explicitly requests this fixture.
+    pub fn automatic(mut self, enabled: bool) -> Self {
+        self.def.automatic = enabled;
+        self
+    }
+    /// Cleanup runs after dependents, including after failures or cancellation.
+    pub fn teardown<F, Fut>(mut self, teardown: F) -> Self
+    where
+        F: Fn(Arc<T>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = E2eResult<()>> + Send + 'static,
+    {
+        let teardown = Arc::new(teardown);
+        self.def.teardown = Some(Arc::new(move |value| {
+            let teardown = teardown.clone();
+            Box::pin(async move {
+                let value = value
+                    .downcast::<T>()
+                    .map_err(|_| E2eError::Config("fixture teardown type mismatch".into()))?;
+                teardown(value).await
+            })
+        }));
+        self
+    }
+}
+
+#[derive(Default)]
+struct FixtureState {
+    values: FixtureMap,
+    built: Vec<(usize, Arc<dyn Any + Send + Sync>)>,
+}
+
+#[derive(Default)]
+struct SuiteState {
+    started: Vec<(Arc<Suite>, Option<String>)>,
+}
+
+impl SuiteState {
+    async fn setup(
+        &mut self,
+        test: &Test,
+        deadline: crate::operation::Deadline,
+        control: &crate::CancellationToken,
+    ) -> E2eResult<()> {
+        for suite in &test.suites {
+            if let Some((_, error)) = self
+                .started
+                .iter()
+                .find(|(seen, _)| Arc::ptr_eq(seen, suite))
+            {
+                if let Some(error) = error {
+                    return Err(E2eError::Config(error.clone()));
+                }
+                continue;
+            }
+            self.started.push((suite.clone(), None));
+            for hook in &suite.before_all {
+                if let Err(error) = bounded(deadline, Some(control), "suite before_all", async {
+                    hook().await
+                })
+                .await
+                {
+                    let error = format!("suite {} before_all: {error}", suite.name);
+                    self.started.last_mut().unwrap().1 = Some(error.clone());
+                    return Err(E2eError::Config(error));
+                }
+            }
+        }
+        Ok(())
+    }
+    async fn cleanup(&mut self, runner: &Runner, project: Option<&str>) -> Vec<TestResult> {
+        self.cleanup_finished(runner, project, &[]).await
+    }
+
+    async fn cleanup_finished(
+        &mut self,
+        runner: &Runner,
+        project: Option<&str>,
+        remaining: &[Arc<Suite>],
+    ) -> Vec<TestResult> {
+        let mut results = Vec::new();
+        let mut finished = Vec::new();
+        self.started.retain(|(suite, error)| {
+            if remaining.iter().any(|pending| Arc::ptr_eq(pending, suite)) {
+                true
+            } else {
+                finished.push((suite.clone(), error.clone()));
+                false
+            }
+        });
+        for (suite, _) in finished.into_iter().rev() {
+            for hook in &suite.after_all {
+                if let Err(error) = bounded(
+                    crate::operation::Deadline::new(runner.cleanup_timeout),
+                    None,
+                    "suite after_all",
+                    async { hook().await },
+                )
+                .await
+                {
+                    results.push(failed_result(
+                        &display_name(project, &format!("{} > <after_all>", suite.name)),
+                        error.to_string(),
+                    ));
+                }
+            }
+        }
+        results
+    }
+}
+
+async fn retire_worker_resources(
+    runner: &Runner,
+    suites: &mut SuiteState,
+    fixtures: &mut FixtureState,
+    project: Option<&str>,
+) -> Vec<String> {
+    let mut errors: Vec<_> = suites
+        .cleanup(runner, project)
+        .await
+        .into_iter()
+        .filter_map(|result| result.error)
+        .collect();
+    if let Some(error) = teardown_fixtures(runner, &fixtures.built).await {
+        errors.push(error);
+    }
+    *fixtures = FixtureState::default();
+    errors
+}
+
+fn fixture_plan(defs: &[FixtureDef], roots: &[TypeId]) -> E2eResult<Vec<usize>> {
+    fn visit(
+        index: usize,
+        defs: &[FixtureDef],
+        marks: &mut [u8],
+        out: &mut Vec<usize>,
+    ) -> E2eResult<()> {
+        if marks[index] == 2 {
+            return Ok(());
+        }
+        if marks[index] == 1 {
+            return Err(E2eError::Config(format!(
+                "fixture dependency cycle at {}",
+                defs[index].name
+            )));
+        }
+        marks[index] = 1;
+        for dependency in &defs[index].dependencies {
+            let dep = defs
+                .iter()
+                .position(|def| def.type_id == *dependency)
+                .ok_or_else(|| {
+                    E2eError::Config(format!(
+                        "missing dependency for fixture {}",
+                        defs[index].name
+                    ))
+                })?;
+            if defs[index].scope == FixtureScope::Worker && defs[dep].scope == FixtureScope::Test {
+                return Err(E2eError::Config(format!(
+                    "worker fixture {} cannot depend on test fixture {}",
+                    defs[index].name, defs[dep].name
+                )));
+            }
+            visit(dep, defs, marks, out)?;
+        }
+        marks[index] = 2;
+        out.push(index);
+        Ok(())
+    }
+    let mut marks = vec![0; defs.len()];
+    let mut out = Vec::new();
+    for root in roots {
+        let index = defs
+            .iter()
+            .position(|def| def.type_id == *root)
+            .ok_or_else(|| E2eError::Config("requested fixture is not registered".into()))?;
+        visit(index, defs, &mut marks, &mut out)?;
+    }
+    Ok(out)
+}
+
+async fn setup_fixtures(
+    defs: &[FixtureDef],
+    roots: &[TypeId],
+    worker: &mut FixtureState,
+    attempt: &mut FixtureState,
+) -> E2eResult<FixtureMap> {
+    for index in fixture_plan(defs, roots)? {
+        let def = &defs[index];
+        let target = if def.scope == FixtureScope::Worker {
+            &mut *worker
+        } else {
+            &mut *attempt
+        };
+        if target.values.inner.contains_key(&def.type_id) {
+            continue;
+        }
+        let mut dependencies = FixtureMap::default();
+        for dependency in &def.dependencies {
+            if let Some(value) = attempt
+                .values
+                .inner
+                .get(dependency)
+                .or_else(|| worker.values.inner.get(dependency))
+            {
+                dependencies.inner.insert(*dependency, value.clone());
+            }
+        }
+        let value = (def.setup)(dependencies)
+            .await
+            .map_err(|error| E2eError::Config(format!("fixture {} setup: {error}", def.name)))?;
+        let target = if def.scope == FixtureScope::Worker {
+            &mut *worker
+        } else {
+            &mut *attempt
+        };
+        target.values.inner.insert(def.type_id, value.clone());
+        target.built.push((index, value));
+    }
+    let mut values = worker.values.clone();
+    values.inner.extend(attempt.values.inner.clone());
+    Ok(values)
 }
 
 /// A named group of tests with its own settings (Playwright projects).
@@ -570,9 +1002,9 @@ pub(crate) fn build_work_items(
                 _ => {
                     for repeat in 0..repeat_each.max(1) {
                         runnable.push(WorkItem {
-                            context_options: project
-                                .as_ref()
-                                .and_then(|p| p.context_options.clone()),
+                            context_options: test.context_options.clone().or_else(|| {
+                                project.as_ref().and_then(|p| p.context_options.clone())
+                            }),
                             test: (*test).clone(),
                             project: name.clone(),
                             retries: test
@@ -989,7 +1421,7 @@ impl Runner {
         F: Fn() -> Fut + Send + Sync + 'static,
         Fut: Future<Output = E2eResult<T>> + Send + 'static,
     {
-        let setup = Arc::new(move || {
+        let setup = Arc::new(move |_map: FixtureMap| {
             let fut = setup();
             Box::pin(async move {
                 fut.await
@@ -998,6 +1430,10 @@ impl Runner {
         });
         self.fixtures.push(FixtureDef {
             type_id: TypeId::of::<T>(),
+            name: std::any::type_name::<T>(),
+            dependencies: Vec::new(),
+            scope: FixtureScope::Test,
+            automatic: true,
             setup,
             teardown: None,
         });
@@ -1016,7 +1452,7 @@ impl Runner {
         G: Fn(Arc<T>) -> Fut2 + Send + Sync + 'static,
         Fut2: Future<Output = E2eResult<()>> + Send + 'static,
     {
-        let setup = Arc::new(move || {
+        let setup = Arc::new(move |_map: FixtureMap| {
             let fut = setup();
             Box::pin(async move {
                 fut.await
@@ -1035,9 +1471,19 @@ impl Runner {
         });
         self.fixtures.push(FixtureDef {
             type_id: TypeId::of::<T>(),
+            name: std::any::type_name::<T>(),
+            dependencies: Vec::new(),
+            scope: FixtureScope::Test,
+            automatic: true,
             setup,
             teardown: Some(teardown),
         });
+        self
+    }
+
+    /// Register a typed, lazy fixture with dependencies and scope.
+    pub fn fixture_definition<T: Send + Sync + 'static>(mut self, fixture: Fixture<T>) -> Self {
+        self.fixtures.push(fixture.def);
         self
     }
 
@@ -1065,6 +1511,26 @@ impl Runner {
                 reason=external.cancelled()=>timer_token.cancel_with_reason(reason),
             }
         }));
+        let roots: Vec<_> = self.fixtures.iter().map(|def| def.type_id).collect();
+        let mut seen = std::collections::HashSet::new();
+        let validation = if self.fixtures.iter().any(|def| !seen.insert(def.type_id)) {
+            Err(E2eError::Config(
+                "duplicate fixture type registration".into(),
+            ))
+        } else {
+            fixture_plan(&self.fixtures, &roots).and_then(|_| {
+                for test in &tests {
+                    fixture_plan(&self.fixtures, &test.required_fixtures)?;
+                }
+                Ok(())
+            })
+        };
+        if let Err(error) = validation {
+            report
+                .results
+                .push(failed_result("<fixtures>", error.to_string()));
+            return report;
+        }
         for setup in &self.global_setup {
             if let Err(error) = bounded(
                 crate::operation::Deadline::new(self.test_timeout),
@@ -1218,6 +1684,8 @@ impl Runner {
             let failures = failures.clone();
             workers.spawn(async move {
                 let mut results = Vec::new();
+                let mut fixture_states: HashMap<Option<String>, FixtureState> = HashMap::new();
+                let mut suite_states: HashMap<Option<String>, SuiteState> = HashMap::new();
                 loop {
                     let item = queue
                         .lock()
@@ -1240,14 +1708,76 @@ impl Runner {
                                 .as_ref()
                                 .and_then(|name| project_browsers.get(name))
                                 .unwrap_or(&browser);
-                            let result =
-                                run_one(&runner, selected, &item, worker_index, &control).await;
+                            let result = run_one(
+                                &runner,
+                                selected,
+                                &item,
+                                worker_index,
+                                &control,
+                                fixture_states.entry(item.project.clone()).or_default(),
+                                suite_states.entry(item.project.clone()).or_default(),
+                            )
+                            .await;
                             if result.status == TestStatus::Failed {
                                 failures.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                                let errors = retire_worker_resources(
+                                    &runner,
+                                    suite_states.entry(item.project.clone()).or_default(),
+                                    fixture_states.entry(item.project.clone()).or_default(),
+                                    item.project.as_deref(),
+                                )
+                                .await;
+                                if !errors.is_empty() {
+                                    results.push(failed_result(
+                                        &display_name(item.project.as_deref(), "<worker cleanup>"),
+                                        errors.join("; "),
+                                    ));
+                                }
                             }
                             results.push(result);
+                            let remaining: Vec<_> = queue
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .iter()
+                                .filter(|pending| pending.project == item.project)
+                                .flat_map(|pending| pending.test.suites.iter().cloned())
+                                .collect();
+                            let cleanup = suite_states
+                                .entry(item.project.clone())
+                                .or_default()
+                                .cleanup_finished(&runner, item.project.as_deref(), &remaining)
+                                .await;
+                            failures.fetch_add(cleanup.len(), std::sync::atomic::Ordering::SeqCst);
+                            if !cleanup.is_empty() {
+                                let errors = retire_worker_resources(
+                                    &runner,
+                                    suite_states.entry(item.project.clone()).or_default(),
+                                    fixture_states.entry(item.project.clone()).or_default(),
+                                    item.project.as_deref(),
+                                )
+                                .await;
+                                if !errors.is_empty() {
+                                    failures.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                                    results.push(failed_result(
+                                        &display_name(item.project.as_deref(), "<worker cleanup>"),
+                                        errors.join("; "),
+                                    ));
+                                }
+                            }
+                            results.extend(cleanup);
                         }
                         None => break,
+                    }
+                }
+                for (project, state) in &mut suite_states {
+                    results.extend(state.cleanup(&runner, project.as_deref()).await);
+                }
+                for (project, state) in &fixture_states {
+                    if let Some(error) = teardown_fixtures(&runner, &state.built).await {
+                        results.push(failed_result(
+                            &display_name(project.as_deref(), "<worker fixtures>"),
+                            error,
+                        ));
                     }
                 }
                 results
@@ -1390,6 +1920,8 @@ async fn run_one(
     item: &WorkItem,
     worker_index: usize,
     control: &crate::CancellationToken,
+    worker_fixtures: &mut FixtureState,
+    suites: &mut SuiteState,
 ) -> TestResult {
     let test = &item.test;
     let mut names = test.locks.clone();
@@ -1446,6 +1978,58 @@ async fn run_one(
         attempts += 1;
         expected_failure_observed = false;
         let deadline = crate::operation::Deadline::new(timeout);
+        let automatic_worker: Vec<_> = runner
+            .fixtures
+            .iter()
+            .filter(|def| def.automatic && def.scope == FixtureScope::Worker)
+            .map(|def| def.type_id)
+            .collect();
+        let mut empty_attempt = FixtureState::default();
+        if let Err(error) = bounded(
+            deadline,
+            Some(control),
+            "automatic worker fixture setup",
+            setup_fixtures(
+                &runner.fixtures,
+                &automatic_worker,
+                worker_fixtures,
+                &mut empty_attempt,
+            ),
+        )
+        .await
+        {
+            let cleanup =
+                retire_worker_resources(runner, suites, worker_fixtures, item.project.as_deref())
+                    .await;
+            last_error = format!(
+                "{error}{}",
+                if cleanup.is_empty() {
+                    String::new()
+                } else {
+                    format!("; worker cleanup: {}", cleanup.join("; "))
+                }
+            );
+            continue;
+        }
+        let deadline = crate::operation::Deadline::new(timeout);
+        if let Err(error) = suites.setup(test, deadline, control).await {
+            last_error = error.to_string();
+            if attempts <= item.retries && !control.is_cancelled() {
+                let cleanup = retire_worker_resources(
+                    runner,
+                    suites,
+                    worker_fixtures,
+                    item.project.as_deref(),
+                )
+                .await;
+                if !cleanup.is_empty() {
+                    last_error.push_str(&format!("; worker cleanup: {}", cleanup.join("; ")));
+                }
+                continue;
+            }
+            break;
+        }
+        let deadline = crate::operation::Deadline::new(timeout);
         let context = match bounded(
             deadline,
             Some(control),
@@ -1485,7 +2069,7 @@ async fn run_one(
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|_| std::path::Path::new(&runner.output_dir).join("snapshots")),
         );
-        let mut built = Vec::with_capacity(runner.fixtures.len());
+        let mut attempt_fixtures = FixtureState::default();
         let mut recording = false;
         let mut body_started = false;
         let info = TestInfo {
@@ -1506,19 +2090,35 @@ async fn run_one(
         };
         // One budget covers beforeEach, fixture setup, recording setup and body.
         let outcome = bounded(deadline, Some(control), "test setup/body", async {
-            for hook in &runner.before_each {
+            let roots: Vec<_> = runner
+                .fixtures
+                .iter()
+                .filter(|def| def.automatic)
+                .map(|def| def.type_id)
+                .collect();
+            setup_fixtures(
+                &runner.fixtures,
+                &roots,
+                worker_fixtures,
+                &mut attempt_fixtures,
+            )
+            .await?;
+            for hook in runner.before_each.iter().chain(
+                test.suites
+                    .iter()
+                    .flat_map(|suite| suite.before_each.iter()),
+            ) {
                 hook(page.clone())
                     .await
                     .map_err(|e| E2eError::Config(format!("before_each: {e}")))?;
             }
-            let mut fixtures = FixtureMap::default();
-            for def in &runner.fixtures {
-                let value = (def.setup)()
-                    .await
-                    .map_err(|e| E2eError::Config(format!("fixture setup: {e}")))?;
-                fixtures.inner.insert(def.type_id, Arc::clone(&value));
-                built.push(value);
-            }
+            let fixtures = setup_fixtures(
+                &runner.fixtures,
+                &test.required_fixtures,
+                worker_fixtures,
+                &mut attempt_fixtures,
+            )
+            .await?;
             if runner.video.records() {
                 page.start_video(VideoOptions {
                     dir: std::path::PathBuf::from(&runner.output_dir),
@@ -1545,7 +2145,13 @@ async fn run_one(
         let mut failed = outcome.err().map(|e| e.to_string());
         expected_failure_observed =
             expected_fail && body_started && failed.is_some() && !control.is_cancelled();
-        for hook in &runner.after_each {
+        for hook in test
+            .suites
+            .iter()
+            .rev()
+            .flat_map(|suite| suite.after_each.iter())
+            .chain(runner.after_each.iter())
+        {
             if let Err(error) = bounded(
                 crate::operation::Deadline::new(runner.cleanup_timeout),
                 None,
@@ -1562,7 +2168,7 @@ async fn run_one(
                 });
             }
         }
-        if let Some(note) = teardown_fixtures(runner, &built).await {
+        if let Some(note) = teardown_fixtures(runner, &attempt_fixtures.built).await {
             expected_failure_observed = false;
             failed = Some(match failed {
                 Some(prior) => format!("{prior} ({note})"),
@@ -1680,6 +2286,20 @@ async fn run_one(
                 );
             }
         }
+        // Retire logical worker resources after an unexpected failure, so
+        // retries and subsequent tests cannot inherit failed fixture/suite state.
+        if failed.is_some() && !expected_failure_observed {
+            let notes =
+                retire_worker_resources(runner, suites, worker_fixtures, item.project.as_deref())
+                    .await;
+            if !notes.is_empty() {
+                failed = Some(format!(
+                    "{}; worker cleanup: {}",
+                    failed.unwrap(),
+                    notes.join("; ")
+                ));
+            }
+        }
         // Unexpected passes fail immediately (no retry can redeem a pass).
         if unexpected_pass {
             return TestResult {
@@ -1739,10 +2359,11 @@ async fn run_one(
 
 async fn teardown_fixtures(
     runner: &Runner,
-    built: &[Arc<dyn Any + Send + Sync>],
+    built: &[(usize, Arc<dyn Any + Send + Sync>)],
 ) -> Option<String> {
     let mut errors = Vec::new();
-    for (def, value) in runner.fixtures.iter().zip(built.iter()).rev() {
+    for (index, value) in built.iter().rev() {
+        let def = &runner.fixtures[*index];
         if let Some(teardown) = &def.teardown {
             if let Err(error) = bounded(
                 crate::operation::Deadline::new(runner.cleanup_timeout),
@@ -2156,5 +2777,270 @@ mod tests {
         assert!(html.contains(">a<"), "{html}");
         assert!(html.contains("boom"), "{html}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod fixture_scope_tests {
+    use super::*;
+    struct A;
+    struct B;
+    struct C;
+    #[test]
+    fn rejects_cycles_missing_requests_dependencies_and_scope_inversion() {
+        let a = Fixture::<A>::new(|_| async { Ok(A) }).dependency::<B>();
+        let b = Fixture::<B>::new(|_| async { Ok(B) }).dependency::<A>();
+        let error = fixture_plan(&[a.def.clone(), b.def], &[TypeId::of::<A>()]).unwrap_err();
+        assert!(error.to_string().contains("cycle"));
+        assert!(fixture_plan(&[a.def], &[TypeId::of::<A>()])
+            .unwrap_err()
+            .to_string()
+            .contains("missing dependency"));
+        assert!(fixture_plan(&[], &[TypeId::of::<A>()])
+            .unwrap_err()
+            .to_string()
+            .contains("not registered"));
+        let a = Fixture::<A>::new(|_| async { Ok(A) });
+        let b = Fixture::<B>::new(|_| async { Ok(B) })
+            .dependency::<A>()
+            .scope(FixtureScope::Worker);
+        assert!(fixture_plan(&[a.def, b.def], &[TypeId::of::<B>()])
+            .unwrap_err()
+            .to_string()
+            .contains("cannot depend"));
+    }
+    #[tokio::test]
+    async fn partial_setup_and_dependency_teardown_survive_failure() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let a = log.clone();
+        let b = log.clone();
+        let runner = Runner::default()
+            .fixture_definition(
+                Fixture::<C>::new(|map| async move {
+                    map.require::<B>()?;
+                    Err(E2eError::Expect("setup failed".into()))
+                })
+                .dependency::<B>(),
+            )
+            .fixture_definition(
+                Fixture::<B>::new(|map| async move {
+                    map.require::<A>()?;
+                    Ok(B)
+                })
+                .dependency::<A>()
+                .teardown(move |_| {
+                    let log = b.clone();
+                    async move {
+                        log.lock().unwrap().push("b");
+                        Err(E2eError::Expect("cleanup failed".into()))
+                    }
+                }),
+            )
+            .fixture_definition(Fixture::<A>::new(|_| async { Ok(A) }).teardown(move |_| {
+                let log = a.clone();
+                async move {
+                    log.lock().unwrap().push("a");
+                    Ok(())
+                }
+            }));
+        let mut worker = FixtureState::default();
+        let mut attempt = FixtureState::default();
+        assert!(setup_fixtures(
+            &runner.fixtures,
+            &[TypeId::of::<C>()],
+            &mut worker,
+            &mut attempt
+        )
+        .await
+        .is_err());
+        let error = teardown_fixtures(&runner, &attempt.built).await.unwrap();
+        assert!(error.contains("cleanup failed"));
+        assert_eq!(*log.lock().unwrap(), ["b", "a"]);
+        assert_eq!(attempt.built.len(), 2);
+    }
+    #[test]
+    fn nested_settings_prefer_descendants_and_focused_suites_preserve_skips() {
+        let child = Suite::new("inner")
+            .timeout(Duration::from_secs(2))
+            .retries(3)
+            .tests(vec![test("leaf", |_| async { Ok(()) })
+                .context_options(ContextOptions::default().viewport(320, 240))]);
+        let tests = Suite::new("outer")
+            .timeout(Duration::from_secs(4))
+            .retries(5)
+            .context_options(ContextOptions::default().viewport(640, 480))
+            .tests(child);
+        assert_eq!(tests[0].timeout, Some(Duration::from_secs(2)));
+        assert_eq!(tests[0].retries, Some(3));
+        assert_eq!(
+            tests[0]
+                .context_options
+                .as_ref()
+                .unwrap()
+                .viewport
+                .unwrap()
+                .width,
+            320
+        );
+        assert_eq!(tests[0].suites.len(), 2);
+        let tests = Suite::new("focused").only().tests(vec![
+            test("skip", |_| async { Ok(()) }).skip(),
+            test("run", |_| async { Ok(()) }),
+        ]);
+        assert_eq!(tests[0].mode, TestMode::Skip);
+        assert_eq!(tests[1].mode, TestMode::Only);
+    }
+}
+
+#[cfg(test)]
+mod suite_lifecycle_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    #[tokio::test]
+    async fn suite_setup_timeout_and_cleanup_failures_are_bounded_and_continue() {
+        let cleaned = Arc::new(AtomicUsize::new(0));
+        let outer_cleanup = cleaned.clone();
+        let inner = Suite::new("inner")
+            .before_all(|| async { std::future::pending::<E2eResult<()>>().await })
+            .after_all(|| async { std::future::pending::<E2eResult<()>>().await })
+            .tests(vec![test("body", |_| async { Ok(()) })]);
+        let tests = Suite::new("outer")
+            .after_all(move || {
+                let cleaned = outer_cleanup.clone();
+                async move {
+                    cleaned.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }
+            })
+            .tests(inner);
+        let mut state = SuiteState::default();
+        let token = crate::CancellationToken::new();
+        let start = Instant::now();
+        assert!(state
+            .setup(
+                &tests[0],
+                crate::operation::Deadline::new(Duration::from_millis(20)),
+                &token
+            )
+            .await
+            .is_err());
+        assert_eq!(state.started.len(), 2);
+        let results = state
+            .cleanup(
+                &Runner::default().cleanup_timeout(Duration::from_millis(20)),
+                None,
+            )
+            .await;
+        assert_eq!(results.len(), 1);
+        assert!(results[0].name.contains("inner"));
+        assert_eq!(cleaned.load(Ordering::SeqCst), 1);
+        assert!(state.started.is_empty());
+        assert!(start.elapsed() < Duration::from_secs(1));
+    }
+    #[tokio::test]
+    async fn worker_cleanup_timeout_does_not_skip_dependencies_or_keep_cached_values() {
+        let cleaned = Arc::new(AtomicUsize::new(0));
+        let count = cleaned.clone();
+        let runner = Runner::default()
+            .cleanup_timeout(Duration::from_millis(20))
+            .fixture_definition(
+                Fixture::<u32>::new(|_| async { Ok(1) })
+                    .scope(FixtureScope::Worker)
+                    .teardown(move |_| {
+                        let count = count.clone();
+                        async move {
+                            count.fetch_add(1, Ordering::SeqCst);
+                            Ok(())
+                        }
+                    }),
+            )
+            .fixture_definition(
+                Fixture::<u64>::new(|map| async move {
+                    map.require::<u32>()?;
+                    Ok(2)
+                })
+                .scope(FixtureScope::Worker)
+                .dependency::<u32>()
+                .teardown(|_| async { std::future::pending::<E2eResult<()>>().await }),
+            );
+        let mut worker = FixtureState::default();
+        let mut attempt = FixtureState::default();
+        setup_fixtures(
+            &runner.fixtures,
+            &[TypeId::of::<u64>()],
+            &mut worker,
+            &mut attempt,
+        )
+        .await
+        .unwrap();
+        let errors =
+            retire_worker_resources(&runner, &mut SuiteState::default(), &mut worker, None).await;
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("timed out"));
+        assert_eq!(cleaned.load(Ordering::SeqCst), 1);
+        assert!(worker.values.inner.is_empty());
+        assert!(worker.built.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod fixture_cancellation_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    #[tokio::test]
+    async fn cancellation_reclaims_completed_worker_dependencies_after_partial_setup() {
+        let ready = Arc::new(tokio::sync::Notify::new());
+        let setup_ready = ready.clone();
+        let cleaned = Arc::new(AtomicUsize::new(0));
+        let count = cleaned.clone();
+        let runner = Runner::default()
+            .fixture_definition(
+                Fixture::<u32>::new(|_| async { Ok(1) })
+                    .scope(FixtureScope::Worker)
+                    .teardown(move |_| {
+                        let count = count.clone();
+                        async move {
+                            count.fetch_add(1, Ordering::SeqCst);
+                            Ok(())
+                        }
+                    }),
+            )
+            .fixture_definition(
+                Fixture::<u64>::new(move |map| {
+                    let ready = setup_ready.clone();
+                    async move {
+                        map.require::<u32>()?;
+                        ready.notify_one();
+                        std::future::pending::<E2eResult<u64>>().await
+                    }
+                })
+                .dependency::<u32>()
+                .scope(FixtureScope::Worker),
+            );
+        let mut worker = FixtureState::default();
+        let mut attempt = FixtureState::default();
+        let token = crate::CancellationToken::new();
+        let roots = [TypeId::of::<u64>()];
+        let (result, ()) = tokio::join!(
+            token.run(setup_fixtures(
+                &runner.fixtures,
+                &roots,
+                &mut worker,
+                &mut attempt
+            )),
+            async {
+                ready.notified().await;
+                token.cancel();
+            }
+        );
+        assert!(matches!(result, Err(E2eError::Cancelled(_))));
+        assert_eq!(worker.built.len(), 1);
+        assert!(
+            retire_worker_resources(&runner, &mut SuiteState::default(), &mut worker, None)
+                .await
+                .is_empty()
+        );
+        assert_eq!(cleaned.load(Ordering::SeqCst), 1);
+        assert!(worker.built.is_empty());
     }
 }

@@ -193,15 +193,15 @@ for m,n in {'close':'Closed','console':'Console','dialog':'Dialog','download':'D
 for m,n in {'close':'Closed','frameReceived':'Received','frameSent':'Sent'}.items():put('WebSocket',m,'Page.subscribe','PageEvent::WebSocket direction '+n+'; Chromium-only observation without a WebSocket object.',kind='event')
 put('WebSocket','url','WebSocketEvent.url','Captured socket URL, Chromium only.')
 # Runner and configuration.
-for m,t in {'afterAll':'after_all','afterEach':'after_each','beforeAll':'before_all','beforeEach':'before_each'}.items():put('Test',m,'Runner.'+t,'Global runner hooks; not scoped by describe suite or isolated worker lifecycle.')
+for m,t in {'afterAll':'after_all','afterEach':'after_each','beforeAll':'before_all','beforeEach':'before_each'}.items():put('Test',m,'Suite.'+t,'Nested suite hooks; beforeAll/afterAll once per worker/project, beforeEach/afterEach per attempt. Tokio worker state rather than process restarts; no callback fixture injection.')
 put('Test','(call)','test','Rust test closure; dynamic details/locks/options differ.')
-put('Test','describe','describe','Prefixes names only; no nested suite execution/hook scope or scheduling model.')
+put('Test','describe','Suite.tests','Nested identity, scoped hooks, inherited timeout/retry/context/tags; no serial/fully-parallel suite scheduling configuration.')
 put('Test','expect','Locator.expect','Rust builders, expect_poll, expect_to_pass and SoftAsserts; no generic matcher registry/configure API.')
-put('Test','extend','Runner.fixture_with_teardown','Typed per-attempt fixtures; no dependency graph, worker scope, auto fixtures, named overrides or lazy fixture resolution.')
+put('Test','extend','Runner.fixture_definition','Typed dependency graph, explicit lazy requests, automatic fixtures, test/worker scope and reverse dependency teardown. No named overrides, callback parameter inference or built-in page fixture injection.')
 for m,t in {'fail':'fail','fixme':'fixme','only':'only','skip':'skip','slow':'slow','setTimeout':'timeout'}.items():put('Test',m,'Test.'+t,'Static test builder setting; no runtime conditional/context metadata overloads.')
 put('Test','info','TestContext.info','Provided through test_with_context; fewer live metadata fields and mutators.')
 put('Test','step','Page.step','Named closure logged on Page; no structured step tree, boxing, timeout, subtitle/params or TestStepInfo.')
-put('Test','use','ContextOptions','Manual Browser.new_context options; no test.use fixture override/scoping system.')
+put('Test','use','Suite.context_options','Nested suite/test context inheritance; no general named fixture option overrides.')
 for m in ['browser','browserName','context','page','request']:
  target={'browser':'Browser','browserName':'Browser.kind','context':'BrowserContext','page':'test','request':'ApiClient'}[m]
  put('Fixtures',m,target,'Manual Browser/Context/client setup or injected Page; runner injects a fresh context/page for every attempt.')
@@ -222,7 +222,7 @@ for c in ['FullProject','TestProject']:
 for m,t in {'acceptDownloads':'accept_downloads','bypassCSP':'bypass_csp','deviceScaleFactor':'device_scale_factor','extraHTTPHeaders':'extra_http_headers','geolocation':'geolocation','hasTouch':'has_touch','httpCredentials':'http_credentials','ignoreHTTPSErrors':'ignore_https_errors','isMobile':'is_mobile','javaScriptEnabled':'java_script_enabled','locale':'locale','offline':'offline','permissions':'permissions','proxy':'proxy_server','storageState':'storage_state','timezoneId':'timezone_id','userAgent':'user_agent','viewport':'viewport','serviceWorkers':'service_workers'}.items():put('TestOptions',m,'ContextOptions.'+t,'Available through runner defaults and per-project context options; no suite-scoped test.use; Firefox restrictions and narrower options apply.')
 for m,t in {'baseURL':'base_url','browserName':'browser','headless':'headless','screenshot':'screenshot','video':'video'}.items():put('TestOptions',m,'E2eConfig.'+t,'Runner/launch config field; no automatic named-fixture/project options equivalence.')
 put('TestOptions','launchOptions','LaunchOptions','Launch struct subset; no full Playwright options, persistent profile or channels.')
-put('TestOptions','contextOptions','ContextOptions','Runner default and per-project context settings applied to fresh contexts; no suite fixture override hierarchy.')
+put('TestOptions','contextOptions','ContextOptions','Runner/project defaults and suite/test context inheritance; no general named fixture overrides.')
 put('TestOptions','testIdAttribute','set_test_id_attribute','Process-global setter, not project/test-specific fixture option.')
 put('TestOptions','trace','BrowserContext.start_tracing','Manual custom JSON traces plus runner JSON; no trace mode policy or Trace Viewer compatibility.')
 for m in ['colorScheme','reducedMotion']:put('TestOptions',m,'Page.emulate_media','Chromium page-level manual emulation; no context/test option binding.')
@@ -259,7 +259,7 @@ put('TestInfo','outputPath','TestInfo.output_path','Attempt-specific artifact pa
 put('Test','locks','Test.lock','Named sorted locks serialize matching tests within this runner; Tokio workers, no multi-process worker coordination.')
 put('Assertions','toPass','expect_to_pass','Retry an asynchronous E2eResult assertion block; no Playwright custom matcher registry/options intervals.')
 for c in ['FullConfig','TestConfig']:put(c,'expect','E2eConfig.expect_timeout_ms','Consumed by CLI environment bridge and Runner; per-page/expect overrides supported.')
-for c in ['FullProject','TestProject']:put(c,'use','Project.context_options','Project-specific context settings; optional browser/launch overrides, no test.use suite hierarchy or project dependencies.')
+for c in ['FullProject','TestProject']:put(c,'use','Project.context_options','Project-specific context settings; optional browser/launch overrides, suite/test context inheritance, no named fixture overrides or project dependencies.')
 put('TestOptions','browserName','Project.browser','Projects select Chromium/Firefox independently; no WebKit backend.')
 put('TestOptions','launchOptions','Project.launch_options','Dedicated project launch settings; persistent profiles supported, no managed channels.')
 put('TestOptions','contextOptions','Project.context_options','Isolated context per attempt, runner defaults and per-project overrides; no full named-fixture test.use model.')
@@ -278,6 +278,13 @@ for m,t in {'page':'Page','console':'Console','weberror':'PageError','request':'
 for c in ['FullConfig','TestConfig']:
  for m,t in {'globalTimeout':'global_timeout_ms','maxFailures':'max_failures'}.items():
   put(c,m,'E2eConfig.'+t,'Consumed by Runner and CLI; global cancellation with bounded teardown and final unexpected-failure scheduling limit. Active workers finish on maxFailures; no process-worker orchestration.')
+# Scoped fixtures, suites and native network lifecycle events.
+for c in ['Page', 'BrowserContext']:
+ for m,t in {'requestFinished':'RequestFinished','requestFailed':'RequestFailed'}.items():
+  put(c,m,c+'.subscribe',t+' enum events on Chromium/Firefox with request IDs and method/URL; failed requests carry transport error text. Context events include page identity. No rich live Request object graph.','Partial','event')
+for m,t in {'describe.only':'only','describe.skip':'skip','describe.fixme':'fixme'}.items():
+ put('Test',m,'Suite.'+t,'Applies focus/skip/fixme to descendants; Rust builders, no JavaScript describe callbacks.')
+put('Test','describe.configure','Suite.timeout','Suite timeout/retry/context settings inherited by descendants; no serial/fully-parallel execution mode configuration.')
 # Fill every remaining upstream member explicitly as absent, with class-specific explanations.
 def default_note(c,e):
  if c.startswith('Android') or c in ['Electron','ElectronApplication']:return 'Experimental upstream API; Ferrite has no Android/ADB/WebView or Electron backend.'
