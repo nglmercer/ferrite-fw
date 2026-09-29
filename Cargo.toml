@@ -49,6 +49,7 @@ http = "1"
 ignore = "0.4"
 indexmap = { version = "2", features = ["serde"] }
 json5 = "0.4"
+md-5 = "0.10"
 miette = "7"
 mime_guess = "2"
 notify = "8"

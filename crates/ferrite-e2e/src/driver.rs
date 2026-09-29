@@ -178,6 +178,34 @@ pub struct CdpDriver {
     pressed: Arc<Mutex<bool>>,
     /// Owning browser context (`None` = default; scopes permission grants).
     browser_context: Option<String>,
+    /// Fetch-domain sharing between routing and auth challenges.
+    fetch_auth: Arc<Mutex<FetchAuthState>>,
+}
+
+/// Shared Fetch-domain state: routing owns `patterns`, credentials own
+/// `handleAuthRequests`, and every change re-enables with the merge.
+#[derive(Debug, Default)]
+struct FetchAuthState {
+    /// Active routing patterns (`None` = routing off).
+    routing_patterns: Option<Vec<Value>>,
+    /// Credentials for `Fetch.authRequired` (`None` = no challenges).
+    creds: Option<(String, String)>,
+    /// Auth-challenge pump (alive while `creds` is set).
+    auth_task: Option<tokio::task::AbortHandle>,
+}
+
+/// Merged `Fetch.enable` params (`None` = `Fetch.disable`).
+///
+/// Auth-only mode passes empty patterns so no request pauses for
+/// `requestPaused`; challenges still arrive as `Fetch.authRequired`.
+fn fetch_enable_params(patterns: Option<&[Value]>, handle_auth: bool) -> Option<Value> {
+    if patterns.is_none() && !handle_auth {
+        return None;
+    }
+    Some(serde_json::json!({
+        "patterns": patterns.unwrap_or(&[]),
+        "handleAuthRequests": handle_auth,
+    }))
 }
 
 /// BiDi-backed driver (Firefox): one browsing context.
@@ -251,6 +279,7 @@ impl CdpDriver {
             modifiers: Arc::new(Mutex::new(0)),
             pressed: Arc::new(Mutex::new(false)),
             browser_context,
+            fetch_auth: Arc::new(Mutex::new(FetchAuthState::default())),
         };
         driver.call("Page.enable", Value::Null).await?;
         driver.call("Runtime.enable", Value::Null).await?;
@@ -687,6 +716,68 @@ impl Driver {
         match self {
             Self::Cdp(driver) => driver.set_timezone(timezone_id).await,
             Self::Bidi(driver) => driver.set_timezone(timezone_id).await,
+        }
+    }
+
+    /// Enable or disable JavaScript execution.
+    pub async fn set_java_script_enabled(&self, enabled: bool) -> E2eResult<()> {
+        match self {
+            Self::Cdp(driver) => driver.set_java_script_enabled(enabled).await,
+            Self::Bidi(driver) => driver.set_java_script_enabled(enabled).await,
+        }
+    }
+
+    /// Bypass Content-Security-Policy checks.
+    pub async fn set_bypass_csp(&self, bypass: bool) -> E2eResult<()> {
+        match self {
+            Self::Cdp(driver) => driver.set_bypass_csp(bypass).await,
+            Self::Bidi(driver) => driver.set_bypass_csp(bypass).await,
+        }
+    }
+
+    /// Allow or deny downloads browser-wide.
+    pub async fn set_downloads_allowed(&self, allowed: bool) -> E2eResult<()> {
+        match self {
+            Self::Cdp(driver) => driver.set_downloads_allowed(allowed).await,
+            Self::Bidi(driver) => driver.set_downloads_allowed(allowed).await,
+        }
+    }
+
+    /// Block service workers (Chromium bypasses them; see note there).
+    pub async fn set_service_workers_blocked(&self, blocked: bool) -> E2eResult<()> {
+        match self {
+            Self::Cdp(driver) => driver.set_service_workers_blocked(blocked).await,
+            Self::Bidi(driver) => driver.set_service_workers_blocked(blocked).await,
+        }
+    }
+
+    /// Clear `storage_types` (e.g. `indexeddb`) for one origin.
+    pub async fn clear_data_for_origin(&self, origin: &str, storage_types: &str) -> E2eResult<()> {
+        match self {
+            Self::Cdp(driver) => driver.clear_data_for_origin(origin, storage_types).await,
+            Self::Bidi(driver) => driver.clear_data_for_origin(origin, storage_types).await,
+        }
+    }
+
+    /// Answer HTTP auth challenges with `username`/`password` (`None` clears).
+    pub async fn set_auth_credentials(
+        &self,
+        username: Option<&str>,
+        password: Option<&str>,
+    ) -> E2eResult<()> {
+        let creds = match (username, password) {
+            (Some(user), Some(pass)) => Some((user.to_string(), pass.to_string())),
+            (None, None) => None,
+            _ => {
+                return Err(E2eError::Config(
+                    "set_auth_credentials needs both username and password (or neither to clear)"
+                        .to_string(),
+                ));
+            }
+        };
+        match self {
+            Self::Cdp(driver) => driver.set_auth_credentials(creds).await,
+            Self::Bidi(driver) => driver.set_auth_credentials(creds).await,
         }
     }
 
@@ -1613,6 +1704,57 @@ impl CdpDriver {
         Ok(())
     }
 
+    async fn set_java_script_enabled(&self, enabled: bool) -> E2eResult<()> {
+        self.call(
+            "Emulation.setScriptExecutionDisabled",
+            serde_json::json!({ "value": !enabled }),
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn set_bypass_csp(&self, bypass: bool) -> E2eResult<()> {
+        self.call(
+            "Page.setBypassCSP",
+            serde_json::json!({ "enabled": bypass }),
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn set_downloads_allowed(&self, allowed: bool) -> E2eResult<()> {
+        let behavior = if allowed { "allow" } else { "deny" };
+        self.cdp
+            .call(
+                None,
+                "Browser.setDownloadBehavior",
+                serde_json::json!({ "behavior": behavior }),
+                self.timeout,
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn set_service_workers_blocked(&self, blocked: bool) -> E2eResult<()> {
+        // CDP cannot block worker *registration*; bypassing is the closest
+        // runtime lever (fetches skip workers entirely).
+        self.call(
+            "Network.setBypassServiceWorker",
+            serde_json::json!({ "bypass": blocked }),
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn clear_data_for_origin(&self, origin: &str, storage_types: &str) -> E2eResult<()> {
+        self.call(
+            "Storage.clearDataForOrigin",
+            serde_json::json!({ "origin": origin, "storageTypes": storage_types }),
+        )
+        .await?;
+        Ok(())
+    }
+
     async fn emulate_media(
         &self,
         color_scheme: Option<ColorScheme>,
@@ -1661,8 +1803,10 @@ impl CdpDriver {
         if wants_response {
             patterns.push(serde_json::json!({ "urlPattern": "*", "requestStage": "Response" }));
         }
-        self.call("Fetch.enable", serde_json::json!({ "patterns": patterns }))
-            .await?;
+        if let Ok(mut shared) = self.fetch_auth.lock() {
+            shared.routing_patterns = Some(patterns);
+        }
+        self.apply_fetch_config().await?;
         let mut events = self.cdp.subscribe();
         let session = self.session.clone();
         let cdp = self.cdp.clone();
@@ -1862,7 +2006,96 @@ impl CdpDriver {
     }
 
     async fn stop_routing(&self) {
-        let _ = self.call("Fetch.disable", Value::Null).await;
+        if let Ok(mut shared) = self.fetch_auth.lock() {
+            shared.routing_patterns = None;
+        }
+        // Auth-only mode keeps the domain enabled (empty patterns).
+        let _ = self.apply_fetch_config().await;
+    }
+
+    /// Re-enable the Fetch domain from merged routing/auth state.
+    async fn apply_fetch_config(&self) -> E2eResult<()> {
+        let params = self
+            .fetch_auth
+            .lock()
+            .map(|shared| {
+                fetch_enable_params(shared.routing_patterns.as_deref(), shared.creds.is_some())
+            })
+            .unwrap_or(None);
+        match params {
+            Some(params) => self.call("Fetch.enable", params).await.map(|_| ()),
+            None => self.call("Fetch.disable", Value::Null).await.map(|_| ()),
+        }
+    }
+
+    /// Answer `Fetch.authRequired` with `creds` (`None` clears).
+    async fn set_auth_credentials(&self, creds: Option<(String, String)>) -> E2eResult<()> {
+        let spawn_pump = {
+            let mut shared = self.fetch_auth.lock().unwrap_or_else(|e| e.into_inner());
+            shared.creds = creds;
+            match (&shared.creds, &shared.auth_task) {
+                (Some(_), None) => true,
+                (None, Some(task)) => {
+                    task.abort();
+                    shared.auth_task = None;
+                    false
+                }
+                _ => false,
+            }
+        };
+        if spawn_pump {
+            let task = self.spawn_auth_pump();
+            if let Ok(mut shared) = self.fetch_auth.lock() {
+                shared.auth_task = Some(task);
+            }
+        }
+        self.apply_fetch_config().await
+    }
+
+    /// Pump answering auth challenges (ignores `requestPaused`: the routing
+    /// pump owns those, so the two never race a request).
+    fn spawn_auth_pump(&self) -> tokio::task::AbortHandle {
+        let mut events = self.cdp.subscribe();
+        let session = self.session.clone();
+        let cdp = self.cdp.clone();
+        let timeout = self.timeout;
+        let shared = Arc::clone(&self.fetch_auth);
+        tokio::spawn(async move {
+            loop {
+                let event = match events.recv().await {
+                    Ok(event) => event,
+                    Err(_) => break,
+                };
+                if event.session.as_deref() != Some(&session)
+                    || event.method != "Fetch.authRequired"
+                {
+                    continue;
+                }
+                let creds = shared
+                    .lock()
+                    .map(|state| state.creds.clone())
+                    .unwrap_or(None);
+                let Some((username, password)) = creds else {
+                    continue;
+                };
+                let _ = cdp
+                    .call(
+                        Some(&session),
+                        "Fetch.continueWithAuth",
+                        serde_json::json!({
+                            "requestId": event.params["requestId"],
+                            "authChallengeResponse": {
+                                "response": "ProvideCredentials",
+                                "username": username,
+                                "password": password,
+                            },
+                        }),
+                        timeout,
+                    )
+                    .await;
+            }
+        })
+        .abort_handle()
     }
 
     fn start_request_capture(&self) -> tokio::task::AbortHandle {
@@ -3204,6 +3437,57 @@ impl BidiDriver {
         ))
     }
 
+    async fn set_java_script_enabled(&self, _enabled: bool) -> E2eResult<()> {
+        Err(E2eError::Config(
+            "firefox JavaScript toggle is not supported \
+             (BiDi has no script-execution override)"
+                .to_string(),
+        ))
+    }
+
+    async fn set_bypass_csp(&self, _bypass: bool) -> E2eResult<()> {
+        Err(E2eError::Config(
+            "firefox CSP bypass is not supported \
+             (BiDi has no CSP override)"
+                .to_string(),
+        ))
+    }
+
+    async fn set_downloads_allowed(&self, _allowed: bool) -> E2eResult<()> {
+        Err(E2eError::Config(
+            "firefox download allow/deny is not supported \
+             (BiDi has no download-behavior override)"
+                .to_string(),
+        ))
+    }
+
+    async fn set_service_workers_blocked(&self, _blocked: bool) -> E2eResult<()> {
+        Err(E2eError::Config(
+            "firefox service-worker blocking is not supported \
+             (BiDi has no worker override)"
+                .to_string(),
+        ))
+    }
+
+    async fn clear_data_for_origin(&self, _origin: &str, _storage_types: &str) -> E2eResult<()> {
+        Err(E2eError::Config(
+            "firefox per-origin storage clear is not supported \
+             (BiDi has no storage-clear command)"
+                .to_string(),
+        ))
+    }
+
+    async fn set_auth_credentials(&self, creds: Option<(String, String)>) -> E2eResult<()> {
+        if creds.is_none() {
+            return Ok(());
+        }
+        Err(E2eError::Config(
+            "firefox HTTP auth challenges are not supported \
+             (BiDi has no auth-challenge response)"
+                .to_string(),
+        ))
+    }
+
     async fn emulate_media(
         &self,
         _color_scheme: Option<ColorScheme>,
@@ -4527,6 +4811,37 @@ mod tests {
         );
         assert_eq!(url_host("data:text/html,x"), None);
         assert_eq!(url_host("about:blank"), None);
+    }
+
+    #[test]
+    fn fetch_config_merges_routing_and_auth() {
+        // Neither: disable the domain.
+        assert_eq!(fetch_enable_params(None, false), None);
+        // Routing only: patterns without challenges.
+        let patterns = vec![serde_json::json!({ "urlPattern": "*" })];
+        assert_eq!(
+            fetch_enable_params(Some(&patterns), false),
+            Some(serde_json::json!({
+                "patterns": [{ "urlPattern": "*" }],
+                "handleAuthRequests": false,
+            }))
+        );
+        // Auth only: empty patterns (nothing pauses) with challenges on.
+        assert_eq!(
+            fetch_enable_params(None, true),
+            Some(serde_json::json!({
+                "patterns": [],
+                "handleAuthRequests": true,
+            }))
+        );
+        // Both: routing patterns plus challenges.
+        assert_eq!(
+            fetch_enable_params(Some(&patterns), true),
+            Some(serde_json::json!({
+                "patterns": [{ "urlPattern": "*" }],
+                "handleAuthRequests": true,
+            }))
+        );
     }
 
     #[test]

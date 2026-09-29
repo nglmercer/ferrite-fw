@@ -10,12 +10,24 @@ use crate::browser::Backend;
 use crate::driver::{base64_encode, now_ms, BidiDriver, CdpDriver, ConsoleSink, Driver};
 use crate::error::{E2eError, E2eResult};
 use crate::page::{
-    Cookie, Page, RouteAction, RouteHandler, RouteHandlerEntry, RouteInfo, RouteRule, Viewport,
+    Cookie, DeviceDescriptor, HttpCredentials, Page, RouteAction, RouteHandler, RouteHandlerEntry,
+    RouteInfo, RouteRule, StorageState, Viewport,
 };
 use std::future::Future;
 
+/// Service-worker policy for a context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ServiceWorkerMode {
+    /// Workers run normally.
+    #[default]
+    Allow,
+    /// Workers are bypassed (Chromium; approximated — registration still
+    /// succeeds but fetches skip workers entirely).
+    Block,
+}
+
 /// Options for a new browser context.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ContextOptions {
     /// Default viewport applied to every page in the context.
     pub viewport: Option<Viewport>,
@@ -27,6 +39,67 @@ pub struct ContextOptions {
     pub proxy_server: Option<String>,
     /// Ignore HTTPS certificate errors.
     pub ignore_https_errors: bool,
+    /// Locale override (`fr-FR`; Chromium only, fails loudly on Firefox).
+    pub locale: Option<String>,
+    /// Timezone override (`America/New_York`; Chromium only).
+    pub timezone_id: Option<String>,
+    /// Geolocation override (latitude, longitude).
+    pub geolocation: Option<(f64, f64)>,
+    /// Permissions granted to every page (`geolocation`, ...).
+    pub permissions: Vec<String>,
+    /// Start offline (Chromium only).
+    pub offline: bool,
+    /// HTTP credentials for basic/digest challenges (Chromium only).
+    pub http_credentials: Option<HttpCredentials>,
+    /// Extra HTTP headers for every request (Chromium only).
+    pub extra_http_headers: Vec<(String, String)>,
+    /// Device pixel ratio (Chromium only; needs `viewport` for full effect).
+    pub device_scale_factor: Option<f64>,
+    /// Mobile viewport behavior (Chromium only).
+    pub is_mobile: bool,
+    /// Touch event support (Chromium only).
+    pub has_touch: bool,
+    /// Enable JavaScript (`None` = on; `Some(false)` is Chromium only).
+    pub java_script_enabled: Option<bool>,
+    /// Bypass Content-Security-Policy checks (Chromium only).
+    pub bypass_csp: bool,
+    /// Accept downloads (`false` denies browser-wide; Chromium only).
+    pub accept_downloads: bool,
+    /// Directory downloads land in (Chromium per-context; Firefox is
+    /// launch-wide, so this errors on Firefox pages).
+    pub downloads_path: Option<PathBuf>,
+    /// Storage state file applied to the context (cookies at once,
+    /// localStorage when its origin loads).
+    pub storage_state: Option<PathBuf>,
+    /// Service-worker policy (blocking is Chromium only).
+    pub service_workers: ServiceWorkerMode,
+}
+
+impl Default for ContextOptions {
+    fn default() -> Self {
+        Self {
+            viewport: None,
+            user_agent: None,
+            proxy_server: None,
+            ignore_https_errors: false,
+            locale: None,
+            timezone_id: None,
+            geolocation: None,
+            permissions: Vec::new(),
+            offline: false,
+            http_credentials: None,
+            extra_http_headers: Vec::new(),
+            device_scale_factor: None,
+            is_mobile: false,
+            has_touch: false,
+            java_script_enabled: None,
+            bypass_csp: false,
+            accept_downloads: true,
+            downloads_path: None,
+            storage_state: None,
+            service_workers: ServiceWorkerMode::Allow,
+        }
+    }
 }
 
 impl ContextOptions {
@@ -42,6 +115,155 @@ impl ContextOptions {
     pub fn user_agent(mut self, user_agent: impl Into<String>) -> Self {
         self.user_agent = Some(user_agent.into());
         self
+    }
+
+    /// Set the locale override.
+    #[must_use]
+    pub fn locale(mut self, locale: impl Into<String>) -> Self {
+        self.locale = Some(locale.into());
+        self
+    }
+
+    /// Set the timezone override.
+    #[must_use]
+    pub fn timezone_id(mut self, timezone_id: impl Into<String>) -> Self {
+        self.timezone_id = Some(timezone_id.into());
+        self
+    }
+
+    /// Set the geolocation override.
+    #[must_use]
+    pub fn geolocation(mut self, latitude: f64, longitude: f64) -> Self {
+        self.geolocation = Some((latitude, longitude));
+        self
+    }
+
+    /// Grant permissions to every page.
+    #[must_use]
+    pub fn permissions(mut self, permissions: &[&str]) -> Self {
+        self.permissions = permissions.iter().map(ToString::to_string).collect();
+        self
+    }
+
+    /// Start offline.
+    #[must_use]
+    pub fn offline(mut self, offline: bool) -> Self {
+        self.offline = offline;
+        self
+    }
+
+    /// Set HTTP credentials for basic/digest challenges.
+    #[must_use]
+    pub fn http_credentials(mut self, credentials: HttpCredentials) -> Self {
+        self.http_credentials = Some(credentials);
+        self
+    }
+
+    /// Set extra HTTP headers for every request.
+    #[must_use]
+    pub fn extra_http_headers(mut self, headers: Vec<(String, String)>) -> Self {
+        self.extra_http_headers = headers;
+        self
+    }
+
+    /// Set the device pixel ratio.
+    #[must_use]
+    pub fn device_scale_factor(mut self, factor: f64) -> Self {
+        self.device_scale_factor = Some(factor);
+        self
+    }
+
+    /// Enable mobile viewport behavior.
+    #[must_use]
+    pub fn is_mobile(mut self, mobile: bool) -> Self {
+        self.is_mobile = mobile;
+        self
+    }
+
+    /// Enable touch event support.
+    #[must_use]
+    pub fn has_touch(mut self, touch: bool) -> Self {
+        self.has_touch = touch;
+        self
+    }
+
+    /// Enable or disable JavaScript.
+    #[must_use]
+    pub fn java_script_enabled(mut self, enabled: bool) -> Self {
+        self.java_script_enabled = Some(enabled);
+        self
+    }
+
+    /// Bypass Content-Security-Policy checks.
+    #[must_use]
+    pub fn bypass_csp(mut self, bypass: bool) -> Self {
+        self.bypass_csp = bypass;
+        self
+    }
+
+    /// Accept or deny downloads.
+    #[must_use]
+    pub fn accept_downloads(mut self, accept: bool) -> Self {
+        self.accept_downloads = accept;
+        self
+    }
+
+    /// Set the directory downloads land in.
+    #[must_use]
+    pub fn downloads_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.downloads_path = Some(path.into());
+        self
+    }
+
+    /// Apply a storage state file to the context.
+    #[must_use]
+    pub fn storage_state(mut self, path: impl Into<PathBuf>) -> Self {
+        self.storage_state = Some(path.into());
+        self
+    }
+
+    /// Set the service-worker policy.
+    #[must_use]
+    pub fn service_workers(mut self, mode: ServiceWorkerMode) -> Self {
+        self.service_workers = mode;
+        self
+    }
+}
+
+/// Live context settings: option seeds plus later setter calls, applied to
+/// current and future pages.
+#[derive(Debug, Clone, Default)]
+struct ContextLiveState {
+    offline: bool,
+    http_credentials: Option<HttpCredentials>,
+    extra_http_headers: Vec<(String, String)>,
+    locale: Option<String>,
+    timezone_id: Option<String>,
+    java_script_enabled: Option<bool>,
+    bypass_csp: bool,
+    downloads_allowed: bool,
+    downloads_path: Option<PathBuf>,
+    service_workers: ServiceWorkerMode,
+    init_scripts: Vec<String>,
+    storage: Option<StorageState>,
+}
+
+impl ContextLiveState {
+    fn seed(options: &ContextOptions) -> Self {
+        Self {
+            offline: options.offline,
+            http_credentials: options.http_credentials.clone(),
+            extra_http_headers: options.extra_http_headers.clone(),
+            locale: options.locale.clone(),
+            timezone_id: options.timezone_id.clone(),
+            java_script_enabled: options.java_script_enabled,
+            bypass_csp: options.bypass_csp,
+            downloads_allowed: options.accept_downloads,
+            downloads_path: options.downloads_path.clone(),
+            service_workers: options.service_workers,
+            init_scripts: Vec::new(),
+            storage: None,
+        }
     }
 }
 
@@ -112,6 +334,9 @@ pub struct BrowserContext {
     permissions: Arc<Mutex<Vec<String>>>,
     /// Geolocation override, applied to current and future pages.
     geolocation: Arc<Mutex<Option<(f64, f64)>>>,
+    /// Live settings (option seeds + setter calls), applied to current
+    /// and future pages.
+    live: Arc<Mutex<ContextLiveState>>,
     /// Launch-wide download dir (Firefox downloads land here).
     download_dir: Option<PathBuf>,
     /// Active tracing session (shared with every page).
@@ -130,6 +355,9 @@ impl BrowserContext {
         registry: Weak<Mutex<Vec<BrowserContext>>>,
         download_dir: Option<PathBuf>,
     ) -> Self {
+        let live = ContextLiveState::seed(&options);
+        let permissions = options.permissions.clone();
+        let geolocation = options.geolocation;
         Self {
             backend,
             id,
@@ -141,8 +369,9 @@ impl BrowserContext {
             registry,
             routes: Arc::new(Mutex::new(Vec::new())),
             handlers: Arc::new(Mutex::new(Vec::new())),
-            permissions: Arc::new(Mutex::new(Vec::new())),
-            geolocation: Arc::new(Mutex::new(None)),
+            permissions: Arc::new(Mutex::new(permissions)),
+            geolocation: Arc::new(Mutex::new(geolocation)),
+            live: Arc::new(Mutex::new(live)),
             download_dir,
             tracing: Arc::new(Mutex::new(None)),
         }
@@ -243,6 +472,24 @@ impl BrowserContext {
         if let Some(viewport) = self.options.viewport {
             page.set_viewport(viewport).await?;
         }
+        if self.options.device_scale_factor.is_some()
+            || self.options.is_mobile
+            || self.options.has_touch
+        {
+            // Playwright combines device flags with the viewport (default
+            // 1280x720 when unset).
+            let viewport = self.options.viewport.unwrap_or(Viewport {
+                width: 1280,
+                height: 720,
+            });
+            page.emulate_device(DeviceDescriptor {
+                viewport,
+                device_scale_factor: self.options.device_scale_factor.unwrap_or(1.0),
+                mobile: self.options.is_mobile,
+                has_touch: self.options.has_touch,
+            })
+            .await?;
+        }
         let permissions = self
             .permissions
             .lock()
@@ -268,6 +515,7 @@ impl BrowserContext {
         if self.options.ignore_https_errors {
             page.set_ignore_https_errors(true).await?;
         }
+        self.apply_live_state(&page).await?;
         if !self
             .routes
             .lock()
@@ -607,6 +855,231 @@ impl BrowserContext {
         Ok(())
     }
 
+    /// Apply the live settings snapshot to one page (new pages).
+    async fn apply_live_state(&self, page: &Page) -> E2eResult<()> {
+        let live = self
+            .live
+            .lock()
+            .map(|live| live.clone())
+            .unwrap_or_default();
+        if live.offline {
+            page.set_offline(true).await?;
+        }
+        if let Some(credentials) = &live.http_credentials {
+            page.set_http_credentials(Some(&credentials.username), Some(&credentials.password))
+                .await?;
+        }
+        if !live.extra_http_headers.is_empty() {
+            let headers: Vec<(&str, &str)> = live
+                .extra_http_headers
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.as_str()))
+                .collect();
+            page.set_extra_http_headers(&headers).await?;
+        }
+        if let Some(locale) = &live.locale {
+            page.set_locale(locale).await?;
+        }
+        if let Some(timezone_id) = &live.timezone_id {
+            page.set_timezone(timezone_id).await?;
+        }
+        if let Some(enabled) = live.java_script_enabled {
+            page.set_java_script_enabled(enabled).await?;
+        }
+        if live.bypass_csp {
+            page.set_bypass_csp(true).await?;
+        }
+        if !live.downloads_allowed {
+            page.set_downloads_allowed(false).await?;
+        }
+        if let Some(dir) = &live.downloads_path {
+            page.set_download_dir(dir).await?;
+        }
+        if live.service_workers == ServiceWorkerMode::Block {
+            page.set_service_workers_blocked(true).await?;
+        }
+        for source in &live.init_scripts {
+            page.add_init_script(source).await?;
+        }
+        if let Some(state) = &live.storage {
+            page.apply_storage_state(state).await?;
+        }
+        Ok(())
+    }
+
+    /// Emulate offline mode on every current and future page (Chromium only).
+    pub async fn set_offline(&self, offline: bool) -> E2eResult<()> {
+        for page in self.pages() {
+            page.set_offline(offline).await?;
+        }
+        self.live.lock().unwrap_or_else(|e| e.into_inner()).offline = offline;
+        Ok(())
+    }
+
+    /// Send HTTP credentials with subsequent requests on every current and
+    /// future page (Chromium only; basic preempted, digest challenged).
+    pub async fn set_http_credentials(
+        &self,
+        username: Option<&str>,
+        password: Option<&str>,
+    ) -> E2eResult<()> {
+        let stored = match (username, password) {
+            (Some(user), Some(pass)) => Some(HttpCredentials::new(user, pass)),
+            (None, None) => None,
+            _ => {
+                return Err(E2eError::Config(
+                    "set_http_credentials needs both username and password (or neither to clear)"
+                        .to_string(),
+                ));
+            }
+        };
+        for page in self.pages() {
+            page.set_http_credentials(username, password).await?;
+        }
+        self.live
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .http_credentials = stored;
+        Ok(())
+    }
+
+    /// Set extra HTTP headers on every current and future page (Chromium only).
+    pub async fn set_extra_http_headers(&self, headers: &[(&str, &str)]) -> E2eResult<()> {
+        for page in self.pages() {
+            page.set_extra_http_headers(headers).await?;
+        }
+        self.live
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .extra_http_headers = headers
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect();
+        Ok(())
+    }
+
+    /// Override the locale on every current and future page (Chromium only).
+    pub async fn set_locale(&self, locale: &str) -> E2eResult<()> {
+        for page in self.pages() {
+            page.set_locale(locale).await?;
+        }
+        self.live.lock().unwrap_or_else(|e| e.into_inner()).locale = Some(locale.to_string());
+        Ok(())
+    }
+
+    /// Override the timezone on every current and future page (Chromium only).
+    pub async fn set_timezone(&self, timezone_id: &str) -> E2eResult<()> {
+        for page in self.pages() {
+            page.set_timezone(timezone_id).await?;
+        }
+        self.live
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .timezone_id = Some(timezone_id.to_string());
+        Ok(())
+    }
+
+    /// Enable or disable JavaScript on every current and future page
+    /// (disabling is Chromium only).
+    pub async fn set_java_script_enabled(&self, enabled: bool) -> E2eResult<()> {
+        for page in self.pages() {
+            page.set_java_script_enabled(enabled).await?;
+        }
+        self.live
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .java_script_enabled = Some(enabled);
+        Ok(())
+    }
+
+    /// Bypass Content-Security-Policy checks on every current and future
+    /// page (Chromium only).
+    pub async fn set_bypass_csp(&self, bypass: bool) -> E2eResult<()> {
+        for page in self.pages() {
+            page.set_bypass_csp(bypass).await?;
+        }
+        self.live
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .bypass_csp = bypass;
+        Ok(())
+    }
+
+    /// Allow or deny downloads on every current and future page
+    /// (Chromium only; denying is browser-wide).
+    pub async fn set_downloads_allowed(&self, allowed: bool) -> E2eResult<()> {
+        for page in self.pages() {
+            page.set_downloads_allowed(allowed).await?;
+        }
+        self.live
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .downloads_allowed = allowed;
+        Ok(())
+    }
+
+    /// Set the service-worker policy on every current and future page
+    /// (blocking is Chromium only).
+    pub async fn set_service_workers(&self, mode: ServiceWorkerMode) -> E2eResult<()> {
+        for page in self.pages() {
+            page.set_service_workers_blocked(mode == ServiceWorkerMode::Block)
+                .await?;
+        }
+        self.live
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .service_workers = mode;
+        Ok(())
+    }
+
+    /// Run `source` before page scripts in every future document, on every
+    /// current and future page.
+    pub async fn add_init_script(&self, source: &str) -> E2eResult<()> {
+        for page in self.pages() {
+            page.add_init_script(source).await?;
+        }
+        self.live
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .init_scripts
+            .push(source.to_string());
+        Ok(())
+    }
+
+    /// Apply a storage state file to the context: cookies land at once
+    /// (context-wide), localStorage lands on pages already on the saved
+    /// origin and follows future navigations there.
+    pub async fn load_storage_state(&self, path: impl AsRef<std::path::Path>) -> E2eResult<()> {
+        let raw = std::fs::read_to_string(path.as_ref()).map_err(|error| {
+            E2eError::Config(format!(
+                "cannot read storage state {}: {error}",
+                path.as_ref().display()
+            ))
+        })?;
+        let state: StorageState = serde_json::from_str(&raw).map_err(|error| {
+            E2eError::Config(format!(
+                "cannot parse storage state {}: {error}",
+                path.as_ref().display()
+            ))
+        })?;
+        for page in self.pages() {
+            page.apply_storage_state(&state).await?;
+        }
+        self.live.lock().unwrap_or_else(|e| e.into_inner()).storage = Some(state);
+        Ok(())
+    }
+
+    /// Capture the first page's storage state (needs an open page).
+    pub async fn storage_state(&self) -> E2eResult<StorageState> {
+        let pages = self.pages();
+        let Some(page) = pages.first() else {
+            return Err(E2eError::Config(
+                "storage_state needs an open page in the context".to_string(),
+            ));
+        };
+        page.storage_state().await
+    }
+
     /// Close the context and all its pages.
     pub async fn close(self) -> E2eResult<()> {
         if let Some(registry) = self.registry.upgrade() {
@@ -639,5 +1112,91 @@ impl BrowserContext {
             _ => {}
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn options_default_accepts_downloads() {
+        let options = ContextOptions::default();
+        assert!(options.accept_downloads);
+        assert!(!options.offline);
+        assert!(!options.is_mobile);
+        assert!(!options.has_touch);
+        assert!(!options.bypass_csp);
+        assert_eq!(options.service_workers, ServiceWorkerMode::Allow);
+        assert!(options.storage_state.is_none());
+        assert!(options.java_script_enabled.is_none());
+    }
+
+    #[test]
+    fn options_builders_chain() {
+        let options = ContextOptions::default()
+            .viewport(800, 600)
+            .locale("fr-FR")
+            .timezone_id("America/New_York")
+            .geolocation(48.8, 2.3)
+            .permissions(&["geolocation"])
+            .offline(true)
+            .http_credentials(HttpCredentials::new("ada", "s3cret"))
+            .extra_http_headers(vec![("X-A".to_string(), "1".to_string())])
+            .device_scale_factor(2.0)
+            .is_mobile(true)
+            .has_touch(true)
+            .java_script_enabled(false)
+            .bypass_csp(true)
+            .accept_downloads(false)
+            .downloads_path("/tmp/dl")
+            .storage_state("/tmp/state.json")
+            .service_workers(ServiceWorkerMode::Block);
+        assert_eq!(
+            options.viewport,
+            Some(Viewport {
+                width: 800,
+                height: 600
+            })
+        );
+        assert_eq!(options.locale.as_deref(), Some("fr-FR"));
+        assert_eq!(options.timezone_id.as_deref(), Some("America/New_York"));
+        assert_eq!(options.geolocation, Some((48.8, 2.3)));
+        assert_eq!(options.permissions, vec!["geolocation".to_string()]);
+        assert!(options.offline);
+        assert_eq!(
+            options.http_credentials,
+            Some(HttpCredentials::new("ada", "s3cret"))
+        );
+        assert_eq!(
+            options.extra_http_headers,
+            vec![("X-A".to_string(), "1".to_string())]
+        );
+        assert_eq!(options.device_scale_factor, Some(2.0));
+        assert!(options.is_mobile);
+        assert!(options.has_touch);
+        assert_eq!(options.java_script_enabled, Some(false));
+        assert!(options.bypass_csp);
+        assert!(!options.accept_downloads);
+        assert_eq!(options.downloads_path, Some(PathBuf::from("/tmp/dl")));
+        assert_eq!(
+            options.storage_state,
+            Some(PathBuf::from("/tmp/state.json"))
+        );
+        assert_eq!(options.service_workers, ServiceWorkerMode::Block);
+    }
+
+    #[test]
+    fn live_state_seeds_from_options() {
+        let options = ContextOptions::default()
+            .offline(true)
+            .locale("de-DE")
+            .accept_downloads(false);
+        let live = ContextLiveState::seed(&options);
+        assert!(live.offline);
+        assert_eq!(live.locale.as_deref(), Some("de-DE"));
+        assert!(!live.downloads_allowed);
+        assert!(live.init_scripts.is_empty());
+        assert!(live.storage.is_none());
     }
 }

@@ -913,6 +913,7 @@ impl Browser {
                 )
             }
         };
+        let storage_state = options.storage_state.clone();
         let context = BrowserContext::new(
             self.backend.clone(),
             id,
@@ -923,6 +924,11 @@ impl Browser {
             Arc::downgrade(&self.contexts),
             self.launch_download_dir.clone(),
         );
+        // Fail loudly on a bad storage file instead of opening pages
+        // without it.
+        if let Some(path) = &storage_state {
+            context.load_storage_state(path).await?;
+        }
         self.contexts
             .lock()
             .unwrap_or_else(|e| e.into_inner())

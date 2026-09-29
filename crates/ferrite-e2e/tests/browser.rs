@@ -12,11 +12,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ferrite_e2e::{
-    describe, match_text_snapshot_with, test, test_with_context, AbortReason, Browser, BrowserKind,
-    ColorScheme, Cookie, DeviceDescriptor, DialogDecision, E2eError, HarContentMode, HarFile,
-    LaunchOptions, LoadState, NavigationOptions, Page, PageEvent, PageEventKind, Project,
-    RecordedRequest, ReducedMotion, RouteAction, RouteFromHarOptions, RouteInfo, RouteRule, Runner,
-    ScreenshotOptions, SnapshotOptions, SnapshotUpdate, TestStatus, Timeout, TracingOptions,
+    describe, match_text_snapshot_with, set_test_id_attribute, test, test_with_context,
+    AbortReason, Browser, BrowserKind, ColorScheme, ContextOptions, Cookie, DeviceDescriptor,
+    DialogDecision, E2eError, HarContentMode, HarFile, HttpCredentials, LaunchOptions, LoadState,
+    NavigationOptions, Page, PageEvent, PageEventKind, Project, RecordedRequest, ReducedMotion,
+    RouteAction, RouteFromHarOptions, RouteInfo, RouteRule, Runner, ScreenshotOptions,
+    ServiceWorkerMode, SnapshotOptions, SnapshotUpdate, TestStatus, Timeout, TracingOptions,
     VideoMode, VideoOptions, WebSocketDirection,
 };
 
@@ -94,6 +95,64 @@ const LOCATE_FIXTURE: &str = r#"<!doctype html><html><head><title>locate me</tit
 /// Echo the request method.
 async fn echo_method(method: axum::http::Method) -> String {
     method.to_string()
+}
+
+/// Verify an RFC 2069/2617 digest answer for ada:s3cret@ferrite.
+fn digest_authorized(header: &str, method: &str) -> bool {
+    use md5::Digest as _;
+    let Some(params) = header.strip_prefix("Digest ") else {
+        return false;
+    };
+    let mut fields = std::collections::HashMap::new();
+    for part in params.split(", ") {
+        let Some((key, value)) = part.split_once('=') else {
+            continue;
+        };
+        fields.insert(key.to_string(), value.trim_matches('"').to_string());
+    }
+    let Some(uri) = fields.get("uri") else {
+        return false;
+    };
+    let Some(nonce) = fields.get("nonce") else {
+        return false;
+    };
+    let Some(response) = fields.get("response") else {
+        return false;
+    };
+    let ha1 = format!("{:x}", md5::Md5::digest("ada:ferrite:s3cret"));
+    let ha2 = format!("{:x}", md5::Md5::digest(format!("{method}:{uri}")));
+    let expected = match (fields.get("qop"), fields.get("nc"), fields.get("cnonce")) {
+        (Some(qop), Some(nc), Some(cnonce)) => format!(
+            "{:x}",
+            md5::Md5::digest(format!("{ha1}:{nonce}:{nc}:{cnonce}:{qop}:{ha2}"))
+        ),
+        _ => format!("{:x}", md5::Md5::digest(format!("{ha1}:{nonce}:{ha2}"))),
+    };
+    response == &expected
+}
+
+/// Digest-protected endpoint (401 + challenge unless authorized).
+async fn digest_auth(
+    headers: axum::http::HeaderMap,
+    method: axum::http::Method,
+) -> axum::response::Response {
+    use axum::response::IntoResponse as _;
+    let authorized = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| digest_authorized(value, method.as_str()));
+    if authorized {
+        return "digest-ok".into_response();
+    }
+    (
+        axum::http::StatusCode::UNAUTHORIZED,
+        [(
+            axum::http::header::WWW_AUTHENTICATE,
+            "Digest realm=\"ferrite\", nonce=\"n0nce\", algorithm=MD5, qop=\"auth\"",
+        )],
+        "auth required",
+    )
+        .into_response()
 }
 
 /// Spawn the fixture app; returns (base_url, shutdown).
@@ -183,6 +242,41 @@ async fn serve() -> (String, tokio::task::AbortHandle) {
                     .and_then(|value| value.to_str().ok())
                     .unwrap_or("absent")
                     .to_string()
+            }),
+        )
+        .route("/api/digest", axum::routing::get(digest_auth))
+        .route(
+            "/api/cookies",
+            axum::routing::get(|headers: axum::http::HeaderMap| async move {
+                headers
+                    .get(axum::http::header::COOKIE)
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("none")
+                    .to_string()
+            }),
+        )
+        .route(
+            "/csp",
+            axum::routing::get(|| async {
+                (
+                    [(
+                        axum::http::header::CONTENT_SECURITY_POLICY,
+                        "script-src 'none'",
+                    )],
+                    axum::response::Html(
+                        "<!doctype html><html><head><title>csp</title></head>\
+                         <body><script src=\"/static/csp.js\"></script></body></html>",
+                    ),
+                )
+            }),
+        )
+        .route(
+            "/static/csp.js",
+            axum::routing::get(|| async {
+                (
+                    [(axum::http::header::CONTENT_TYPE, "application/javascript")],
+                    "window.__csp = 'yes';",
+                )
             }),
         );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -4557,5 +4651,565 @@ async fn network_har_export_embed_and_replay() {
         replay.close().await.unwrap();
         browser.close().await.unwrap();
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[tokio::test]
+async fn context_locale_timezone_options() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let context = browser
+            .new_context(
+                ContextOptions::default()
+                    .locale("fr-FR")
+                    .timezone_id("America/New_York"),
+            )
+            .await
+            .unwrap();
+        if kind == BrowserKind::Chromium {
+            let page = context.new_page().await.unwrap();
+            page.goto(&base).await.unwrap();
+            let intl = page
+                .evaluate_value("Intl.DateTimeFormat().resolvedOptions().locale")
+                .await
+                .unwrap();
+            assert_eq!(intl, serde_json::json!("fr-FR"), "{tag}");
+            let zone = page
+                .evaluate_value("Intl.DateTimeFormat().resolvedOptions().timeZone")
+                .await
+                .unwrap();
+            assert_eq!(zone, serde_json::json!("America/New_York"), "{tag}");
+            page.close().await.unwrap();
+        } else {
+            let error = context.new_page().await.unwrap_err();
+            assert!(
+                error.to_string().contains("not supported"),
+                "{tag}: {error}"
+            );
+        }
+
+        context.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn context_offline_headers_credentials() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let context = browser
+            .new_context(ContextOptions::default())
+            .await
+            .unwrap();
+        let page = context.new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+
+        if kind == BrowserKind::Chromium {
+            context.set_offline(true).await.unwrap();
+            let failed: String = page
+                .evaluate("fetch('api/hi').then(() => 'ok', () => 'failed')")
+                .await
+                .unwrap();
+            assert_eq!(failed, "failed", "{tag}");
+            context.set_offline(false).await.unwrap();
+            let ok: String = page
+                .evaluate("fetch('api/hi').then(() => 'ok', () => 'failed')")
+                .await
+                .unwrap();
+            assert_eq!(ok, "ok", "{tag}");
+
+            context
+                .set_extra_http_headers(&[("X-Ferrite-Probe", "probe-1")])
+                .await
+                .unwrap();
+            let headers: String = page
+                .evaluate("fetch('api/echo-headers').then(r => r.text())")
+                .await
+                .unwrap();
+            assert!(headers.contains("probe-1"), "{tag}: {headers}");
+
+            context
+                .set_http_credentials(Some("ada"), Some("s3cret"))
+                .await
+                .unwrap();
+            let auth: String = page
+                .evaluate("fetch('api/auth').then(r => r.text())")
+                .await
+                .unwrap();
+            assert!(auth.starts_with("Basic "), "{tag}: {auth}");
+            context.set_http_credentials(None, None).await.unwrap();
+            let auth: String = page
+                .evaluate("fetch('api/auth').then(r => r.text())")
+                .await
+                .unwrap();
+            assert_eq!(auth, "absent", "{tag}");
+
+            // Options seed the same settings for new pages.
+            let seeded = browser
+                .new_context(
+                    ContextOptions::default()
+                        .http_credentials(HttpCredentials::new("ada", "s3cret"))
+                        .extra_http_headers(vec![(
+                            "X-Ferrite-Probe".to_string(),
+                            "probe-1".to_string(),
+                        )]),
+                )
+                .await
+                .unwrap();
+            let seeded_page = seeded.new_page().await.unwrap();
+            seeded_page.goto(&base).await.unwrap();
+            let auth: String = seeded_page
+                .evaluate("fetch('api/auth').then(r => r.text())")
+                .await
+                .unwrap();
+            assert!(auth.starts_with("Basic "), "{tag}: {auth}");
+            seeded_page.close().await.unwrap();
+            seeded.close().await.unwrap();
+        } else {
+            for error in [
+                context.set_offline(true).await.unwrap_err(),
+                context
+                    .set_extra_http_headers(&[("X-Ferrite-Probe", "probe-1")])
+                    .await
+                    .unwrap_err(),
+                context
+                    .set_http_credentials(Some("ada"), Some("s3cret"))
+                    .await
+                    .unwrap_err(),
+            ] {
+                assert!(
+                    error.to_string().contains("not supported"),
+                    "{tag}: {error}"
+                );
+            }
+        }
+
+        page.close().await.unwrap();
+        context.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn context_digest_auth() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        if kind != BrowserKind::Chromium {
+            eprintln!("skipping {tag}: digest needs Chromium Fetch auth");
+            browser.close().await.unwrap();
+            continue;
+        }
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+
+        // No credentials: the challenge surfaces as a 401.
+        let status: i64 = page
+            .evaluate("fetch('api/digest').then(r => r.status)")
+            .await
+            .unwrap();
+        assert_eq!(status, 401, "{tag}");
+
+        page.set_http_credentials(Some("ada"), Some("s3cret"))
+            .await
+            .unwrap();
+        let body: String = page
+            .evaluate("fetch('api/digest').then(r => r.text())")
+            .await
+            .unwrap();
+        assert_eq!(body, "digest-ok", "{tag}");
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn context_init_scripts() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let context = browser
+            .new_context(ContextOptions::default())
+            .await
+            .unwrap();
+        let before = context.new_page().await.unwrap();
+        context
+            .add_init_script("window.__w8init = 'yes';")
+            .await
+            .unwrap();
+        let after = context.new_page().await.unwrap();
+
+        // Current and future pages take the script in new documents.
+        for page in [&before, &after] {
+            page.goto(&base).await.unwrap();
+            let marker: String = page.evaluate("window.__w8init").await.unwrap();
+            assert_eq!(marker, "yes", "{tag}");
+        }
+
+        before.close().await.unwrap();
+        after.close().await.unwrap();
+        context.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn context_storage_state_round_trip() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let origin = base.trim_end_matches('/').to_string();
+        let page = browser.new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+        page.evaluate_value(
+            "document.cookie = 'w8sess=abc'; localStorage.setItem('w8key', 'w8val'); true",
+        )
+        .await
+        .unwrap();
+
+        // Getter captures origin, cookies, and localStorage.
+        let state = page.storage_state().await.unwrap();
+        assert_eq!(state.origin, origin, "{tag}");
+        assert!(
+            state
+                .cookies
+                .iter()
+                .any(|cookie| cookie.name == "w8sess" && cookie.value == "abc"),
+            "{tag}: {:?}",
+            state.cookies
+        );
+        assert_eq!(
+            state.local_storage.get("w8key").map(String::as_str),
+            Some("w8val"),
+            "{tag}"
+        );
+
+        // Save, then replay into a fresh context.
+        let dir =
+            std::env::temp_dir().join(format!("ferrite-e2e-ctx8-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("state.json");
+        page.save_storage_state(&file).await.unwrap();
+        page.close().await.unwrap();
+
+        let context = browser
+            .new_context(ContextOptions::default().storage_state(&file))
+            .await
+            .unwrap();
+        let replay = context.new_page().await.unwrap();
+        replay.goto(&base).await.unwrap();
+        let cookies: String = replay
+            .evaluate("fetch('api/cookies').then(r => r.text())")
+            .await
+            .unwrap();
+        assert!(cookies.contains("w8sess=abc"), "{tag}: {cookies}");
+        let stored: String = replay
+            .evaluate("localStorage.getItem('w8key')")
+            .await
+            .unwrap();
+        assert_eq!(stored, "w8val", "{tag}");
+
+        // Context getter reads the first page; error paths fail loudly.
+        let got = context.storage_state().await.unwrap();
+        assert_eq!(got.origin, origin, "{tag}");
+        let error = match browser
+            .new_context(ContextOptions::default().storage_state(dir.join("nope.json")))
+            .await
+        {
+            Ok(_) => panic!("{tag}: expected a storage-state error"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("cannot read storage state"),
+            "{tag}: {error}"
+        );
+        let empty = browser
+            .new_context(ContextOptions::default())
+            .await
+            .unwrap();
+        let error = empty.storage_state().await.unwrap_err();
+        assert!(
+            error.to_string().contains("needs an open page"),
+            "{tag}: {error}"
+        );
+
+        replay.close().await.unwrap();
+        context.close().await.unwrap();
+        empty.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[tokio::test]
+async fn context_device_emulation() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let context = browser
+            .new_context(
+                ContextOptions::default()
+                    .viewport(393, 852)
+                    .device_scale_factor(2.0)
+                    .is_mobile(true)
+                    .has_touch(true),
+            )
+            .await
+            .unwrap();
+        if kind == BrowserKind::Chromium {
+            let page = context.new_page().await.unwrap();
+            page.goto(&base).await.unwrap();
+            let dpr: f64 = page.evaluate("window.devicePixelRatio").await.unwrap();
+            assert_eq!(dpr, 2.0, "{tag}");
+            let touch: bool = page.evaluate("'ontouchstart' in window").await.unwrap();
+            assert!(touch, "{tag}");
+            let width: i64 = page.evaluate("window.innerWidth").await.unwrap();
+            assert_eq!(width, 393, "{tag}");
+            page.close().await.unwrap();
+        } else {
+            let error = context.new_page().await.unwrap_err();
+            assert!(error.to_string().contains("Chromium"), "{tag}: {error}");
+        }
+
+        context.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn context_no_js_and_bypass_csp() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let context = browser
+            .new_context(ContextOptions::default())
+            .await
+            .unwrap();
+        let page = context.new_page().await.unwrap();
+
+        if kind == BrowserKind::Chromium {
+            page.set_java_script_enabled(false).await.unwrap();
+            page.goto(&base).await.unwrap();
+            let error = page.evaluate_value("1 + 1").await.unwrap_err();
+            assert!(!error.to_string().is_empty(), "{tag}");
+            page.set_java_script_enabled(true).await.unwrap();
+            page.goto(&base).await.unwrap();
+            page.locator("#inc").click().await.unwrap();
+            assert!(page.content().await.unwrap().contains(">1<"), "{tag}");
+
+            page.goto(&format!("{base}csp")).await.unwrap();
+            let blocked = page.evaluate_value("window.__csp").await.unwrap();
+            assert_eq!(blocked, serde_json::Value::Null, "{tag}");
+            page.set_bypass_csp(true).await.unwrap();
+            page.goto(&format!("{base}csp")).await.unwrap();
+            let loaded: String = page.evaluate("window.__csp").await.unwrap();
+            assert_eq!(loaded, "yes", "{tag}");
+        } else {
+            for error in [
+                page.set_java_script_enabled(false).await.unwrap_err(),
+                page.set_bypass_csp(true).await.unwrap_err(),
+                context.set_java_script_enabled(false).await.unwrap_err(),
+                context.set_bypass_csp(true).await.unwrap_err(),
+            ] {
+                assert!(
+                    error.to_string().contains("not supported"),
+                    "{tag}: {error}"
+                );
+            }
+            let blocked = browser
+                .new_context(ContextOptions::default().java_script_enabled(false))
+                .await
+                .unwrap();
+            let error = blocked.new_page().await.unwrap_err();
+            assert!(
+                error.to_string().contains("not supported"),
+                "{tag}: {error}"
+            );
+            blocked.close().await.unwrap();
+        }
+
+        page.close().await.unwrap();
+        context.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn context_downloads_path_and_deny() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let dir =
+            std::env::temp_dir().join(format!("ferrite-e2e-ctxdl-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        if kind == BrowserKind::Chromium {
+            let context = browser
+                .new_context(ContextOptions::default().downloads_path(&dir))
+                .await
+                .unwrap();
+            let page = context.new_page().await.unwrap();
+            page.goto(&base).await.unwrap();
+            page.evaluate_value("window.location = 'download/report.txt'; true")
+                .await
+                .unwrap();
+            let download = page
+                .wait_for_download_file(&dir, Duration::from_secs(15))
+                .await
+                .unwrap();
+            assert_eq!(download.suggested_filename, "report.txt", "{tag}");
+
+            // Denying stops downloads (browser-wide until the browser closes).
+            context.set_downloads_allowed(false).await.unwrap();
+            page.goto(&base).await.unwrap();
+            page.evaluate_value("window.location = 'download/report.txt'; true")
+                .await
+                .unwrap();
+            let error = page
+                .wait_for_download_file(&dir, Duration::from_secs(3))
+                .await
+                .unwrap_err();
+            assert!(!error.to_string().is_empty(), "{tag}");
+
+            page.close().await.unwrap();
+            context.close().await.unwrap();
+        } else {
+            let context = browser
+                .new_context(ContextOptions::default().downloads_path(&dir))
+                .await
+                .unwrap();
+            let error = context.new_page().await.unwrap_err();
+            assert!(error.to_string().contains("launch-wide"), "{tag}: {error}");
+            context.close().await.unwrap();
+            let context = browser
+                .new_context(ContextOptions::default())
+                .await
+                .unwrap();
+            let page = context.new_page().await.unwrap();
+            let error = context.set_downloads_allowed(false).await.unwrap_err();
+            assert!(
+                error.to_string().contains("not supported"),
+                "{tag}: {error}"
+            );
+            page.close().await.unwrap();
+            context.close().await.unwrap();
+        }
+
+        browser.close().await.unwrap();
+        shutdown.abort();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[tokio::test]
+async fn context_service_workers_blocked() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let context = browser
+            .new_context(ContextOptions::default().service_workers(ServiceWorkerMode::Block))
+            .await
+            .unwrap();
+        if kind == BrowserKind::Chromium {
+            // Smoke: the bypass lever applies without failing.
+            let page = context.new_page().await.unwrap();
+            page.goto(&base).await.unwrap();
+            page.set_service_workers_blocked(false).await.unwrap();
+            page.close().await.unwrap();
+        } else {
+            let error = context.new_page().await.unwrap_err();
+            assert!(
+                error.to_string().contains("not supported"),
+                "{tag}: {error}"
+            );
+        }
+
+        context.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn context_clear_indexed_db() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+
+        if kind == BrowserKind::Chromium {
+            let created: String = page
+                .evaluate(
+                    "(async () => { await new Promise((res, rej) => { \
+                     const open = indexedDB.open('w8db', 1); \
+                     open.onupgradeneeded = () => open.result.createObjectStore('s'); \
+                     open.onsuccess = () => res(0); open.onerror = () => rej(open.error); }); \
+                     return 'made'; })()",
+                )
+                .await
+                .unwrap();
+            assert_eq!(created, "made", "{tag}");
+            let names: Vec<String> = page
+                .evaluate("(async () => (await indexedDB.databases()).map(d => d.name))()")
+                .await
+                .unwrap();
+            assert!(names.contains(&"w8db".to_string()), "{tag}: {names:?}");
+            page.clear_indexed_db().await.unwrap();
+            let names: Vec<String> = page
+                .evaluate("(async () => (await indexedDB.databases()).map(d => d.name))()")
+                .await
+                .unwrap();
+            assert!(names.is_empty(), "{tag}: {names:?}");
+        } else {
+            let error = page.clear_indexed_db().await.unwrap_err();
+            assert!(
+                error.to_string().contains("not supported"),
+                "{tag}: {error}"
+            );
+        }
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn test_id_attribute_global() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (_base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.set_content("<button data-qa=\"save\">Save</button>")
+            .await
+            .unwrap();
+
+        // The global attribute switches what get_by_test_id matches; the
+        // window is one round-trip, then the default is restored.
+        set_test_id_attribute("data-qa");
+        page.get_by_test_id("save").expect_visible().await.unwrap();
+        set_test_id_attribute("data-testid");
+        assert_eq!(
+            page.get_by_test_id("save").count().await.unwrap(),
+            0,
+            "{tag}"
+        );
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
     }
 }

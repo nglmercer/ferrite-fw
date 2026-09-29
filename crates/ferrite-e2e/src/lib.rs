@@ -59,19 +59,19 @@ pub use api::{ApiClient, ApiResponse};
 pub use bidi::BidiConnection;
 pub use browser::{find_chromium, find_firefox, Browser, BrowserKind, LaunchOptions};
 pub use cdp::CdpConnection;
-pub use context::{BrowserContext, ContextOptions, TracingOptions};
+pub use context::{BrowserContext, ContextOptions, ServiceWorkerMode, TracingOptions};
 pub use driver::FrameStream;
 pub use error::{E2eError, E2eResult};
 pub use expect::{expect_poll, PageExpect, SoftAsserts, Timeout};
 pub use har::{HarContentMode, HarFile, HarReplayEntry};
 pub use jshandle::JSHandle;
-pub use locator::{Locator, LocatorOptions, Selector};
+pub use locator::{set_test_id_attribute, test_id_attribute, Locator, LocatorOptions, Selector};
 pub use page::{
     AbortReason, ClickOptions, ColorScheme, ConsoleMessage, Cookie, DeviceDescriptor,
-    DialogDecision, DialogInfo, Download, ElementRect, ElementState, Frame, KeyPress, LoadState,
-    NavigationOptions, Page, PageEvent, PageEventKind, RecordedRequest, ReducedMotion, RouteAction,
-    RouteFromHarOptions, RouteHandler, RouteHandlerEntry, RouteInfo, RouteRule, ScreenshotOptions,
-    StorageState, Viewport, WebSocketDirection, WebSocketEvent,
+    DialogDecision, DialogInfo, Download, ElementRect, ElementState, Frame, HttpCredentials,
+    KeyPress, LoadState, NavigationOptions, Page, PageEvent, PageEventKind, RecordedRequest,
+    ReducedMotion, RouteAction, RouteFromHarOptions, RouteHandler, RouteHandlerEntry, RouteInfo,
+    RouteRule, ScreenshotOptions, StorageState, Viewport, WebSocketDirection, WebSocketEvent,
 };
 pub use report::{Attachment, TestReport, TestResult, TestStatus};
 pub use runner::{

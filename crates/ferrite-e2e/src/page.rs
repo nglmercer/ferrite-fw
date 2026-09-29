@@ -72,6 +72,25 @@ pub struct ConsoleMessage {
     pub text: String,
 }
 
+/// HTTP credentials for basic and digest auth challenges.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HttpCredentials {
+    /// Username sent with challenges.
+    pub username: String,
+    /// Password sent with challenges.
+    pub password: String,
+}
+
+impl HttpCredentials {
+    /// Build credentials from a username and password.
+    pub fn new(username: impl Into<String>, password: impl Into<String>) -> Self {
+        Self {
+            username: username.into(),
+            password: password.into(),
+        }
+    }
+}
+
 /// Saved storage state: cookies plus one origin's localStorage.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageState {
@@ -1089,6 +1108,9 @@ pub struct Page {
     /// Context grants waiting for the first http(s) navigation (Firefox
     /// grants need an origin, so fresh pages cannot take them yet).
     pending_grants: Arc<Mutex<Vec<String>>>,
+    /// Storage state waiting for a navigation to its origin (localStorage
+    /// needs a live document on the saved origin).
+    pending_storage: Arc<Mutex<Option<StorageState>>>,
     net_capture: Arc<Mutex<Option<tokio::task::AbortHandle>>>,
     exposed: ExposedState,
     registry: Weak<Mutex<Vec<Page>>>,
@@ -1234,6 +1256,7 @@ impl Page {
             handlers: Arc::new(Mutex::new(Vec::new())),
             context_handlers,
             pending_grants: Arc::new(Mutex::new(Vec::new())),
+            pending_storage: Arc::new(Mutex::new(None)),
             net_capture: Arc::new(Mutex::new(None)),
             exposed: ExposedState::default(),
             registry,
@@ -1483,6 +1506,7 @@ impl Page {
             })?;
         self.slow_mo().await;
         self.apply_pending_grants(&url).await?;
+        self.apply_pending_storage(&url).await?;
         Ok(())
     }
 
@@ -1509,6 +1533,62 @@ impl Page {
         }
         let names: Vec<&str> = pending.iter().map(String::as_str).collect();
         self.grant_permissions(&names).await
+    }
+
+    /// Queue storage state until a navigation lands on its origin.
+    pub(crate) fn defer_storage(&self, state: StorageState) {
+        *self
+            .pending_storage
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(state);
+    }
+
+    /// Inject queued storage once its origin loads (single-shot).
+    async fn apply_pending_storage(&self, url: &str) -> E2eResult<()> {
+        let pending = self
+            .pending_storage
+            .lock()
+            .map(|mut slot| slot.take())
+            .unwrap_or(None);
+        let Some(state) = pending else {
+            return Ok(());
+        };
+        if !url.starts_with(state.origin.as_str()) {
+            self.defer_storage(state);
+            return Ok(());
+        }
+        self.driver
+            .add_cookies(&state.cookies, &state.origin)
+            .await?;
+        self.inject_local_storage(&state.local_storage).await
+    }
+
+    /// Replace this document's localStorage wholesale.
+    async fn inject_local_storage(&self, entries: &HashMap<String, String>) -> E2eResult<()> {
+        let entries = serde_json::to_string(entries)?;
+        self.evaluate_value(&format!(
+            "(() => {{ localStorage.clear(); \
+             for (const [k, v] of Object.entries({entries})) localStorage.setItem(k, v); \
+             return true; }})()"
+        ))
+        .await?;
+        Ok(())
+    }
+
+    /// Apply context storage state now when already on the saved origin,
+    /// else queue the whole state (cookies set on a blank page lose their
+    /// origin association, so they wait for navigation like grants do).
+    pub(crate) async fn apply_storage_state(&self, state: &StorageState) -> E2eResult<()> {
+        let url = self.url().await.unwrap_or_default();
+        if url.starts_with(state.origin.as_str()) {
+            self.driver
+                .add_cookies(&state.cookies, &state.origin)
+                .await?;
+            self.inject_local_storage(&state.local_storage).await?;
+        } else {
+            self.defer_storage(state.clone());
+        }
+        Ok(())
     }
 
     /// Reload the page.
@@ -2149,16 +2229,21 @@ impl Page {
         self.driver.clear_cookies().await
     }
 
-    /// Save cookies plus current-origin localStorage to a JSON file.
-    pub async fn save_storage_state(&self, path: impl AsRef<Path>) -> E2eResult<()> {
+    /// Capture this page's storage state (origin, cookies, localStorage).
+    pub async fn storage_state(&self) -> E2eResult<StorageState> {
         let origin = self.evaluate_string("location.origin").await?;
         let local_storage: HashMap<String, String> =
             serde_json::from_value(self.evaluate_value("({ ...localStorage })").await?)?;
-        let state = StorageState {
+        Ok(StorageState {
             origin,
             cookies: self.cookies().await?,
             local_storage,
-        };
+        })
+    }
+
+    /// Save cookies plus current-origin localStorage to a JSON file.
+    pub async fn save_storage_state(&self, path: impl AsRef<Path>) -> E2eResult<()> {
+        let state = self.storage_state().await?;
         std::fs::write(path, serde_json::to_string_pretty(&state)?)?;
         Ok(())
     }
@@ -2179,13 +2264,7 @@ impl Page {
         }
         let url = self.url().await?;
         self.driver.add_cookies(&state.cookies, &url).await?;
-        let entries = serde_json::to_string(&state.local_storage)?;
-        self.evaluate_value(&format!(
-            "(() => {{ localStorage.clear(); \
-             for (const [k, v] of Object.entries({entries})) localStorage.setItem(k, v); \
-             return true; }})()"
-        ))
-        .await?;
+        self.inject_local_storage(&state.local_storage).await?;
         Ok(())
     }
 
@@ -2215,10 +2294,12 @@ impl Page {
         self.driver.clear_geolocation().await
     }
 
-    /// Send HTTP basic credentials with subsequent requests (Chromium only).
+    /// Send HTTP credentials with subsequent requests (Chromium only).
     ///
-    /// Implemented as an `Authorization` extra header; pass `None` to clear.
-    /// Firefox has no header override, so this fails loudly there.
+    /// Basic auth is preempted with an `Authorization` header and digest
+    /// (or proxy) challenges are answered from the Fetch domain; pass
+    /// `None` to clear both. Firefox has neither override, so this fails
+    /// loudly there.
     pub async fn set_http_credentials(
         &self,
         username: Option<&str>,
@@ -2230,14 +2311,49 @@ impl Page {
                 let value = format!("Basic {token}");
                 self.driver
                     .set_extra_http_headers(&[("Authorization", value.as_str())])
+                    .await?;
+                self.driver
+                    .set_auth_credentials(Some(user), Some(pass))
                     .await
             }
-            (None, None) => self.driver.set_extra_http_headers(&[]).await,
+            (None, None) => {
+                self.driver.set_extra_http_headers(&[]).await?;
+                self.driver.set_auth_credentials(None, None).await
+            }
             _ => Err(E2eError::Config(
                 "set_http_credentials needs both username and password (or neither to clear)"
                     .to_string(),
             )),
         }
+    }
+
+    /// Enable or disable JavaScript execution (Chromium only).
+    pub async fn set_java_script_enabled(&self, enabled: bool) -> E2eResult<()> {
+        self.driver.set_java_script_enabled(enabled).await
+    }
+
+    /// Bypass Content-Security-Policy checks (Chromium only).
+    pub async fn set_bypass_csp(&self, bypass: bool) -> E2eResult<()> {
+        self.driver.set_bypass_csp(bypass).await
+    }
+
+    /// Allow or deny downloads (Chromium only; browser-wide).
+    pub async fn set_downloads_allowed(&self, allowed: bool) -> E2eResult<()> {
+        self.driver.set_downloads_allowed(allowed).await
+    }
+
+    /// Block service workers (Chromium only; approximated by bypassing
+    /// workers, so fetches skip them entirely).
+    pub async fn set_service_workers_blocked(&self, blocked: bool) -> E2eResult<()> {
+        self.driver.set_service_workers_blocked(blocked).await
+    }
+
+    /// Clear this origin's IndexedDB databases (Chromium only).
+    pub async fn clear_indexed_db(&self) -> E2eResult<()> {
+        let origin = self.evaluate_string("location.origin").await?;
+        self.driver
+            .clear_data_for_origin(&origin, "indexeddb")
+            .await
     }
 
     /// Emulate offline mode (Chromium only).

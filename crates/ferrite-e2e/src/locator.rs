@@ -1,6 +1,7 @@
 //! Selectors (`css`, `text=`, `xpath=`, `role=`) and locator actions.
 
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use serde_json::Value;
@@ -8,6 +9,28 @@ use serde_json::Value;
 use crate::driver::base64_encode;
 use crate::error::{E2eError, E2eResult};
 use crate::page::{ClickOptions, ElementState, Page};
+
+/// Attribute `get_by_test_id` matches (default `data-testid`).
+static TEST_ID_ATTRIBUTE: OnceLock<Mutex<String>> = OnceLock::new();
+
+fn test_id_cell() -> &'static Mutex<String> {
+    TEST_ID_ATTRIBUTE.get_or_init(|| Mutex::new("data-testid".to_string()))
+}
+
+/// Set the attribute `get_by_test_id` matches (Playwright
+/// `selectors.setTestIdAttribute`). Global: restore the default when done.
+pub fn set_test_id_attribute(name: &str) {
+    *test_id_cell().lock().unwrap_or_else(|e| e.into_inner()) = name.to_string();
+}
+
+/// The attribute `get_by_test_id` currently matches.
+#[must_use]
+pub fn test_id_attribute() -> String {
+    test_id_cell()
+        .lock()
+        .map(|name| name.clone())
+        .unwrap_or_else(|_| "data-testid".to_string())
+}
 
 /// A parsed selector with an engine and a body.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,9 +96,9 @@ impl Selector {
         }
     }
 
-    /// Match `[data-testid="id"]` exactly.
+    /// Match `[<test-id-attr>="id"]` exactly.
     pub(crate) fn test_id(id: &str) -> Self {
-        let raw = format!("css=[data-testid={}]", css_string(id));
+        let raw = format!("css=[{}={}]", test_id_attribute(), css_string(id));
         Self::parse(raw)
     }
 
@@ -1168,6 +1191,16 @@ mod tests {
             Selector::parse("role=button".to_string()).engine,
             Engine::Role
         );
+    }
+
+    #[test]
+    fn test_id_attribute_round_trips() {
+        assert_eq!(test_id_attribute(), "data-testid");
+        set_test_id_attribute("data-qa");
+        assert_eq!(test_id_attribute(), "data-qa");
+        assert_eq!(Selector::test_id("save").raw, "css=[data-qa=\"save\"]");
+        set_test_id_attribute("data-testid");
+        assert_eq!(test_id_attribute(), "data-testid");
     }
 
     #[test]
