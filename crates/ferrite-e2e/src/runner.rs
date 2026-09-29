@@ -9,6 +9,7 @@ use crate::browser::Browser;
 use crate::error::E2eResult;
 use crate::page::{Page, ScreenshotOptions};
 use crate::report::{TestReport, TestResult, TestStatus};
+use crate::video::{VideoMode, VideoOptions};
 
 /// A boxed test future.
 pub type BoxTestFuture = Pin<Box<dyn Future<Output = E2eResult<()>> + Send + 'static>>;
@@ -49,6 +50,8 @@ pub struct Runner {
     screenshot_always: bool,
     write_trace: bool,
     list_progress: bool,
+    video: VideoMode,
+    video_fps: u32,
 }
 
 impl Default for Runner {
@@ -63,6 +66,8 @@ impl Default for Runner {
             screenshot_always: false,
             write_trace: true,
             list_progress: true,
+            video: VideoMode::Off,
+            video_fps: 10,
         }
     }
 }
@@ -81,6 +86,8 @@ impl Runner {
             screenshot_always: config.screenshot_always(),
             write_trace: true,
             list_progress: true,
+            video: VideoMode::parse(&config.video).unwrap_or(VideoMode::Off),
+            video_fps: config.video_fps.max(1),
         }
     }
 
@@ -123,6 +130,20 @@ impl Runner {
     #[must_use]
     pub fn list_progress(mut self, enabled: bool) -> Self {
         self.list_progress = enabled;
+        self
+    }
+
+    /// Video recording mode.
+    #[must_use]
+    pub fn video_mode(mut self, mode: VideoMode) -> Self {
+        self.video = mode;
+        self
+    }
+
+    /// Recording frames per second.
+    #[must_use]
+    pub fn video_fps(mut self, fps: u32) -> Self {
+        self.video_fps = fps.max(1);
         self
     }
 
@@ -169,6 +190,7 @@ impl Runner {
                     error: Some(error.to_string()),
                     screenshots: vec![],
                     trace: None,
+                    video: None,
                 }),
             }
         }
@@ -212,6 +234,7 @@ async fn run_one(
     let mut last_error = String::new();
     let mut screenshots = Vec::new();
     let mut trace_path = None;
+    let mut video_path = None;
     let slug = slug(&test.name);
 
     for _ in 0..=runner.retries {
@@ -223,8 +246,27 @@ async fn run_one(
                 continue;
             }
         };
+        let recording = if runner.video.records() {
+            match page
+                .start_video(VideoOptions {
+                    dir: std::path::PathBuf::from(&runner.output_dir),
+                    fps: runner.video_fps,
+                    ..VideoOptions::default()
+                })
+                .await
+            {
+                Ok(()) => true,
+                Err(error) => {
+                    last_error = format!("start video: {error}");
+                    page.close().await.ok();
+                    continue;
+                }
+            }
+        } else {
+            false
+        };
         let outcome = tokio::time::timeout(runner.test_timeout, (test.func)(page.clone())).await;
-        let failed = match outcome {
+        let mut failed = match outcome {
             Ok(Ok(())) => None,
             Ok(Err(error)) => Some(error.to_string()),
             Err(_) => Some(format!(
@@ -232,6 +274,26 @@ async fn run_one(
                 runner.test_timeout.as_millis()
             )),
         };
+        if recording {
+            let keep = runner.video == VideoMode::On
+                || (runner.video == VideoMode::OnlyOnFailure && failed.is_some());
+            if keep {
+                let path = std::path::Path::new(&runner.output_dir)
+                    .join(format!("{slug}-attempt{attempts}.webm"));
+                match page.stop_video(&path).await {
+                    Ok(done) => video_path = Some(done.display().to_string()),
+                    Err(error) => {
+                        let note = format!("stop video: {error}");
+                        failed = Some(match failed {
+                            Some(prior) => format!("{prior} ({note})"),
+                            None => note,
+                        });
+                    }
+                }
+            } else {
+                page.cancel_video().await;
+            }
+        }
         let take_shot =
             runner.screenshot_always || (failed.is_some() && runner.screenshot_on_failure);
         if take_shot {
@@ -276,6 +338,7 @@ async fn run_one(
                     error: None,
                     screenshots,
                     trace: trace_path,
+                    video: video_path,
                 };
             }
             Some(error) => last_error = error,
@@ -289,6 +352,7 @@ async fn run_one(
         error: Some(last_error),
         screenshots,
         trace: trace_path,
+        video: video_path,
     }
 }
 
@@ -348,6 +412,7 @@ mod tests {
                 error: None,
                 screenshots: vec![],
                 trace: None,
+                video: None,
             }],
         };
         let written = runner.write_artifacts(&report, "list,json,junit");

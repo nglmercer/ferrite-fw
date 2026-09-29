@@ -38,6 +38,18 @@ pub(crate) async fn e2e(
         return check_browser(&resolved.e2e, kind).await;
     }
 
+    // Chromium recordings assemble via ffmpeg: fail fast with a hint.
+    if resolved.e2e.video != "off"
+        && kind == ferrite::e2e::BrowserKind::Chromium
+        && ferrite::e2e::find_ffmpeg().is_none()
+    {
+        return Err(ferrite::FerriteError::Other(
+            "video is enabled for chromium but ffmpeg was not found; install \
+             ffmpeg or set FERRITE_FFMPEG_PATH (firefox records natively)"
+                .to_string(),
+        ));
+    }
+
     // Server lifecycle: explicit --url wins, then config, else boot.
     let booted = ensure_server(&root, &resolved, args.url.clone()).await?;
     println!("e2e server: {}", booted.url);
@@ -49,6 +61,7 @@ pub(crate) async fn e2e(
         .current_dir(&root)
         .env("FERRITE_E2E_BASE_URL", &booted.url)
         .env("FERRITE_E2E_BROWSER", kind.name())
+        .env("FERRITE_E2E_VIDEO", &resolved.e2e.video)
         .env("FERRITE_E2E_REPORTER", &resolved.e2e.reporter)
         .env("FERRITE_E2E_WORKERS", resolved.e2e.workers.to_string())
         .env("FERRITE_E2E_RETRIES", resolved.e2e.retries.to_string())
@@ -85,6 +98,9 @@ fn apply_flag_overrides(e2e: &mut ferrite::config::E2eConfig, args: &E2eArgs) {
     }
     if let Some(workers) = args.workers {
         e2e.workers = workers;
+    }
+    if let Some(video) = &args.video {
+        e2e.video = video.clone();
     }
     if args.filter.is_some() {
         // The filter travels to the test process; `Runner::filter` applies it.

@@ -318,6 +318,19 @@ impl Locator {
         Ok(())
     }
 
+    /// Screenshot just this element (PNG bytes).
+    pub async fn screenshot(&self) -> E2eResult<Vec<u8>> {
+        self.page.action(&self.selector, "scroll", None).await?;
+        let state = self.ready_state(&LocatorOptions { timeout: None }).await?;
+        match state.rects.first() {
+            Some(rect) => self.page.screenshot_clip(rect, None).await,
+            None => Err(E2eError::Locator {
+                selector: self.selector.raw().to_string(),
+                message: "element has no bounding box".to_string(),
+            }),
+        }
+    }
+
     /// Fill an input/textarea/select with text (replaces the value).
     pub async fn fill(&self, text: &str) -> E2eResult<()> {
         self.page.action(&self.selector, "fill", Some(text)).await?;

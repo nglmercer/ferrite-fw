@@ -424,6 +424,10 @@ pub struct E2eConfig {
     pub output_dir: String,
     /// Screenshot policy (`on`, `off`, `only-on-failure`).
     pub screenshot: String,
+    /// Video policy (`on`, `off`, `only-on-failure`).
+    pub video: String,
+    /// Recording frames per second.
+    pub video_fps: u32,
     /// Slow down each action by this many milliseconds.
     pub slow_mo_ms: u64,
     /// Default viewport.
@@ -450,6 +454,8 @@ impl Default for E2eConfig {
             reporter: "list".to_string(),
             output_dir: "test-results".to_string(),
             screenshot: "only-on-failure".to_string(),
+            video: "off".to_string(),
+            video_fps: 10,
             slow_mo_ms: 0,
             viewport: None,
             web_server: None,
@@ -735,6 +741,12 @@ fn merge_e2e(mut base: E2eConfig, over: E2eConfig) -> E2eConfig {
     }
     if over.screenshot != defaults.screenshot {
         base.screenshot = over.screenshot;
+    }
+    if over.video != defaults.video {
+        base.video = over.video;
+    }
+    if over.video_fps != defaults.video_fps {
+        base.video_fps = over.video_fps;
     }
     if over.slow_mo_ms != defaults.slow_mo_ms {
         base.slow_mo_ms = over.slow_mo_ms;
@@ -1073,6 +1085,8 @@ mod tests {
              retries = 2\n\
              workers = 8\n\
              reporter = \"list,json\"\n\
+             video = \"only-on-failure\"\n\
+             video_fps = 15\n\
              [e2e.viewport]\n\
              width = 1280\n\
              height = 720\n\
@@ -1085,15 +1099,19 @@ mod tests {
         assert_eq!(user.e2e.retries, 2);
         assert_eq!(user.e2e.workers, 8);
         assert_eq!(user.e2e.reporter, "list,json");
+        assert_eq!(user.e2e.video, "only-on-failure");
+        assert_eq!(user.e2e.video_fps, 15);
         assert_eq!(user.e2e.viewport.as_ref().unwrap().width, 1280);
         let server = user.e2e.web_server.as_ref().unwrap();
         assert_eq!(server.url.as_deref(), Some("http://127.0.0.1:5190/"));
         assert!(server.reuse_existing);
-        // Defaults stay headless with failure screenshots.
+        // Defaults stay headless with failure screenshots and no video.
         let defaults = E2eConfig::default();
         assert!(defaults.headless);
         assert!(defaults.screenshot_on_failure());
         assert!(!defaults.screenshot_always());
+        assert_eq!(defaults.video, "off");
+        assert_eq!(defaults.video_fps, 10);
     }
 
     #[test]

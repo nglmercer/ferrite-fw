@@ -233,6 +233,9 @@ pub(crate) struct E2eArgs {
     /// Only run tests whose name contains this.
     #[arg(long)]
     pub(crate) filter: Option<String>,
+    /// Video policy (`on`, `off`, `only-on-failure`).
+    #[arg(long)]
+    pub(crate) video: Option<String>,
     /// Only verify the browser launches, then exit.
     #[arg(long)]
     pub(crate) check: bool,

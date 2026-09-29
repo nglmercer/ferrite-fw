@@ -35,7 +35,13 @@ async fn demo_suite() {
     if let Ok(base) = std::env::var("FERRITE_E2E_BASE_URL") {
         browser.set_base_url(Some(base));
     }
+    // Opt-in recording: `ferrite e2e --video on` (off by default).
+    let video = std::env::var("FERRITE_E2E_VIDEO")
+        .ok()
+        .and_then(|mode| ferrite_e2e::VideoMode::parse(&mode).ok())
+        .unwrap_or(ferrite_e2e::VideoMode::Off);
     let report = Runner::default()
+        .video_mode(video)
         .run(
             &browser,
             vec![

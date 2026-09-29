@@ -34,6 +34,9 @@ pub struct TestResult {
     /// Trace artifact path, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trace: Option<String>,
+    /// Video artifact path, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video: Option<String>,
 }
 
 /// Aggregate report for a run.
@@ -123,6 +126,9 @@ impl TestReport {
             if let Some(trace) = &result.trace {
                 out.push_str(&format!("       trace: {trace}\n"));
             }
+            if let Some(video) = &result.video {
+                out.push_str(&format!("       video: {video}\n"));
+            }
         }
         out.push_str(&self.summary());
         out.push('\n');
@@ -159,6 +165,12 @@ impl TestReport {
                     xml_escape(&one_line(error))
                 ));
             }
+            if let Some(video) = &result.video {
+                out.push_str(&format!(
+                    "    <properties><property name=\"video\" value=\"{}\"/></properties>\n",
+                    xml_escape(video)
+                ));
+            }
             out.push_str("  </testcase>\n");
         }
         out.push_str("</testsuite>\n");
@@ -193,6 +205,7 @@ mod tests {
                     error: None,
                     screenshots: vec![],
                     trace: None,
+                    video: None,
                 },
                 TestResult {
                     name: "fails <bad>".to_string(),
@@ -202,6 +215,7 @@ mod tests {
                     error: Some("expect failed: title".to_string()),
                     screenshots: vec!["test-results/fails.png".to_string()],
                     trace: Some("test-results/fails.json".to_string()),
+                    video: Some("test-results/fails.webm".to_string()),
                 },
             ],
         }
@@ -226,6 +240,7 @@ mod tests {
             list.contains("screenshot: test-results/fails.png"),
             "{list}"
         );
+        assert!(list.contains("video: test-results/fails.webm"), "{list}");
     }
 
     #[test]
@@ -241,5 +256,9 @@ mod tests {
         assert!(junit.contains("tests=\"2\" failures=\"1\""), "{junit}");
         assert!(junit.contains("fails &lt;bad&gt;"), "{junit}");
         assert!(junit.contains("<failure"), "{junit}");
+        assert!(
+            junit.contains("<property name=\"video\" value=\"test-results/fails.webm\"/>"),
+            "{junit}"
+        );
     }
 }

@@ -9,9 +9,10 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::driver::{ConsoleSink, Driver};
+use crate::driver::{ConsoleSink, Driver, FrameStream, RecordingState};
 use crate::error::{E2eError, E2eResult};
 use crate::locator::{Locator, Selector};
+use crate::video::VideoOptions;
 
 /// CSS pixel viewport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -234,6 +235,16 @@ pub struct Page {
     base_url: Option<String>,
     routing: Arc<Mutex<Option<tokio::task::AbortHandle>>>,
     dialogs: Arc<Mutex<Option<tokio::task::AbortHandle>>>,
+    capture: Arc<Mutex<Option<CaptureState>>>,
+}
+
+/// At most one capture (recording or frame stream) per page: both use the
+/// same screencast session on Chromium.
+enum CaptureState {
+    /// Active recording.
+    Recording(RecordingState),
+    /// Active frame stream pump.
+    Streaming(tokio::task::AbortHandle),
 }
 
 impl Page {
@@ -250,6 +261,7 @@ impl Page {
             base_url,
             routing: Arc::new(Mutex::new(None)),
             dialogs: Arc::new(Mutex::new(None)),
+            capture: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -642,10 +654,116 @@ impl Page {
         }
     }
 
+    /// Start recording video (one capture at a time per page).
+    ///
+    /// Chromium assembles damage-driven screencast frames with per-frame
+    /// timestamps (correct duration even for mostly-static pages);
+    /// Firefox records natively. Fully static recordings with zero
+    /// repaints fail loudly at stop time on Chromium.
+    pub async fn start_video(&self, opts: VideoOptions) -> E2eResult<()> {
+        if self.capture.lock().map(|c| c.is_some()).unwrap_or(true) {
+            return Err(E2eError::Config(
+                "capture already active on this page; stop it first".to_string(),
+            ));
+        }
+        let state = self.driver.start_recording(&opts).await?;
+        *self.capture.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(CaptureState::Recording(state));
+        Ok(())
+    }
+
+    /// Take the capture state only when it is a recording.
+    fn take_recording(&self) -> Option<RecordingState> {
+        let mut guard = self.capture.lock().ok()?;
+        match guard.as_ref() {
+            Some(CaptureState::Recording(_)) => match guard.take() {
+                Some(CaptureState::Recording(state)) => Some(state),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Take the capture state only when it is a frame stream.
+    fn take_stream(&self) -> Option<tokio::task::AbortHandle> {
+        let mut guard = self.capture.lock().ok()?;
+        match guard.as_ref() {
+            Some(CaptureState::Streaming(_)) => match guard.take() {
+                Some(CaptureState::Streaming(pump)) => Some(pump),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Stop the recording and write the video to `path`.
+    pub async fn stop_video(&self, path: &std::path::Path) -> E2eResult<std::path::PathBuf> {
+        match self.take_recording() {
+            Some(state) => self.driver.stop_recording(state, path).await,
+            None if self.is_streaming() => Err(E2eError::Config(
+                "a frame stream (not a recording) is active; use stop_frames".to_string(),
+            )),
+            None => Err(E2eError::Config(
+                "no active recording on this page".to_string(),
+            )),
+        }
+    }
+
+    /// Discard the recording without producing output.
+    pub async fn cancel_video(&self) {
+        if let Some(state) = self.take_recording() {
+            self.driver.cancel_recording(state).await;
+        }
+    }
+
+    /// True when a frame stream (not a recording) is active.
+    fn is_streaming(&self) -> bool {
+        self.capture
+            .lock()
+            .map(|c| matches!(*c, Some(CaptureState::Streaming(_))))
+            .unwrap_or(false)
+    }
+
+    /// Start a live frame stream (one capture at a time per page).
+    ///
+    /// Chromium emits frames on repaint only: static pages yield nothing
+    /// until damage occurs (use `next_timeout`). Firefox polls screenshots
+    /// at `opts.fps` regardless of motion.
+    pub async fn frames(&self, opts: VideoOptions) -> E2eResult<FrameStream> {
+        if self.capture.lock().map(|c| c.is_some()).unwrap_or(true) {
+            return Err(E2eError::Config(
+                "capture already active on this page; stop it first".to_string(),
+            ));
+        }
+        let (stream, pump) = self.driver.start_frame_stream(&opts).await?;
+        *self.capture.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(CaptureState::Streaming(pump));
+        Ok(stream)
+    }
+
+    /// Stop the live frame stream.
+    pub async fn stop_frames(&self) {
+        if let Some(pump) = self.take_stream() {
+            pump.abort();
+            self.driver.stop_frame_stream().await;
+        }
+    }
+
+    /// Screenshot one element box (PNG by default, JPEG with `quality`).
+    pub async fn screenshot_clip(
+        &self,
+        rect: &ElementRect,
+        quality: Option<u8>,
+    ) -> E2eResult<Vec<u8>> {
+        self.driver.screenshot_clip(rect, quality).await
+    }
+
     /// Close the page target.
     pub async fn close(&self) -> E2eResult<()> {
         self.stop_routing().await;
         self.stop_dialog_handling().await;
+        self.stop_frames().await;
+        self.cancel_video().await;
         self.driver.close().await
     }
 }

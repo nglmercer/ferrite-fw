@@ -4,6 +4,7 @@
 //! against. Engine differences (sessions vs contexts, RemoteValue decoding,
 //! interception mechanisms) stay inside the two drivers.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -13,7 +14,10 @@ use serde_json::Value;
 use crate::bidi::{bytes_to_string, remote_to_json, BidiConnection, BidiEvent};
 use crate::cdp::{CdpConnection, CdpEvent};
 use crate::error::{E2eError, E2eResult};
-use crate::page::{ConsoleMessage, Cookie, LoadState, RouteAction, RouteRule, TraceEntry};
+use crate::page::{
+    ConsoleMessage, Cookie, ElementRect, LoadState, RouteAction, RouteRule, TraceEntry,
+};
+use crate::video::{assemble_webm, SpooledFrame, VideoFrame, VideoOptions};
 
 /// Sinks shared between a page and its driver's background listeners.
 #[derive(Clone)]
@@ -410,6 +414,110 @@ impl Driver {
             Self::Bidi(driver) => driver.raw(method, params, timeout).await,
         }
     }
+
+    /// Start a live frame stream (screencast on Chromium, paced
+    /// screenshots on Firefox). Returns the stream plus the pump handle;
+    /// call [`Driver::stop_frame_stream`] after aborting the pump.
+    pub async fn start_frame_stream(
+        &self,
+        opts: &VideoOptions,
+    ) -> E2eResult<(FrameStream, tokio::task::AbortHandle)> {
+        match self {
+            Self::Cdp(driver) => driver.start_frame_stream(opts).await,
+            Self::Bidi(driver) => driver.start_frame_stream(opts).await,
+        }
+    }
+
+    /// Stop a frame stream at the protocol level (best effort).
+    pub async fn stop_frame_stream(&self) {
+        match self {
+            Self::Cdp(driver) => driver.stop_frame_stream().await,
+            Self::Bidi(driver) => driver.stop_frame_stream().await,
+        }
+    }
+
+    /// Start recording video to `opts.dir`.
+    pub async fn start_recording(&self, opts: &VideoOptions) -> E2eResult<RecordingState> {
+        match self {
+            Self::Cdp(driver) => driver.start_recording(opts).await,
+            Self::Bidi(driver) => driver.start_recording(opts).await,
+        }
+    }
+
+    /// Stop a recording and produce the output video.
+    pub async fn stop_recording(
+        &self,
+        state: RecordingState,
+        output: &std::path::Path,
+    ) -> E2eResult<PathBuf> {
+        match self {
+            Self::Cdp(driver) => driver.stop_recording(state, output).await,
+            Self::Bidi(driver) => driver.stop_recording(state, output).await,
+        }
+    }
+
+    /// Discard a recording without producing output.
+    pub async fn cancel_recording(&self, state: RecordingState) {
+        match self {
+            Self::Cdp(driver) => driver.cancel_recording(state).await,
+            Self::Bidi(driver) => driver.cancel_recording(state).await,
+        }
+    }
+
+    /// Screenshot one element box.
+    pub async fn screenshot_clip(
+        &self,
+        rect: &ElementRect,
+        quality: Option<u8>,
+    ) -> E2eResult<Vec<u8>> {
+        match self {
+            Self::Cdp(driver) => driver.screenshot_clip(rect, quality).await,
+            Self::Bidi(driver) => driver.screenshot_clip(rect, quality).await,
+        }
+    }
+}
+
+/// Live frame stream.
+#[derive(Debug)]
+pub struct FrameStream {
+    receiver: tokio::sync::mpsc::UnboundedReceiver<VideoFrame>,
+}
+
+impl FrameStream {
+    /// Next frame, or `None` when the stream ends.
+    pub async fn next(&mut self) -> Option<VideoFrame> {
+        self.receiver.recv().await
+    }
+
+    /// Next frame, or `None` on timeout or stream end (Chromium emits on
+    /// repaint only, so static pages yield nothing until damage occurs).
+    pub async fn next_timeout(&mut self, timeout: Duration) -> Option<VideoFrame> {
+        tokio::time::timeout(timeout, self.receiver.recv())
+            .await
+            .ok()?
+    }
+}
+
+/// Opaque per-engine recording state.
+pub enum RecordingState {
+    /// Chromium: frame spool + pump task.
+    Cdp {
+        /// Spool directory with `frame-%06d.jpg` + `manifest.jsonl`.
+        spool: PathBuf,
+        /// Pump task handle.
+        pump: tokio::task::AbortHandle,
+        /// Target fps for assembly.
+        fps: u32,
+        /// Recording start (for the trailing frame duration).
+        started: std::time::Instant,
+    },
+    /// Firefox: native screencast id + reported path.
+    Bidi {
+        /// Screencast uuid for `stopScreencast`.
+        screencast: String,
+        /// Path reported by `startScreencast`.
+        path: PathBuf,
+    },
 }
 
 // --- CDP driver --------------------------------------------------------------
@@ -888,6 +996,209 @@ impl CdpDriver {
         self.cdp
             .call(Some(&self.session), method, params, timeout)
             .await
+    }
+
+    async fn start_frame_stream(
+        &self,
+        opts: &VideoOptions,
+    ) -> E2eResult<(FrameStream, tokio::task::AbortHandle)> {
+        self.start_screencast(opts).await?;
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut events = self.cdp.subscribe();
+        let session = self.session.clone();
+        let cdp = self.cdp.clone();
+        let timeout = self.timeout;
+        let started = tokio::time::Instant::now();
+        let min_gap = Duration::from_millis((1000 / u64::from(opts.fps.max(1))).max(1));
+        let handle = tokio::spawn(async move {
+            let mut index = 0u64;
+            let mut last_kept = None;
+            loop {
+                let event = match events.recv().await {
+                    Ok(event) => event,
+                    Err(_) => break,
+                };
+                if event.session.as_deref() != Some(&session)
+                    || event.method != "Page.screencastFrame"
+                {
+                    continue;
+                }
+                // Ack immediately so the encoder never stalls on backpressure.
+                let frame_session = event.params["sessionId"].clone();
+                let _ = cdp
+                    .call(
+                        Some(&session),
+                        "Page.screencastFrameAck",
+                        serde_json::json!({ "sessionId": frame_session }),
+                        timeout,
+                    )
+                    .await;
+                // Client-side throttle to target fps (the compositor emits
+                // every repaint; sampling server-side drops sparse damage).
+                let now = tokio::time::Instant::now();
+                if let Some(last) = last_kept {
+                    if now.duration_since(last) < min_gap {
+                        continue;
+                    }
+                }
+                let data = event.params["data"].as_str().unwrap_or_default();
+                let Ok(bytes) = decode_base64(data) else {
+                    continue;
+                };
+                last_kept = Some(now);
+                let frame = VideoFrame {
+                    index,
+                    timestamp_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+                    data: bytes,
+                };
+                index += 1;
+                if tx.send(frame).is_err() {
+                    break;
+                }
+            }
+        });
+        Ok((FrameStream { receiver: rx }, handle.abort_handle()))
+    }
+
+    async fn stop_frame_stream(&self) {
+        let _ = self.call("Page.stopScreencast", Value::Null).await;
+    }
+
+    async fn start_recording(&self, opts: &VideoOptions) -> E2eResult<RecordingState> {
+        let spool = spool_dir(&opts.dir)?;
+        self.start_screencast(opts).await?;
+        let mut events = self.cdp.subscribe();
+        let session = self.session.clone();
+        let cdp = self.cdp.clone();
+        let timeout = self.timeout;
+        let started = std::time::Instant::now();
+        let min_gap = Duration::from_millis((1000 / u64::from(opts.fps.max(1))).max(1));
+        let pump_spool = spool.clone();
+        let pump = tokio::spawn(async move {
+            let mut index = 0u64;
+            let mut last_kept = None;
+            loop {
+                let event = match events.recv().await {
+                    Ok(event) => event,
+                    Err(_) => break,
+                };
+                if event.session.as_deref() != Some(&session)
+                    || event.method != "Page.screencastFrame"
+                {
+                    continue;
+                }
+                let frame_session = event.params["sessionId"].clone();
+                let _ = cdp
+                    .call(
+                        Some(&session),
+                        "Page.screencastFrameAck",
+                        serde_json::json!({ "sessionId": frame_session }),
+                        timeout,
+                    )
+                    .await;
+                let now = tokio::time::Instant::now();
+                if let Some(last) = last_kept {
+                    if now.duration_since(last) < min_gap {
+                        continue;
+                    }
+                }
+                let data = event.params["data"].as_str().unwrap_or_default();
+                let Ok(bytes) = decode_base64(data) else {
+                    continue;
+                };
+                last_kept = Some(now);
+                let name = format!("frame-{index:06}.jpg");
+                if std::fs::write(pump_spool.join(&name), bytes).is_err() {
+                    break;
+                }
+                let t_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+                let line = serde_json::json!({ "file": name, "t": t_ms }).to_string();
+                if append_line(&pump_spool.join("manifest.jsonl"), &line).is_err() {
+                    break;
+                }
+                index += 1;
+            }
+        });
+        Ok(RecordingState::Cdp {
+            spool,
+            pump: pump.abort_handle(),
+            fps: opts.fps,
+            started,
+        })
+    }
+
+    async fn stop_recording(
+        &self,
+        state: RecordingState,
+        output: &std::path::Path,
+    ) -> E2eResult<PathBuf> {
+        let RecordingState::Cdp {
+            spool,
+            pump,
+            fps,
+            started,
+        } = state
+        else {
+            return Err(E2eError::Config("recording/engine mismatch".to_string()));
+        };
+        pump.abort();
+        self.stop_frame_stream().await;
+        // Give the pump a beat to flush its last write before assembling.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let frames = read_manifest(&spool.join("manifest.jsonl"));
+        let total_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+        let assembled = assemble_webm(
+            &spool,
+            &frames,
+            total_ms,
+            fps,
+            output,
+            Duration::from_secs(120),
+        )
+        .await;
+        let _ = std::fs::remove_dir_all(&spool);
+        assembled?;
+        Ok(output.to_path_buf())
+    }
+
+    async fn cancel_recording(&self, state: RecordingState) {
+        if let RecordingState::Cdp { spool, pump, .. } = state {
+            pump.abort();
+            self.stop_frame_stream().await;
+            let _ = std::fs::remove_dir_all(&spool);
+        }
+    }
+
+    async fn screenshot_clip(&self, rect: &ElementRect, quality: Option<u8>) -> E2eResult<Vec<u8>> {
+        let mut params = serde_json::json!({
+            "clip": {
+                "x": rect.x, "y": rect.y,
+                "width": rect.width, "height": rect.height,
+                "scale": 1,
+            },
+            "captureBeyondViewport": true,
+        });
+        if let Some(quality) = quality {
+            params["format"] = Value::String("jpeg".to_string());
+            params["quality"] = Value::from(quality);
+        }
+        let shot = self.call("Page.captureScreenshot", params).await?;
+        decode_shot(&shot)
+    }
+
+    async fn start_screencast(&self, opts: &VideoOptions) -> E2eResult<()> {
+        // Always every frame: server-side sampling drops sparse damage to
+        // zero frames (observed); throttle client-side instead.
+        let mut params = serde_json::json!({
+            "format": "jpeg",
+            "quality": opts.quality,
+            "everyNthFrame": 1,
+        });
+        if let Some(width) = opts.max_width {
+            params["maxWidth"] = Value::from(width);
+        }
+        self.call("Page.startScreencast", params).await?;
+        Ok(())
     }
 }
 
@@ -1419,6 +1730,154 @@ impl BidiDriver {
         }
         self.bidi.call(method, params, timeout).await
     }
+
+    async fn start_frame_stream(
+        &self,
+        opts: &VideoOptions,
+    ) -> E2eResult<(FrameStream, tokio::task::AbortHandle)> {
+        // BiDi screencast is file-based (no frame events), so live frames
+        // fall back to paced screenshots.
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let bidi = self.bidi.clone();
+        let context = self.context.clone();
+        let timeout = self.timeout;
+        let period = Duration::from_millis((1000 / u64::from(opts.fps.max(1))).max(50));
+        let started = tokio::time::Instant::now();
+        let handle = tokio::spawn(async move {
+            let mut index = 0u64;
+            loop {
+                let shot = bidi
+                    .call(
+                        "browsingContext.captureScreenshot",
+                        serde_json::json!({ "context": context }),
+                        timeout,
+                    )
+                    .await;
+                if let Ok(shot) = shot {
+                    let data = shot.get("data").and_then(Value::as_str).unwrap_or_default();
+                    if let Ok(bytes) = decode_base64(data) {
+                        let frame = VideoFrame {
+                            index,
+                            timestamp_ms: started.elapsed().as_millis().min(u128::from(u64::MAX))
+                                as u64,
+                            data: bytes,
+                        };
+                        index += 1;
+                        if tx.send(frame).is_err() {
+                            break;
+                        }
+                    }
+                }
+                tokio::time::sleep(period).await;
+            }
+        });
+        Ok((FrameStream { receiver: rx }, handle.abort_handle()))
+    }
+
+    async fn stop_frame_stream(&self) {
+        // Polling pump stops with its task; nothing protocol-level to undo.
+    }
+
+    async fn start_recording(&self, opts: &VideoOptions) -> E2eResult<RecordingState> {
+        std::fs::create_dir_all(&opts.dir)?;
+        let dir = opts.dir.display().to_string();
+        let started = self
+            .bidi
+            .call(
+                "browsingContext.startScreencast",
+                serde_json::json!({ "context": self.context, "destinationFolder": dir }),
+                self.timeout,
+            )
+            .await?;
+        let screencast = started
+            .get("screencast")
+            .and_then(Value::as_str)
+            .ok_or_else(|| E2eError::Launch("BiDi startScreencast returned no id".to_string()))?
+            .to_string();
+        let path = started
+            .get("path")
+            .and_then(Value::as_str)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| opts.dir.join("screencast.webm"));
+        Ok(RecordingState::Bidi { screencast, path })
+    }
+
+    async fn stop_recording(
+        &self,
+        state: RecordingState,
+        output: &std::path::Path,
+    ) -> E2eResult<PathBuf> {
+        let RecordingState::Bidi { screencast, path } = state else {
+            return Err(E2eError::Config("recording/engine mismatch".to_string()));
+        };
+        let stopped = self
+            .bidi
+            .call(
+                "browsingContext.stopScreencast",
+                serde_json::json!({ "context": self.context, "screencast": screencast }),
+                Duration::from_secs(30),
+            )
+            .await?;
+        // Firefox may ignore destinationFolder (observed on 156): always move
+        // by the reported path so nothing is stranded in Downloads.
+        let src = stopped
+            .get("path")
+            .and_then(Value::as_str)
+            .map(PathBuf::from)
+            .filter(|p| p.is_file())
+            .unwrap_or(path);
+        if let Some(parent) = output.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        if src != output {
+            move_file(&src, output).map_err(|error| {
+                E2eError::Config(format!(
+                    "move recording {} -> {}: {error}",
+                    src.display(),
+                    output.display()
+                ))
+            })?;
+        }
+        Ok(output.to_path_buf())
+    }
+
+    async fn cancel_recording(&self, state: RecordingState) {
+        if let RecordingState::Bidi { screencast, path } = state {
+            let stopped = self
+                .bidi
+                .call(
+                    "browsingContext.stopScreencast",
+                    serde_json::json!({ "context": self.context, "screencast": screencast }),
+                    Duration::from_secs(10),
+                )
+                .await;
+            let src = stopped
+                .ok()
+                .and_then(|s| s.get("path").and_then(Value::as_str).map(PathBuf::from))
+                .unwrap_or(path);
+            let _ = std::fs::remove_file(src);
+        }
+    }
+
+    async fn screenshot_clip(&self, rect: &ElementRect, quality: Option<u8>) -> E2eResult<Vec<u8>> {
+        let mut params = serde_json::json!({
+            "clip": {
+                "type": "box",
+                "x": rect.x, "y": rect.y,
+                "width": rect.width, "height": rect.height,
+            },
+        });
+        if let Some(quality) = quality {
+            params["format"] = serde_json::json!({
+                "type": "image/jpeg",
+                "quality": f64::from(quality).clamp(1.0, 100.0) / 100.0,
+            });
+        }
+        let shot = self
+            .call("browsingContext.captureScreenshot", params)
+            .await?;
+        decode_shot(&shot)
+    }
 }
 
 /// BiDi Enter key (private-use code point, WebDriver convention).
@@ -1549,17 +2008,71 @@ pub(crate) fn base64_encode(bytes: &[u8]) -> String {
 }
 
 pub(crate) fn decode_shot(value: &Value) -> E2eResult<Vec<u8>> {
-    use base64::Engine as _;
     let data = value
         .get("data")
         .and_then(Value::as_str)
         .unwrap_or_default();
+    decode_base64(data).map_err(|error| E2eError::Cdp {
+        method: "captureScreenshot".to_string(),
+        message: error,
+    })
+}
+
+fn decode_base64(data: &str) -> Result<Vec<u8>, String> {
+    use base64::Engine as _;
     base64::engine::general_purpose::STANDARD
         .decode(data)
-        .map_err(|error| E2eError::Cdp {
-            method: "captureScreenshot".to_string(),
-            message: error.to_string(),
+        .map_err(|error| error.to_string())
+}
+
+/// Unique frame spool directory inside `dir`.
+fn spool_dir(dir: &std::path::Path) -> E2eResult<PathBuf> {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let spool = dir.join(format!(".spool-{}-{nanos}", std::process::id()));
+    std::fs::create_dir_all(&spool)?;
+    Ok(spool)
+}
+
+/// Append one line to a manifest file.
+fn append_line(path: &std::path::Path, line: &str) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    writeln!(file, "{line}")
+}
+
+/// Move a file, falling back to copy+remove across filesystems
+/// (Firefox records into Downloads, often a different mount than /tmp).
+fn move_file(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    match std::fs::rename(src, dst) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
+            std::fs::copy(src, dst)?;
+            std::fs::remove_file(src)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Read a `manifest.jsonl` spool manifest (tolerates a missing file).
+fn read_manifest(path: &std::path::Path) -> Vec<SpooledFrame> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|entry| {
+            Some(SpooledFrame {
+                file: entry.get("file")?.as_str()?.to_string(),
+                timestamp_ms: entry.get("t")?.as_u64()?,
+            })
         })
+        .collect()
 }
 
 fn handle_cdp_event(event: &CdpEvent, sink: &ConsoleSink) {
