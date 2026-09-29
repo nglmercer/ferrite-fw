@@ -123,6 +123,50 @@ impl ApiClient {
         self.send(request).await
     }
 
+    /// PATCH `body` as JSON.
+    pub async fn patch_json(&self, path: &str, body: &Value) -> E2eResult<ApiResponse> {
+        let url = self.url(path)?;
+        let request = self.client.patch(&url).json(body);
+        self.send(request).await
+    }
+
+    /// HEAD `path` (headers only, no body).
+    pub async fn head(&self, path: &str) -> E2eResult<ApiResponse> {
+        let url = self.url(path)?;
+        let request = self.client.head(&url);
+        self.send(request).await
+    }
+
+    /// POST form fields (`application/x-www-form-urlencoded`).
+    pub async fn post_form(&self, path: &str, fields: &[(&str, &str)]) -> E2eResult<ApiResponse> {
+        let url = self.url(path)?;
+        let request = self.client.post(&url).form(fields);
+        self.send(request).await
+    }
+
+    /// GET `path` with URL-encoded query pairs.
+    pub async fn get_with_query(
+        &self,
+        path: &str,
+        query: &[(&str, &str)],
+    ) -> E2eResult<ApiResponse> {
+        let url = self.url(path)?;
+        let request = self.client.get(&url).query(query);
+        self.send(request).await
+    }
+
+    /// POST `body` as JSON with URL-encoded query pairs.
+    pub async fn post_json_with_query(
+        &self,
+        path: &str,
+        body: &Value,
+        query: &[(&str, &str)],
+    ) -> E2eResult<ApiResponse> {
+        let url = self.url(path)?;
+        let request = self.client.post(&url).query(query).json(body);
+        self.send(request).await
+    }
+
     /// Resolve `path` against the base URL (absolute URLs pass through).
     fn url(&self, path: &str) -> E2eResult<String> {
         if path.starts_with("http://") || path.starts_with("https://") {

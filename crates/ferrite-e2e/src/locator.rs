@@ -757,6 +757,53 @@ impl Locator {
         Ok(())
     }
 
+    /// Blur the element.
+    pub async fn blur(&self) -> E2eResult<()> {
+        self.page.action(&self.selector, "blur", None).await?;
+        Ok(())
+    }
+
+    /// Tap the element's center via the touchscreen.
+    pub async fn tap(&self) -> E2eResult<()> {
+        self.page.action(&self.selector, "scroll", None).await?;
+        let state = self.ready_state(&LocatorOptions { timeout: None }).await?;
+        match Self::center(&state) {
+            Some((x, y)) => self.page.touchscreen_tap(x, y).await,
+            None => Err(E2eError::Locator {
+                selector: self.selector.raw().to_string(),
+                message: "element has no bounding box".to_string(),
+            }),
+        }
+    }
+
+    /// Drag the element's center onto `target` in `steps` moves (min 1).
+    /// Both locators must live on the same page.
+    pub async fn drag_to(&self, target: &Locator, steps: u32) -> E2eResult<()> {
+        if self.page.target_id() != target.page.target_id() {
+            return Err(E2eError::Locator {
+                selector: self.selector.raw().to_string(),
+                message: "drag_to needs locators on the same page".to_string(),
+            });
+        }
+        if steps == 0 {
+            return Err(E2eError::Config(
+                "drag_to needs at least 1 step".to_string(),
+            ));
+        }
+        self.page.action(&self.selector, "scroll", None).await?;
+        let from = self.ready_state(&LocatorOptions { timeout: None }).await?;
+        let to = target
+            .ready_state(&LocatorOptions { timeout: None })
+            .await?;
+        let (Some((x0, y0)), Some((x1, y1))) = (Self::center(&from), Self::center(&to)) else {
+            return Err(E2eError::Locator {
+                selector: self.selector.raw().to_string(),
+                message: "element has no bounding box".to_string(),
+            });
+        };
+        self.page.mouse_drag((x0, y0), (x1, y1), steps).await
+    }
+
     /// Scroll the element into the center of the viewport.
     pub async fn scroll_into_view(&self) -> E2eResult<()> {
         self.page.action(&self.selector, "scroll", None).await?;

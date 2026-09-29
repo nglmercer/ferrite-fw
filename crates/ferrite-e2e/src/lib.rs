@@ -59,7 +59,7 @@ pub use cdp::CdpConnection;
 pub use context::{BrowserContext, ContextOptions};
 pub use driver::FrameStream;
 pub use error::{E2eError, E2eResult};
-pub use expect::{expect_poll, PageExpect, Timeout};
+pub use expect::{expect_poll, PageExpect, SoftAsserts, Timeout};
 pub use locator::{Locator, LocatorOptions, Selector};
 pub use page::{
     ClickOptions, ColorScheme, ConsoleMessage, Cookie, DeviceDescriptor, DialogInfo, ElementState,

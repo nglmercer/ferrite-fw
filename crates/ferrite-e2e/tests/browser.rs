@@ -43,6 +43,26 @@ const ASSERT_FIXTURE: &str = r#"<!doctype html><html><head><title>assert me</tit
 <span id="empty"></span>
 </body></html>"#;
 
+const DRAG_FIXTURE: &str = r#"<!doctype html><html><head><title>drag me</title><style>
+#drag{position:absolute;left:10px;top:10px;width:50px;height:50px;background:red}
+#drop{position:absolute;left:300px;top:300px;width:100px;height:100px;border:2px solid blue}
+</style></head><body>
+<div id="drag"></div><div id="drop"></div>
+<script>
+const el = document.getElementById('drag');
+let dx = 0, dy = 0, on = false;
+el.addEventListener('pointerdown', (e) => {
+  on = true; dx = e.clientX - el.offsetLeft; dy = e.clientY - el.offsetTop;
+  el.setPointerCapture(e.pointerId);
+});
+el.addEventListener('pointermove', (e) => {
+  if (!on) return;
+  el.style.left = (e.clientX - dx) + 'px';
+  el.style.top = (e.clientY - dy) + 'px';
+});
+el.addEventListener('pointerup', () => { on = false; });
+</script></body></html>"#;
+
 const FRAMES_FIXTURE: &str = r#"<!doctype html><html><head><title>frames host</title></head><body>
 <iframe src="/assert" name="inner"></iframe>
 </body></html>"#;
@@ -92,6 +112,10 @@ async fn serve() -> (String, tokio::task::AbortHandle) {
             axum::routing::get(|| async { axum::response::Html(FRAMES_FIXTURE.to_string()) }),
         )
         .route(
+            "/drag",
+            axum::routing::get(|| async { axum::response::Html(DRAG_FIXTURE.to_string()) }),
+        )
+        .route(
             "/api/hi",
             axum::routing::get(|| async { axum::Json(serde_json::json!({"real": true})) }),
         )
@@ -112,6 +136,24 @@ async fn serve() -> (String, tokio::task::AbortHandle) {
                         "attachment; filename=\"report.txt\"",
                     )],
                     "ferrite download contents",
+                )
+            }),
+        )
+        .route(
+            "/static/app.js",
+            axum::routing::get(|| async {
+                (
+                    [(axum::http::header::CONTENT_TYPE, "application/javascript")],
+                    "window.__tagScript = 'loaded';",
+                )
+            }),
+        )
+        .route(
+            "/static/app.css",
+            axum::routing::get(|| async {
+                (
+                    [(axum::http::header::CONTENT_TYPE, "text/css")],
+                    "#name { color: rgb(7, 8, 9); }",
                 )
             }),
         )
@@ -2390,6 +2432,500 @@ async fn frames_listing_and_evaluate() {
         assert!(
             page.frame_by_url("no-such-frame").await.unwrap().is_none(),
             "{tag}"
+        );
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn clock_fixed_time() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+
+        // Fixed time needs an installed clock.
+        let err = page.clock_set_fixed_time(1_000_000).await.unwrap_err();
+        assert!(err.to_string().contains("clock_install"), "{tag}: {err}");
+        page.clock_install().await.unwrap();
+        page.clock_set_fixed_time(1_000_000).await.unwrap();
+        let fixed: i64 = page.evaluate("Date.now()").await.unwrap();
+        assert_eq!(fixed, 1_000_000, "{tag}");
+        page.clock_advance(500).await.unwrap();
+        let advanced: i64 = page.evaluate("Date.now()").await.unwrap();
+        assert_eq!(advanced, 1_000_500, "{tag}");
+        page.clock_uninstall().await.unwrap();
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn locator_tap_and_blur() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+
+        // Touchscreen tap activates the button.
+        page.locator("#inc").tap().await.unwrap();
+        page.locator("#count").expect_text("1").await.unwrap();
+        // Tapping nothing fails loudly.
+        let err = page.locator("#nope").tap().await.unwrap_err();
+        assert!(err.to_string().contains("#nope"), "{tag}: {err}");
+
+        // Focus then blur moves the active element.
+        page.locator("#name").focus().await.unwrap();
+        let active: String = page.evaluate("document.activeElement.id").await.unwrap();
+        assert_eq!(active, "name", "{tag}");
+        page.locator("#name").blur().await.unwrap();
+        let blurred: String = page
+            .evaluate("document.activeElement.tagName")
+            .await
+            .unwrap();
+        assert_eq!(blurred, "BODY", "{tag}");
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn browser_contexts_and_pages() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        assert!(browser.contexts().is_empty(), "{tag}");
+        assert!(browser.pages().is_empty(), "{tag}");
+
+        let first = browser.new_page().await.unwrap();
+        assert_eq!(browser.contexts().len(), 1, "{tag}");
+        assert_eq!(browser.pages().len(), 1, "{tag}");
+
+        let context = browser
+            .new_context(ferrite_e2e::ContextOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(browser.contexts().len(), 2, "{tag}");
+        let second = context.new_page().await.unwrap();
+        let third = context.new_page().await.unwrap();
+        assert_eq!(context.pages().len(), 2, "{tag}");
+        assert_eq!(browser.pages().len(), 3, "{tag}");
+
+        third.close().await.unwrap();
+        assert_eq!(context.pages().len(), 1, "{tag}");
+        assert_eq!(browser.pages().len(), 2, "{tag}");
+        context.close().await.unwrap();
+        assert_eq!(browser.contexts().len(), 1, "{tag}");
+        assert_eq!(browser.pages().len(), 1, "{tag}");
+
+        first.close().await.unwrap();
+        second.close().await.unwrap();
+        assert!(browser.pages().is_empty(), "{tag}");
+        browser.close().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn script_and_style_tags() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+
+        page.add_script_tag_content("window.__tagInline = 40 + 2;")
+            .await
+            .unwrap();
+        let inline: i64 = page.evaluate("window.__tagInline").await.unwrap();
+        assert_eq!(inline, 42, "{tag}");
+        page.add_script_tag_url(&format!("{base}static/app.js"))
+            .await
+            .unwrap();
+        let loaded: String = page.evaluate("window.__tagScript").await.unwrap();
+        assert_eq!(loaded, "loaded", "{tag}");
+        let err = page
+            .add_script_tag_url(&format!("{base}static/missing.js"))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("load failed"), "{tag}: {err}");
+
+        page.add_style_tag_content("#name { color: rgb(4, 5, 6); }")
+            .await
+            .unwrap();
+        let color: String = page
+            .evaluate("getComputedStyle(document.getElementById('name')).color")
+            .await
+            .unwrap();
+        assert_eq!(color, "rgb(4, 5, 6)", "{tag}");
+        page.add_style_tag_url(&format!("{base}static/app.css"))
+            .await
+            .unwrap();
+        let linked: String = page
+            .evaluate("getComputedStyle(document.getElementById('name')).color")
+            .await
+            .unwrap();
+        assert_eq!(linked, "rgb(7, 8, 9)", "{tag}");
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn network_capture_details() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+        page.start_request_capture();
+
+        page.evaluate_value(
+            "setTimeout(() => fetch('api/echo', { method: 'POST', \
+             headers: { 'x-detail-probe': 'seen' }, body: 'hello-body' }), 500); 1",
+        )
+        .await
+        .unwrap();
+        let seen = page
+            .wait_for_response("api/echo", Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(seen.method, "POST", "{tag}");
+        assert!(
+            seen.headers
+                .iter()
+                .any(|(name, value)| name.eq_ignore_ascii_case("x-detail-probe")
+                    && value == "seen"),
+            "{tag}: {:?}",
+            seen.headers
+        );
+        // Request bodies are reported on Chromium only.
+        if kind == BrowserKind::Chromium {
+            assert_eq!(seen.post_data.as_deref(), Some("hello-body"), "{tag}");
+        } else {
+            assert_eq!(seen.post_data, None, "{tag}");
+        }
+        assert!(seen.duration_ms.is_some(), "{tag}");
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn frame_locators() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&format!("{base}frames")).await.unwrap();
+        page.wait_for_function(
+            "document.querySelector('iframe').contentDocument.readyState === 'complete'",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+
+        let inner = page.frame_by_url("assert").await.unwrap().unwrap();
+        // Actions, getters, and assertions all run inside the frame.
+        inner.locator("#btn").expect_visible().await.unwrap();
+        let text = inner.locator("#btn").text().await.unwrap();
+        assert_eq!(text, "Save", "{tag}");
+        inner.locator("#txt").fill("grace").await.unwrap();
+        let value = inner.locator("#txt").input_value().await.unwrap();
+        assert_eq!(value, "grace", "{tag}");
+        inner
+            .get_by_role("button", "Save")
+            .expect_visible()
+            .await
+            .unwrap();
+        // The host document does not see iframe elements.
+        assert_eq!(page.locator("#btn").count().await.unwrap(), 0, "{tag}");
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn locator_drag_to() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&format!("{base}drag")).await.unwrap();
+
+        page.locator("#drag")
+            .drag_to(&page.locator("#drop"), 5)
+            .await
+            .unwrap();
+        // Grab offset keeps the center within half the box of the target.
+        let dragged = page.locator("#drag").state().await.unwrap().rects[0].clone();
+        let target = page.locator("#drop").state().await.unwrap().rects[0].clone();
+        let (cx, cy) = (
+            dragged.x + dragged.width / 2.0,
+            dragged.y + dragged.height / 2.0,
+        );
+        let (tx, ty) = (
+            target.x + target.width / 2.0,
+            target.y + target.height / 2.0,
+        );
+        assert!((cx - tx).abs() < 30.0, "{tag}: {cx} vs {tx}");
+        assert!((cy - ty).abs() < 30.0, "{tag}: {cy} vs {ty}");
+
+        // Misuse fails loudly.
+        let other = browser.new_page().await.unwrap();
+        let err = page
+            .locator("#drag")
+            .drag_to(&other.locator("#drop"), 5)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("same page"), "{tag}: {err}");
+        let err = page
+            .locator("#drag")
+            .drag_to(&page.locator("#drop"), 0)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("at least 1 step"), "{tag}: {err}");
+
+        other.close().await.unwrap();
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn context_rules_apply_to_pages() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let context = browser
+            .new_context(ferrite_e2e::ContextOptions::default())
+            .await
+            .unwrap();
+
+        // Context routes hit every page, current and future.
+        context
+            .route(vec![RouteRule::fulfill(
+                "**/api/hi",
+                200,
+                r#"{"ctx":true}"#,
+                "application/json",
+            )])
+            .await
+            .unwrap();
+        let one = context.new_page().await.unwrap();
+        one.goto(&base).await.unwrap();
+        let text: String = one
+            .evaluate("fetch('api/hi').then(r => r.text())")
+            .await
+            .unwrap();
+        assert!(text.contains("\"ctx\":true"), "{tag}: {text}");
+        let two = context.new_page().await.unwrap();
+        two.goto(&base).await.unwrap();
+        let text: String = two
+            .evaluate("fetch('api/hi').then(r => r.text())")
+            .await
+            .unwrap();
+        assert!(text.contains("\"ctx\":true"), "{tag}: {text}");
+
+        // Page rules win on overlap; other pages keep the context rule.
+        one.route(vec![RouteRule::fulfill(
+            "**/api/hi",
+            200,
+            r#"{"page":true}"#,
+            "application/json",
+        )])
+        .await
+        .unwrap();
+        let text: String = one
+            .evaluate("fetch('api/hi').then(r => r.text())")
+            .await
+            .unwrap();
+        assert!(text.contains("\"page\":true"), "{tag}: {text}");
+        let text: String = two
+            .evaluate("fetch('api/hi').then(r => r.text())")
+            .await
+            .unwrap();
+        assert!(text.contains("\"ctx\":true"), "{tag}: {text}");
+
+        // Unrouting restores the real response (page rule still wins on one).
+        assert_eq!(context.unroute("**/api/hi").await.unwrap(), 1, "{tag}");
+        let text: String = two
+            .evaluate("fetch('api/hi').then(r => r.text())")
+            .await
+            .unwrap();
+        assert!(text.contains("\"real\":true"), "{tag}: {text}");
+        let text: String = one
+            .evaluate("fetch('api/hi').then(r => r.text())")
+            .await
+            .unwrap();
+        assert!(text.contains("\"page\":true"), "{tag}: {text}");
+
+        // Context cookies are visible to pages.
+        context
+            .add_cookies(
+                &[Cookie {
+                    name: "ctx".to_string(),
+                    value: "yum".to_string(),
+                    domain: None,
+                    path: Some("/".to_string()),
+                    http_only: false,
+                    secure: false,
+                    expires: None,
+                }],
+                &base,
+            )
+            .await
+            .unwrap();
+        let found = one
+            .cookies()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|cookie| cookie.name == "ctx")
+            .unwrap();
+        assert_eq!(found.value, "yum", "{tag}");
+
+        // Permissions inherit to future pages without their own call.
+        context.grant_permissions(&["geolocation"]).await.unwrap();
+        let three = context.new_page().await.unwrap();
+        three.goto(&base).await.unwrap();
+        three
+            .evaluate_value(
+                "navigator.permissions.query({name:'geolocation'}) \
+                 .then(r => document.title = 'perm:' + r.state)",
+            )
+            .await
+            .unwrap();
+        three.expect().title("perm:granted").await.unwrap();
+
+        // Geolocation override inherits too (Firefox: loud error when old).
+        match context.set_geolocation(48.85, 2.35).await {
+            Ok(()) => {
+                let four = context.new_page().await.unwrap();
+                four.goto(&base).await.unwrap();
+                four.evaluate_value(
+                    "navigator.geolocation.getCurrentPosition( \
+                     p => document.title = 'geo:' + p.coords.latitude + ',' + p.coords.longitude, \
+                     e => document.title = 'geo-err:' + e.code + ':' + e.message)",
+                )
+                .await
+                .unwrap();
+                four.expect().title("geo:48.85,2.35").await.unwrap();
+                four.close().await.unwrap();
+            }
+            Err(error) => {
+                assert_eq!(tag, "firefox", "{tag}: unexpected {error}");
+                assert!(error.to_string().contains("newer build"), "{tag}: {error}");
+            }
+        }
+
+        one.close().await.unwrap();
+        two.close().await.unwrap();
+        three.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn route_modify_response() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+
+        // Firefox rejects every response-phase override (probe-verified on
+        // 156: body, headers and statusCode are request-phase-only).
+        if kind != BrowserKind::Chromium {
+            let err = page
+                .route(vec![RouteRule::modify_response(
+                    "**/api/hi",
+                    Some(418),
+                    None,
+                    Some(br#"{"mocked":true}"#.to_vec()),
+                )])
+                .await
+                .unwrap_err();
+            assert!(
+                err.to_string().contains("not supported on Firefox"),
+                "{tag}: {err}"
+            );
+            page.close().await.unwrap();
+            browser.close().await.unwrap();
+            shutdown.abort();
+            continue;
+        }
+
+        // Full override: status + headers + body.
+        page.route(vec![RouteRule::modify_response(
+            "**/api/hi",
+            Some(418),
+            Some(vec![
+                ("x-modified".to_string(), "yes".to_string()),
+                ("content-type".to_string(), "application/json".to_string()),
+            ]),
+            Some(br#"{"mocked":true}"#.to_vec()),
+        )])
+        .await
+        .unwrap();
+        let probe: serde_json::Value = page
+            .evaluate(
+                "fetch('api/hi').then(async r => \
+                 ({ status: r.status, body: await r.text(), \
+                 header: r.headers.get('x-modified') }))",
+            )
+            .await
+            .unwrap();
+        assert_eq!(probe["status"], serde_json::json!(418), "{tag}: {probe}");
+        assert_eq!(
+            probe["body"],
+            serde_json::json!(r#"{"mocked":true}"#),
+            "{tag}: {probe}"
+        );
+        assert_eq!(probe["header"], serde_json::json!("yes"), "{tag}: {probe}");
+
+        // Non-matching traffic passes through untouched.
+        let method: String = page
+            .evaluate("fetch('api/method').then(r => r.text())")
+            .await
+            .unwrap();
+        assert_eq!(method, "GET", "{tag}");
+
+        // Status-only edits merge over the real response.
+        page.route(vec![RouteRule::modify_response(
+            "**/api/hi",
+            Some(500),
+            None,
+            None,
+        )])
+        .await
+        .unwrap();
+        let probe: serde_json::Value = page
+            .evaluate(
+                "fetch('api/hi').then(async r => \
+                 ({ status: r.status, body: await r.text() }))",
+            )
+            .await
+            .unwrap();
+        assert_eq!(probe["status"], serde_json::json!(500), "{tag}: {probe}");
+        assert!(
+            probe["body"].as_str().unwrap_or_default().contains("real"),
+            "{tag}: {probe}"
         );
 
         page.close().await.unwrap();

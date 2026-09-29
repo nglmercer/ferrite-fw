@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -89,6 +89,15 @@ pub struct RecordedRequest {
     pub url: String,
     /// Response status (0 when the request failed).
     pub status: u16,
+    /// Request headers as sent.
+    #[serde(default)]
+    pub headers: Vec<(String, String)>,
+    /// Request body text (Chromium only; `None` when absent or streamed).
+    #[serde(default)]
+    pub post_data: Option<String>,
+    /// Request-to-response wall time in ms (`None` when the start was missed).
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
 }
 
 /// A JavaScript dialog observed while auto-handling.
@@ -165,8 +174,10 @@ pub(crate) struct FrameInfo {
     pub url: String,
 }
 
-/// A frame in the page (main frame or iframe): frame-scoped `evaluate`
-/// only — locators always target the main frame.
+/// A frame in the page (main frame or iframe) with frame-scoped
+/// `evaluate` and locators. Note: coordinate-based locator actions
+/// (`hover`, `tap`, `drag_to`) use frame-relative coordinates and may miss
+/// on offset iframes; DOM actions and assertions are exact.
 #[derive(Clone)]
 pub struct Frame {
     page: Page,
@@ -209,6 +220,51 @@ impl Frame {
     /// Evaluate an expression in this frame, returning raw JSON.
     pub async fn evaluate_value(&self, expression: &str) -> E2eResult<Value> {
         self.page.driver.frame_evaluate(&self.id, expression).await
+    }
+
+    /// This page scoped to the frame (all evaluation runs inside it).
+    fn scoped_page(&self) -> Page {
+        self.page.clone().scoped(self.id.clone())
+    }
+
+    /// Locate elements inside this frame.
+    pub fn locator(&self, selector: impl Into<String>) -> Locator {
+        Locator::new(self.scoped_page(), Selector::parse(selector.into()))
+    }
+
+    /// Locate `[data-testid]` inside this frame.
+    pub fn get_by_test_id(&self, id: &str) -> Locator {
+        Locator::new(self.scoped_page(), Selector::test_id(id))
+    }
+
+    /// Locate elements containing `text` inside this frame.
+    pub fn get_by_text(&self, text: &str) -> Locator {
+        Locator::new(self.scoped_page(), Selector::by_text(text))
+    }
+
+    /// Locate an ARIA role inside this frame.
+    pub fn get_by_role(&self, role: &str, name: &str) -> Locator {
+        Locator::new(self.scoped_page(), Selector::by_role(role, name))
+    }
+
+    /// Locate a `<label>` by its text inside this frame.
+    pub fn get_by_label(&self, text: &str) -> Locator {
+        Locator::new(self.scoped_page(), Selector::by_label(text))
+    }
+
+    /// Locate by `[placeholder]` inside this frame.
+    pub fn get_by_placeholder(&self, text: &str) -> Locator {
+        Locator::new(self.scoped_page(), Selector::by_placeholder(text))
+    }
+
+    /// Locate by `[alt]` inside this frame.
+    pub fn get_by_alt(&self, text: &str) -> Locator {
+        Locator::new(self.scoped_page(), Selector::by_alt(text))
+    }
+
+    /// Locate by `[title]` inside this frame.
+    pub fn get_by_title(&self, text: &str) -> Locator {
+        Locator::new(self.scoped_page(), Selector::by_title(text))
     }
 }
 
@@ -275,6 +331,46 @@ impl DeviceDescriptor {
             height: 1080,
         },
         device_scale_factor: 1.0,
+        mobile: false,
+        has_touch: false,
+    };
+    /// iPhone SE (375x667, 2x, mobile, touch).
+    pub const IPHONE_SE: Self = Self {
+        viewport: Viewport {
+            width: 375,
+            height: 667,
+        },
+        device_scale_factor: 2.0,
+        mobile: true,
+        has_touch: true,
+    };
+    /// iPad (768x1024, 2x, touch, tablet UI).
+    pub const IPAD: Self = Self {
+        viewport: Viewport {
+            width: 768,
+            height: 1024,
+        },
+        device_scale_factor: 2.0,
+        mobile: false,
+        has_touch: true,
+    };
+    /// Desktop 1440p (2560x1440, 1x).
+    pub const DESKTOP_1440P: Self = Self {
+        viewport: Viewport {
+            width: 2560,
+            height: 1440,
+        },
+        device_scale_factor: 1.0,
+        mobile: false,
+        has_touch: false,
+    };
+    /// Laptop retina (1440x900, 2x).
+    pub const LAPTOP_RETINA: Self = Self {
+        viewport: Viewport {
+            width: 1440,
+            height: 900,
+        },
+        device_scale_factor: 2.0,
         mobile: false,
         has_touch: false,
     };
@@ -349,6 +445,17 @@ pub enum RouteAction {
         /// Replacement body bytes.
         body: Option<Vec<u8>>,
     },
+    /// Modify the real response (`None` = keep original status/headers/body).
+    /// Header overrides replace the whole set; Content-Length is repaired
+    /// whenever the body changes.
+    ModifyResponse {
+        /// Replacement status.
+        status: Option<u16>,
+        /// Replacement headers (replaces the whole set).
+        headers: Option<Vec<(String, String)>>,
+        /// Replacement body bytes.
+        body: Option<Vec<u8>>,
+    },
 }
 
 /// A request-routing rule (glob pattern over the URL).
@@ -402,6 +509,25 @@ impl RouteRule {
             action: RouteAction::ContinueWith {
                 url,
                 method,
+                headers,
+                body,
+            },
+        }
+    }
+
+    /// Modify the real response for matching requests (`None` = keep the
+    /// original status/headers/body). Chromium-only: Firefox rejects every
+    /// response-phase override, so `route` fails fast there.
+    pub fn modify_response(
+        pattern: impl Into<String>,
+        status: Option<u16>,
+        headers: Option<Vec<(String, String)>>,
+        body: Option<Vec<u8>>,
+    ) -> Self {
+        Self {
+            pattern: pattern.into(),
+            action: RouteAction::ModifyResponse {
+                status,
                 headers,
                 body,
             },
@@ -480,8 +606,15 @@ pub struct Page {
     dialogs: Arc<Mutex<Option<tokio::task::AbortHandle>>>,
     capture: Arc<Mutex<Option<CaptureState>>>,
     routes: Arc<Mutex<Vec<RouteRule>>>,
+    /// Rules inherited from the owning context (shared; page rules win).
+    context_routes: Arc<Mutex<Vec<RouteRule>>>,
+    /// Context grants waiting for the first http(s) navigation (Firefox
+    /// grants need an origin, so fresh pages cannot take them yet).
+    pending_grants: Arc<Mutex<Vec<String>>>,
     net_capture: Arc<Mutex<Option<tokio::task::AbortHandle>>>,
     exposed: ExposedState,
+    registry: Weak<Mutex<Vec<Page>>>,
+    frame_id: Option<String>,
 }
 
 /// Rust handlers exposed to page JS ([`Page::expose_function`]).
@@ -532,6 +665,10 @@ const CLOCK_SCRIPT: &str = r#"(() => {
   window.cancelAnimationFrame = (id) => { timers.delete(id); };
   performance.now = () => now - origin;
   window.__ferriteClock = {
+    setFixed(ms) {
+      now = +ms || 0;
+      return now;
+    },
     tick(ms) {
       const end = now + Math.max(0, +ms || 0);
       let fired = 0;
@@ -582,6 +719,8 @@ impl Page {
         sink: ConsoleSink,
         slow_mo: Duration,
         base_url: Option<String>,
+        registry: Weak<Mutex<Vec<Page>>>,
+        context_routes: Arc<Mutex<Vec<RouteRule>>>,
     ) -> Self {
         Self {
             driver,
@@ -592,9 +731,19 @@ impl Page {
             dialogs: Arc::new(Mutex::new(None)),
             capture: Arc::new(Mutex::new(None)),
             routes: Arc::new(Mutex::new(Vec::new())),
+            context_routes,
+            pending_grants: Arc::new(Mutex::new(Vec::new())),
             net_capture: Arc::new(Mutex::new(None)),
             exposed: ExposedState::default(),
+            registry,
+            frame_id: None,
         }
+    }
+
+    /// Clone scoped to a frame (evaluation runs inside it).
+    pub(crate) fn scoped(mut self, frame_id: String) -> Self {
+        self.frame_id = Some(frame_id);
+        self
     }
 
     /// Target id.
@@ -713,7 +862,33 @@ impl Page {
                 },
             })?;
         self.slow_mo().await;
+        self.apply_pending_grants(&url).await?;
         Ok(())
+    }
+
+    /// Queue context grants until the first http(s) navigation (Firefox).
+    pub(crate) fn defer_grants(&self, grants: Vec<String>) {
+        *self
+            .pending_grants
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = grants;
+    }
+
+    /// Grant whatever the context queued, once an http(s) page is loaded.
+    async fn apply_pending_grants(&self, url: &str) -> E2eResult<()> {
+        if !url.starts_with("http") {
+            return Ok(());
+        }
+        let pending = self
+            .pending_grants
+            .lock()
+            .map(|mut grants| std::mem::take(&mut *grants))
+            .unwrap_or_default();
+        if pending.is_empty() {
+            return Ok(());
+        }
+        let names: Vec<&str> = pending.iter().map(String::as_str).collect();
+        self.grant_permissions(&names).await
     }
 
     /// Reload the page.
@@ -768,7 +943,10 @@ impl Page {
 
     /// Evaluate JavaScript and return the raw JSON value.
     pub async fn evaluate_value(&self, expression: &str) -> E2eResult<Value> {
-        self.driver.evaluate(expression).await
+        match &self.frame_id {
+            Some(id) => self.driver.frame_evaluate(id, expression).await,
+            None => self.driver.evaluate(expression).await,
+        }
     }
 
     async fn evaluate_string(&self, expression: &str) -> E2eResult<String> {
@@ -937,6 +1115,10 @@ impl Page {
     }
 
     /// Press the left mouse button at CSS-pixel coordinates.
+    ///
+    /// Note: on Firefox the hold does not survive across calls (BiDi input
+    /// state resets after each action sequence), so build drags with
+    /// [`Page::mouse_drag`], not manual down/move/up sequences.
     pub async fn mouse_down(&self, x: f64, y: f64) -> E2eResult<()> {
         self.driver.mouse_down(x, y).await?;
         self.slow_mo().await;
@@ -946,6 +1128,13 @@ impl Page {
     /// Release the left mouse button at CSS-pixel coordinates.
     pub async fn mouse_up(&self, x: f64, y: f64) -> E2eResult<()> {
         self.driver.mouse_up(x, y).await?;
+        self.slow_mo().await;
+        Ok(())
+    }
+
+    /// Drag from one CSS-pixel point to another in `steps` paced moves.
+    pub async fn mouse_drag(&self, from: (f64, f64), to: (f64, f64), steps: u32) -> E2eResult<()> {
+        self.driver.mouse_drag(from, to, steps).await?;
         self.slow_mo().await;
         Ok(())
     }
@@ -1186,6 +1375,22 @@ impl Page {
         }
     }
 
+    /// Jump the fake clock to an exact epoch-millisecond time.
+    /// Fails loudly when no clock is installed.
+    pub async fn clock_set_fixed_time(&self, ms: i64) -> E2eResult<()> {
+        let now: Option<i64> = self
+            .evaluate(&format!(
+                "window.__ferriteClock ? window.__ferriteClock.setFixed({ms}) : null"
+            ))
+            .await?;
+        match now {
+            Some(_) => Ok(()),
+            None => Err(E2eError::Config(
+                "clock_set_fixed_time needs clock_install first".to_string(),
+            )),
+        }
+    }
+
     /// Restore the native clock (idempotent).
     pub async fn clock_uninstall(&self) -> E2eResult<()> {
         self.evaluate_value("window.__ferriteClock ? window.__ferriteClock.uninstall() : true")
@@ -1323,20 +1528,17 @@ impl Page {
             .await
     }
 
-    /// Start intercepting requests with glob rules.
+    /// Start intercepting requests with glob rules (replaces page rules;
+    /// context rules still apply as fallback, page rules win on overlap).
     pub async fn route(&self, rules: Vec<RouteRule>) -> E2eResult<()> {
         *self.routes.lock().unwrap_or_else(|e| e.into_inner()) = rules;
         self.restart_routing().await
     }
 
-    /// Stop intercepting requests.
+    /// Stop page-level interception (context rules still apply).
     pub async fn stop_routing(&self) {
         *self.routes.lock().unwrap_or_else(|e| e.into_inner()) = Vec::new();
-        let handle = self.routing.lock().map(|mut r| r.take()).unwrap_or(None);
-        if let Some(handle) = handle {
-            handle.abort();
-            self.driver.stop_routing().await;
-        }
+        let _ = self.restart_routing().await;
     }
 
     /// Remove rules with `pattern`; returns how many were removed.
@@ -1354,18 +1556,24 @@ impl Page {
         Ok(removed)
     }
 
-    /// Apply the stored rules (no pump when empty).
-    async fn restart_routing(&self) -> E2eResult<()> {
+    /// Apply the stored rules (page first, context fallback; no pump when empty).
+    pub(crate) async fn restart_routing(&self) -> E2eResult<()> {
         let handle = self.routing.lock().map(|mut r| r.take()).unwrap_or(None);
         if let Some(handle) = handle {
             handle.abort();
             self.driver.stop_routing().await;
         }
-        let rules = self
+        let mut rules = self
             .routes
             .lock()
             .map(|routes| routes.clone())
             .unwrap_or_default();
+        rules.extend(
+            self.context_routes
+                .lock()
+                .map(|routes| routes.clone())
+                .unwrap_or_default(),
+        );
         if rules.is_empty() {
             return Ok(());
         }
@@ -1421,6 +1629,58 @@ impl Page {
     /// wrapped in a function, so avoid top-level `return`).
     pub async fn add_init_script(&self, source: &str) -> E2eResult<()> {
         self.driver.add_init_script(source).await
+    }
+
+    /// Add a `<script src>` tag and wait for it to load.
+    pub async fn add_script_tag_url(&self, url: &str) -> E2eResult<()> {
+        let url_json = serde_json::to_string(url).map_err(E2eError::Json)?;
+        self.evaluate_value(&format!(
+            "new Promise((resolve, reject) => {{ \
+             const s = document.createElement('script'); s.src = {url_json}; \
+             s.onload = () => resolve(true); \
+             s.onerror = () => reject(new Error('script load failed')); \
+             document.head.appendChild(s); }})"
+        ))
+        .await?;
+        Ok(())
+    }
+
+    /// Add an inline `<script>` tag (runs immediately).
+    pub async fn add_script_tag_content(&self, code: &str) -> E2eResult<()> {
+        let code_json = serde_json::to_string(code).map_err(E2eError::Json)?;
+        self.evaluate_value(&format!(
+            "(() => {{ const s = document.createElement('script'); \
+             s.textContent = {code_json}; document.head.appendChild(s); \
+             return true; }})()"
+        ))
+        .await?;
+        Ok(())
+    }
+
+    /// Add a stylesheet `<link>` tag and wait for it to load.
+    pub async fn add_style_tag_url(&self, url: &str) -> E2eResult<()> {
+        let url_json = serde_json::to_string(url).map_err(E2eError::Json)?;
+        self.evaluate_value(&format!(
+            "new Promise((resolve, reject) => {{ \
+             const l = document.createElement('link'); l.rel = 'stylesheet'; \
+             l.href = {url_json}; l.onload = () => resolve(true); \
+             l.onerror = () => reject(new Error('stylesheet load failed')); \
+             document.head.appendChild(l); }})"
+        ))
+        .await?;
+        Ok(())
+    }
+
+    /// Add an inline `<style>` tag.
+    pub async fn add_style_tag_content(&self, css: &str) -> E2eResult<()> {
+        let css_json = serde_json::to_string(css).map_err(E2eError::Json)?;
+        self.evaluate_value(&format!(
+            "(() => {{ const s = document.createElement('style'); \
+             s.textContent = {css_json}; document.head.appendChild(s); \
+             return true; }})()"
+        ))
+        .await?;
+        Ok(())
     }
 
     /// All document frames (main frame first; named `document_frames`
@@ -1875,6 +2135,13 @@ impl Page {
 
     /// Close the page target.
     pub async fn close(&self) -> E2eResult<()> {
+        if let Some(registry) = self.registry.upgrade() {
+            let target = self.target_id().to_string();
+            registry
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .retain(|page| page.target_id() != target);
+        }
         self.stop_routing().await;
         self.stop_dialog_handling().await;
         self.stop_request_capture();
@@ -1887,6 +2154,29 @@ impl Page {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn device_presets_have_sane_metrics() {
+        for device in [
+            DeviceDescriptor::IPHONE_15,
+            DeviceDescriptor::IPHONE_SE,
+            DeviceDescriptor::IPAD,
+            DeviceDescriptor::PIXEL_7,
+            DeviceDescriptor::DESKTOP_1080P,
+            DeviceDescriptor::DESKTOP_1440P,
+            DeviceDescriptor::LAPTOP_RETINA,
+        ] {
+            assert!(device.viewport.width > 0);
+            assert!(device.viewport.height > 0);
+            assert!(device.device_scale_factor > 0.0);
+        }
+        assert_eq!(DeviceDescriptor::IPHONE_SE.viewport.width, 375);
+        const {
+            assert!(DeviceDescriptor::IPAD.has_touch);
+            assert!(!DeviceDescriptor::IPAD.mobile);
+            assert!(!DeviceDescriptor::LAPTOP_RETINA.has_touch);
+        }
+    }
 
     // Navigation without a base URL stays loud (covered through goto errors).
     #[test]

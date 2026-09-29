@@ -10,6 +10,48 @@ use crate::error::{E2eError, E2eResult};
 use crate::locator::Locator;
 use crate::page::Page;
 
+/// Collect assertion failures without stopping at the first one
+/// (Playwright `expect.soft` equivalent): feed each assertion result to
+/// [`SoftAsserts::check`], then fail once via [`SoftAsserts::assert_all`].
+#[derive(Debug, Default)]
+pub struct SoftAsserts {
+    failures: Vec<String>,
+}
+
+impl SoftAsserts {
+    /// Empty collector.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record an assertion result, keeping its failure message.
+    pub fn check(&mut self, result: E2eResult<()>) {
+        if let Err(error) = result {
+            self.failures.push(error.to_string());
+        }
+    }
+
+    /// Collected failure messages.
+    #[must_use]
+    pub fn failures(&self) -> &[String] {
+        &self.failures
+    }
+
+    /// Fail with all collected messages (ok when empty).
+    pub fn assert_all(self) -> E2eResult<()> {
+        if self.failures.is_empty() {
+            Ok(())
+        } else {
+            Err(E2eError::Expect(format!(
+                "{} soft assertion(s) failed:\n{}",
+                self.failures.len(),
+                self.failures.join("\n")
+            )))
+        }
+    }
+}
+
 /// Assertion retry window.
 #[derive(Debug, Clone, Copy)]
 pub struct Timeout(Duration);
@@ -911,6 +953,28 @@ impl Locator {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn soft_asserts_collect_and_report() {
+        let mut soft = SoftAsserts::new();
+        soft.check(Ok(()));
+        soft.check(Err(E2eError::Expect("first".to_string())));
+        soft.check(Err(E2eError::Expect("second".to_string())));
+        assert_eq!(
+            soft.failures(),
+            &[
+                E2eError::Expect("first".to_string()).to_string(),
+                E2eError::Expect("second".to_string()).to_string()
+            ]
+        );
+        let err = soft.assert_all().unwrap_err();
+        assert!(err.to_string().contains("2 soft assertion(s)"), "{err}");
+        assert!(err.to_string().contains("first"), "{err}");
+
+        let mut clean = SoftAsserts::new();
+        clean.check(Ok(()));
+        assert!(clean.assert_all().is_ok());
+    }
     use std::sync::Arc;
 
     #[tokio::test]

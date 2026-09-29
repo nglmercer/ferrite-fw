@@ -131,6 +131,11 @@ pub struct CdpDriver {
     sink: ConsoleSink,
     /// Held modifier bitmask (CDP does not track it across calls).
     modifiers: Arc<Mutex<u8>>,
+    /// Whether the left button is held (CDP moves default to buttons=0,
+    /// which breaks pointer capture and buttons-gated drag handlers).
+    pressed: Arc<Mutex<bool>>,
+    /// Owning browser context (`None` = default; scopes permission grants).
+    browser_context: Option<String>,
 }
 
 /// BiDi-backed driver (Firefox): one browsing context.
@@ -142,6 +147,8 @@ pub struct BidiDriver {
     insecure_certs: bool,
     intercept: Arc<Mutex<Option<String>>>,
     sink: ConsoleSink,
+    /// Owning user context (`None` = default; scopes permission grants).
+    user_context: Option<String>,
 }
 
 /// Engine-agnostic page driver.
@@ -191,6 +198,7 @@ impl CdpDriver {
         target: String,
         timeout: Duration,
         sink: ConsoleSink,
+        browser_context: Option<String>,
     ) -> E2eResult<Self> {
         let driver = Self {
             cdp,
@@ -199,6 +207,8 @@ impl CdpDriver {
             timeout,
             sink,
             modifiers: Arc::new(Mutex::new(0)),
+            pressed: Arc::new(Mutex::new(false)),
+            browser_context,
         };
         driver.call("Page.enable", Value::Null).await?;
         driver.call("Runtime.enable", Value::Null).await?;
@@ -235,6 +245,7 @@ impl BidiDriver {
         timeout: Duration,
         insecure_certs: bool,
         sink: ConsoleSink,
+        user_context: Option<String>,
     ) -> Self {
         let driver = Self {
             bidi,
@@ -243,6 +254,7 @@ impl BidiDriver {
             insecure_certs,
             intercept: Arc::new(Mutex::new(None)),
             sink,
+            user_context,
         };
         driver.spawn_listener();
         driver
@@ -475,6 +487,14 @@ impl Driver {
         match self {
             Self::Cdp(driver) => driver.mouse_up(x, y).await,
             Self::Bidi(driver) => driver.mouse_up(x, y).await,
+        }
+    }
+
+    /// Drag from one point to another in `steps` paced moves.
+    pub async fn mouse_drag(&self, from: (f64, f64), to: (f64, f64), steps: u32) -> E2eResult<()> {
+        match self {
+            Self::Cdp(driver) => driver.mouse_drag(from, to, steps).await,
+            Self::Bidi(driver) => driver.mouse_drag(from, to, steps).await,
         }
     }
 
@@ -878,7 +898,7 @@ impl CdpDriver {
 
     async fn set_content(&self, html: &str) -> E2eResult<()> {
         let tree = self.call("Page.getFrameTree", Value::Null).await?;
-        let frame_id = tree["frame"]["id"].clone();
+        let frame_id = tree["frameTree"]["frame"]["id"].clone();
         self.call(
             "Page.setDocumentContent",
             serde_json::json!({ "frameId": frame_id, "html": html }),
@@ -1056,12 +1076,23 @@ impl CdpDriver {
         self.modifiers.lock().map(|held| *held).unwrap_or_default()
     }
 
+    /// Button to report on moves (`left` while held, else `none`).
+    fn held_button(&self) -> &'static str {
+        if self.pressed.lock().map(|held| *held).unwrap_or_default() {
+            "left"
+        } else {
+            "none"
+        }
+    }
+
     async fn mouse_move(&self, x: f64, y: f64) -> E2eResult<()> {
         let modifiers = self.held_modifiers();
+        let button = self.held_button();
         self.call(
             "Input.dispatchMouseEvent",
             serde_json::json!({
                 "type": "mouseMoved", "x": x, "y": y, "modifiers": modifiers,
+                "button": button,
             }),
         )
         .await?;
@@ -1132,6 +1163,9 @@ impl CdpDriver {
             }),
         )
         .await?;
+        if let Ok(mut pressed) = self.pressed.lock() {
+            *pressed = true;
+        }
         Ok(())
     }
 
@@ -1146,7 +1180,22 @@ impl CdpDriver {
             }),
         )
         .await?;
+        if let Ok(mut pressed) = self.pressed.lock() {
+            *pressed = false;
+        }
         Ok(())
+    }
+
+    async fn mouse_drag(&self, from: (f64, f64), to: (f64, f64), steps: u32) -> E2eResult<()> {
+        self.mouse_move(from.0, from.1).await?;
+        self.mouse_down(from.0, from.1).await?;
+        for step in 1..=steps.max(1) {
+            let t = f64::from(step) / f64::from(steps.max(1));
+            self.mouse_move(from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t)
+                .await?;
+            tokio::time::sleep(Duration::from_millis(16)).await;
+        }
+        self.mouse_up(to.0, to.1).await
     }
 
     async fn mouse_wheel(&self, x: f64, y: f64, delta_x: f64, delta_y: f64) -> E2eResult<()> {
@@ -1232,11 +1281,11 @@ impl CdpDriver {
     }
 
     async fn grant_permissions(&self, permissions: &[&str]) -> E2eResult<()> {
-        self.call(
-            "Browser.grantPermissions",
-            serde_json::json!({ "permissions": permissions }),
-        )
-        .await?;
+        let mut params = serde_json::json!({ "permissions": permissions });
+        if let Some(context) = &self.browser_context {
+            params["browserContextId"] = Value::String(context.clone());
+        }
+        self.call("Browser.grantPermissions", params).await?;
         Ok(())
     }
 
@@ -1340,11 +1389,15 @@ impl CdpDriver {
         let set = builder
             .build()
             .map_err(|error| E2eError::Config(error.to_string()))?;
-        self.call(
-            "Fetch.enable",
-            serde_json::json!({ "patterns": [{ "urlPattern": "*" }] }),
-        )
-        .await?;
+        let mut patterns = vec![serde_json::json!({ "urlPattern": "*" })];
+        if rules
+            .iter()
+            .any(|rule| matches!(rule.action, RouteAction::ModifyResponse { .. }))
+        {
+            patterns.push(serde_json::json!({ "urlPattern": "*", "requestStage": "Response" }));
+        }
+        self.call("Fetch.enable", serde_json::json!({ "patterns": patterns }))
+            .await?;
         let mut events = self.cdp.subscribe();
         let session = self.session.clone();
         let cdp = self.cdp.clone();
@@ -1366,6 +1419,20 @@ impl CdpDriver {
                     .unwrap_or_default()
                     .to_string();
                 let action = set.matches(&url).first().map(|i| &rules[*i].action);
+                if event.params.get("responseStatusCode").is_some()
+                    || event.params.get("responseHeaders").is_some()
+                {
+                    answer_response_pause(
+                        &cdp,
+                        &session,
+                        timeout,
+                        &request_id,
+                        &event.params,
+                        action,
+                    )
+                    .await;
+                    continue;
+                }
                 let is_override = matches!(action, Some(RouteAction::ContinueWith { .. }));
                 let (method, params) = match action {
                     Some(RouteAction::Abort) => (
@@ -1418,6 +1485,12 @@ impl CdpDriver {
                         }
                         ("Fetch.continueRequest", params)
                     }
+                    // Response edits apply at the response stage; the request
+                    // must reach the server first.
+                    Some(RouteAction::ModifyResponse { .. }) | None => (
+                        "Fetch.continueRequest",
+                        serde_json::json!({ "requestId": request_id }),
+                    ),
                     _ => (
                         "Fetch.continueRequest",
                         serde_json::json!({ "requestId": request_id }),
@@ -1449,7 +1522,7 @@ impl CdpDriver {
         let session = self.session.clone();
         let sink = self.sink.clone();
         tokio::spawn(async move {
-            let mut pending: HashMap<String, (String, String)> = HashMap::new();
+            let mut pending: HashMap<String, PendingRequest> = HashMap::new();
             loop {
                 let event = match events.recv().await {
                     Ok(event) => event,
@@ -1471,31 +1544,64 @@ impl CdpDriver {
                                 .as_str()
                                 .unwrap_or_default()
                                 .to_string();
-                            pending.insert(id.to_string(), (method, url));
+                            let headers = cdp_header_pairs(&event.params["request"]["headers"]);
+                            let post_data = event.params["request"]["postData"]
+                                .as_str()
+                                .map(str::to_string);
+                            pending.insert(
+                                id.to_string(),
+                                PendingRequest {
+                                    method,
+                                    url,
+                                    headers,
+                                    post_data,
+                                    started: tokio::time::Instant::now(),
+                                },
+                            );
                         }
                     }
                     "Network.responseReceived" => {
                         let id = event.params["requestId"].as_str().unwrap_or_default();
-                        if let Some((method, url)) = pending.remove(id) {
+                        if let Some(request) = pending.remove(id) {
                             let status = event.params["response"]["status"]
                                 .as_u64()
                                 .unwrap_or(0)
                                 .min(u64::from(u16::MAX))
                                 as u16;
                             sink.push_request(RecordedRequest {
-                                method,
-                                url,
+                                method: request.method,
+                                url: request.url,
                                 status,
+                                headers: request.headers,
+                                post_data: request.post_data,
+                                duration_ms: Some(
+                                    request
+                                        .started
+                                        .elapsed()
+                                        .as_millis()
+                                        .min(u128::from(u64::MAX))
+                                        as u64,
+                                ),
                             });
                         }
                     }
                     "Network.loadingFailed" => {
                         let id = event.params["requestId"].as_str().unwrap_or_default();
-                        if let Some((method, url)) = pending.remove(id) {
+                        if let Some(request) = pending.remove(id) {
                             sink.push_request(RecordedRequest {
-                                method,
-                                url,
+                                method: request.method,
+                                url: request.url,
                                 status: 0,
+                                headers: request.headers,
+                                post_data: request.post_data,
+                                duration_ms: Some(
+                                    request
+                                        .started
+                                        .elapsed()
+                                        .as_millis()
+                                        .min(u128::from(u64::MAX))
+                                        as u64,
+                                ),
                             });
                         }
                     }
@@ -2332,6 +2438,32 @@ impl BidiDriver {
         .await
     }
 
+    async fn mouse_drag(&self, from: (f64, f64), to: (f64, f64), steps: u32) -> E2eResult<()> {
+        // Button state does not survive across `performActions` calls, so the
+        // whole drag runs as one action sequence with paced intermediate moves.
+        self.bring_to_front().await?;
+        let mut actions = vec![
+            serde_json::json!({ "type": "pointerMove", "x": from.0, "y": from.1 }),
+            serde_json::json!({ "type": "pointerDown", "button": 0 }),
+        ];
+        for step in 1..=steps.max(1) {
+            let t = f64::from(step) / f64::from(steps.max(1));
+            actions.push(serde_json::json!({
+                "type": "pointerMove",
+                "x": from.0 + (to.0 - from.0) * t,
+                "y": from.1 + (to.1 - from.1) * t,
+                "duration": 16,
+            }));
+        }
+        actions.push(serde_json::json!({ "type": "pointerUp", "button": 0 }));
+        self.perform(serde_json::json!([{
+            "type": "pointer", "id": "ferrite-mouse",
+            "parameters": { "pointerType": "mouse" },
+            "actions": actions,
+        }]))
+        .await
+    }
+
     async fn mouse_wheel(&self, x: f64, y: f64, delta_x: f64, delta_y: f64) -> E2eResult<()> {
         self.bring_to_front().await?;
         self.perform(serde_json::json!([{
@@ -2383,13 +2515,25 @@ impl BidiDriver {
             .as_str()
             .filter(|origin| origin.starts_with("http"))
             .map(str::to_string);
+        let Some(origin) = origin else {
+            // Firefox (even 156) rejects origin-less grants, so fail loudly
+            // instead of sending a call the engine refuses.
+            return Err(E2eError::Config(
+                "firefox permission grants need an http(s) page \
+                 (navigate first, then grant)"
+                    .to_string(),
+            ));
+        };
         for name in permissions {
             let mut params = serde_json::json!({
                 "descriptor": { "name": name },
                 "state": "granted",
+                "origin": origin,
             });
-            if let Some(origin) = &origin {
-                params["origin"] = Value::String(origin.clone());
+            // Origin-only grants land in the default user context; pages in
+            // a dedicated context would never see them.
+            if let Some(user_context) = &self.user_context {
+                params["userContext"] = Value::String(user_context.clone());
             }
             self.call("permissions.setPermission", params).await?;
         }
@@ -2489,14 +2633,30 @@ impl BidiDriver {
                     .to_string(),
             ));
         }
+        // Firefox rejects every `provideResponse` override at `responseStarted`
+        // (status, headers and body are request-phase-only), so response
+        // edits fail fast instead of silently passing the original through.
+        if rules
+            .iter()
+            .any(|rule| matches!(rule.action, RouteAction::ModifyResponse { .. }))
+        {
+            return Err(E2eError::Config(
+                "modify_response is not supported on Firefox \
+                 (BiDi provideResponse overrides are request-phase-only)"
+                    .to_string(),
+            ));
+        }
         // Firefox rejects `*` in URL patterns, so intercept everything with
         // the empty match-all pattern and filter client-side with globset.
+        // Scoped to this page: a global intercept would block sibling pages
+        // whose pumps never see (or no longer handle) the events.
         let added = self
             .bidi
             .call(
                 "network.addIntercept",
                 serde_json::json!({
                     "phases": ["beforeRequestSent"],
+                    "contexts": [self.context.clone()],
                     "urlPatterns": [{ "type": "pattern" }],
                 }),
                 self.timeout,
@@ -2640,7 +2800,7 @@ impl BidiDriver {
         let context = self.context.clone();
         let sink = self.sink.clone();
         tokio::spawn(async move {
-            let mut pending: HashMap<String, (String, String)> = HashMap::new();
+            let mut pending: HashMap<String, PendingRequest> = HashMap::new();
             loop {
                 let event = match events.recv().await {
                     Ok(event) => event,
@@ -2663,23 +2823,43 @@ impl BidiDriver {
                                 .as_str()
                                 .unwrap_or_default()
                                 .to_string();
-                            pending.insert(id.to_string(), (method, url));
+                            let headers = bidi_header_pairs(&event.params["request"]["headers"]);
+                            pending.insert(
+                                id.to_string(),
+                                PendingRequest {
+                                    method,
+                                    url,
+                                    headers,
+                                    post_data: None,
+                                    started: tokio::time::Instant::now(),
+                                },
+                            );
                         }
                     }
                     "network.responseCompleted" => {
                         let id = event.params["request"]["request"]
                             .as_str()
                             .unwrap_or_default();
-                        if let Some((method, url)) = pending.remove(id) {
+                        if let Some(request) = pending.remove(id) {
                             let status = event.params["response"]["status"]
                                 .as_u64()
                                 .unwrap_or(0)
                                 .min(u64::from(u16::MAX))
                                 as u16;
                             sink.push_request(RecordedRequest {
-                                method,
-                                url,
+                                method: request.method,
+                                url: request.url,
                                 status,
+                                headers: request.headers,
+                                post_data: request.post_data,
+                                duration_ms: Some(
+                                    request
+                                        .started
+                                        .elapsed()
+                                        .as_millis()
+                                        .min(u128::from(u64::MAX))
+                                        as u64,
+                                ),
                             });
                         }
                     }
@@ -2687,11 +2867,21 @@ impl BidiDriver {
                         let id = event.params["request"]["request"]
                             .as_str()
                             .unwrap_or_default();
-                        if let Some((method, url)) = pending.remove(id) {
+                        if let Some(request) = pending.remove(id) {
                             sink.push_request(RecordedRequest {
-                                method,
-                                url,
+                                method: request.method,
+                                url: request.url,
                                 status: 0,
+                                headers: request.headers,
+                                post_data: request.post_data,
+                                duration_ms: Some(
+                                    request
+                                        .started
+                                        .elapsed()
+                                        .as_millis()
+                                        .min(u128::from(u64::MAX))
+                                        as u64,
+                                ),
                             });
                         }
                     }
@@ -3134,6 +3324,27 @@ fn collect_bidi_frames(node: &Value, out: &mut Vec<FrameInfo>) {
     }
 }
 
+/// An in-flight capture entry (completed at response/failure time).
+struct PendingRequest {
+    method: String,
+    url: String,
+    headers: Vec<(String, String)>,
+    post_data: Option<String>,
+    started: tokio::time::Instant,
+}
+
+/// Header pairs from a CDP request object.
+fn cdp_header_pairs(headers: &Value) -> Vec<(String, String)> {
+    headers
+        .as_object()
+        .map(|map| {
+            map.iter()
+                .map(|(name, value)| (name.clone(), value.as_str().unwrap_or_default().to_string()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Header pairs from a BiDi request object (base64 values decoded lossily).
 fn bidi_header_pairs(headers: &Value) -> Vec<(String, String)> {
     headers
@@ -3157,6 +3368,134 @@ fn bidi_header_pairs(headers: &Value) -> Vec<(String, String)> {
 }
 
 /// Set (or add) Content-Length on a header list.
+/// Answer a CDP response-stage pause by merging `ModifyResponse` overrides
+/// over the real response. Anything else (or an unreadable original body)
+/// continues untouched: falling back beats corrupting.
+async fn answer_response_pause(
+    cdp: &CdpConnection,
+    session: &str,
+    timeout: Duration,
+    request_id: &Value,
+    params: &Value,
+    action: Option<&RouteAction>,
+) {
+    let pass = serde_json::json!({ "requestId": request_id });
+    let Some(RouteAction::ModifyResponse {
+        status,
+        headers,
+        body,
+    }) = action
+    else {
+        let _ = cdp
+            .call(Some(session), "Fetch.continueResponse", pass, timeout)
+            .await;
+        return;
+    };
+    if status.is_none() && headers.is_none() && body.is_none() {
+        let _ = cdp
+            .call(Some(session), "Fetch.continueResponse", pass, timeout)
+            .await;
+        return;
+    }
+    let original = match cdp
+        .call(
+            Some(session),
+            "Fetch.getResponseBody",
+            serde_json::json!({ "requestId": request_id }),
+            timeout,
+        )
+        .await
+    {
+        Ok(original) => original,
+        Err(_) => {
+            let _ = cdp
+                .call(Some(session), "Fetch.continueResponse", pass, timeout)
+                .await;
+            return;
+        }
+    };
+    let original_body: Vec<u8> =
+        if original.get("base64Encoded").and_then(Value::as_bool) == Some(true) {
+            let encoded = original
+                .get("body")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            match decode_base64(encoded) {
+                Ok(bytes) => bytes,
+                Err(_) => {
+                    let _ = cdp
+                        .call(Some(session), "Fetch.continueResponse", pass, timeout)
+                        .await;
+                    return;
+                }
+            }
+        } else {
+            original
+                .get("body")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .as_bytes()
+                .to_vec()
+        };
+    let code = status
+        .as_ref()
+        .map(|code| u64::from(*code))
+        .unwrap_or_else(|| {
+            params
+                .get("responseStatusCode")
+                .and_then(Value::as_u64)
+                .unwrap_or(200)
+        });
+    let mut merged: Vec<(String, String)> = match headers {
+        Some(list) => list.clone(),
+        None => params
+            .get("responseHeaders")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| {
+                        Some((
+                            item.get("name")?.as_str()?.to_string(),
+                            item.get("value")?.as_str()?.to_string(),
+                        ))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+    };
+    let final_body = body.clone().unwrap_or(original_body);
+    if body.is_some() || headers.is_some() {
+        merged = with_content_length(merged, final_body.len());
+    }
+    let result = cdp
+        .call(
+            Some(session),
+            "Fetch.fulfillRequest",
+            serde_json::json!({
+                "requestId": request_id,
+                "responseCode": code,
+                "responseHeaders": merged
+                    .iter()
+                    .map(|(name, value)| serde_json::json!({"name": name, "value": value}))
+                    .collect::<Vec<_>>(),
+                "body": base64_encode(&final_body),
+            }),
+            timeout,
+        )
+        .await;
+    if result.is_err() {
+        let _ = cdp
+            .call(
+                Some(session),
+                "Fetch.continueResponse",
+                serde_json::json!({ "requestId": request_id }),
+                timeout,
+            )
+            .await;
+    }
+}
+
 fn with_content_length(mut headers: Vec<(String, String)>, len: usize) -> Vec<(String, String)> {
     match headers
         .iter_mut()

@@ -6,6 +6,7 @@
 //! loud configuration error.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use serde_json::Value;
@@ -283,6 +284,8 @@ pub struct Browser {
     base_url: Option<String>,
     proxy_server: Option<String>,
     product: String,
+    contexts: Arc<Mutex<Vec<BrowserContext>>>,
+    default: OnceLock<BrowserContext>,
 }
 
 impl Browser {
@@ -409,6 +412,8 @@ impl Browser {
             base_url: None,
             proxy_server: options.proxy_server,
             product,
+            contexts: Arc::new(Mutex::new(Vec::new())),
+            default: OnceLock::new(),
         })
     }
 
@@ -553,6 +558,8 @@ impl Browser {
             base_url: None,
             proxy_server: options.proxy_server,
             product,
+            contexts: Arc::new(Mutex::new(Vec::new())),
+            default: OnceLock::new(),
         })
     }
 
@@ -582,6 +589,8 @@ impl Browser {
             base_url: None,
             proxy_server: None,
             product: "chromium".to_string(),
+            contexts: Arc::new(Mutex::new(Vec::new())),
+            default: OnceLock::new(),
         })
     }
 
@@ -690,27 +699,61 @@ impl Browser {
                 )
             }
         };
-        Ok(BrowserContext::new(
+        let context = BrowserContext::new(
             self.backend.clone(),
             id,
             options,
             self.slow_mo,
             self.timeout,
             self.base_url.clone(),
-        ))
+            Arc::downgrade(&self.contexts),
+        );
+        self.contexts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(context.clone());
+        Ok(context)
     }
 
     /// Default (shared) browser context.
     #[must_use]
     pub fn default_context(&self) -> BrowserContext {
-        BrowserContext::new(
-            self.backend.clone(),
-            None,
-            ContextOptions::default(),
-            self.slow_mo,
-            self.timeout,
-            self.base_url.clone(),
-        )
+        self.default
+            .get_or_init(|| {
+                let context = BrowserContext::new(
+                    self.backend.clone(),
+                    None,
+                    ContextOptions::default(),
+                    self.slow_mo,
+                    self.timeout,
+                    self.base_url.clone(),
+                    Arc::downgrade(&self.contexts),
+                );
+                self.contexts
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(context.clone());
+                context
+            })
+            .clone()
+    }
+
+    /// Open contexts (default context included once used).
+    #[must_use]
+    pub fn contexts(&self) -> Vec<BrowserContext> {
+        self.contexts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Open pages across all contexts.
+    #[must_use]
+    pub fn pages(&self) -> Vec<Page> {
+        self.contexts()
+            .iter()
+            .flat_map(BrowserContext::pages)
+            .collect()
     }
 
     /// Open a page in the default context.

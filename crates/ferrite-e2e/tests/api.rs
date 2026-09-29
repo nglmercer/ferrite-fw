@@ -26,6 +26,26 @@ async fn serve() -> (String, tokio::task::AbortHandle) {
         .route(
             "/gone",
             axum::routing::delete(axum::http::StatusCode::NO_CONTENT),
+        )
+        .route(
+            "/patch",
+            axum::routing::patch(|body: axum::body::Bytes| async move { body }),
+        )
+        .route(
+            "/form",
+            axum::routing::post(
+                |axum::Form(fields): axum::Form<Vec<(String, String)>>| async move {
+                    axum::Json(fields)
+                },
+            ),
+        )
+        .route(
+            "/search",
+            axum::routing::get(
+                |axum::extract::Query(params): axum::extract::Query<
+                    std::collections::HashMap<String, String>,
+                >| async move { params.get("q").cloned().unwrap_or_default() },
+            ),
         );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/", listener.local_addr().unwrap());
@@ -82,6 +102,41 @@ async fn api_client_round_trip() {
     assert!(direct.ok());
     let err = ApiClient::new().get("json").await.unwrap_err();
     assert!(matches!(err, E2eError::Config(_)), "{err}");
+
+    // PATCH, HEAD, forms, and query pairs.
+    let patch = client
+        .patch_json("patch", &serde_json::json!({"p": true}))
+        .await
+        .unwrap();
+    assert_eq!(
+        patch.json::<serde_json::Value>().unwrap(),
+        serde_json::json!({"p": true})
+    );
+    let head = client.head("json").await.unwrap();
+    assert_eq!(head.status(), 200);
+    assert!(head.bytes().is_empty());
+    assert!(head.header("content-type").unwrap().contains("json"));
+    let form = client
+        .post_form("form", &[("user", "ada"), ("role", "dev")])
+        .await
+        .unwrap();
+    assert_eq!(
+        form.json::<serde_json::Value>().unwrap(),
+        serde_json::json!([["user", "ada"], ["role", "dev"]])
+    );
+    let search = client
+        .get_with_query("search", &[("q", "hello world")])
+        .await
+        .unwrap();
+    assert_eq!(search.text(), "hello world");
+    let post_query = client
+        .post_json_with_query("echo", &serde_json::json!({"n": 2}), &[("q", "x")])
+        .await
+        .unwrap();
+    assert_eq!(
+        post_query.json::<serde_json::Value>().unwrap(),
+        serde_json::json!({"n": 2})
+    );
 
     shutdown.abort();
 }
