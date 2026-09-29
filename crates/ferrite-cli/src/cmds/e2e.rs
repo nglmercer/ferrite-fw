@@ -33,6 +33,9 @@ pub(crate) async fn e2e(
     // Validate the engine early (loud on webkit/unknown).
     let kind = ferrite::e2e::BrowserKind::parse(&resolved.e2e.browser)
         .map_err(ferrite::FerriteError::from)?;
+    // Validate the snapshot mode early (loud on typos).
+    ferrite::e2e::SnapshotUpdate::parse(&resolved.e2e.update_snapshots)
+        .map_err(ferrite::FerriteError::from)?;
 
     if args.check {
         return check_browser(&resolved.e2e, kind).await;
@@ -65,6 +68,7 @@ pub(crate) async fn e2e(
         .env("FERRITE_E2E_REPORTER", &resolved.e2e.reporter)
         .env("FERRITE_E2E_WORKERS", resolved.e2e.workers.to_string())
         .env("FERRITE_E2E_RETRIES", resolved.e2e.retries.to_string())
+        .env("FERRITE_UPDATE_SNAPSHOTS", &resolved.e2e.update_snapshots)
         .stdin(std::process::Stdio::inherit())
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit())
@@ -101,6 +105,9 @@ fn apply_flag_overrides(e2e: &mut ferrite::config::E2eConfig, args: &E2eArgs) {
     }
     if let Some(video) = &args.video {
         e2e.video = video.clone();
+    }
+    if let Some(update_snapshots) = &args.update_snapshots {
+        e2e.update_snapshots = update_snapshots.clone();
     }
     if args.filter.is_some() {
         // The filter travels to the test process; `Runner::filter` applies it.

@@ -448,8 +448,16 @@ impl Runner {
     ///
     /// Unset builder filters fall back to `FERRITE_E2E_FILTER`,
     /// `FERRITE_E2E_GREP`, `FERRITE_E2E_GREP_INVERT`, and `FERRITE_E2E_SHARD`
-    /// (set by the CLI flags).
+    /// (set by the CLI flags). Snapshot assertions resolve their directory
+    /// from `FERRITE_SNAPSHOT_DIR`, which this run seeds from the output dir
+    /// unless already set.
     pub async fn run(&self, browser: &Browser, tests: Vec<Test>) -> TestReport {
+        if std::env::var("FERRITE_SNAPSHOT_DIR").is_err() {
+            std::env::set_var(
+                "FERRITE_SNAPSHOT_DIR",
+                format!("{}/snapshots", self.output_dir),
+            );
+        }
         let mut report = TestReport::default();
         for setup in &self.global_setup {
             if let Err(error) = setup().await {

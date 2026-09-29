@@ -12,10 +12,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ferrite_e2e::{
-    describe, test, Browser, BrowserKind, ColorScheme, Cookie, DeviceDescriptor, DialogDecision,
-    E2eError, LaunchOptions, LoadState, NavigationOptions, Page, PageEvent, PageEventKind,
-    RecordedRequest, ReducedMotion, RouteAction, RouteInfo, RouteRule, Runner, ScreenshotOptions,
-    TestStatus, Timeout, TracingOptions, VideoMode, VideoOptions, WebSocketDirection,
+    describe, match_text_snapshot_with, test, Browser, BrowserKind, ColorScheme, Cookie,
+    DeviceDescriptor, DialogDecision, E2eError, LaunchOptions, LoadState, NavigationOptions, Page,
+    PageEvent, PageEventKind, RecordedRequest, ReducedMotion, RouteAction, RouteInfo, RouteRule,
+    Runner, ScreenshotOptions, SnapshotOptions, SnapshotUpdate, TestStatus, Timeout,
+    TracingOptions, VideoMode, VideoOptions, WebSocketDirection,
 };
 
 const FIXTURE: &str = r#"<!doctype html><html><head><title>e2e fixture</title></head><body>
@@ -4004,5 +4005,135 @@ async fn runner_before_all_after_all() {
 
     for (_kind, browser) in browsers {
         browser.close().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn snapshot_screenshots() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let dir =
+            std::env::temp_dir().join(format!("ferrite-snap-w5-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let opts = SnapshotOptions {
+            dir: Some(dir.clone()),
+            update: Some(SnapshotUpdate::Missing),
+            ..Default::default()
+        };
+        let page = browser.new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+
+        // Missing snapshots are written once, then match stably.
+        page.expect()
+            .screenshot_with("w5 page", &opts)
+            .await
+            .unwrap();
+        assert!(dir.join("w5-page.png").is_file(), "{tag}");
+        page.expect()
+            .screenshot_with("w5 page", &opts)
+            .await
+            .unwrap();
+        page.locator("#title")
+            .expect()
+            .screenshot_with("w5 title", &opts)
+            .await
+            .unwrap();
+        page.locator("#title")
+            .expect()
+            .screenshot_with("w5 title", &opts)
+            .await
+            .unwrap();
+
+        // Drift fails loudly (short timeout: we expect the failure).
+        page.evaluate_value("document.body.style.background = 'red'; true")
+            .await
+            .unwrap();
+        let error = page
+            .expect()
+            .timeout(Timeout::ms(500))
+            .screenshot_with("w5 page", &opts)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("differs"), "{tag}: {error}");
+        assert!(dir.join("w5-page.actual.png").is_file(), "{tag}");
+        // ... passes negated, and `all` re-baselines.
+        page.expect()
+            .not()
+            .screenshot_with("w5 page", &opts)
+            .await
+            .unwrap();
+        let all = SnapshotOptions {
+            update: Some(SnapshotUpdate::All),
+            ..opts.clone()
+        };
+        page.expect()
+            .screenshot_with("w5 page", &all)
+            .await
+            .unwrap();
+        page.expect()
+            .screenshot_with("w5 page", &opts)
+            .await
+            .unwrap();
+
+        // `none` refuses to write missing snapshots.
+        let none = SnapshotOptions {
+            update: Some(SnapshotUpdate::None),
+            ..opts.clone()
+        };
+        let error = page
+            .expect()
+            .screenshot_with("w5 never", &none)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("no snapshot"), "{tag}: {error}");
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[tokio::test]
+async fn snapshot_text_and_aria() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let dir =
+            std::env::temp_dir().join(format!("ferrite-snap-w5t-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let opts = SnapshotOptions {
+            dir: Some(dir.clone()),
+            update: Some(SnapshotUpdate::Missing),
+            ..Default::default()
+        };
+        let page = browser.new_page().await.unwrap();
+        page.goto(&format!("{base}locate")).await.unwrap();
+
+        let aria = page.aria_snapshot().await.unwrap();
+        assert!(aria.contains("button"), "{tag}");
+        page.expect().aria_snapshot(&aria).await.unwrap();
+        let error = page
+            .expect()
+            .timeout(Timeout::ms(300))
+            .aria_snapshot("definitely not the snapshot")
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("aria snapshot"),
+            "{tag}: {error}"
+        );
+
+        match_text_snapshot_with("w5 aria", &aria, &opts).unwrap();
+        match_text_snapshot_with("w5 aria", &aria, &opts).unwrap();
+        let error = match_text_snapshot_with("w5 aria", "changed", &opts).unwrap_err();
+        assert!(error.to_string().contains("line 1"), "{tag}: {error}");
+        assert!(dir.join("w5-aria.actual.snap").is_file(), "{tag}");
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

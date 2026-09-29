@@ -8,7 +8,11 @@ use serde::Serialize;
 
 use crate::error::{E2eError, E2eResult};
 use crate::locator::Locator;
-use crate::page::Page;
+use crate::page::{Page, ScreenshotOptions};
+use crate::snapshot::{
+    assert_snapshot_png, compare_png, resolve_update, snap_path_for, SnapshotOptions,
+    SnapshotUpdate,
+};
 
 /// Collect assertion failures without stopping at the first one
 /// (Playwright `expect.soft` equivalent): feed each assertion result to
@@ -266,6 +270,88 @@ impl PageExpect {
                         Ok(None)
                     } else {
                         Ok(Some(format!("url was {url:?}")))
+                    }
+                }
+            },
+        )
+        .await
+    }
+
+    /// Assert a viewport screenshot matches the named snapshot (retries until match).
+    pub async fn screenshot(&self, name: &str) -> E2eResult<()> {
+        self.screenshot_with(name, &SnapshotOptions::default())
+            .await
+    }
+
+    /// [`PageExpect::screenshot`] with explicit snapshot options.
+    ///
+    /// Missing snapshots and `update=all` are one-shot (write once, pass);
+    /// otherwise captures are compared until they match or the timeout expires.
+    pub async fn screenshot_with(&self, name: &str, opts: &SnapshotOptions) -> E2eResult<()> {
+        let path = snap_path_for(name, "png", opts);
+        if !path.is_file() || resolve_update(opts.update) == SnapshotUpdate::All {
+            let actual = self.page.screenshot(ScreenshotOptions::default()).await?;
+            return assert_snapshot_png(name, &actual, opts);
+        }
+        let expected = std::fs::read(&path)?;
+        let page = self.page.clone();
+        let opts = opts.clone();
+        let name = name.to_string();
+        let negated = self.negated;
+        let description = format!("screenshot {name:?}{}", not_tag(negated));
+        let result = poll(self.timeout, description, || {
+            let page = page.clone();
+            let expected = expected.clone();
+            let opts = opts.clone();
+            async move {
+                let actual = match page.screenshot(ScreenshotOptions::default()).await {
+                    Ok(bytes) => bytes,
+                    Err(error) => return Ok(Some(error.to_string())),
+                };
+                match compare_png(&actual, &expected, opts.threshold) {
+                    Ok(diff) if diff.passed(&opts) != negated => Ok(None),
+                    Ok(diff) => Ok(Some(diff.summary())),
+                    // Size mismatches count as different under negation.
+                    Err(_) if negated => Ok(None),
+                    Err(error) => Ok(Some(error.to_string())),
+                }
+            }
+        })
+        .await;
+        match result {
+            Ok(()) => Ok(()),
+            Err(poll_error) => {
+                // Final capture for the `.actual.png` artifact + detailed message.
+                let actual = page.screenshot(ScreenshotOptions::default()).await?;
+                match assert_snapshot_png(&name, &actual, &opts) {
+                    Err(rich) => Err(rich),
+                    // Negated case: still matching at timeout.
+                    Ok(()) => Err(poll_error),
+                }
+            }
+        }
+    }
+
+    /// Assert the accessibility snapshot equals `expected` exactly.
+    pub async fn aria_snapshot(&self, expected: &str) -> E2eResult<()> {
+        let page = self.page.clone();
+        let expected = expected.to_string();
+        let negated = self.negated;
+        poll(
+            self.timeout,
+            format!("aria snapshot == {expected:?}{}", not_tag(negated)),
+            || {
+                let page = page.clone();
+                let expected = expected.clone();
+                async move {
+                    let actual = match page.aria_snapshot().await {
+                        Ok(actual) => actual,
+                        Err(error) => return Ok(Some(error.to_string())),
+                    };
+                    if (actual == expected) != negated {
+                        Ok(None)
+                    } else {
+                        Ok(Some(format!("aria snapshot was {actual:?}")))
                     }
                 }
             },
@@ -900,6 +986,65 @@ impl LocatorExpect {
             },
         )
         .await
+    }
+
+    /// Assert an element screenshot matches the named snapshot (retries until match).
+    pub async fn screenshot(&self, name: &str) -> E2eResult<()> {
+        self.screenshot_with(name, &SnapshotOptions::default())
+            .await
+    }
+
+    /// [`LocatorExpect::screenshot`] with explicit snapshot options.
+    ///
+    /// Missing snapshots and `update=all` are one-shot (write once, pass);
+    /// otherwise captures are compared until they match or the timeout expires.
+    pub async fn screenshot_with(&self, name: &str, opts: &SnapshotOptions) -> E2eResult<()> {
+        let path = snap_path_for(name, "png", opts);
+        if !path.is_file() || resolve_update(opts.update) == SnapshotUpdate::All {
+            let actual = self.locator.screenshot().await?;
+            return assert_snapshot_png(name, &actual, opts);
+        }
+        let expected = std::fs::read(&path)?;
+        let locator = self.locator.clone();
+        let opts = opts.clone();
+        let name = name.to_string();
+        let negated = self.negated;
+        let description = format!(
+            "`{}` screenshot {name:?}{}",
+            locator.selector(),
+            not_tag(negated)
+        );
+        let result = poll(self.timeout, description, || {
+            let locator = locator.clone();
+            let expected = expected.clone();
+            let opts = opts.clone();
+            async move {
+                let actual = match locator.screenshot().await {
+                    Ok(bytes) => bytes,
+                    Err(error) => return Ok(Some(error.to_string())),
+                };
+                match compare_png(&actual, &expected, opts.threshold) {
+                    Ok(diff) if diff.passed(&opts) != negated => Ok(None),
+                    Ok(diff) => Ok(Some(diff.summary())),
+                    // Size mismatches count as different under negation.
+                    Err(_) if negated => Ok(None),
+                    Err(error) => Ok(Some(error.to_string())),
+                }
+            }
+        })
+        .await;
+        match result {
+            Ok(()) => Ok(()),
+            Err(poll_error) => {
+                // Final capture for the `.actual.png` artifact + detailed message.
+                let actual = locator.screenshot().await?;
+                match assert_snapshot_png(&name, &actual, &opts) {
+                    Err(rich) => Err(rich),
+                    // Negated case: still matching at timeout.
+                    Ok(()) => Err(poll_error),
+                }
+            }
+        }
     }
 }
 

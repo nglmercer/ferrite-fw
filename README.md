@@ -255,6 +255,7 @@ reporter = "list,json"              # list | json | junit (comma-separated)
 screenshot = "only-on-failure"      # on | off | only-on-failure
 video = "off"                       # on | off | only-on-failure (webm)
 video_fps = 10
+update_snapshots = "missing"        # missing | all | none
 
 [e2e.web_server]
 url = "http://127.0.0.1:5190/"
@@ -266,7 +267,9 @@ chaining, filters, and `and_`/`or_`, auto-retrying `expect_*` with `not()`,
 immediate `is_*` checks, `bounding_box`/`highlight`/`evaluate`, dialog info
 and `wait_for_dialog`, `wait_for_selector`/`wait_for_popup`, permissions and
 geolocation (plus clears), HTTP credentials, storage state, request routing
-(`unroute_all`) and observation, response bodies, aria snapshots, `Download`
+(`unroute_all`) and observation, response bodies, aria snapshots with
+screenshot/text/aria snapshot assertions (`missing`/`all`/`none` update modes),
+`Download`
 objects with save/delete, screenshots, video recording, live frame streams,
 traces, `ApiClient` verbs with `fetch`, parallel `Runner` with tags, sharding,
 and `before_all`/`after_all` hooks). Chromium recordings assemble via `ffmpeg`

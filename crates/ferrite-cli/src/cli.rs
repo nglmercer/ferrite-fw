@@ -267,6 +267,9 @@ pub(crate) struct E2eArgs {
     /// Video policy (`on`, `off`, `only-on-failure`).
     #[arg(long)]
     pub(crate) video: Option<String>,
+    /// Snapshot update mode (`missing`, `all`, `none`).
+    #[arg(long)]
+    pub(crate) update_snapshots: Option<String>,
     /// Only verify the browser launches, then exit.
     #[arg(long)]
     pub(crate) check: bool,

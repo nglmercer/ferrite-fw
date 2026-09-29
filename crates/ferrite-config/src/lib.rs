@@ -432,6 +432,8 @@ pub struct E2eConfig {
     pub video_fps: u32,
     /// Slow down each action by this many milliseconds.
     pub slow_mo_ms: u64,
+    /// Snapshot update mode (`missing`, `all`, `none`).
+    pub update_snapshots: String,
     /// Default viewport.
     pub viewport: Option<ViewportConfig>,
     /// Web server to boot before tests (dev server by default).
@@ -460,6 +462,7 @@ impl Default for E2eConfig {
             video: "off".to_string(),
             video_fps: 10,
             slow_mo_ms: 0,
+            update_snapshots: "missing".to_string(),
             viewport: None,
             web_server: None,
         }

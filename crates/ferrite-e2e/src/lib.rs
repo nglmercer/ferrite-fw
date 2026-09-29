@@ -51,6 +51,7 @@ mod locator;
 mod page;
 mod report;
 mod runner;
+mod snapshot;
 mod video;
 mod webserver;
 
@@ -73,6 +74,10 @@ pub use page::{
 };
 pub use report::{TestReport, TestResult, TestStatus};
 pub use runner::{describe, test, GlobalHook, HookFn, Runner, Test, TestMode};
+pub use snapshot::{
+    assert_snapshot_png, assert_snapshot_text, compare_png, match_text_snapshot,
+    match_text_snapshot_with, SnapshotDiff, SnapshotOptions, SnapshotUpdate,
+};
 pub use video::{find_ffmpeg, find_ffprobe, VideoFormat, VideoFrame, VideoMode, VideoOptions};
 pub use webserver::{wait_for_url, RunningWebServer, WebServer};
 
