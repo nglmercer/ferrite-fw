@@ -50,6 +50,7 @@ mod coverage;
 mod driver;
 mod error;
 mod expect;
+mod file_payload;
 mod frame_locator;
 mod har;
 mod jshandle;
@@ -59,6 +60,7 @@ mod page;
 mod report;
 mod runner;
 mod snapshot;
+mod url_matcher;
 mod video;
 mod webserver;
 
@@ -76,6 +78,7 @@ pub use coverage::{Coverage, CoverageFunction, CoverageRange, CssCoverageEntry, 
 pub use driver::FrameStream;
 pub use error::{E2eError, E2eResult};
 pub use expect::{expect_poll, expect_to_pass, LocatorExpect, PageExpect, SoftAsserts, Timeout};
+pub use file_payload::FilePayload;
 pub use frame_locator::FrameLocator;
 pub use har::{HarContentMode, HarFile, HarReplayEntry};
 pub use jshandle::JSHandle;
@@ -85,11 +88,11 @@ pub use locator::{
 };
 pub use operation::{CancellationToken, OperationOptions};
 pub use page::{
-    AbortReason, ClickOptions, ColorScheme, ConsoleMessage, Cookie, DeviceDescriptor,
-    DialogDecision, DialogInfo, Download, ElementRect, ElementState, Frame, HttpCredentials,
-    KeyPress, KeyPressOptions, LoadState, LocatorHandlerFn, LocatorHandlerOptions, MouseButton,
-    MouseClickOptions, NavigationOptions, NetworkRequest, Page, PageEvent, PageEventKind,
-    RecordedRequest, ReducedMotion, RouteAction, RouteFromHarOptions, RouteHandler,
+    AbortReason, ClickOptions, ColorScheme, ConsoleLocation, ConsoleMessage, Cookie,
+    DeviceDescriptor, DialogDecision, DialogInfo, Download, ElementRect, ElementState, Frame,
+    HttpCredentials, KeyPress, KeyPressOptions, LoadState, LocatorHandlerFn, LocatorHandlerOptions,
+    MouseButton, MouseClickOptions, NavigationOptions, NetworkRequest, Page, PageEvent,
+    PageEventKind, RecordedRequest, ReducedMotion, RouteAction, RouteFromHarOptions, RouteHandler,
     RouteHandlerEntry, RouteInfo, RouteRule, ScreenshotOptions, StorageEntry, StorageOrigin,
     StorageState, Viewport, WebSocketDirection, WebSocketEvent,
 };
@@ -107,6 +110,7 @@ pub use snapshot::{
     assert_snapshot_png, assert_snapshot_text, compare_png, match_text_snapshot,
     match_text_snapshot_with, SnapshotDiff, SnapshotOptions, SnapshotUpdate,
 };
+pub use url_matcher::UrlMatcher;
 pub use video::{find_ffmpeg, find_ffprobe, VideoFormat, VideoFrame, VideoMode, VideoOptions};
 pub use webserver::{wait_for_url, RunningWebServer, WebServer};
 

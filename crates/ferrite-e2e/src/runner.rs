@@ -2535,6 +2535,7 @@ fn attempt_history(history: &Mutex<Vec<AttemptResult>>) -> Vec<AttemptResult> {
 }
 
 struct AttemptGuard {
+    context: Option<crate::BrowserContext>,
     hub: crate::report::ReporterHub,
     info: TestInfo,
     result: TestResult,
@@ -2561,6 +2562,7 @@ impl AttemptGuard {
         result.repeat_each_index = info.repeat_each_index;
         let attachments_start = info.attachments().len();
         Self {
+            context: None,
             hub,
             info,
             result,
@@ -2593,6 +2595,11 @@ impl Drop for AttemptGuard {
             .skip(self.attachments_start)
             .collect();
         let attempt = AttemptResult {
+            console: self
+                .context
+                .as_ref()
+                .map(|context| context.console_messages())
+                .unwrap_or_default(),
             info: self.info.attempt.clone(),
             status: self.info.status().unwrap(),
             expected_status: self.info.expected_status(),
@@ -2875,6 +2882,7 @@ async fn run_one(
                 break;
             }
         };
+        attempt_report.context = Some(context.clone());
         let mut page = match bounded_in(
             info.steps.as_ref(),
             deadline,
@@ -3178,7 +3186,7 @@ async fn run_one(
                 "attempt": attempts,
                 "worker": worker_index,
                 "repeat": item.repeat_each_index,
-                "console": page.console_messages(),
+                "console": context.console_messages(),
                 "trace": page.trace(),
             });
             let data = serde_json::to_string_pretty(&payload).unwrap_or_default();

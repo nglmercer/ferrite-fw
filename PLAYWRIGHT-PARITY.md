@@ -19,9 +19,9 @@ reporter, Android and Electron APIs:
 | Classification | Members | Meaning |
 |---|---:|---|
 | Equivalent | 15 | Counterpart for the basic operation/value, without full options or engine compatibility |
-| Partial | 578 | Related exposed operation with material semantic, option or engine differences |
+| Partial | 581 | Related exposed operation with material semantic, option or engine differences |
 | Idiomatic | 42 | Comparable operation through Rust language/library facilities |
-| Missing | 383 | No dedicated public counterpart |
+| Missing | 380 | No dedicated public counterpart |
 
 These counts describe an inventory, **not a behavioral compatibility
 percentage**. The earlier inventory had 458 Partial and 503 Missing members.
@@ -53,6 +53,8 @@ implementation.
 | Locator selection | Strict single-target operations, genuine first/last/nth slicing, relative has/hasNot filters, exact/regex/visibility builders | No complete Playwright selector extension/custom-engine surface |
 | Semantic locators | Associated labels target controls; roles and accessible names use shared DOM helpers; open shadow-root traversal | Full accessible-name specification and closed shadow roots remain outside this implementation |
 | Actions | Retry readiness, visibility/stability/hit testing, trusted forced clicks, trusted checkbox/key input; delayed fill/select and contenteditable support | Some actions use DOM setters/events; full native input/event/layout semantics remain narrower |
+| Uploads | Path and in-memory filename/MIME/binary payloads, multiple/empty batches and input/change events on both engines | DOM injection, 64 MiB total cap; native chooser and directory uploads remain deferred |
+| URL/network waits | Exact, glob, regex and URL/request/response predicates, including async network predicates | Explicit Rust APIs and snapshot records; no waitUntil/URLPattern or complete live Request/Response objects |
 | DOM access | Separate textContent/innerText, arrays, evaluate-all/JSON arguments, highlight removal; single-target getters wait and enforce strictness | JSON values only, without arbitrary JS/JSHandle argument serialization |
 | Frames and handles | Same-origin lazy/nested/replacement `FrameLocator`, frame ownership, content/function/URL/load/selector helpers, remote handle evaluation/properties | Cross-origin/OOPIF lazy selection and ElementHandle are deferred |
 | Assertions | Exact/regex page title/URL, normalized ordered texts, classes, values, role/error message, custom predicates, `expect_to_pass` | No custom matcher registry/asymmetric matchers or full options parity |
@@ -61,7 +63,7 @@ implementation.
 | API testing | Query/headers/JSON/form/raw/multipart, cookies, TLS/proxy/auth, timeout, redirects, status checks and connect retries | IndexedDB state and all redirect/retry semantics remain deferred; returned response buffers are independently owned |
 | Browser/API storage | Context-linked cookies in both directions; isolated protocol cookie partitions; Playwright cookies/origins localStorage JSON | API transport options configured separately; redirect/partition/SameSite details remain narrower; no IndexedDB/OPFS snapshots |
 | HTTP credentials | Browser challenge authentication on Chromium, preserving extra headers; explicit preemptive Basic helper | Firefox challenge credentials unsupported; cached-auth clearing is approximate |
-| Callbacks and buffers | Page-exposed functions survive navigation; console/error retrieval and clearing | No context-wide bindings, async Rust callbacks or complete frame/worker dispatch |
+| Callbacks and buffers | Page-exposed functions survive navigation; console/error source metadata, context history and per-attempt reporting | No context-wide bindings, async Rust callbacks or complete frame/worker dispatch |
 | Downloads | Chromium download behavior/cancellation scoped to the owning context; completed-file deduplication | File-based lifecycle, limited Firefox URL/failure/cancellation metadata |
 | Coverage | Dedicated Chromium JS/CSS coverage controller with sources and usage ranges | Native V8/CSS ranges, without Playwright flattening/navigation options; Firefox unsupported |
 
@@ -96,7 +98,9 @@ presence does not establish full Playwright behavior:
   upstream report formats.
 - Screenshot comparison, update modes and paths differ. PDF options, device
   descriptors, emulation and permissions have smaller surfaces.
-- URL/event/network waits retain narrower matching/result options. Zero disables
+- URL/network waits support exact/glob/regex and predicates, while returning
+  narrower snapshots and explicit Rust option surfaces. Event waits retain
+  enum/predicate APIs rather than full upstream emitter semantics. Zero disables
   the operation timeout; action/protocol defaults are shared across page clones.
   Cancellation drops the outstanding wait; already issued browser commands or
   JavaScript may still finish remotely. It is cooperative and cannot interrupt
@@ -300,6 +304,67 @@ These additions follow the official [TestStep metadata](https://playwright.dev/d
 and [TestInfo outcomes](https://playwright.dev/docs/api/class-testinfo), with the
 Rust schema and lifecycle differences described above.
 
+## URL/network matching, generated uploads and browser diagnostics
+
+`UrlMatcher::exact`, `glob`, `regex` and `contains` are reusable across
+`Page::wait_for_url_matching`, `wait_for_request_matching` and
+`wait_for_response_matching`; Frame supports matching URL waits too. Exact
+relative URLs resolve against the configured base URL. Globs match the whole
+URL: `*` excludes slashes, `**` includes them, `{a,b}` selects alternatives,
+`?` is literal and backslashes escape characters. Regex anchoring follows the
+supplied pattern. Invalid patterns fail at construction. Existing string waits
+retain their explicit substring behavior.
+
+`wait_for_url_where` accepts a URL predicate. Network `_where` methods accept
+synchronous predicates over `RecordedRequest`, and `_async` methods accept an
+owned snapshot and return `E2eResult<bool>`. They can match method, URL, status,
+request headers and response headers; predicate errors propagate. Timeout and
+page/context/caller cancellation bound the entire wait, including pending async
+predicates. Zero disables only its local deadline. Poll the wait future before
+triggering traffic, for example `tokio::join!(wait, trigger)`; merely constructing
+a Rust future does not arm it.
+
+Live observations are separate from HAR/body capture: request waits resolve at
+request start (status zero), response waits at headers and may match requests
+already in flight when the wait begins. New waits do not consume past events.
+Redirect hops preserve method/URL/status association. The observation channel
+holds 256 events; lag fails explicitly instead of accepting incomplete traffic.
+Returned snapshots have no response body; existing request capture remains
+available with its documented engine limits. URL waits also handle hash/history
+changes and frame-scoped navigation. `waitUntil` and URLPattern remain absent.
+
+`FilePayload::new(name, mime_type, bytes)` supplies generated files to
+`Locator::set_input_file_payloads` or the Page selector helper. Bytes, Unicode
+filenames and explicit MIME types reach the browser File and form submission.
+Existing path uploads share the same transfer path, infer MIME from filenames
+and read asynchronously. All uploads retain the 64 MiB aggregate cap. Empty
+batches clear the input; multiple files require a `multiple` input. Complete
+payload validation happens before DOM mutation; input/change events still fire.
+Missing/non-file disk paths, invalid names/MIME characters and oversized batches
+fail explicitly. This is DOM File/DataTransfer injection on both engines;
+directory uploads and native chooser interception remain deferred.
+
+`ConsoleMessage` now includes optional `ConsoleLocation` (source URL and
+zero-based line/column), native epoch-ms `timestamp_ms` and owning `page_id`.
+CDP Runtime/Log and BiDi log events supply metadata where available; unavailable
+fields remain `None`. JavaScript exception descriptions retain the error text.
+Page events/buffers and context events share the enriched message.
+`BrowserContext::console_messages` retains context-wide history, including
+closed pages and adopted popups; its clearing is independent of Page buffers.
+Each `AttemptResult::console`, live `on_test_end`, final JSON/HTML and attempt
+traces include context console/error observations with source/page identity.
+Retries keep separate histories, and cleanup output is captured before attempt
+end. HTML escapes console text and source metadata. These fields have serde
+defaults for old JSON; manual Rust literals need the additional optional/history
+fields. JSHandle arguments, worker ownership and complete JS error objects remain
+outside this implementation.
+
+These additions follow the official [URL waits](https://playwright.dev/docs/api/class-page#page-wait-for-url),
+[request/response waits](https://playwright.dev/docs/api/class-page#page-wait-for-response),
+[file payloads](https://playwright.dev/docs/api/class-locator#locator-set-input-files)
+and [console metadata](https://playwright.dev/docs/api/class-consolemessage), with
+the Rust/engine limits above.
+
 ## Engine and validation evidence
 
 Chromium uses CDP and Firefox uses stock WebDriver BiDi. Firefox accepts user
@@ -319,17 +384,27 @@ is full.
 
 ```bash
 FERRITE_CHROMIUM_PATH=/path/to/chrome-headless-shell \
-TMPDIR=/path/to/disk-backed-temp cargo test -p ferrite-e2e -- --test-threads=2
+FERRITE_E2E_REQUIRE_BOTH_BROWSERS=1 \
+TMPDIR=/path/to/disk-backed-temp cargo test -p ferrite-e2e --no-fail-fast -- --test-threads=4
 cargo clippy -p ferrite-e2e -p ferrite-cli --all-targets -- -D warnings
 ```
 
-Validation for step controls, automatic lifecycle diagnostics and portable reports:
+Validation for URL/network matching, generated uploads and browser diagnostics:
 
-- `ferrite-e2e`: **132 unit tests, 3 API tests, 93 browser tests, 7 attempt-diagnostics
+- `ferrite-e2e`: **137 unit tests, 3 API tests, 93 browser tests, 7 attempt-diagnostics
   groups, 4 reliability groups, 4 runtime/reporter groups, 6 fixture/network
-  groups, 4 step-control/bundle groups and 2 doctests** (255 checks total).
+  groups, 4 step-control/bundle groups, 5 wait/upload/console groups and
+  2 doctests** (265 checks total).
   Headless Shell and Firefox were installed and exercised; unsupported-engine branches remain explicit.
-- The four new groups additionally passed with full Chrome and Firefox, covering
+- The five new groups additionally passed with full Chrome and Firefox, covering
+  exact/glob/regex and predicate URL matching, frame history, request-start and
+  response-header timing, in-flight requests, redirects, asynchronous predicates,
+  errors, deadlines and disposal. Binary/Unicode/MIME upload payloads, multiple
+  and empty batches, input/change events and native HTTP multipart submissions
+  passed on both engines. Console/error source positions, epoch timestamps and
+  page IDs survived closed popups, retries, cleanup, page-buffer clearing,
+  trace export and portable JSON/escaped HTML reports.
+- The existing four step/bundle groups cover
   preset/dynamic local skips, nested metadata and attachments, recovered and
   propagated step timeouts, enclosing budgets/cancellation, automatic action and
   assertion deduplication, hook/fixture lifetimes and shared worker cleanup.
@@ -345,10 +420,11 @@ Validation for step controls, automatic lifecycle diagnostics and portable repor
 - Existing trace and first-attachment names remain compatible; retry trace files
   and repeated attachment names preserve their individual contents.
 - CLI/configuration checks passed again: 5 CLI tests, 17 configuration tests and
-  1 doctest (278 checks across E2E/CLI/configuration). This change adds no CLI
+  1 doctest (288 checks across E2E/CLI/configuration). This change adds no CLI
   options. A real portable HTML report with expanded automatic/user/hook trees,
   skipped steps, annotations and run lifecycle was rendered in Chromium and
-  visually inspected.
+  visually inspected. The console section was also rendered and visually
+  inspected with escaped text, source URL/position, native timestamp and page ID.
 
 New regressions cover isolation/retries/locks, project engines and cleanup,
 persistent profiles,

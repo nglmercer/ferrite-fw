@@ -326,6 +326,15 @@ for m,t in {'annotations':'annotations','titlePath':'title_path'}.items():
  put('TestStepInfo',m,'StepContext.'+t,'Live getters on the context passed to Page.step_with; annotate adds source-aware metadata, title paths include file/test/ancestor steps. Completed records reject late annotations.')
 for m,t in {'annotations':'annotations','category':'category','titlePath':'title_path'}.items():
  put('TestStep',m,'StepInfo.'+t,'Persisted annotations and full title path; categories user/action/assertion/hook/fixture differ from the upstream category vocabulary and not all Page/protocol operations are wrapped.')
+# URL/network predicates, generated uploads and source-aware browser diagnostics.
+for c in ['Page','Frame']:
+ put(c,'waitForURL',c+'.wait_for_url_matching','Exact (relative to base URL), full-URL glob/regex or wait_for_url_where predicate. Legacy wait_for_url remains substring-based. No waitUntil/URLPattern option object; Rust duration and clone controls govern cancellation.')
+for m,t in {'waitForRequest':'wait_for_request_async','waitForResponse':'wait_for_response_async'}.items():
+ put('Page',m,'Page.'+t,'Exact/glob/regex or sync/async predicates over RecordedRequest fields; request waits resolve at start, response waits at headers including already in-flight requests. Returns a metadata snapshot rather than rich live Request/Response/body objects. Legacy strings retain substring semantics; lag fails explicitly.')
+for c,target in [('Page','Page.set_input_file_payloads'),('Locator','Locator.set_input_file_payloads'),('Frame','Locator.set_input_file_payloads')]:
+ put(c,'setInputFiles',target,'FilePayload filename/MIME/bytes or existing path uploads; empty lists clear, multiple files require a multiple input, 64 MiB total cap. DOM File/DataTransfer injection on both engines; no native chooser/directory upload/options parity. Frame uses Frame.locator.')
+for m,t in {'text':'text','type':'kind','location':'location','timestamp':'timestamp_ms','page':'page_id'}.items():
+ put('ConsoleMessage',m,'ConsoleMessage.'+t,'Native CDP/BiDi source URL/zero-based position, epoch-ms timestamp and owning page ID when available. Optional unknown metadata; page is an ID rather than a Page object. String previews, not JSHandle argument or worker ownership parity. Context history and attempt JSON/HTML/trace retain closed-page messages.')
 # Fill every remaining upstream member explicitly as absent, with class-specific explanations.
 def default_note(c,e):
  if c.startswith('Android') or c in ['Electron','ElectronApplication']:return 'Experimental upstream API; Ferrite has no Android/ADB/WebView or Electron backend.'

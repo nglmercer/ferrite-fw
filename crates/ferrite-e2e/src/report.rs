@@ -238,6 +238,9 @@ impl StepInfo {
 /// Complete diagnostics and artifacts for a single attempt.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttemptResult {
+    /// Console output and JavaScript errors across all pages of this attempt.
+    #[serde(default)]
+    pub console: Vec<crate::ConsoleMessage>,
     pub info: AttemptInfo,
     pub status: AttemptStatus,
     pub expected_status: AttemptStatus,
@@ -1038,6 +1041,7 @@ impl TestReport {
                     ));
                 }
                 render_steps(&mut out, &attempt.steps);
+                render_console(&mut out, &attempt.console);
                 for path in &attempt.screenshots {
                     render_link(&mut out, path, "screenshot");
                 }
@@ -1087,6 +1091,36 @@ fn render_error(out: &mut String, error: &TestError) {
         ));
     }
 }
+fn render_console(out: &mut String, messages: &[crate::ConsoleMessage]) {
+    if messages.is_empty() {
+        return;
+    }
+    out.push_str("<details><summary>Console and page errors</summary><ul>");
+    for message in messages {
+        out.push_str(&format!(
+            "<li><strong>{}</strong><pre>{}</pre>",
+            xml_escape(&message.kind),
+            xml_escape(&message.text)
+        ));
+        if let Some(location) = &message.location {
+            out.push_str(&format!(
+                "<div>{}:{}:{}</div>",
+                xml_escape(&location.url),
+                location.line,
+                location.column
+            ));
+        }
+        if let Some(timestamp) = message.timestamp_ms {
+            out.push_str(&format!("<div>{}</div>", crate::har::iso8601(timestamp)));
+        }
+        if let Some(page) = &message.page_id {
+            out.push_str(&format!("<div>page: {}</div>", xml_escape(page)));
+        }
+        out.push_str("</li>");
+    }
+    out.push_str("</ul></details>");
+}
+
 fn render_steps(out: &mut String, steps: &[StepInfo]) {
     if steps.is_empty() {
         return;
@@ -1324,6 +1358,7 @@ mod tests {
             })
             .await;
         let attempt = AttemptResult {
+            console: Vec::new(),
             info: session.attempt.clone(),
             status: AttemptStatus::Failed,
             expected_status: AttemptStatus::Passed,

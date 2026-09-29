@@ -203,3 +203,40 @@ Move or upload the entire folder; links remain usable after source files are
 removed. Selecting the `html` reporter performs this export automatically.
 JSON/JUnit selected with HTML share its relative paths; JSON-only/JUnit-only
 exports retain their prior source paths. Missing artifact files fail export.
+
+URL/network matching accepts `UrlMatcher::exact`, `glob` and `regex`; legacy
+string waits keep substring matching. Exact relative URLs resolve against base URL.
+
+```rust,ignore
+let wait = ctx.page.wait_for_response_where(
+    |r| r.url.ends_with("/api/save") && r.method == "POST" && r.status == 200,
+    std::time::Duration::from_secs(5),
+);
+let click = ctx.page.get_by_role("button", "Save");
+let (response, clicked) = tokio::join!(wait, click.click());
+response?;
+clicked?;
+```
+
+`wait_for_request_async` / `wait_for_response_async` support async predicates
+returning `E2eResult<bool>`. Request waits resolve at start and response waits at
+headers, including in-flight requests. Returned records are metadata snapshots;
+body capture remains separate. Poll waits before triggering traffic. Timeout,
+cancellation and disposal also bound pending predicates; lag is an explicit error.
+
+Generated uploads do not require disk files:
+
+```rust,ignore
+ctx.page.locator("input[type=file]").set_input_file_payloads(&[
+    ferrite_e2e::FilePayload::new("report.txt", "text/plain", b"generated content"),
+]).await?;
+```
+
+Empty lists clear inputs. Multiple files require a `multiple` input; the total
+64 MiB cap applies to both payloads and existing path uploads. Directory uploads
+and native file chooser interception remain outside this API.
+
+Console/error messages include optional source URL/zero-based line/column,
+epoch-ms timestamp and owning page ID. `ctx.context.console_messages()` also
+retains closed-page/popup output, independently of Page buffers. Attempt JSON,
+HTML, trace and `on_test_end` preserve this history across cleanup and retries.

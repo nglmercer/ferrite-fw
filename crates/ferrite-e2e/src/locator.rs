@@ -6,7 +6,6 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::driver::base64_encode;
 use crate::error::{E2eError, E2eResult};
 use crate::page::{ClickOptions, ElementState, KeyPressOptions, Page};
 
@@ -397,7 +396,10 @@ impl Selector {
             "set_input_files" => &format!(
                 "if (!(el instanceof HTMLInputElement) || el.type !== 'file') \
                  return {{ ok: false, error: 'not a file input' }}; \
-                 const picked = JSON.parse({arg}).map(f => {{ \
+                 const source = JSON.parse({arg}); \
+                 if (source.length > 1 && !el.multiple) \
+                 return {{ ok: false, error: 'multiple files require a multiple input' }}; \
+                 const picked = source.map(f => {{ \
                  const bin = atob(f.data); \
                  const bytes = new Uint8Array(bin.length); \
                  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i); \
@@ -1983,30 +1985,73 @@ impl Locator {
                                 let mut total = 0usize;
                                 for path in paths {
                                     let path = path.as_ref();
-                                    let bytes = std::fs::read(path).map_err(|error| {
+                                    let metadata =
+                                        tokio::fs::metadata(path).await.map_err(|e| {
+                                            E2eError::Config(format!(
+                                                "cannot read {}: {e}",
+                                                path.display()
+                                            ))
+                                        })?;
+                                    if !metadata.is_file() {
+                                        return Err(E2eError::Config(format!(
+                                            "upload {} is not a file",
+                                            path.display()
+                                        )));
+                                    }
+                                    if metadata.len()
+                                        > crate::file_payload::MAX_UPLOAD_BYTES
+                                            .saturating_sub(total)
+                                            as u64
+                                    {
+                                        return Err(E2eError::Config(
+                                            "set_input_files payload exceeds 64 MiB".into(),
+                                        ));
+                                    }
+                                    let bytes = tokio::fs::read(path).await.map_err(|e| {
                                         E2eError::Config(format!(
-                                            "cannot read {}: {error}",
+                                            "cannot read {}: {e}",
                                             path.display()
                                         ))
                                     })?;
-                                    total += bytes.len();
-                                    if total > 64 * 1024 * 1024 {
+                                    total = total.checked_add(bytes.len()).ok_or_else(|| {
+                                        E2eError::Config("upload size overflow".into())
+                                    })?;
+                                    if total > crate::file_payload::MAX_UPLOAD_BYTES {
                                         return Err(E2eError::Config(
-                                            "set_input_files payload exceeds 64 MiB".to_string(),
+                                            "set_input_files payload exceeds 64 MiB".into(),
                                         ));
                                     }
                                     let name = path
                                         .file_name()
-                                        .map(|name| name.to_string_lossy().into_owned())
+                                        .map(|n| n.to_string_lossy().into_owned())
                                         .unwrap_or_default();
-                                    files.push(serde_json::json!({
-                                        "name": name,
-                                        "mime": guess_mime(&name),
-                                        "data": base64_encode(&bytes),
-                                    }));
+                                    files.push(crate::FilePayload::new(
+                                        &name,
+                                        guess_mime(&name),
+                                        bytes,
+                                    ));
                                 }
-                                let payload =
-                                    serde_json::to_string(&files).map_err(E2eError::Json)?;
+                                self.set_input_file_payloads(&files).await
+                            },
+                        ))
+                        .await
+                },
+            )
+            .await
+    }
+    /// Upload generated bytes with explicit filenames and MIME types (64 MiB
+    /// total cap). Multiple files require a multiple input; an empty list clears.
+    pub async fn set_input_file_payloads(&self, files: &[crate::FilePayload]) -> E2eResult<()> {
+        self.page
+            .auto_step(
+                format!("locator.set_input_file_payloads {}", self.selector.raw()),
+                crate::StepCategory::Action,
+                async {
+                    self.page
+                        .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                            format!("locator set_input_file_payloads `{}`", self.selector.raw()),
+                            async {
+                                let payload = crate::file_payload::encode_payloads(files)?;
                                 self.page
                                     .action(&self.selector, "set_input_files", Some(&payload))
                                     .await?;

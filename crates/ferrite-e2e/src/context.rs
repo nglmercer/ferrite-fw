@@ -411,6 +411,7 @@ pub struct BrowserContext {
     download_dir: Option<PathBuf>,
     /// Active tracing session (shared with every page).
     tracing: Arc<Mutex<Option<TracingState>>>,
+    console: Arc<Mutex<Vec<crate::ConsoleMessage>>>,
 }
 
 impl BrowserContext {
@@ -447,7 +448,24 @@ impl BrowserContext {
             live: Arc::new(Mutex::new(live)),
             download_dir,
             tracing: Arc::new(Mutex::new(None)),
+            console: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    /// Console/error history across this context, including closed pages and
+    /// adopted popups. Retained independently of each Page console buffer.
+    pub fn console_messages(&self) -> Vec<crate::ConsoleMessage> {
+        self.console
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+    /// Clear context history; per-page console buffers remain independent.
+    pub fn clear_console_messages(&self) {
+        self.console
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
     }
 
     /// Subscribe before triggering an action to observe context and page events.
@@ -604,7 +622,7 @@ impl BrowserContext {
     ) -> E2eResult<Page> {
         driver.bind_context_cancellation(self.cancellation.clone());
         let target_id = driver.target_id().to_owned();
-        sink.forward_context(&self.events, &target_id);
+        sink.forward_context(&self.events, &target_id, &self.console);
         let mut page = Page::new(
             driver,
             sink,

@@ -26,7 +26,15 @@ use crate::video::{assemble_webm, SpooledFrame, VideoFrame, VideoOptions};
 type ContextEventForwarding = (
     tokio::sync::broadcast::WeakSender<crate::ContextEvent>,
     String,
+    std::sync::Weak<Mutex<Vec<ConsoleMessage>>>,
 );
+
+/// Live request-start/response-header observation, separate from HAR/body capture.
+#[derive(Clone)]
+pub(crate) struct NetworkObservation {
+    pub request: RecordedRequest,
+    pub response: bool,
+}
 
 /// Sinks shared between a page and its driver's background listeners.
 #[derive(Clone)]
@@ -42,6 +50,8 @@ pub struct ConsoleSink {
     /// Recorded network requests (oldest first, capped).
     requests: Arc<Mutex<VecDeque<RecordedRequest>>>,
     active_requests: Arc<Mutex<HashMap<String, NetworkRequest>>>,
+    observed_network: Arc<Mutex<HashMap<String, RecordedRequest>>>,
+    network_events: tokio::sync::broadcast::Sender<NetworkObservation>,
     /// WebSocket request id to URL (resolves frame events to sockets).
     sockets: Arc<Mutex<HashMap<String, String>>>,
     /// Page event broadcast (console, dialogs, network, downloads, popups).
@@ -49,6 +59,7 @@ pub struct ConsoleSink {
     pub(crate) download_dir: Arc<Mutex<Option<PathBuf>>>,
     downloads_emitted: Arc<Mutex<HashMap<PathBuf, (u64, SystemTime)>>>,
     context_events: Arc<Mutex<Option<ContextEventForwarding>>>,
+    page_id: Arc<Mutex<Option<String>>>,
 }
 
 /// Maximum recorded requests per page (oldest dropped first).
@@ -73,8 +84,11 @@ impl ConsoleSink {
             requests: Arc::new(Mutex::new(VecDeque::new())),
             sockets: Arc::new(Mutex::new(HashMap::new())),
             active_requests: Arc::new(Mutex::new(HashMap::new())),
+            observed_network: Arc::new(Mutex::new(HashMap::new())),
+            network_events: tokio::sync::broadcast::channel(MAX_EVENT_BUFFER).0,
             events: tokio::sync::broadcast::channel(MAX_EVENT_BUFFER).0,
             context_events: Arc::new(Mutex::new(None)),
+            page_id: Arc::new(Mutex::new(None)),
             download_dir: Arc::new(Mutex::new(None)),
             downloads_emitted: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -95,7 +109,51 @@ impl ConsoleSink {
         });
     }
 
+    pub(crate) fn subscribe_network(&self) -> tokio::sync::broadcast::Receiver<NetworkObservation> {
+        self.network_events.subscribe()
+    }
+    fn observe_request(&self, request: RecordedRequest) {
+        if let Some(id) = &request.request_id {
+            self.observed_network
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(id.clone(), request.clone());
+        }
+        let _ = self.network_events.send(NetworkObservation {
+            request,
+            response: false,
+        });
+    }
+    fn observe_response(&self, id: &str, response: &Value, headers: Vec<(String, String)>) {
+        let mut records = self
+            .observed_network
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(request) = records.get_mut(id) {
+            if let Some(url) = response["url"].as_str() {
+                request.url = url.into();
+            }
+            request.status = response["status"]
+                .as_u64()
+                .unwrap_or(0)
+                .min(u64::from(u16::MAX)) as u16;
+            request.status_text = response["statusText"].as_str().unwrap_or_default().into();
+            request.mime_type = response["mimeType"].as_str().unwrap_or_default().into();
+            request.response_headers = headers;
+            request.duration_ms = request
+                .started_ms
+                .map(|start| now_ms().saturating_sub(start));
+            let _ = self.network_events.send(NetworkObservation {
+                request: request.clone(),
+                response: true,
+            });
+        }
+    }
     fn finish_network_request(&self, id: &str, failure: Option<(String, Option<bool>)>) {
+        self.observed_network
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(id);
         let request = self
             .active_requests
             .lock()
@@ -135,7 +193,7 @@ impl ConsoleSink {
                 }
             }
         }
-        if let Some((weak, page_id)) = &*self
+        if let Some((weak, page_id, _)) = &*self
             .context_events
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -154,11 +212,16 @@ impl ConsoleSink {
         &self,
         events: &tokio::sync::broadcast::Sender<crate::ContextEvent>,
         page_id: &str,
+        console: &Arc<Mutex<Vec<ConsoleMessage>>>,
     ) {
         *self
             .context_events
             .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some((events.downgrade(), page_id.to_owned()));
+            .unwrap_or_else(|e| e.into_inner()) = Some((
+            events.downgrade(),
+            page_id.to_owned(),
+            Arc::downgrade(console),
+        ));
     }
     fn completed_download(&self, filename: &str, filepath: Option<&str>) {
         let path = filepath.map(PathBuf::from).or_else(|| {
@@ -186,15 +249,30 @@ impl ConsoleSink {
         }
     }
     /// Record a console message (also appended to the trace).
-    pub fn push_console(&self, kind: String, text: String) {
-        if let Ok(mut console) = self.console.lock() {
-            console.push(ConsoleMessage {
-                kind: kind.clone(),
-                text: text.clone(),
-            });
+    pub fn push_console(&self, mut message: ConsoleMessage) {
+        message.page_id = self
+            .page_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        self.console
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(message.clone());
+        if let Some((_, _, context_console)) = &*self
+            .context_events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+        {
+            if let Some(console) = context_console.upgrade() {
+                console
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(message.clone());
+            }
         }
-        self.record("console", format!("{kind}: {text}"));
-        self.emit(PageEvent::Console(ConsoleMessage { kind, text }));
+        self.record("console", format!("{}: {}", message.kind, message.text));
+        self.emit(PageEvent::Console(message));
     }
 
     /// Record an observed dialog (also appended to the trace).
@@ -456,6 +534,7 @@ impl CdpDriver {
         sink: ConsoleSink,
         browser_context: Option<String>,
     ) -> E2eResult<Self> {
+        *sink.page_id.lock().unwrap_or_else(|e| e.into_inner()) = Some(target.clone());
         let driver = Self {
             cdp,
             session,
@@ -546,6 +625,7 @@ impl BidiDriver {
         sink: ConsoleSink,
         user_context: Option<String>,
     ) -> Self {
+        *sink.page_id.lock().unwrap_or_else(|e| e.into_inner()) = Some(context.clone());
         let driver = Self {
             bidi,
             context,
@@ -4832,6 +4912,47 @@ fn is_unsupported_command(error: &E2eError) -> bool {
     }
 }
 
+fn console_metadata(
+    kind: String,
+    text: String,
+    details: &Value,
+    timestamp: &Value,
+) -> ConsoleMessage {
+    let frame = details["stackTrace"]["callFrames"]
+        .as_array()
+        .and_then(|frames| frames.first());
+    let location = frame
+        .and_then(console_location)
+        .or_else(|| console_location(details));
+    let timestamp_ms = timestamp.as_u64().or_else(|| {
+        timestamp
+            .as_f64()
+            .filter(|n| n.is_finite() && *n >= 0.0 && *n < u64::MAX as f64)
+            .map(|n| n as u64)
+    });
+    ConsoleMessage {
+        kind,
+        text,
+        location,
+        timestamp_ms,
+        page_id: None,
+    }
+}
+fn console_location(value: &Value) -> Option<crate::ConsoleLocation> {
+    let url = value["url"].as_str()?.to_owned();
+    if url.is_empty() {
+        return None;
+    }
+    Some(crate::ConsoleLocation {
+        url,
+        line: value["lineNumber"].as_u64()?.min(u64::from(u32::MAX)) as u32,
+        column: value["columnNumber"]
+            .as_u64()
+            .unwrap_or(0)
+            .min(u64::from(u32::MAX)) as u32,
+    })
+}
+
 fn handle_bidi_event(event: &BidiEvent, sink: &ConsoleSink) {
     match event.method.as_str() {
         "log.entryAdded" => {
@@ -4855,7 +4976,12 @@ fn handle_bidi_event(event: &BidiEvent, sink: &ConsoleSink) {
             } else {
                 text.to_string()
             };
-            sink.push_console(kind, text);
+            sink.push_console(console_metadata(
+                kind,
+                text,
+                &event.params,
+                &event.params["timestamp"],
+            ));
         }
         "network.beforeRequestSent" => {
             sink.start_network_request(NetworkRequest {
@@ -4872,8 +4998,40 @@ fn handle_bidi_event(event: &BidiEvent, sink: &ConsoleSink) {
                     .unwrap_or_default()
                     .into(),
             });
+            sink.observe_request(RecordedRequest {
+                method: event.params["request"]["method"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .into(),
+                url: event.params["request"]["url"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .into(),
+                status: 0,
+                headers: bidi_header_pairs(&event.params["request"]["headers"]),
+                post_data: event.params["request"]["postData"]
+                    .as_str()
+                    .map(str::to_owned),
+                started_ms: Some(now_ms()),
+                request_id: event.params["request"]["request"]
+                    .as_str()
+                    .map(str::to_owned),
+                status_text: String::new(),
+                mime_type: String::new(),
+                response_headers: Vec::new(),
+                duration_ms: None,
+                body: None,
+                body_truncated: false,
+            });
         }
         "network.responseStarted" => {
+            sink.observe_response(
+                event.params["request"]["request"]
+                    .as_str()
+                    .unwrap_or_default(),
+                &event.params["response"],
+                bidi_header_pairs(&event.params["response"]["headers"]),
+            );
             sink.emit(PageEvent::Response {
                 request_id: event.params["request"]["request"]
                     .as_str()
@@ -5420,24 +5578,37 @@ fn handle_cdp_event(event: &CdpEvent, sink: &ConsoleSink) {
                         .join(" ")
                 })
                 .unwrap_or_default();
-            sink.push_console(kind, args);
+            sink.push_console(console_metadata(
+                kind,
+                args,
+                &event.params,
+                &event.params["timestamp"],
+            ));
         }
         "Runtime.exceptionThrown" => {
-            let text = event.params["exceptionDetails"]["text"]
+            let details = &event.params["exceptionDetails"];
+            let text = details["exception"]["description"]
                 .as_str()
+                .or_else(|| details["text"].as_str())
                 .unwrap_or("page exception")
-                .to_string();
-            sink.push_console("exception".to_string(), text);
+                .to_owned();
+            sink.push_console(console_metadata(
+                "exception".into(),
+                text,
+                details,
+                &event.params["timestamp"],
+            ));
         }
         "Log.entryAdded" => {
             let entry = &event.params["entry"];
             let kind = entry["level"].as_str().unwrap_or("log").to_string();
             let text = entry["text"].as_str().unwrap_or_default().to_string();
-            sink.push_console(kind, text);
+            sink.push_console(console_metadata(kind, text, entry, &entry["timestamp"]));
         }
         "Network.requestWillBeSent" => {
             let id = event.params["requestId"].as_str().unwrap_or_default();
             if let Some(response) = event.params.get("redirectResponse") {
+                sink.observe_response(id, response, cdp_header_pairs(&response["headers"]));
                 sink.emit(PageEvent::Response {
                     request_id: id.into(),
                     url: response["url"].as_str().unwrap_or_default().into(),
@@ -5455,8 +5626,36 @@ fn handle_cdp_event(event: &CdpEvent, sink: &ConsoleSink) {
                     .unwrap_or_default()
                     .into(),
             });
+            sink.observe_request(RecordedRequest {
+                method: event.params["request"]["method"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .into(),
+                url: event.params["request"]["url"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .into(),
+                status: 0,
+                headers: cdp_header_pairs(&event.params["request"]["headers"]),
+                post_data: event.params["request"]["postData"]
+                    .as_str()
+                    .map(str::to_owned),
+                started_ms: Some(now_ms()),
+                request_id: event.params["requestId"].as_str().map(str::to_owned),
+                status_text: String::new(),
+                mime_type: String::new(),
+                response_headers: Vec::new(),
+                duration_ms: None,
+                body: None,
+                body_truncated: false,
+            });
         }
         "Network.responseReceived" => {
+            sink.observe_response(
+                event.params["requestId"].as_str().unwrap_or_default(),
+                &event.params["response"],
+                cdp_header_pairs(&event.params["response"]["headers"]),
+            );
             sink.emit(PageEvent::Response {
                 request_id: event.params["requestId"]
                     .as_str()
@@ -5743,5 +5942,116 @@ mod network_lifecycle_tests {
         );
         assert!(events.try_recv().is_err());
         assert_eq!(sink.inflight.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_observation_tests {
+    use super::*;
+    #[test]
+    fn console_protocol_metadata_is_preserved_in_events_buffers_and_context_history() {
+        let sink = ConsoleSink::new();
+        *sink.page_id.lock().unwrap() = Some("page-1".into());
+        let context_log = Arc::new(Mutex::new(Vec::new()));
+        let context_events = tokio::sync::broadcast::channel(16).0;
+        sink.forward_context(&context_events, "page-1", &context_log);
+        let mut events = sink.subscribe();
+        handle_cdp_event(
+            &CdpEvent {
+                session: None,
+                method: "Runtime.consoleAPICalled".into(),
+                params: serde_json::json!({"type":"log","args":[{"value":"message"}],"timestamp":1234.9,"stackTrace":{"callFrames":[{"url":"https://app/script.js","lineNumber":0,"columnNumber":7}]}}),
+            },
+            &sink,
+        );
+        let PageEvent::Console(message) = events.try_recv().unwrap() else {
+            panic!("console event");
+        };
+        assert_eq!(message.location.as_ref().unwrap().line, 0);
+        assert_eq!(message.location.as_ref().unwrap().column, 7);
+        assert_eq!(message.timestamp_ms, Some(1234));
+        assert_eq!(message.page_id.as_deref(), Some("page-1"));
+        assert_eq!(
+            context_log.lock().unwrap()[0].timestamp_ms,
+            message.timestamp_ms
+        );
+        handle_bidi_event(
+            &BidiEvent {
+                method: "log.entryAdded".into(),
+                params: serde_json::json!({"type":"javascript","text":"Error: boom","timestamp":4321,"source":{"context":"page-1"},"stackTrace":{"callFrames":[{"url":"https://app/error.js","lineNumber":4,"columnNumber":2}]}}),
+            },
+            &sink,
+        );
+        let PageEvent::Console(error) = events.try_recv().unwrap() else {
+            panic!("console error event");
+        };
+        assert_eq!(error.kind, "exception");
+        assert_eq!(error.location.unwrap().url, "https://app/error.js");
+        assert_eq!(error.timestamp_ms, Some(4321));
+        let unknown = console_metadata("log".into(), "unknown".into(), &Value::Null, &Value::Null);
+        assert!(unknown.location.is_none() && unknown.timestamp_ms.is_none());
+        let legacy: ConsoleMessage =
+            serde_json::from_value(serde_json::json!({"kind":"log","text":"old"})).unwrap();
+        assert!(
+            legacy.location.is_none() && legacy.page_id.is_none() && legacy.timestamp_ms.is_none()
+        );
+    }
+    #[test]
+    fn live_network_observations_precede_capture_and_keep_redirect_identity() {
+        let sink = ConsoleSink::new();
+        let mut events = sink.subscribe_network();
+        let cdp = |method: &str, params| CdpEvent {
+            session: None,
+            method: method.into(),
+            params,
+        };
+        handle_cdp_event(
+            &cdp(
+                "Network.requestWillBeSent",
+                serde_json::json!({"requestId":"r","request":{"method":"POST","url":"https://app/old","headers":{"x-key":"yes"},"postData":"body"}}),
+            ),
+            &sink,
+        );
+        let request = events.try_recv().unwrap();
+        assert!(!request.response);
+        assert_eq!(request.request.status, 0);
+        assert_eq!(request.request.post_data.as_deref(), Some("body"));
+        assert!(sink.requests().is_empty());
+        handle_cdp_event(
+            &cdp(
+                "Network.requestWillBeSent",
+                serde_json::json!({"requestId":"r","redirectResponse":{"url":"https://app/old","status":302,"headers":{"location":"https://app/new"}},"request":{"method":"GET","url":"https://app/new"}}),
+            ),
+            &sink,
+        );
+        let redirect = events.try_recv().unwrap();
+        assert!(redirect.response);
+        assert_eq!(redirect.request.status, 302);
+        assert_eq!(redirect.request.method, "POST");
+        let next = events.try_recv().unwrap();
+        assert!(!next.response);
+        assert_eq!(next.request.method, "GET");
+        handle_cdp_event(
+            &cdp(
+                "Network.responseReceived",
+                serde_json::json!({"requestId":"r","response":{"url":"https://app/new","status":200,"headers":{"x-reply":"ready"}}}),
+            ),
+            &sink,
+        );
+        let response = events.try_recv().unwrap();
+        assert!(response.response);
+        assert_eq!(response.request.request_id.as_deref(), Some("r"));
+        assert_eq!(
+            response.request.response_headers,
+            [("x-reply".into(), "ready".into())]
+        );
+        handle_cdp_event(
+            &cdp(
+                "Network.loadingFinished",
+                serde_json::json!({"requestId":"r"}),
+            ),
+            &sink,
+        );
+        assert!(sink.observed_network.lock().unwrap().is_empty());
     }
 }
