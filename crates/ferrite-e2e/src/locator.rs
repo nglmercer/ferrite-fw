@@ -1,9 +1,11 @@
 //! Selectors (`css`, `text=`, `xpath=`, `role=`) and locator actions.
 
+use std::path::Path;
 use std::time::Duration;
 
 use serde_json::Value;
 
+use crate::driver::base64_encode;
 use crate::error::{E2eError, E2eResult};
 use crate::page::{ClickOptions, ElementState, Page};
 
@@ -16,6 +18,7 @@ pub struct Selector {
     pick: Pick,
     scope: Option<Box<Selector>>,
     has_text: Vec<String>,
+    strict: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,6 +69,7 @@ impl Selector {
             pick: Pick::First,
             scope: None,
             has_text: Vec::new(),
+            strict: false,
         }
     }
 
@@ -329,13 +333,55 @@ impl Selector {
                  el.value = {arg}; {fire} \
                  return {{ ok: el.value === {arg} }};"
             ),
+            "set_input_files" => &format!(
+                "if (!(el instanceof HTMLInputElement) || el.type !== 'file') \
+                 return {{ ok: false, error: 'not a file input' }}; \
+                 const picked = JSON.parse({arg}).map(f => {{ \
+                 const bin = atob(f.data); \
+                 const bytes = new Uint8Array(bin.length); \
+                 for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i); \
+                 return new File([bytes], f.name, {{ type: f.mime }}); }}); \
+                 const dt = new DataTransfer(); \
+                 picked.forEach(f => dt.items.add(f)); \
+                 el.files = dt.files; {fire} \
+                 return {{ ok: true }};"
+            ),
             _ => "return { ok: false, error: 'unknown action' };",
         };
+        let guard = if self.strict {
+            "if (els.length !== 1) return { ok: false, \
+             error: 'strict mode violation: expected exactly one match, got ' + els.length }; "
+        } else {
+            ""
+        };
         format!(
-            "(() => {{ const els = {resolve}; const el = els[0]; \
+            "(() => {{ const els = {resolve}; {guard}const el = els[0]; \
              if (!el) return {{ ok: false, error: 'no matching element' }}; \
              {body} }})()"
         )
+    }
+}
+
+/// MIME type guess from a file name (defaults to octet-stream).
+fn guess_mime(name: &str) -> &'static str {
+    match name
+        .rsplit('.')
+        .next()
+        .unwrap_or_default()
+        .to_lowercase()
+        .as_str()
+    {
+        "txt" | "text" | "md" | "csv" => "text/plain",
+        "html" | "htm" => "text/html",
+        "json" => "application/json",
+        "pdf" => "application/pdf",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "svg" => "image/svg+xml",
+        "webp" => "image/webp",
+        "zip" => "application/zip",
+        _ => "application/octet-stream",
     }
 }
 
@@ -408,6 +454,14 @@ pub struct Locator {
     selector: Selector,
 }
 
+impl std::fmt::Debug for Locator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Locator")
+            .field("selector", &self.selector)
+            .finish()
+    }
+}
+
 impl Locator {
     pub(crate) fn new(page: Page, selector: Selector) -> Self {
         Self { page, selector }
@@ -458,6 +512,20 @@ impl Locator {
         let mut selector = self.selector.clone();
         selector.pick = pick;
         selector.raw = format!("{} >> {label}", selector.raw);
+        Self {
+            page: self.page.clone(),
+            selector,
+        }
+    }
+
+    /// Fail actions unless exactly one element matches.
+    ///
+    /// Applies to actions and getters; `count()` still reports all matches.
+    #[must_use]
+    pub fn strict(&self) -> Self {
+        let mut selector = self.selector.clone();
+        selector.strict = true;
+        selector.raw = format!("{} >> strict", selector.raw);
         Self {
             page: self.page.clone(),
             selector,
@@ -518,6 +586,7 @@ impl Locator {
             pick: Pick::First,
             scope: None,
             has_text: Vec::new(),
+            strict: false,
         };
         Ok(Self {
             page: self.page.clone(),
@@ -778,6 +847,40 @@ impl Locator {
         Ok(())
     }
 
+    /// Set files on a file input (an empty list clears it). Files are read
+    /// from disk (64 MiB total cap) and injected via `DataTransfer`, firing
+    /// `input`/`change`.
+    pub async fn set_input_files<P: AsRef<Path>>(&self, paths: &[P]) -> E2eResult<()> {
+        let mut files = Vec::with_capacity(paths.len());
+        let mut total = 0usize;
+        for path in paths {
+            let path = path.as_ref();
+            let bytes = std::fs::read(path).map_err(|error| {
+                E2eError::Config(format!("cannot read {}: {error}", path.display()))
+            })?;
+            total += bytes.len();
+            if total > 64 * 1024 * 1024 {
+                return Err(E2eError::Config(
+                    "set_input_files payload exceeds 64 MiB".to_string(),
+                ));
+            }
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            files.push(serde_json::json!({
+                "name": name,
+                "mime": guess_mime(&name),
+                "data": base64_encode(&bytes),
+            }));
+        }
+        let payload = serde_json::to_string(&files).map_err(E2eError::Json)?;
+        self.page
+            .action(&self.selector, "set_input_files", Some(&payload))
+            .await?;
+        Ok(())
+    }
+
     /// Check a checkbox/radio.
     pub async fn check(&self) -> E2eResult<()> {
         self.page
@@ -817,8 +920,14 @@ impl Locator {
     /// Returns [`Value::Null`] when nothing matches.
     async fn eval_first(&self, projection: &str) -> E2eResult<Value> {
         let resolve = self.selector.resolve_js();
+        let guard = if self.selector.strict {
+            "if (els.length !== 1) throw new Error('strict mode violation: \
+             expected exactly one match, got ' + els.length); "
+        } else {
+            ""
+        };
         let expression = format!(
-            "(() => {{ const els = {resolve}; const el = els[0]; \
+            "(() => {{ const els = {resolve}; {guard}const el = els[0]; \
              if (!el) return null; return ({projection}); }})()"
         );
         self.page.evaluate_value(&expression).await
@@ -854,6 +963,55 @@ impl Locator {
         } else {
             Ok(Some(value))
         }
+    }
+
+    /// Read innerHTML (`None` when the element is missing).
+    pub async fn inner_html(&self) -> E2eResult<Option<String>> {
+        let value = self.eval_first("el.innerHTML").await?;
+        Ok(value.as_str().map(str::to_string))
+    }
+
+    /// Whether the first match intersects the viewport.
+    pub async fn in_viewport(&self) -> E2eResult<bool> {
+        let value = self
+            .eval_first(
+                "(() => { const r = el.getBoundingClientRect(); \
+                 return r.bottom > 0 && r.right > 0 \
+                 && r.top < innerHeight && r.left < innerWidth; })()",
+            )
+            .await?;
+        Ok(value.as_bool().unwrap_or(false))
+    }
+
+    /// Accessible name (`aria-label`, `alt`, then text).
+    ///
+    /// An approximation of the full accessible-name computation.
+    pub async fn accessible_name(&self) -> E2eResult<Option<String>> {
+        let value = self
+            .eval_first(
+                "(el.getAttribute('aria-label') \
+                 || el.getAttribute('alt') \
+                 || (el.textContent || '').trim() || null)",
+            )
+            .await?;
+        Ok(value.as_str().map(str::to_string))
+    }
+
+    /// Accessible description (`aria-describedby` targets, then `title`).
+    ///
+    /// An approximation of the full accessible-description computation.
+    pub async fn accessible_description(&self) -> E2eResult<Option<String>> {
+        let value = self
+            .eval_first(
+                "(() => { const ids = (el.getAttribute('aria-describedby') || '') \
+                 .split(/\\s+/).filter(Boolean); \
+                 const text = ids.map(id => document.getElementById(id)) \
+                 .filter(Boolean).map(target => target.textContent.trim()) \
+                 .join(' '); \
+                 return text || el.getAttribute('title') || null; })()",
+            )
+            .await?;
+        Ok(value.as_str().map(str::to_string))
     }
 }
 
@@ -978,6 +1136,19 @@ mod tests {
     }
 
     #[test]
+    fn strict_guards_actions() {
+        let mut selector = Selector::parse(".a".to_string());
+        selector.strict = true;
+        assert!(selector
+            .action_expression("click", None)
+            .contains("strict mode violation"));
+        let loose = Selector::parse(".a".to_string());
+        assert!(!loose
+            .action_expression("click", None)
+            .contains("strict mode violation"));
+    }
+
+    #[test]
     fn combinators_resolve() {
         let combo = Selector {
             raw: "(a | b)".to_string(),
@@ -989,6 +1160,7 @@ mod tests {
             pick: Pick::First,
             scope: None,
             has_text: Vec::new(),
+            strict: false,
         };
         let expression = combo.resolve_js();
         assert!(expression.contains("new Set"));
@@ -1004,6 +1176,7 @@ mod tests {
             pick: Pick::First,
             scope: None,
             has_text: Vec::new(),
+            strict: false,
         };
         let expression = both.resolve_js();
         assert!(expression.contains("keep.has(el)"));

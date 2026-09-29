@@ -5,7 +5,7 @@
 //! interception mechanisms) stay inside the two drivers.
 
 use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -16,8 +16,8 @@ use crate::bidi::{bytes_to_string, remote_to_json, BidiConnection, BidiEvent};
 use crate::cdp::{CdpConnection, CdpEvent};
 use crate::error::{E2eError, E2eResult};
 use crate::page::{
-    ColorScheme, ConsoleMessage, Cookie, DialogInfo, ElementRect, LoadState, RecordedRequest,
-    ReducedMotion, RouteAction, RouteRule, TraceEntry,
+    ColorScheme, ConsoleMessage, Cookie, DialogInfo, ElementRect, FrameInfo, LoadState,
+    RecordedRequest, ReducedMotion, RouteAction, RouteRule, TraceEntry,
 };
 use crate::video::{assemble_webm, SpooledFrame, VideoFrame, VideoOptions};
 
@@ -342,11 +342,51 @@ impl Driver {
         }
     }
 
+    /// Emulate a device (Chromium: metrics + touch; Firefox: unsupported).
+    pub async fn emulate_device(&self, device: crate::page::DeviceDescriptor) -> E2eResult<()> {
+        match self {
+            Self::Cdp(driver) => driver.emulate_device(device).await,
+            Self::Bidi(driver) => driver.emulate_device(device).await,
+        }
+    }
+
     /// Override the user agent.
     pub async fn set_user_agent(&self, user_agent: &str) -> E2eResult<()> {
         match self {
             Self::Cdp(driver) => driver.set_user_agent(user_agent).await,
             Self::Bidi(driver) => driver.set_user_agent(user_agent).await,
+        }
+    }
+
+    /// Direct downloads to `dir` (Chromium; Firefox is launch-time only).
+    pub async fn set_download_dir(&self, dir: &Path) -> E2eResult<()> {
+        match self {
+            Self::Cdp(driver) => driver.set_download_dir(dir).await,
+            Self::Bidi(driver) => driver.set_download_dir(dir).await,
+        }
+    }
+
+    /// Run `source` before page scripts in every future document.
+    pub async fn add_init_script(&self, source: &str) -> E2eResult<()> {
+        match self {
+            Self::Cdp(driver) => driver.add_init_script(source).await,
+            Self::Bidi(driver) => driver.add_init_script(source).await,
+        }
+    }
+
+    /// List frames (main frame first).
+    pub async fn frames(&self) -> E2eResult<Vec<FrameInfo>> {
+        match self {
+            Self::Cdp(driver) => driver.frames().await,
+            Self::Bidi(driver) => driver.frames().await,
+        }
+    }
+
+    /// Evaluate in a frame by listing id.
+    pub async fn frame_evaluate(&self, frame_id: &str, expression: &str) -> E2eResult<Value> {
+        match self {
+            Self::Cdp(driver) => driver.frame_evaluate(frame_id, expression).await,
+            Self::Bidi(driver) => driver.frame_evaluate(frame_id, expression).await,
         }
     }
 
@@ -371,6 +411,14 @@ impl Driver {
         match self {
             Self::Cdp(driver) => driver.set_cookie(name, value, url).await,
             Self::Bidi(driver) => driver.set_cookie(name, value, url).await,
+        }
+    }
+
+    /// Set full-fidelity cookies (domain defaults to `url`'s host).
+    pub async fn add_cookies(&self, cookies: &[Cookie], url: &str) -> E2eResult<()> {
+        match self {
+            Self::Cdp(driver) => driver.add_cookies(cookies, url).await,
+            Self::Bidi(driver) => driver.add_cookies(cookies, url).await,
         }
     }
 
@@ -451,6 +499,14 @@ impl Driver {
         match self {
             Self::Cdp(driver) => driver.key_up(key).await,
             Self::Bidi(driver) => driver.key_up(key).await,
+        }
+    }
+
+    /// Tap at coordinates with the touchscreen.
+    pub async fn touchscreen_tap(&self, x: f64, y: f64) -> E2eResult<()> {
+        match self {
+            Self::Cdp(driver) => driver.touchscreen_tap(x, y).await,
+            Self::Bidi(driver) => driver.touchscreen_tap(x, y).await,
         }
     }
 
@@ -754,16 +810,23 @@ impl CdpDriver {
     }
 
     async fn evaluate(&self, expression: &str) -> E2eResult<Value> {
-        let result = self
-            .call(
-                "Runtime.evaluate",
-                serde_json::json!({
-                    "expression": expression,
-                    "returnByValue": true,
-                    "awaitPromise": true,
-                }),
-            )
-            .await?;
+        self.evaluate_with_context(expression, None).await
+    }
+
+    async fn evaluate_with_context(
+        &self,
+        expression: &str,
+        context_id: Option<i64>,
+    ) -> E2eResult<Value> {
+        let mut params = serde_json::json!({
+            "expression": expression,
+            "returnByValue": true,
+            "awaitPromise": true,
+        });
+        if let Some(id) = context_id {
+            params["contextId"] = Value::from(id);
+        }
+        let result = self.call("Runtime.evaluate", params).await?;
         if let Some(exception) = result.get("exceptionDetails") {
             let text = exception
                 .get("text")
@@ -779,6 +842,24 @@ impl CdpDriver {
             .and_then(|r| r.get("value"))
             .cloned()
             .unwrap_or(Value::Null))
+    }
+
+    async fn frames(&self) -> E2eResult<Vec<FrameInfo>> {
+        let tree = self.call("Page.getFrameTree", Value::Null).await?;
+        let mut out = Vec::new();
+        collect_cdp_frames(&tree["frameTree"], &mut out);
+        Ok(out)
+    }
+
+    async fn frame_evaluate(&self, frame_id: &str, expression: &str) -> E2eResult<Value> {
+        let world = self
+            .call(
+                "Page.createIsolatedWorld",
+                serde_json::json!({ "frameId": frame_id, "worldName": "ferrite" }),
+            )
+            .await?;
+        let context_id = world.get("executionContextId").and_then(Value::as_i64);
+        self.evaluate_with_context(expression, context_id).await
     }
 
     async fn evaluate_string(&self, expression: &str) -> E2eResult<String> {
@@ -861,10 +942,54 @@ impl CdpDriver {
         Ok(())
     }
 
+    async fn emulate_device(&self, device: crate::page::DeviceDescriptor) -> E2eResult<()> {
+        self.call(
+            "Emulation.setDeviceMetricsOverride",
+            serde_json::json!({
+                "width": device.viewport.width, "height": device.viewport.height,
+                "deviceScaleFactor": device.device_scale_factor,
+                "mobile": device.mobile,
+            }),
+        )
+        .await?;
+        let mut touch = serde_json::json!({ "enabled": device.has_touch });
+        if device.has_touch {
+            touch["maxTouchPoints"] = serde_json::Value::from(5);
+        }
+        self.call("Emulation.setTouchEmulationEnabled", touch)
+            .await?;
+        Ok(())
+    }
+
     async fn set_user_agent(&self, user_agent: &str) -> E2eResult<()> {
         self.call(
             "Emulation.setUserAgentOverride",
             serde_json::json!({ "userAgent": user_agent }),
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn set_download_dir(&self, dir: &Path) -> E2eResult<()> {
+        std::fs::create_dir_all(dir)?;
+        self.cdp
+            .call(
+                None,
+                "Browser.setDownloadBehavior",
+                serde_json::json!({
+                    "behavior": "allow",
+                    "downloadPath": dir.to_string_lossy(),
+                }),
+                self.timeout,
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn add_init_script(&self, source: &str) -> E2eResult<()> {
+        self.call(
+            "Page.addScriptToEvaluateOnNewDocument",
+            serde_json::json!({ "source": source }),
         )
         .await?;
         Ok(())
@@ -895,6 +1020,28 @@ impl CdpDriver {
             serde_json::json!({ "name": name, "value": value, "url": url }),
         )
         .await?;
+        Ok(())
+    }
+
+    async fn add_cookies(&self, cookies: &[Cookie], url: &str) -> E2eResult<()> {
+        for cookie in cookies {
+            let mut params = serde_json::json!({
+                "name": cookie.name, "value": cookie.value, "url": url,
+            });
+            if let Some(path) = &cookie.path {
+                params["path"] = Value::String(path.clone());
+            }
+            if cookie.secure {
+                params["secure"] = Value::Bool(true);
+            }
+            if cookie.http_only {
+                params["httpOnly"] = Value::Bool(true);
+            }
+            if let Some(expires) = cookie.expires.filter(|expires| *expires >= 0) {
+                params["expires"] = Value::from(expires);
+            }
+            self.call("Network.setCookie", params).await?;
+        }
         Ok(())
     }
 
@@ -1042,6 +1189,21 @@ impl CdpDriver {
             params["text"] = Value::String(key.to_string());
         }
         self.call("Input.dispatchKeyEvent", params).await?;
+        Ok(())
+    }
+
+    async fn touchscreen_tap(&self, x: f64, y: f64) -> E2eResult<()> {
+        self.bring_to_front().await?;
+        for (kind, points) in [
+            ("touchStart", serde_json::json!([{ "x": x, "y": y }])),
+            ("touchEnd", serde_json::json!([])),
+        ] {
+            self.call(
+                "Input.dispatchTouchEvent",
+                serde_json::json!({ "type": kind, "touchPoints": points }),
+            )
+            .await?;
+        }
         Ok(())
     }
 
@@ -1203,7 +1365,9 @@ impl CdpDriver {
                     .as_str()
                     .unwrap_or_default()
                     .to_string();
-                let (method, params) = match set.matches(&url).first().map(|i| &rules[*i].action) {
+                let action = set.matches(&url).first().map(|i| &rules[*i].action);
+                let is_override = matches!(action, Some(RouteAction::ContinueWith { .. }));
+                let (method, params) = match action {
                     Some(RouteAction::Abort) => (
                         "Fetch.failRequest",
                         serde_json::json!({
@@ -1226,12 +1390,51 @@ impl CdpDriver {
                             ],
                         }),
                     ),
+                    Some(RouteAction::ContinueWith {
+                        url,
+                        method,
+                        headers,
+                        body,
+                    }) => {
+                        let mut params = serde_json::json!({ "requestId": request_id });
+                        if let Some(url) = url {
+                            params["url"] = Value::String(url.clone());
+                        }
+                        if let Some(method) = method {
+                            params["method"] = Value::String(method.clone());
+                        }
+                        if let Some(headers) = headers {
+                            params["headers"] = Value::Array(
+                                headers
+                                    .iter()
+                                    .map(|(name, value)| {
+                                        serde_json::json!({ "name": name, "value": value })
+                                    })
+                                    .collect(),
+                            );
+                        }
+                        if let Some(body) = body {
+                            params["postData"] = Value::String(base64_encode(body));
+                        }
+                        ("Fetch.continueRequest", params)
+                    }
                     _ => (
                         "Fetch.continueRequest",
                         serde_json::json!({ "requestId": request_id }),
                     ),
                 };
-                let _ = cdp.call(Some(&session), method, params, timeout).await;
+                let result = cdp.call(Some(&session), method, params, timeout).await;
+                if result.is_err() && is_override {
+                    // Rejected overrides must not hang the page: let it through.
+                    let _ = cdp
+                        .call(
+                            Some(&session),
+                            "Fetch.continueRequest",
+                            serde_json::json!({ "requestId": event.params["requestId"] }),
+                            timeout,
+                        )
+                        .await;
+                }
             }
         });
         Ok(handle.abort_handle())
@@ -1781,13 +1984,40 @@ impl BidiDriver {
     }
 
     async fn evaluate(&self, expression: &str) -> E2eResult<Value> {
+        self.evaluate_in_context(expression, self.context.as_str())
+            .await
+    }
+
+    async fn frames(&self) -> E2eResult<Vec<FrameInfo>> {
+        let tree = self
+            .bidi
+            .call(
+                "browsingContext.getTree",
+                serde_json::json!({ "root": self.context }),
+                self.timeout,
+            )
+            .await?;
+        let mut out = Vec::new();
+        if let Some(contexts) = tree.get("contexts").and_then(Value::as_array) {
+            for context in contexts {
+                collect_bidi_frames(context, &mut out);
+            }
+        }
+        Ok(out)
+    }
+
+    async fn frame_evaluate(&self, frame_id: &str, expression: &str) -> E2eResult<Value> {
+        self.evaluate_in_context(expression, frame_id).await
+    }
+
+    async fn evaluate_in_context(&self, expression: &str, context: &str) -> E2eResult<Value> {
         let result = self
             .bidi
             .call(
                 "script.evaluate",
                 serde_json::json!({
                     "expression": expression,
-                    "target": { "context": self.context },
+                    "target": { "context": context },
                     "awaitPromise": true,
                 }),
                 self.timeout,
@@ -1866,6 +2096,38 @@ impl BidiDriver {
         ))
     }
 
+    async fn set_download_dir(&self, _dir: &Path) -> E2eResult<()> {
+        Err(E2eError::Config(
+            "firefox download dir is launch-wide (BiDi has no per-page override); \
+             set LaunchOptions::download_dir or [e2e] download_dir"
+                .to_string(),
+        ))
+    }
+
+    async fn add_init_script(&self, source: &str) -> E2eResult<()> {
+        // BiDi preload scripts must be function declarations.
+        let function = format!("() => {{ {source} }}");
+        self.bidi
+            .call(
+                "script.addPreloadScript",
+                serde_json::json!({
+                    "functionDeclaration": function,
+                    "contexts": [self.context],
+                }),
+                self.timeout,
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn emulate_device(&self, _device: crate::page::DeviceDescriptor) -> E2eResult<()> {
+        Err(E2eError::Config(
+            "emulate_device is only supported on Chromium \
+             (Firefox BiDi has no device emulation)"
+                .to_string(),
+        ))
+    }
+
     async fn set_ignore_https_errors(&self, ignore: bool) -> E2eResult<()> {
         if !ignore || self.insecure_certs {
             return Ok(());
@@ -1899,6 +2161,9 @@ impl BidiDriver {
                     path: cookie["path"].as_str().map(str::to_string),
                     http_only: cookie["httpOnly"].as_bool().unwrap_or(false),
                     secure: cookie["secure"].as_bool().unwrap_or(false),
+                    expires: cookie["expiry"]
+                        .as_i64()
+                        .or_else(|| cookie["expiry"].as_str().and_then(|raw| raw.parse().ok())),
                 });
             }
         }
@@ -1924,6 +2189,40 @@ impl BidiDriver {
                 self.timeout,
             )
             .await?;
+        Ok(())
+    }
+
+    async fn add_cookies(&self, cookies: &[Cookie], url: &str) -> E2eResult<()> {
+        let host = url_host(url);
+        for cookie in cookies {
+            let mut params = serde_json::json!({
+                "name": cookie.name,
+                "value": { "type": "string", "value": cookie.value },
+                "path": cookie.path.as_deref().unwrap_or("/"),
+            });
+            if let Some(domain) = cookie.domain.as_deref().or(host.as_deref()) {
+                params["domain"] = Value::String(domain.to_string());
+            }
+            if cookie.secure {
+                params["secure"] = Value::Bool(true);
+            }
+            if cookie.http_only {
+                params["httpOnly"] = Value::Bool(true);
+            }
+            if let Some(expiry) = cookie.expires.filter(|expiry| *expiry >= 0) {
+                params["expiry"] = Value::from(expiry);
+            }
+            self.bidi
+                .call(
+                    "storage.setCookie",
+                    serde_json::json!({
+                        "cookie": params,
+                        "partition": { "type": "context", "context": self.context },
+                    }),
+                    self.timeout,
+                )
+                .await?;
+        }
         Ok(())
     }
 
@@ -2063,6 +2362,20 @@ impl BidiDriver {
         .await
     }
 
+    async fn touchscreen_tap(&self, x: f64, y: f64) -> E2eResult<()> {
+        self.bring_to_front().await?;
+        self.perform(serde_json::json!([{
+            "type": "pointer", "id": "ferrite-touch",
+            "parameters": { "pointerType": "touch" },
+            "actions": [
+                { "type": "pointerMove", "x": x, "y": y },
+                { "type": "pointerDown", "button": 0 },
+                { "type": "pointerUp", "button": 0 },
+            ],
+        }]))
+        .await
+    }
+
     async fn grant_permissions(&self, permissions: &[&str]) -> E2eResult<()> {
         let origin = self
             .evaluate("location.origin")
@@ -2164,6 +2477,18 @@ impl BidiDriver {
         let set = builder
             .build()
             .map_err(|error| E2eError::Config(error.to_string()))?;
+        // Firefox accepts `url` overrides but aborts the redirected request,
+        // so fail fast instead of breaking the page's fetch.
+        if rules
+            .iter()
+            .any(|rule| matches!(&rule.action, RouteAction::ContinueWith { url: Some(_), .. }))
+        {
+            return Err(E2eError::Config(
+                "continue_with url overrides are not supported on Firefox \
+                 (BiDi aborts the redirected request)"
+                    .to_string(),
+            ));
+        }
         // Firefox rejects `*` in URL patterns, so intercept everything with
         // the empty match-all pattern and filter client-side with globset.
         let added = self
@@ -2201,7 +2526,9 @@ impl BidiDriver {
                     .as_str()
                     .unwrap_or_default()
                     .to_string();
-                let (method, params) = match set.matches(&url).first().map(|i| &rules[*i].action) {
+                let action = set.matches(&url).first().map(|i| &rules[*i].action);
+                let is_override = matches!(action, Some(RouteAction::ContinueWith { .. }));
+                let (method, params) = match action {
                     Some(RouteAction::Abort) => (
                         "network.failRequest",
                         serde_json::json!({ "request": request }),
@@ -2222,12 +2549,69 @@ impl BidiDriver {
                             "body": { "type": "base64", "value": base64_encode(body.as_bytes()) },
                         }),
                     ),
+                    Some(RouteAction::ContinueWith {
+                        url,
+                        method,
+                        headers,
+                        body,
+                    }) => {
+                        let mut params = serde_json::json!({ "request": request });
+                        if let Some(url) = url {
+                            params["url"] = Value::String(url.clone());
+                        }
+                        if let Some(method) = method {
+                            params["method"] = Value::String(method.clone());
+                        }
+                        // Firefox keeps a stale Content-Length when only the body
+                        // is replaced, truncating the server-side read; carry the
+                        // right length (over the user's set, else the original's).
+                        let effective = match (headers, body) {
+                            (Some(user), Some(replacement)) => {
+                                Some(with_content_length(user.clone(), replacement.len()))
+                            }
+                            (None, Some(replacement)) => Some(with_content_length(
+                                bidi_header_pairs(&event.params["request"]["headers"]),
+                                replacement.len(),
+                            )),
+                            (Some(user), None) => Some(user.clone()),
+                            (None, None) => None,
+                        };
+                        if let Some(list) = effective {
+                            params["headers"] = Value::Array(
+                                list.iter()
+                                    .map(|(name, value)| {
+                                        serde_json::json!({
+                                            "name": name,
+                                            "value": { "type": "string", "value": value },
+                                        })
+                                    })
+                                    .collect(),
+                            );
+                        }
+                        if let Some(body) = body {
+                            params["body"] = serde_json::json!({
+                                "type": "base64",
+                                "value": base64_encode(body),
+                            });
+                        }
+                        ("network.continueRequest", params)
+                    }
                     _ => (
                         "network.continueRequest",
                         serde_json::json!({ "request": request }),
                     ),
                 };
-                let _ = bidi.call(method, params, timeout).await;
+                let result = bidi.call(method, params, timeout).await;
+                if result.is_err() && is_override {
+                    // Rejected overrides must not hang the page: let it through.
+                    let _ = bidi
+                        .call(
+                            "network.continueRequest",
+                            serde_json::json!({ "request": event.params["request"]["request"] }),
+                            timeout,
+                        )
+                        .await;
+                }
             }
         });
         Ok(handle.abort_handle())
@@ -2719,6 +3103,69 @@ fn decode_base64(data: &str) -> Result<Vec<u8>, String> {
     base64::engine::general_purpose::STANDARD
         .decode(data)
         .map_err(|error| error.to_string())
+}
+
+/// Collect frames from a CDP frame tree (main frame first, depth-first).
+fn collect_cdp_frames(tree: &Value, out: &mut Vec<FrameInfo>) {
+    let frame = &tree["frame"];
+    out.push(FrameInfo {
+        id: frame["id"].as_str().unwrap_or_default().to_string(),
+        name: frame["name"].as_str().unwrap_or_default().to_string(),
+        url: frame["url"].as_str().unwrap_or_default().to_string(),
+    });
+    if let Some(children) = tree.get("childFrames").and_then(Value::as_array) {
+        for child in children {
+            collect_cdp_frames(child, out);
+        }
+    }
+}
+
+/// Collect frames from a BiDi context tree (names are not reported).
+fn collect_bidi_frames(node: &Value, out: &mut Vec<FrameInfo>) {
+    out.push(FrameInfo {
+        id: node["context"].as_str().unwrap_or_default().to_string(),
+        name: String::new(),
+        url: node["url"].as_str().unwrap_or_default().to_string(),
+    });
+    if let Some(children) = node.get("children").and_then(Value::as_array) {
+        for child in children {
+            collect_bidi_frames(child, out);
+        }
+    }
+}
+
+/// Header pairs from a BiDi request object (base64 values decoded lossily).
+fn bidi_header_pairs(headers: &Value) -> Vec<(String, String)> {
+    headers
+        .as_array()
+        .map(|list| {
+            list.iter()
+                .filter_map(|header| {
+                    let name = header.get("name")?.as_str()?.to_string();
+                    let value = header.get("value")?;
+                    let text = match value.get("type")?.as_str()? {
+                        "base64" => decode_base64(value.get("value")?.as_str()?)
+                            .ok()
+                            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())?,
+                        _ => value.get("value")?.as_str()?.to_string(),
+                    };
+                    Some((name, text))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Set (or add) Content-Length on a header list.
+fn with_content_length(mut headers: Vec<(String, String)>, len: usize) -> Vec<(String, String)> {
+    match headers
+        .iter_mut()
+        .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+    {
+        Some(slot) => slot.1 = len.to_string(),
+        None => headers.push(("Content-Length".to_string(), len.to_string())),
+    }
+    headers
 }
 
 /// Unique frame spool directory inside `dir`.

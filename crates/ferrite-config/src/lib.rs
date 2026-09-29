@@ -407,6 +407,8 @@ pub struct E2eConfig {
     pub proxy_server: Option<String>,
     /// Accept insecure TLS certificates session-wide.
     pub ignore_https_errors: bool,
+    /// Download directory (unset = browser default).
+    pub download_dir: Option<String>,
     /// Base URL for relative navigations (`page.goto("/")`).
     /// Defaults to the booted dev server or `FERRITE_E2E_BASE_URL`.
     pub base_url: Option<String>,
@@ -418,7 +420,7 @@ pub struct E2eConfig {
     pub retries: u32,
     /// Parallel test workers.
     pub workers: usize,
-    /// Reporter (`list`, `json`, `junit`, comma-separated).
+    /// Reporter (`list`, `json`, `junit`, `html`, comma-separated).
     pub reporter: String,
     /// Artifact directory (screenshots, traces, reports).
     pub output_dir: String,
@@ -446,6 +448,7 @@ impl Default for E2eConfig {
             user_agent: None,
             proxy_server: None,
             ignore_https_errors: false,
+            download_dir: None,
             base_url: None,
             timeout_ms: 30_000,
             expect_timeout_ms: 5_000,
@@ -717,6 +720,9 @@ fn merge_e2e(mut base: E2eConfig, over: E2eConfig) -> E2eConfig {
     }
     if over.ignore_https_errors {
         base.ignore_https_errors = true;
+    }
+    if over.download_dir.is_some() {
+        base.download_dir = over.download_dir;
     }
     if over.base_url.is_some() {
         base.base_url = over.base_url;
@@ -1066,10 +1072,14 @@ mod tests {
     #[test]
     fn merge_config_unions_prefixes_and_proxies() {
         let mut base = UserConfig::default();
-        base.server.proxy.insert("/a".to_string(), "http://a".to_string());
+        base.server
+            .proxy
+            .insert("/a".to_string(), "http://a".to_string());
         let mut over = UserConfig::default();
         over.env.prefix = vec!["APP_".to_string()];
-        over.server.proxy.insert("/b".to_string(), "http://b".to_string());
+        over.server
+            .proxy
+            .insert("/b".to_string(), "http://b".to_string());
         let merged = merge_config(base, over);
         assert!(merged.env.prefix.contains(&"APP_".to_string()));
         assert!(merged.env.prefix.contains(&"FERRITE_".to_string()));

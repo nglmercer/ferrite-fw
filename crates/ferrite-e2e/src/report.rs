@@ -1,4 +1,4 @@
-//! Test results and reporters (`list`, `json`, `junit`).
+//! Test results and reporters (`list`, `json`, `junit`, `html`).
 
 use serde::{Deserialize, Serialize};
 
@@ -176,6 +176,62 @@ impl TestReport {
         out.push_str("</testsuite>\n");
         out
     }
+
+    /// Render the `html` reporter output (single self-contained file).
+    #[must_use]
+    pub fn to_html(&self) -> String {
+        let mut out = String::from(
+            "<!doctype html><html><head><meta charset=\"utf-8\">\
+             <title>ferrite e2e report</title><style>\
+             body{font-family:sans-serif;margin:2em;color:#222}\
+             table{border-collapse:collapse;width:100%}\
+             th,td{border:1px solid #ccc;padding:.4em .6em;text-align:left;vertical-align:top}\
+             th{background:#f0f0f0}pre{background:#f6f6f6;padding:.4em;white-space:pre-wrap}\
+             .pill{display:inline-block;padding:.1em .6em;border-radius:1em;color:#fff;font-size:.85em}\
+             .pass{background:#2a7}.fail{background:#c33}.skip{background:#888}\
+             </style></head><body>",
+        );
+        out.push_str(&format!(
+            "<h1>ferrite e2e</h1><p>{}</p>",
+            xml_escape(&self.summary())
+        ));
+        out.push_str(
+            "<table><thead><tr><th>status</th><th>test</th><th>time</th>\
+             <th>attempts</th><th>details</th></tr></thead><tbody>",
+        );
+        for result in &self.results {
+            let (label, class) = match result.status {
+                TestStatus::Passed => ("passed", "pass"),
+                TestStatus::Failed => ("failed", "fail"),
+                TestStatus::Skipped => ("skipped", "skip"),
+            };
+            out.push_str(&format!(
+                "<tr><td><span class=\"pill {class}\">{label}</span></td><td>{}</td>\
+                 <td>{}ms</td><td>{}</td><td>",
+                xml_escape(&result.name),
+                result.duration_ms,
+                result.attempts
+            ));
+            if let Some(error) = &result.error {
+                out.push_str(&format!("<pre>{}</pre>", xml_escape(error)));
+            }
+            for shot in &result.screenshots {
+                let href = xml_escape(shot);
+                out.push_str(&format!("<a href=\"{href}\">screenshot</a> "));
+            }
+            if let Some(trace) = &result.trace {
+                let href = xml_escape(trace);
+                out.push_str(&format!("<a href=\"{href}\">trace</a> "));
+            }
+            if let Some(video) = &result.video {
+                let href = xml_escape(video);
+                out.push_str(&format!("<a href=\"{href}\">video</a>"));
+            }
+            out.push_str("</td></tr>");
+        }
+        out.push_str("</tbody></table></body></html>");
+        out
+    }
 }
 
 fn one_line(text: &str) -> String {
@@ -248,6 +304,18 @@ mod tests {
         let report = sample();
         let parsed: TestReport = serde_json::from_str(&report.to_json()).unwrap();
         assert_eq!(parsed.results.len(), 2);
+    }
+
+    #[test]
+    fn html_renders_report() {
+        let html = sample().to_html();
+        assert!(html.contains("<title>ferrite e2e report</title>"), "{html}");
+        assert!(html.contains("1 passed, 1 failed"), "{html}");
+        assert!(html.contains("fails &lt;bad&gt;"), "{html}");
+        assert!(html.contains("pill fail"), "{html}");
+        assert!(html.contains("expect failed: title"), "{html}");
+        assert!(html.contains("href=\"test-results/fails.png\""), "{html}");
+        assert!(html.contains("href=\"test-results/fails.webm\""), "{html}");
     }
 
     #[test]

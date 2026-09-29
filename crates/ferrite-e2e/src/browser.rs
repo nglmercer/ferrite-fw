@@ -76,6 +76,8 @@ pub struct LaunchOptions {
     pub proxy_server: Option<String>,
     /// Accept insecure TLS certificates session-wide.
     pub ignore_https_errors: bool,
+    /// Download directory (Chromium pref / Firefox profile pref).
+    pub download_dir: Option<PathBuf>,
 }
 
 impl Default for LaunchOptions {
@@ -91,6 +93,7 @@ impl Default for LaunchOptions {
             user_agent: None,
             proxy_server: None,
             ignore_https_errors: false,
+            download_dir: None,
         }
     }
 }
@@ -109,6 +112,7 @@ impl LaunchOptions {
             user_agent: config.user_agent.clone(),
             proxy_server: config.proxy_server.clone(),
             ignore_https_errors: config.ignore_https_errors,
+            download_dir: config.download_dir.clone().map(PathBuf::from),
         })
     }
 
@@ -123,6 +127,13 @@ impl LaunchOptions {
     #[must_use]
     pub fn executable(mut self, path: impl Into<PathBuf>) -> Self {
         self.executable_path = Some(path.into());
+        self
+    }
+
+    /// Set the download directory.
+    #[must_use]
+    pub fn download_dir(mut self, path: impl Into<PathBuf>) -> Self {
+        self.download_dir = Some(path.into());
         self
     }
 
@@ -302,6 +313,9 @@ impl Browser {
             })?;
         let debug_port = free_port()?;
         let profile = tempfile::tempdir()?;
+        if let Some(dir) = &options.download_dir {
+            write_chromium_download_pref(profile.path(), dir)?;
+        }
         let profile_arg = format!("--user-data-dir={}", profile.path().display());
 
         let mut cmd = tokio::process::Command::new(&executable);
@@ -412,7 +426,14 @@ impl Browser {
             })?;
         let debug_port = free_port()?;
         let profile = tempfile::tempdir()?;
-        write_firefox_prefs(profile.path(), options.user_agent.as_deref())?;
+        write_firefox_prefs(
+            profile.path(),
+            options.user_agent.as_deref(),
+            options.download_dir.as_deref(),
+        )?;
+        if let Some(dir) = &options.download_dir {
+            std::fs::create_dir_all(dir)?;
+        }
 
         let mut cmd = tokio::process::Command::new(&executable);
         if options.headless {
@@ -718,7 +739,28 @@ impl Browser {
 }
 
 /// Firefox profile prefs (`user.js`): UA override plus automation defaults.
-fn write_firefox_prefs(profile: &Path, user_agent: Option<&str>) -> E2eResult<()> {
+/// Seed a fresh Chromium profile with a download directory.
+fn write_chromium_download_pref(profile: &Path, dir: &Path) -> E2eResult<()> {
+    std::fs::create_dir_all(dir)?;
+    let prefs = serde_json::json!({
+        "download": {
+            "default_directory": dir.to_string_lossy(),
+            "prompt_for_download": false,
+            "directory_upgrade": true,
+        },
+    });
+    std::fs::write(
+        profile.join("Preferences"),
+        serde_json::to_string(&prefs).map_err(E2eError::Json)?,
+    )?;
+    Ok(())
+}
+
+fn write_firefox_prefs(
+    profile: &Path,
+    user_agent: Option<&str>,
+    download_dir: Option<&Path>,
+) -> E2eResult<()> {
     let mut prefs = String::from(
         "user_pref(\"browser.shell.checkDefaultBrowser\", false);\n\
          user_pref(\"browser.sessionstore.resume_from_crash\", false);\n\
@@ -728,6 +770,18 @@ fn write_firefox_prefs(profile: &Path, user_agent: Option<&str>) -> E2eResult<()
         prefs.push_str(&format!(
             "user_pref(\"general.useragent.override\", {});\n",
             serde_json::to_string(user_agent)?
+        ));
+    }
+    if let Some(dir) = download_dir {
+        prefs.push_str(&format!(
+            "user_pref(\"browser.download.dir\", {});\n\
+             user_pref(\"browser.download.folderList\", 2);\n\
+             user_pref(\"browser.download.useDownloadDir\", true);\n\
+             user_pref(\"browser.download.manager.showWhenStarting\", false);\n\
+             user_pref(\"browser.helperApps.neverAsk.saveToDisk\", \
+             \"text/plain,application/octet-stream,application/pdf,text/csv,\
+             application/json,text/html,image/png,image/jpeg\");\n",
+            serde_json::to_string(&dir.to_string_lossy())?
         ));
     }
     std::fs::write(profile.join("user.js"), prefs)?;
@@ -829,7 +883,7 @@ mod tests {
     #[test]
     fn firefox_prefs_write_user_js() {
         let dir = tempfile::tempdir().unwrap();
-        write_firefox_prefs(dir.path(), Some("TestAgent/1.0")).unwrap();
+        write_firefox_prefs(dir.path(), Some("TestAgent/1.0"), None).unwrap();
         let prefs = std::fs::read_to_string(dir.path().join("user.js")).unwrap();
         assert!(prefs.contains("general.useragent.override"), "{prefs}");
         assert!(prefs.contains("TestAgent/1.0"), "{prefs}");

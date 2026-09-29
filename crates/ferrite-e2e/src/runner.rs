@@ -17,6 +17,20 @@ pub type BoxTestFuture = Pin<Box<dyn Future<Output = E2eResult<()>> + Send + 'st
 /// A test body: receives a fresh [`Page`].
 pub type TestFn = Arc<dyn Fn(Page) -> BoxTestFuture + Send + Sync>;
 
+/// How a test runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TestMode {
+    /// Run normally.
+    #[default]
+    Run,
+    /// Report skipped without running.
+    Skip,
+    /// Restrict the run to `Only` tests.
+    Only,
+    /// Report skipped (expected to fail, tracked separately).
+    Fixme,
+}
+
 /// One named test.
 #[derive(Clone)]
 pub struct Test {
@@ -26,6 +40,14 @@ pub struct Test {
     pub func: TestFn,
     /// Tags for filtering.
     pub tags: Vec<String>,
+    /// Run mode.
+    pub mode: TestMode,
+    /// Retry override (runner default when unset).
+    pub retries: Option<u32>,
+    /// Timeout override (runner default when unset).
+    pub timeout: Option<Duration>,
+    /// Triple the effective timeout.
+    pub slow: bool,
 }
 
 impl Test {
@@ -33,6 +55,48 @@ impl Test {
     #[must_use]
     pub fn tag(mut self, tag: impl Into<String>) -> Self {
         self.tags.push(tag.into());
+        self
+    }
+
+    /// Skip without running (reported as skipped).
+    #[must_use]
+    pub fn skip(mut self) -> Self {
+        self.mode = TestMode::Skip;
+        self
+    }
+
+    /// Run only `Only` tests (reported as skipped otherwise).
+    #[must_use]
+    pub fn only(mut self) -> Self {
+        self.mode = TestMode::Only;
+        self
+    }
+
+    /// Skip as a known failure (reported as skipped).
+    #[must_use]
+    pub fn fixme(mut self) -> Self {
+        self.mode = TestMode::Fixme;
+        self
+    }
+
+    /// Triple the effective timeout.
+    #[must_use]
+    pub fn slow(mut self) -> Self {
+        self.slow = true;
+        self
+    }
+
+    /// Override the retry count.
+    #[must_use]
+    pub fn retries(mut self, retries: u32) -> Self {
+        self.retries = Some(retries);
+        self
+    }
+
+    /// Override the timeout.
+    #[must_use]
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
         self
     }
 }
@@ -47,6 +111,10 @@ where
         name: name.into(),
         func: Arc::new(move |page| Box::pin(func(page))),
         tags: Vec::new(),
+        mode: TestMode::Run,
+        retries: None,
+        timeout: None,
+        slow: false,
     }
 }
 
@@ -62,19 +130,30 @@ pub fn describe(name: &str, tests: Vec<Test>) -> Vec<Test> {
         .collect()
 }
 
-/// Select the tests to run: name-or-tag substring filters, then one shard.
+/// Select the tests to run: `Only` restriction, name-or-tag substring
+/// filters, inverted grep, then one shard.
 ///
 /// `shard` is 1-based (`shard(1, 3)` runs the first third by name order).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn select<'a>(
     tests: &'a [Test],
     filter: Option<&str>,
     grep: Option<&str>,
+    grep_invert: Option<&str>,
     shard: Option<(usize, usize)>,
 ) -> Vec<&'a Test> {
     let mut selected: Vec<&Test> = tests.iter().collect();
+    if selected.iter().any(|test| test.mode == TestMode::Only) {
+        selected.retain(|test| test.mode == TestMode::Only);
+    }
     for needle in filter.into_iter().chain(grep) {
         selected.retain(|test| {
             test.name.contains(needle) || test.tags.iter().any(|tag| tag.contains(needle))
+        });
+    }
+    if let Some(needle) = grep_invert {
+        selected.retain(|test| {
+            !(test.name.contains(needle) || test.tags.iter().any(|tag| tag.contains(needle)))
         });
     }
     if let Some((index, total)) = shard {
@@ -113,14 +192,25 @@ fn env_filter(var: &str) -> Option<String> {
 }
 
 /// Runs tests against a [`Browser`] with workers, retries, and artifacts.
-#[derive(Debug, Clone)]
+/// A per-test hook (`Page` in, unit out).
+pub type HookFn = Arc<dyn Fn(Page) -> BoxTestFuture + Send + Sync>;
+
+/// A run-wide hook (no page).
+pub type GlobalHook = Arc<dyn Fn() -> BoxTestFuture + Send + Sync>;
+
+#[derive(Clone)]
 pub struct Runner {
     workers: usize,
     retries: u32,
     test_timeout: Duration,
     filter: Option<String>,
     grep: Option<String>,
+    grep_invert: Option<String>,
     shard: Option<(usize, usize)>,
+    before_each: Vec<HookFn>,
+    after_each: Vec<HookFn>,
+    global_setup: Vec<GlobalHook>,
+    global_teardown: Vec<GlobalHook>,
     output_dir: String,
     screenshot_on_failure: bool,
     screenshot_always: bool,
@@ -138,7 +228,12 @@ impl Default for Runner {
             test_timeout: Duration::from_secs(30),
             filter: None,
             grep: None,
+            grep_invert: None,
             shard: None,
+            before_each: Vec::new(),
+            after_each: Vec::new(),
+            global_setup: Vec::new(),
+            global_teardown: Vec::new(),
             output_dir: "test-results".to_string(),
             screenshot_on_failure: true,
             screenshot_always: false,
@@ -160,7 +255,12 @@ impl Runner {
             test_timeout: Duration::from_millis(config.timeout_ms.max(1)),
             filter: None,
             grep: None,
+            grep_invert: None,
             shard: None,
+            before_each: Vec::new(),
+            after_each: Vec::new(),
+            global_setup: Vec::new(),
+            global_teardown: Vec::new(),
             output_dir: config.output_dir.clone(),
             screenshot_on_failure: config.screenshot_on_failure(),
             screenshot_always: config.screenshot_always(),
@@ -207,6 +307,62 @@ impl Runner {
     #[must_use]
     pub fn grep(mut self, grep: impl Into<String>) -> Self {
         self.grep = Some(grep.into());
+        self
+    }
+
+    /// Skip tests whose name or tags contain `grep_invert`.
+    ///
+    /// Builder values win over `FERRITE_E2E_GREP_INVERT` (set by `--grep-invert`).
+    #[must_use]
+    pub fn grep_invert(mut self, grep_invert: impl Into<String>) -> Self {
+        self.grep_invert = Some(grep_invert.into());
+        self
+    }
+
+    /// Run `hook` before every attempt (failures fail the attempt).
+    #[must_use]
+    pub fn before_each<F, Fut>(mut self, hook: F) -> Self
+    where
+        F: Fn(Page) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = E2eResult<()>> + Send + 'static,
+    {
+        self.before_each
+            .push(Arc::new(move |page| Box::pin(hook(page))));
+        self
+    }
+
+    /// Run `hook` after every attempt (failures fail the attempt).
+    #[must_use]
+    pub fn after_each<F, Fut>(mut self, hook: F) -> Self
+    where
+        F: Fn(Page) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = E2eResult<()>> + Send + 'static,
+    {
+        self.after_each
+            .push(Arc::new(move |page| Box::pin(hook(page))));
+        self
+    }
+
+    /// Run `hook` once before the run (failures abort with one failed result).
+    #[must_use]
+    pub fn global_setup<F, Fut>(mut self, hook: F) -> Self
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = E2eResult<()>> + Send + 'static,
+    {
+        self.global_setup.push(Arc::new(move || Box::pin(hook())));
+        self
+    }
+
+    /// Run `hook` once after the run (failures append one failed result).
+    #[must_use]
+    pub fn global_teardown<F, Fut>(mut self, hook: F) -> Self
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = E2eResult<()>> + Send + 'static,
+    {
+        self.global_teardown
+            .push(Arc::new(move || Box::pin(hook())));
         self
     }
 
@@ -258,21 +414,69 @@ impl Runner {
     /// Run tests to completion (never fails the call itself).
     ///
     /// Unset builder filters fall back to `FERRITE_E2E_FILTER`,
-    /// `FERRITE_E2E_GREP`, and `FERRITE_E2E_SHARD` (set by the CLI flags).
+    /// `FERRITE_E2E_GREP`, `FERRITE_E2E_GREP_INVERT`, and `FERRITE_E2E_SHARD`
+    /// (set by the CLI flags).
     pub async fn run(&self, browser: &Browser, tests: Vec<Test>) -> TestReport {
+        let mut report = TestReport::default();
+        for setup in &self.global_setup {
+            if let Err(error) = setup().await {
+                report.results.push(TestResult {
+                    name: "<global setup>".to_string(),
+                    status: TestStatus::Failed,
+                    attempts: 1,
+                    duration_ms: 0,
+                    error: Some(error.to_string()),
+                    screenshots: vec![],
+                    trace: None,
+                    video: None,
+                });
+                return report;
+            }
+        }
         let filter = self
             .filter
             .clone()
             .or_else(|| env_filter("FERRITE_E2E_FILTER"));
         let grep = self.grep.clone().or_else(|| env_filter("FERRITE_E2E_GREP"));
+        let grep_invert = self
+            .grep_invert
+            .clone()
+            .or_else(|| env_filter("FERRITE_E2E_GREP_INVERT"));
         let shard = self.shard.or_else(shard_from_env);
-        let selected: Vec<Test> = select(&tests, filter.as_deref(), grep.as_deref(), shard)
-            .into_iter()
-            .cloned()
-            .collect();
+        let selected: Vec<Test> = select(
+            &tests,
+            filter.as_deref(),
+            grep.as_deref(),
+            grep_invert.as_deref(),
+            shard,
+        )
+        .into_iter()
+        .cloned()
+        .collect();
+        let mut runnable = Vec::new();
+        for test in selected {
+            match test.mode {
+                TestMode::Skip | TestMode::Fixme => {
+                    if self.list_progress {
+                        println!("[skip] {}", test.name);
+                    }
+                    report.results.push(TestResult {
+                        name: test.name.clone(),
+                        status: TestStatus::Skipped,
+                        attempts: 0,
+                        duration_ms: 0,
+                        error: None,
+                        screenshots: vec![],
+                        trace: None,
+                        video: None,
+                    });
+                }
+                TestMode::Run | TestMode::Only => runnable.push(test),
+            }
+        }
         let semaphore = Arc::new(tokio::sync::Semaphore::new(self.workers));
         let mut handles = Vec::new();
-        for test in selected {
+        for test in runnable {
             let permit = semaphore.clone().acquire_owned().await.expect("semaphore");
             let runner = self.clone();
             let context = browser.default_context();
@@ -281,7 +485,6 @@ impl Runner {
                 run_one(&runner, &context, &test).await
             }));
         }
-        let mut report = TestReport::default();
         for handle in handles {
             match handle.await {
                 Ok(result) => {
@@ -310,6 +513,20 @@ impl Runner {
                 }),
             }
         }
+        for teardown in &self.global_teardown {
+            if let Err(error) = teardown().await {
+                report.results.push(TestResult {
+                    name: "<global teardown>".to_string(),
+                    status: TestStatus::Failed,
+                    attempts: 1,
+                    duration_ms: 0,
+                    error: Some(error.to_string()),
+                    screenshots: vec![],
+                    trace: None,
+                    video: None,
+                });
+            }
+        }
         report.results.sort_by(|a, b| a.name.cmp(&b.name));
         report
     }
@@ -333,6 +550,12 @@ impl Runner {
                         written.push(path);
                     }
                 }
+                "html" => {
+                    let path = format!("{}/report.html", self.output_dir);
+                    if std::fs::write(&path, report.to_html()).is_ok() {
+                        written.push(path);
+                    }
+                }
                 _ => {}
             }
         }
@@ -352,8 +575,13 @@ async fn run_one(
     let mut trace_path = None;
     let mut video_path = None;
     let slug = slug(&test.name);
+    let retries = test.retries.unwrap_or(runner.retries);
+    let mut timeout = test.timeout.unwrap_or(runner.test_timeout);
+    if test.slow {
+        timeout = timeout.saturating_mul(3);
+    }
 
-    for _ in 0..=runner.retries {
+    for _ in 0..=retries {
         attempts += 1;
         let page = match context.new_page().await {
             Ok(page) => page,
@@ -362,6 +590,18 @@ async fn run_one(
                 continue;
             }
         };
+        let mut hooked = None;
+        for hook in &runner.before_each {
+            if let Err(error) = hook(page.clone()).await {
+                hooked = Some(format!("before_each: {error}"));
+                break;
+            }
+        }
+        if let Some(error) = hooked {
+            last_error = error;
+            page.close().await.ok();
+            continue;
+        }
         let recording = if runner.video.records() {
             match page
                 .start_video(VideoOptions {
@@ -381,15 +621,21 @@ async fn run_one(
         } else {
             false
         };
-        let outcome = tokio::time::timeout(runner.test_timeout, (test.func)(page.clone())).await;
+        let outcome = tokio::time::timeout(timeout, (test.func)(page.clone())).await;
         let mut failed = match outcome {
             Ok(Ok(())) => None,
             Ok(Err(error)) => Some(error.to_string()),
-            Err(_) => Some(format!(
-                "test timed out after {}ms",
-                runner.test_timeout.as_millis()
-            )),
+            Err(_) => Some(format!("test timed out after {}ms", timeout.as_millis())),
         };
+        for hook in &runner.after_each {
+            if let Err(error) = hook(page.clone()).await {
+                let note = format!("after_each: {error}");
+                failed = Some(match failed {
+                    Some(prior) => format!("{prior} ({note})"),
+                    None => note,
+                });
+            }
+        }
         if recording {
             let keep = runner.video == VideoMode::On
                 || (runner.video == VideoMode::OnlyOnFailure && failed.is_some());
@@ -526,22 +772,40 @@ mod tests {
                 .map(|test| test.name.clone())
                 .collect::<Vec<_>>()
         };
-        assert_eq!(names(select(&tests, None, None, None)).len(), 3);
+        assert_eq!(names(select(&tests, None, None, None, None)).len(), 3);
         assert_eq!(
-            names(select(&tests, Some("auth"), None, None)),
+            names(select(&tests, Some("auth"), None, None, None)),
             vec!["auth > login".to_string(), "auth > logout".to_string()]
         );
         assert_eq!(
-            names(select(&tests, Some("fast"), None, None)),
+            names(select(&tests, Some("fast"), None, None, None)),
             vec!["auth > login".to_string()]
         );
         // grep ANDs with filter.
         assert_eq!(
-            names(select(&tests, Some("auth"), Some("slow"), None)),
+            names(select(&tests, Some("auth"), Some("slow"), None, None)),
             vec!["auth > logout".to_string()]
         );
-        assert_eq!(select(&tests, Some("auth"), Some("fast"), None).len(), 1);
-        assert!(select(&tests, Some("zzz"), None, None).is_empty());
+        assert_eq!(
+            select(&tests, Some("auth"), Some("fast"), None, None).len(),
+            1
+        );
+        assert!(select(&tests, Some("zzz"), None, None, None).is_empty());
+    }
+
+    #[test]
+    fn select_inverts_grep() {
+        let tests = vec![
+            named("home renders"),
+            named("auth > login").tag("fast"),
+            named("auth > logout").tag("slow"),
+        ];
+        let selected = select(&tests, Some("auth"), None, Some("slow"), None);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].name, "auth > login");
+        let selected = select(&tests, None, None, Some("auth"), None);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].name, "home renders");
     }
 
     #[test]
@@ -555,22 +819,44 @@ mod tests {
         };
         // Sorted a,b,c,d; shard 1/2 takes positions 0,2.
         assert_eq!(
-            names(select(&tests, None, None, Some((1, 2)))),
+            names(select(&tests, None, None, None, Some((1, 2)))),
             vec!["a".to_string(), "c".to_string()]
         );
         assert_eq!(
-            names(select(&tests, None, None, Some((2, 2)))),
+            names(select(&tests, None, None, None, Some((2, 2)))),
             vec!["b".to_string(), "d".to_string()]
         );
         assert_eq!(
-            names(select(&tests, None, None, Some((3, 3)))),
+            names(select(&tests, None, None, None, Some((3, 3)))),
             vec!["c".to_string()]
         );
         // Filters apply before sharding.
         assert_eq!(
-            names(select(&tests, Some("a"), None, Some((1, 2)))),
+            names(select(&tests, Some("a"), None, None, Some((1, 2)))),
             vec!["a".to_string()]
         );
+    }
+
+    #[test]
+    fn select_restricts_to_only() {
+        let tests = vec![named("a"), named("b").only(), named("c")];
+        let selected = select(&tests, None, None, None, None);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].name, "b");
+    }
+
+    #[test]
+    fn modes_and_overrides_build() {
+        let test = named("a")
+            .skip()
+            .retries(2)
+            .timeout(Duration::from_secs(5))
+            .slow();
+        assert_eq!(test.mode, TestMode::Skip);
+        assert_eq!(test.retries, Some(2));
+        assert_eq!(test.timeout, Some(Duration::from_secs(5)));
+        assert!(test.slow);
+        assert_eq!(named("b").fixme().mode, TestMode::Fixme);
     }
 
     #[test]
@@ -620,6 +906,31 @@ mod tests {
         assert_eq!(written.len(), 2);
         assert!(dir.join("results.json").is_file());
         assert!(dir.join("junit.xml").is_file());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn artifacts_write_html() {
+        let dir = std::env::temp_dir().join(format!("ferrite-e2e-rep-html-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let runner = Runner::default().output_dir(dir.display().to_string());
+        let report = TestReport {
+            results: vec![TestResult {
+                name: "a".to_string(),
+                status: TestStatus::Failed,
+                attempts: 2,
+                duration_ms: 5,
+                error: Some("boom".to_string()),
+                screenshots: vec![],
+                trace: None,
+                video: None,
+            }],
+        };
+        let written = runner.write_artifacts(&report, "html");
+        assert_eq!(written.len(), 1);
+        let html = std::fs::read_to_string(dir.join("report.html")).unwrap();
+        assert!(html.contains(">a<"), "{html}");
+        assert!(html.contains("boom"), "{html}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

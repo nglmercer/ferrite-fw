@@ -37,6 +37,7 @@
 //! }
 //! ```
 
+mod api;
 mod bidi;
 mod browser;
 mod cdp;
@@ -51,21 +52,22 @@ mod runner;
 mod video;
 mod webserver;
 
+pub use api::{ApiClient, ApiResponse};
 pub use bidi::BidiConnection;
 pub use browser::{find_chromium, find_firefox, Browser, BrowserKind, LaunchOptions};
 pub use cdp::CdpConnection;
 pub use context::{BrowserContext, ContextOptions};
 pub use driver::FrameStream;
 pub use error::{E2eError, E2eResult};
-pub use expect::{PageExpect, Timeout};
+pub use expect::{expect_poll, PageExpect, Timeout};
 pub use locator::{Locator, LocatorOptions, Selector};
 pub use page::{
-    ClickOptions, ColorScheme, ConsoleMessage, Cookie, DialogInfo, ElementState, KeyPress,
-    LoadState, NavigationOptions, Page, RecordedRequest, ReducedMotion, RouteAction, RouteRule,
-    ScreenshotOptions, StorageState, Viewport,
+    ClickOptions, ColorScheme, ConsoleMessage, Cookie, DeviceDescriptor, DialogInfo, ElementState,
+    Frame, KeyPress, LoadState, NavigationOptions, Page, RecordedRequest, ReducedMotion,
+    RouteAction, RouteRule, ScreenshotOptions, StorageState, Viewport,
 };
 pub use report::{TestReport, TestResult, TestStatus};
-pub use runner::{describe, test, Runner, Test};
+pub use runner::{describe, test, GlobalHook, HookFn, Runner, Test, TestMode};
 pub use video::{find_ffmpeg, find_ffprobe, VideoFormat, VideoFrame, VideoMode, VideoOptions};
 pub use webserver::{wait_for_url, RunningWebServer, WebServer};
 

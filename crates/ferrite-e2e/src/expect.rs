@@ -1,6 +1,7 @@
 //! Auto-retrying assertions (`expect_*`), Playwright-style.
 
 use std::future::Future;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Serialize;
@@ -78,6 +79,44 @@ fn not_tag(negated: bool) -> &'static str {
     } else {
         ""
     }
+}
+
+/// Poll `check` until it returns `Some(value)` or the timeout hits.
+///
+/// `None` means "not yet"; `Err` is recorded as the last mismatch and
+/// retried. Fails loudly with `E2eError::Expect` on timeout.
+pub async fn expect_poll<T, F, Fut>(
+    description: impl Into<String>,
+    timeout: impl Into<Timeout>,
+    check: F,
+) -> E2eResult<T>
+where
+    F: Fn() -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = E2eResult<Option<T>>> + Send,
+    T: Send + 'static,
+{
+    use std::sync::Mutex;
+
+    let found: Arc<Mutex<Option<T>>> = Arc::new(Mutex::new(None));
+    let slot = found.clone();
+    let check = Arc::new(check);
+    poll(timeout.into().duration(), description.into(), move || {
+        let found = slot.clone();
+        let check = check.clone();
+        async move {
+            match check().await {
+                Ok(Some(value)) => {
+                    *found.lock().unwrap_or_else(|e| e.into_inner()) = Some(value);
+                    Ok(None)
+                }
+                Ok(None) => Ok(Some("pending".to_string())),
+                Err(error) => Ok(Some(error.to_string())),
+            }
+        }
+    })
+    .await?;
+    let value = found.lock().unwrap_or_else(|e| e.into_inner()).take();
+    value.ok_or_else(|| E2eError::Expect("poll finished without a value".to_string()))
 }
 
 /// Page-level assertions.
@@ -733,6 +772,93 @@ impl LocatorExpect {
         )
         .await
     }
+
+    /// Assert the element intersects the viewport.
+    pub async fn in_viewport(&self) -> E2eResult<()> {
+        let locator = self.locator.clone();
+        let negated = self.negated;
+        poll(
+            self.timeout,
+            format!("`{}` in viewport{}", locator.selector(), not_tag(negated)),
+            || {
+                let locator = locator.clone();
+                async move {
+                    let inside = match locator.in_viewport().await {
+                        Ok(inside) => inside,
+                        Err(error) => return Ok(Some(error.to_string())),
+                    };
+                    if inside != negated {
+                        Ok(None)
+                    } else {
+                        Ok(Some("outside the viewport or absent".to_string()))
+                    }
+                }
+            },
+        )
+        .await
+    }
+
+    /// Assert the accessible name (exact match).
+    pub async fn accessible_name(&self, expected: &str) -> E2eResult<()> {
+        let locator = self.locator.clone();
+        let expected = expected.to_string();
+        let negated = self.negated;
+        poll(
+            self.timeout,
+            format!(
+                "`{}` accessible name == {expected:?}{}",
+                locator.selector(),
+                not_tag(negated)
+            ),
+            || {
+                let locator = locator.clone();
+                let expected = expected.clone();
+                async move {
+                    let actual = match locator.accessible_name().await {
+                        Ok(actual) => actual,
+                        Err(error) => return Ok(Some(error.to_string())),
+                    };
+                    if (actual.as_deref() == Some(expected.as_str())) != negated {
+                        Ok(None)
+                    } else {
+                        Ok(Some(format!("accessible name was {actual:?}")))
+                    }
+                }
+            },
+        )
+        .await
+    }
+
+    /// Assert the accessible description (exact match).
+    pub async fn accessible_description(&self, expected: &str) -> E2eResult<()> {
+        let locator = self.locator.clone();
+        let expected = expected.to_string();
+        let negated = self.negated;
+        poll(
+            self.timeout,
+            format!(
+                "`{}` accessible description == {expected:?}{}",
+                locator.selector(),
+                not_tag(negated)
+            ),
+            || {
+                let locator = locator.clone();
+                let expected = expected.clone();
+                async move {
+                    let actual = match locator.accessible_description().await {
+                        Ok(actual) => actual,
+                        Err(error) => return Ok(Some(error.to_string())),
+                    };
+                    if (actual.as_deref() == Some(expected.as_str())) != negated {
+                        Ok(None)
+                    } else {
+                        Ok(Some(format!("accessible description was {actual:?}")))
+                    }
+                }
+            },
+        )
+        .await
+    }
 }
 
 impl Page {
@@ -827,5 +953,35 @@ mod tests {
             Timeout::default().duration(),
             Duration::from_millis(DEFAULT_EXPECT_MS)
         );
+    }
+
+    #[tokio::test]
+    async fn expect_poll_returns_first_value() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let worker = calls.clone();
+        let value = expect_poll("counter", Timeout::ms(2000), move || {
+            let worker = worker.clone();
+            async move {
+                let n = worker.fetch_add(1, Ordering::SeqCst);
+                if n >= 2 {
+                    Ok(Some(n))
+                } else {
+                    Ok(None)
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(value, 2);
+    }
+
+    #[tokio::test]
+    async fn expect_poll_times_out_loudly() {
+        let error = expect_poll("never", Timeout::ms(120), || async {
+            Ok::<Option<u32>, E2eError>(None)
+        })
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("never"), "{error}");
     }
 }

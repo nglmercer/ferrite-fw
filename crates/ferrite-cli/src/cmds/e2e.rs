@@ -112,6 +112,9 @@ fn apply_flag_overrides(e2e: &mut ferrite::config::E2eConfig, args: &E2eArgs) {
     if let Some(grep) = &args.grep {
         std::env::set_var("FERRITE_E2E_GREP", grep);
     }
+    if let Some(grep_invert) = &args.grep_invert {
+        std::env::set_var("FERRITE_E2E_GREP_INVERT", grep_invert);
+    }
     if let Some((index, total)) = args.shard {
         std::env::set_var("FERRITE_E2E_SHARD", format!("{index}/{total}"));
     }

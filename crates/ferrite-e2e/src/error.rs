@@ -54,6 +54,9 @@ pub enum E2eError {
     /// Underlying I/O failure.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    /// API client transport failure.
+    #[error("http error: {0}")]
+    Http(#[from] reqwest::Error),
     /// JSON failure.
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
@@ -76,6 +79,7 @@ impl E2eError {
             Self::Config(_) => "FERRITE_E2E_CONFIG",
             Self::Io(_) => "FERRITE_E2E_IO",
             Self::Json(_) => "FERRITE_E2E_JSON",
+            Self::Http(_) => "FERRITE_E2E_HTTP",
         }
     }
 }

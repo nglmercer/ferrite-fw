@@ -3,8 +3,9 @@
 //! [`Page`] is engine-agnostic: it delegates to a [`Driver`](crate::driver::Driver)
 //! (CDP for Chromium, WebDriver BiDi for Firefox).
 
-use std::collections::HashMap;
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -118,6 +119,104 @@ pub struct Cookie {
     /// Secure flag.
     #[serde(default)]
     pub secure: bool,
+    /// Expiry as epoch seconds (`None`/negative = session cookie).
+    #[serde(default, deserialize_with = "de_cookie_expires")]
+    pub expires: Option<i64>,
+}
+
+/// CDP reports cookie expiry as a float; BiDi may omit it.
+fn de_cookie_expires<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value: Option<serde_json::Value> = Option::deserialize(deserializer)?;
+    match value {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::Number(number)) => Ok(number
+            .as_i64()
+            .or_else(|| number.as_f64().map(|float| float.round() as i64))),
+        Some(_) => Ok(None),
+    }
+}
+
+/// File names currently in `dir` (loud error when unreadable).
+fn dir_names(dir: &Path) -> E2eResult<HashSet<String>> {
+    let entries = std::fs::read_dir(dir)
+        .map_err(|error| E2eError::Config(format!("cannot read {}: {error}", dir.display())))?;
+    Ok(entries
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect())
+}
+
+/// True for in-progress download files (not yet renamed to the final name).
+fn is_temp_download(name: &str) -> bool {
+    name.ends_with(".part") || name.ends_with(".crdownload") || name.ends_with(".tmp")
+}
+
+/// A frame listing entry (ids are opaque engine handles).
+#[derive(Debug, Clone)]
+pub(crate) struct FrameInfo {
+    /// Opaque frame id for driver-level frame evaluation.
+    pub id: String,
+    /// Frame name (`<iframe name>`; empty on Firefox).
+    pub name: String,
+    /// Frame document URL.
+    pub url: String,
+}
+
+/// A frame in the page (main frame or iframe): frame-scoped `evaluate`
+/// only — locators always target the main frame.
+#[derive(Clone)]
+pub struct Frame {
+    page: Page,
+    id: String,
+    name: String,
+    url: String,
+}
+
+impl std::fmt::Debug for Frame {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Frame")
+            .field("name", &self.name)
+            .field("url", &self.url)
+            .finish()
+    }
+}
+
+impl Frame {
+    /// Frame name (empty on Firefox).
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Frame document URL.
+    #[must_use]
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    /// Evaluate an expression in this frame, deserializing the result.
+    pub async fn evaluate<T>(&self, expression: &str) -> E2eResult<T>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        let value = self.evaluate_value(expression).await?;
+        serde_json::from_value(value).map_err(E2eError::Json)
+    }
+
+    /// Evaluate an expression in this frame, returning raw JSON.
+    pub async fn evaluate_value(&self, expression: &str) -> E2eResult<Value> {
+        self.page.driver.frame_evaluate(&self.id, expression).await
+    }
+}
+
+/// True when `name` is a safe JS identifier for [`Page::expose_function`].
+fn valid_expose_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some('_' | '$' | 'a'..='z' | 'A'..='Z'))
+        && chars.all(|c| matches!(c, '_' | '$' | 'a'..='z' | 'A'..='Z' | '0'..='9'))
 }
 
 /// Options for [`Page::screenshot`].
@@ -127,6 +226,58 @@ pub struct ScreenshotOptions {
     pub full_page: bool,
     /// JPEG quality (1-100); PNG when unset.
     pub quality: Option<u8>,
+    /// Locators to cover with magenta boxes (viewport captures only).
+    pub mask: Vec<Locator>,
+    /// Freeze animations/transitions during the capture.
+    pub disable_animations: bool,
+    /// Hide the text caret during the capture.
+    pub hide_caret: bool,
+}
+
+/// A device to emulate (Chromium only).
+#[derive(Debug, Clone, Copy)]
+pub struct DeviceDescriptor {
+    /// CSS viewport.
+    pub viewport: Viewport,
+    /// Device pixel ratio.
+    pub device_scale_factor: f64,
+    /// Mobile UA hints and viewport behavior.
+    pub mobile: bool,
+    /// Touch event support.
+    pub has_touch: bool,
+}
+
+impl DeviceDescriptor {
+    /// iPhone 15 (393x852, 3x, mobile, touch).
+    pub const IPHONE_15: Self = Self {
+        viewport: Viewport {
+            width: 393,
+            height: 852,
+        },
+        device_scale_factor: 3.0,
+        mobile: true,
+        has_touch: true,
+    };
+    /// Pixel 7 (412x915, 2.625x, mobile, touch).
+    pub const PIXEL_7: Self = Self {
+        viewport: Viewport {
+            width: 412,
+            height: 915,
+        },
+        device_scale_factor: 2.625,
+        mobile: true,
+        has_touch: true,
+    };
+    /// Desktop 1080p (1920x1080, 1x).
+    pub const DESKTOP_1080P: Self = Self {
+        viewport: Viewport {
+            width: 1920,
+            height: 1080,
+        },
+        device_scale_factor: 1.0,
+        mobile: false,
+        has_touch: false,
+    };
 }
 
 /// Click modifiers + button.
@@ -187,6 +338,17 @@ pub enum RouteAction {
         /// Content type header.
         content_type: String,
     },
+    /// Continue with modified URL/method/headers/body (`None` = unchanged).
+    ContinueWith {
+        /// Replacement URL.
+        url: Option<String>,
+        /// Replacement method.
+        method: Option<String>,
+        /// Replacement headers (replaces the whole set).
+        headers: Option<Vec<(String, String)>>,
+        /// Replacement body bytes.
+        body: Option<Vec<u8>>,
+    },
 }
 
 /// A request-routing rule (glob pattern over the URL).
@@ -220,6 +382,28 @@ impl RouteRule {
                 status,
                 body: body.into(),
                 content_type: content_type.into(),
+            },
+        }
+    }
+
+    /// Continue matching requests with modifications (`None` = unchanged).
+    /// Header overrides replace the whole header set; body overrides carry a
+    /// corrected Content-Length. URL overrides are Chromium-only (Firefox
+    /// aborts the redirected request, so `route` fails fast there).
+    pub fn continue_with(
+        pattern: impl Into<String>,
+        url: Option<String>,
+        method: Option<String>,
+        headers: Option<Vec<(String, String)>>,
+        body: Option<Vec<u8>>,
+    ) -> Self {
+        Self {
+            pattern: pattern.into(),
+            action: RouteAction::ContinueWith {
+                url,
+                method,
+                headers,
+                body,
             },
         }
     }
@@ -269,7 +453,7 @@ pub struct ElementState {
 }
 
 /// Bounding box in CSS pixels.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ElementRect {
     /// Left edge.
     #[serde(default)]
@@ -297,7 +481,91 @@ pub struct Page {
     capture: Arc<Mutex<Option<CaptureState>>>,
     routes: Arc<Mutex<Vec<RouteRule>>>,
     net_capture: Arc<Mutex<Option<tokio::task::AbortHandle>>>,
+    exposed: ExposedState,
 }
+
+/// Rust handlers exposed to page JS ([`Page::expose_function`]).
+type ExposedFn = Arc<dyn Fn(Vec<Value>) -> Value + Send + Sync>;
+
+/// Exposed handlers plus their dispatch pump.
+#[derive(Clone, Default)]
+struct ExposedState {
+    fns: Arc<Mutex<HashMap<String, ExposedFn>>>,
+    pump: Arc<Mutex<Option<tokio::task::AbortHandle>>>,
+}
+
+/// Fake clock injected by [`Page::clock_install`]: overrides `Date`,
+/// `setTimeout`/`setInterval`, `requestAnimationFrame` and `performance.now`
+/// with a virtual queue drained by `__ferriteClock.tick(ms)`.
+const CLOCK_SCRIPT: &str = r#"(() => {
+  if (window.__ferriteClock) return true;
+  const native = {
+    date: Date, setTimeout, clearTimeout, setInterval, clearInterval,
+    raf: requestAnimationFrame, caf: cancelAnimationFrame,
+    perf: performance.now.bind(performance),
+  };
+  let now = native.date.now();
+  const origin = now;
+  let seq = 1;
+  const timers = new Map();
+  const asFn = (cb) => typeof cb === "function" ? cb : (() => Function(String(cb))());
+  function fakeDate(...args) { return args.length ? new native.date(...args) : new native.date(now); }
+  fakeDate.now = () => now;
+  fakeDate.parse = native.date.parse;
+  fakeDate.UTC = native.date.UTC;
+  fakeDate.prototype = native.date.prototype;
+  window.Date = fakeDate;
+  window.setTimeout = (cb, ms = 0, ...args) => {
+    const id = seq++;
+    timers.set(id, { time: now + Math.max(0, +ms || 0), cb: asFn(cb), args, repeat: 0 });
+    return id;
+  };
+  window.clearTimeout = (id) => { timers.delete(id); };
+  window.setInterval = (cb, ms = 0, ...args) => {
+    const id = seq++;
+    const step = Math.max(0, +ms || 0);
+    timers.set(id, { time: now + step, cb: asFn(cb), args, repeat: step });
+    return id;
+  };
+  window.clearInterval = (id) => { timers.delete(id); };
+  window.requestAnimationFrame = (cb) => window.setTimeout(() => cb(now), 16);
+  window.cancelAnimationFrame = (id) => { timers.delete(id); };
+  performance.now = () => now - origin;
+  window.__ferriteClock = {
+    tick(ms) {
+      const end = now + Math.max(0, +ms || 0);
+      let fired = 0;
+      for (;;) {
+        let best = 0, bestTime = Infinity;
+        for (const [id, t] of timers) {
+          if (t.time <= end && t.time < bestTime) { best = id; bestTime = t.time; }
+        }
+        if (!best) break;
+        if (++fired > 10000) throw new Error("clock tick exceeded 10000 timers (infinite timer loop?)");
+        const t = timers.get(best);
+        timers.delete(best);
+        now = t.time;
+        if (t.repeat) timers.set(best, { time: now + t.repeat, cb: t.cb, args: t.args, repeat: t.repeat });
+        t.cb(...t.args);
+      }
+      now = end;
+      return now;
+    },
+    uninstall() {
+      window.Date = native.date;
+      window.setTimeout = native.setTimeout;
+      window.clearTimeout = native.clearTimeout;
+      window.setInterval = native.setInterval;
+      window.clearInterval = native.clearInterval;
+      window.requestAnimationFrame = native.raf;
+      window.cancelAnimationFrame = native.caf;
+      performance.now = native.perf;
+      delete window.__ferriteClock;
+      return true;
+    },
+  };
+  return true;
+})()"#;
 
 /// At most one capture (recording or frame stream) per page: both use the
 /// same screencast session on Chromium.
@@ -325,6 +593,7 @@ impl Page {
             capture: Arc::new(Mutex::new(None)),
             routes: Arc::new(Mutex::new(Vec::new())),
             net_capture: Arc::new(Mutex::new(None)),
+            exposed: ExposedState::default(),
         }
     }
 
@@ -702,11 +971,164 @@ impl Page {
         Ok(())
     }
 
+    /// Tap at CSS-pixel coordinates with the touchscreen.
+    pub async fn touchscreen_tap(&self, x: f64, y: f64) -> E2eResult<()> {
+        self.driver.touchscreen_tap(x, y).await?;
+        self.slow_mo().await;
+        Ok(())
+    }
+
+    /// Run a named step, recording it (with duration) in the trace.
+    pub async fn step<F, T>(&self, name: &str, step: F) -> T
+    where
+        F: Future<Output = T>,
+    {
+        let started = std::time::Instant::now();
+        let out = step.await;
+        self.sink.record(
+            "step",
+            format!("{name} ({}ms)", started.elapsed().as_millis()),
+        );
+        out
+    }
+
+    /// Read a localStorage entry (`None` when missing).
+    pub async fn local_storage_get(&self, key: &str) -> E2eResult<Option<String>> {
+        Self::storage_get("localStorage", key, &self.driver).await
+    }
+
+    /// Write a localStorage entry.
+    pub async fn local_storage_set(&self, key: &str, value: &str) -> E2eResult<()> {
+        Self::storage_set("localStorage", key, value, &self.driver).await
+    }
+
+    /// Remove a localStorage entry.
+    pub async fn local_storage_remove(&self, key: &str) -> E2eResult<()> {
+        let key_json = serde_json::to_string(key).unwrap_or_default();
+        self.driver
+            .evaluate(&format!("localStorage.removeItem({key_json})"))
+            .await?;
+        Ok(())
+    }
+
+    /// Clear localStorage.
+    pub async fn local_storage_clear(&self) -> E2eResult<()> {
+        self.driver.evaluate("localStorage.clear()").await?;
+        Ok(())
+    }
+
+    /// Read a sessionStorage entry (`None` when missing).
+    pub async fn session_storage_get(&self, key: &str) -> E2eResult<Option<String>> {
+        Self::storage_get("sessionStorage", key, &self.driver).await
+    }
+
+    /// Write a sessionStorage entry.
+    pub async fn session_storage_set(&self, key: &str, value: &str) -> E2eResult<()> {
+        Self::storage_set("sessionStorage", key, value, &self.driver).await
+    }
+
+    /// Remove a sessionStorage entry.
+    pub async fn session_storage_remove(&self, key: &str) -> E2eResult<()> {
+        let key_json = serde_json::to_string(key).unwrap_or_default();
+        self.driver
+            .evaluate(&format!("sessionStorage.removeItem({key_json})"))
+            .await?;
+        Ok(())
+    }
+
+    /// Clear sessionStorage.
+    pub async fn session_storage_clear(&self) -> E2eResult<()> {
+        self.driver.evaluate("sessionStorage.clear()").await?;
+        Ok(())
+    }
+
+    /// Read a web-storage entry.
+    async fn storage_get(storage: &str, key: &str, driver: &Driver) -> E2eResult<Option<String>> {
+        let key_json = serde_json::to_string(key).unwrap_or_default();
+        let value = driver
+            .evaluate(&format!("{storage}.getItem({key_json})"))
+            .await?;
+        Ok(value.as_str().map(str::to_string))
+    }
+
+    /// Write a web-storage entry.
+    async fn storage_set(storage: &str, key: &str, value: &str, driver: &Driver) -> E2eResult<()> {
+        let key_json = serde_json::to_string(key).unwrap_or_default();
+        let value_json = serde_json::to_string(value).unwrap_or_default();
+        driver
+            .evaluate(&format!("{storage}.setItem({key_json}, {value_json})"))
+            .await?;
+        Ok(())
+    }
+
     /// Capture a screenshot (PNG by default, JPEG with `quality`).
     pub async fn screenshot(&self, options: ScreenshotOptions) -> E2eResult<Vec<u8>> {
-        self.driver
+        if options.full_page && !options.mask.is_empty() {
+            return Err(E2eError::Config(
+                "screenshot mask needs a viewport capture (mask + full_page is not supported)"
+                    .to_string(),
+            ));
+        }
+        let prepared = !options.mask.is_empty() || options.disable_animations || options.hide_caret;
+        if prepared {
+            self.prepare_screenshot(&options).await?;
+        }
+        let shot = self
+            .driver
             .screenshot(options.full_page, options.quality)
-            .await
+            .await;
+        if prepared {
+            self.cleanup_screenshot().await.ok();
+        }
+        shot
+    }
+
+    /// Inject mask overlays and capture CSS.
+    async fn prepare_screenshot(&self, options: &ScreenshotOptions) -> E2eResult<()> {
+        let mut css = String::new();
+        if options.disable_animations {
+            css.push_str(
+                "*,*::before,*::after{animation-duration:0s!important;\
+                 animation-delay:0s!important;transition-duration:0s!important;\
+                 scroll-behavior:auto!important}",
+            );
+        }
+        if options.hide_caret {
+            css.push_str("*{caret-color:transparent!important}");
+        }
+        let mut rects = Vec::new();
+        for locator in &options.mask {
+            rects.extend(locator.state().await?.rects);
+        }
+        let css_json = serde_json::to_string(&css).unwrap_or_default();
+        let rects_json = serde_json::to_string(&rects).map_err(E2eError::Json)?;
+        self.evaluate_value(&format!(
+            "(() => {{ \
+             const style = document.createElement('style'); \
+             style.id = 'ferrite-shot-style'; style.textContent = {css_json}; \
+             document.head.appendChild(style); \
+             for (const r of {rects_json}) {{ \
+             const d = document.createElement('div'); \
+             d.className = 'ferrite-shot-mask'; \
+             d.style.cssText = 'position:fixed;left:' + r.x + 'px;top:' + r.y \
+             + 'px;width:' + r.width + 'px;height:' + r.height \
+             + 'px;background:#FF00FF;z-index:2147483647;pointer-events:none;'; \
+             document.body.appendChild(d); }} \
+             return true; }})()"
+        ))
+        .await?;
+        Ok(())
+    }
+
+    /// Remove mask overlays and capture CSS.
+    async fn cleanup_screenshot(&self) -> E2eResult<()> {
+        self.evaluate_value(
+            "(() => { document.getElementById('ferrite-shot-style')?.remove(); \
+             document.querySelectorAll('.ferrite-shot-mask') \
+             .forEach(el => el.remove()); return true; })()",
+        )
+        .await?;
+        Ok(())
     }
 
     /// Capture a screenshot and write it to `path`.
@@ -735,6 +1157,42 @@ impl Page {
             .await
     }
 
+    /// Emulate a device preset (Chromium only; loud error on Firefox).
+    pub async fn emulate_device(&self, device: DeviceDescriptor) -> E2eResult<()> {
+        self.driver.emulate_device(device).await
+    }
+
+    /// Install a fake clock in the current document (freezes `Date`,
+    /// `setTimeout`/`setInterval`, `requestAnimationFrame`, `performance.now`).
+    /// Applies to the current document only; navigations reset it.
+    pub async fn clock_install(&self) -> E2eResult<()> {
+        self.evaluate_value(CLOCK_SCRIPT).await?;
+        Ok(())
+    }
+
+    /// Advance the fake clock by `ms`, firing due timers in order.
+    /// Fails loudly when no clock is installed.
+    pub async fn clock_advance(&self, ms: u64) -> E2eResult<()> {
+        let now: Option<i64> = self
+            .evaluate(&format!(
+                "window.__ferriteClock ? window.__ferriteClock.tick({ms}) : null"
+            ))
+            .await?;
+        match now {
+            Some(_) => Ok(()),
+            None => Err(E2eError::Config(
+                "clock_advance needs clock_install first".to_string(),
+            )),
+        }
+    }
+
+    /// Restore the native clock (idempotent).
+    pub async fn clock_uninstall(&self) -> E2eResult<()> {
+        self.evaluate_value("window.__ferriteClock ? window.__ferriteClock.uninstall() : true")
+            .await?;
+        Ok(())
+    }
+
     /// Override the user agent.
     pub async fn set_user_agent(&self, user_agent: &str) -> E2eResult<()> {
         self.driver.set_user_agent(user_agent).await
@@ -754,6 +1212,12 @@ impl Page {
     pub async fn set_cookie(&self, name: &str, value: &str) -> E2eResult<()> {
         let url = self.url().await?;
         self.driver.set_cookie(name, value, &url).await
+    }
+
+    /// Set full-fidelity cookies (path, flags, expiry honored).
+    pub async fn add_cookies(&self, cookies: &[Cookie]) -> E2eResult<()> {
+        let url = self.url().await?;
+        self.driver.add_cookies(cookies, &url).await
     }
 
     /// Clear browser cookies.
@@ -777,8 +1241,8 @@ impl Page {
 
     /// Load storage state saved by [`Page::save_storage_state`].
     ///
-    /// The page must already be on the saved origin; cookies restore by
-    /// name/value and localStorage is replaced wholesale.
+    /// The page must already be on the saved origin; cookies restore with
+    /// full fidelity and localStorage is replaced wholesale.
     pub async fn load_storage_state(&self, path: impl AsRef<Path>) -> E2eResult<()> {
         let raw = std::fs::read_to_string(path)?;
         let state: StorageState = serde_json::from_str(&raw)?;
@@ -790,11 +1254,7 @@ impl Page {
             )));
         }
         let url = self.url().await?;
-        for cookie in &state.cookies {
-            self.driver
-                .set_cookie(&cookie.name, &cookie.value, &url)
-                .await?;
-        }
+        self.driver.add_cookies(&state.cookies, &url).await?;
         let entries = serde_json::to_string(&state.local_storage)?;
         self.evaluate_value(&format!(
             "(() => {{ localStorage.clear(); \
@@ -938,6 +1398,328 @@ impl Page {
     #[must_use]
     pub fn requests(&self) -> Vec<RecordedRequest> {
         self.sink.requests()
+    }
+
+    /// Set files on the file input matching `selector` (empty list clears).
+    pub async fn set_input_files<P: AsRef<Path>>(
+        &self,
+        selector: &str,
+        paths: &[P],
+    ) -> E2eResult<()> {
+        self.locator(selector).set_input_files(paths).await
+    }
+
+    /// Direct downloads to `dir` (created when missing). Chromium only;
+    /// Firefox configures the download dir at launch
+    /// ([`LaunchOptions::download_dir`](crate::LaunchOptions::download_dir)).
+    pub async fn set_download_dir(&self, dir: impl AsRef<Path>) -> E2eResult<()> {
+        self.driver.set_download_dir(dir.as_ref()).await
+    }
+
+    /// Run `source` before page scripts in every future document of this
+    /// page (applies after the next navigation; on Firefox the source is
+    /// wrapped in a function, so avoid top-level `return`).
+    pub async fn add_init_script(&self, source: &str) -> E2eResult<()> {
+        self.driver.add_init_script(source).await
+    }
+
+    /// All document frames (main frame first; named `document_frames`
+    /// because [`Page::frames`] streams video frames). Frame names are
+    /// Chromium-only (empty on Firefox, which reports no names).
+    pub async fn document_frames(&self) -> E2eResult<Vec<Frame>> {
+        Ok(self
+            .driver
+            .frames()
+            .await?
+            .into_iter()
+            .map(|info| Frame {
+                page: self.clone(),
+                id: info.id,
+                name: info.name,
+                url: info.url,
+            })
+            .collect())
+    }
+
+    /// First frame with exactly `name`.
+    pub async fn frame_by_name(&self, name: &str) -> E2eResult<Option<Frame>> {
+        Ok(self
+            .document_frames()
+            .await?
+            .into_iter()
+            .find(|frame| frame.name == name))
+    }
+
+    /// First frame whose URL contains `pattern`.
+    pub async fn frame_by_url(&self, pattern: &str) -> E2eResult<Option<Frame>> {
+        Ok(self
+            .document_frames()
+            .await?
+            .into_iter()
+            .find(|frame| frame.url.contains(pattern)))
+    }
+
+    /// Expose a Rust function to page JS as `window[name]`. The page calls
+    /// it like `await window[name](...args)`; the callback receives all args
+    /// and its return value resolves the promise (panics reject it).
+    /// Dispatch polls (~50ms latency), so keep handlers fast. Applies to the
+    /// current document only: re-expose after navigation.
+    pub async fn expose_function<F>(&self, name: &str, f: F) -> E2eResult<()>
+    where
+        F: Fn(Vec<Value>) -> Value + Send + Sync + 'static,
+    {
+        if !valid_expose_name(name) {
+            return Err(E2eError::Config(format!(
+                "expose_function needs a JS identifier, got {name:?}"
+            )));
+        }
+        let name_json = serde_json::to_string(name).map_err(E2eError::Json)?;
+        self.evaluate_value(&format!(
+            "(() => {{ \
+             window.__ferriteExpose = window.__ferriteExpose \
+             || {{ seq: 0, queue: [], pending: {{}} }}; \
+             const bx = window.__ferriteExpose; \
+             window[{name_json}] = (...args) => new Promise((resolve, reject) => {{ \
+             const id = ++bx.seq; \
+             bx.pending[id] = {{ resolve, reject }}; \
+             bx.queue.push([{name_json}, id, args]); }}); \
+             return true; }})()"
+        ))
+        .await?;
+        self.exposed
+            .fns
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(name.to_string(), Arc::new(f));
+        self.start_expose_pump();
+        Ok(())
+    }
+
+    /// Remove exposed functions and stop their dispatch pump.
+    pub async fn clear_exposed_functions(&self) {
+        let handle = self
+            .exposed
+            .pump
+            .lock()
+            .map(|mut pump| pump.take())
+            .unwrap_or(None);
+        if let Some(handle) = handle {
+            handle.abort();
+        }
+        let names: Vec<String> = self
+            .exposed
+            .fns
+            .lock()
+            .map(|mut fns| fns.drain().map(|(name, _)| name).collect())
+            .unwrap_or_default();
+        if !names.is_empty() {
+            let mut script = String::from("(() => {");
+            for name in &names {
+                script.push_str(&format!(
+                    "delete window[{}];",
+                    serde_json::to_string(name).unwrap_or_default()
+                ));
+            }
+            script.push_str("delete window.__ferriteExpose; return true; })()");
+            self.evaluate_value(&script).await.ok();
+        }
+    }
+
+    /// Start the exposed-function dispatch pump (once per page).
+    fn start_expose_pump(&self) {
+        let mut pump = self.exposed.pump.lock().unwrap_or_else(|e| e.into_inner());
+        if pump.is_some() {
+            return;
+        }
+        let page = self.clone();
+        let fns = self.exposed.fns.clone();
+        *pump = Some(
+            tokio::spawn(async move {
+                let mut failures = 0u32;
+                loop {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    let calls: Vec<(String, u64, Vec<Value>)> = match page
+                        .evaluate(
+                            "(() => { const bx = window.__ferriteExpose; \
+                             if (!bx) return []; \
+                             const taken = bx.queue; bx.queue = []; return taken; })()",
+                        )
+                        .await
+                    {
+                        Ok(calls) => {
+                            failures = 0;
+                            calls
+                        }
+                        Err(_) => {
+                            failures += 1;
+                            if failures > 20 {
+                                break;
+                            }
+                            continue;
+                        }
+                    };
+                    for (name, id, args) in calls {
+                        let handler = fns
+                            .lock()
+                            .map(|fns| fns.get(&name).cloned())
+                            .unwrap_or(None);
+                        let (result, failed) = match handler {
+                            Some(handle) => {
+                                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    handle(args)
+                                })) {
+                                    Ok(value) => (value.to_string(), false),
+                                    Err(_) => (
+                                        serde_json::json!("exposed function panicked").to_string(),
+                                        true,
+                                    ),
+                                }
+                            }
+                            None => (
+                                serde_json::json!("unknown exposed function").to_string(),
+                                true,
+                            ),
+                        };
+                        let settle = if failed { "reject" } else { "resolve" };
+                        let delivered = page
+                            .evaluate_value(&format!(
+                                "(() => {{ const bx = window.__ferriteExpose; \
+                                 const entry = bx && bx.pending[{id}]; \
+                                 if (!entry) return false; \
+                                 delete bx.pending[{id}]; entry.{settle}({result}); \
+                                 return true; }})()"
+                            ))
+                            .await;
+                        if delivered.is_err() {
+                            failures += 1;
+                            if failures > 20 {
+                                break;
+                            }
+                        } else {
+                            failures = 0;
+                        }
+                    }
+                }
+            })
+            .abort_handle(),
+        );
+    }
+
+    /// Wait for a new file in `dir`, returning once it stops growing.
+    /// In-progress downloads (`*.part`, `*.crdownload`, `*.tmp`) are skipped.
+    pub async fn wait_for_download(
+        &self,
+        dir: impl AsRef<Path>,
+        timeout: Duration,
+    ) -> E2eResult<PathBuf> {
+        let dir = dir.as_ref();
+        let before = dir_names(dir)?;
+        let deadline = tokio::time::Instant::now() + timeout;
+        let mut stable: Option<(PathBuf, u64)> = None;
+        loop {
+            let mut candidate: Option<(PathBuf, u64)> = None;
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    if before.contains(&name) || !path.is_file() || is_temp_download(&name) {
+                        continue;
+                    }
+                    let size = entry.metadata().map(|meta| meta.len()).unwrap_or(0);
+                    candidate = Some((path, size));
+                    break;
+                }
+            }
+            if let Some((path, size)) = candidate {
+                if stable.as_ref() == Some(&(path.clone(), size)) {
+                    return Ok(path);
+                }
+                stable = Some((path, size));
+            } else {
+                stable = None;
+            }
+            if tokio::time::Instant::now() > deadline {
+                return Err(E2eError::Timeout(
+                    timeout.as_millis().min(u128::from(u64::MAX)) as u64,
+                    format!("wait_for_download({})", dir.display()),
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// Start capture when it isn't running (keeps history when it is).
+    fn ensure_request_capture(&self) {
+        let running = self
+            .net_capture
+            .lock()
+            .map(|capture| capture.is_some())
+            .unwrap_or(false);
+        if !running {
+            self.start_request_capture();
+        }
+    }
+
+    /// Wait for a request whose URL contains `pattern`. Only matches
+    /// requests made after this call, so call it before triggering the
+    /// request. Starts capture when needed.
+    pub async fn wait_for_request(
+        &self,
+        pattern: &str,
+        timeout: Duration,
+    ) -> E2eResult<RecordedRequest> {
+        self.ensure_request_capture();
+        let skip = self.requests().len();
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if let Some(found) = self
+                .requests()
+                .iter()
+                .skip(skip)
+                .find(|request| request.url.contains(pattern))
+                .cloned()
+            {
+                return Ok(found);
+            }
+            if tokio::time::Instant::now() > deadline {
+                return Err(E2eError::Timeout(
+                    timeout.as_millis().min(u128::from(u64::MAX)) as u64,
+                    format!("wait_for_request({pattern})"),
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    /// Wait for a response (nonzero status) whose URL contains `pattern`.
+    /// Like [`Page::wait_for_request`], only matches responses arriving
+    /// after this call.
+    pub async fn wait_for_response(
+        &self,
+        pattern: &str,
+        timeout: Duration,
+    ) -> E2eResult<RecordedRequest> {
+        self.ensure_request_capture();
+        let skip = self.requests().len();
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if let Some(found) = self
+                .requests()
+                .iter()
+                .skip(skip)
+                .find(|request| request.url.contains(pattern) && request.status != 0)
+                .cloned()
+            {
+                return Ok(found);
+            }
+            if tokio::time::Instant::now() > deadline {
+                return Err(E2eError::Timeout(
+                    timeout.as_millis().min(u128::from(u64::MAX)) as u64,
+                    format!("wait_for_response({pattern})"),
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     /// Auto-handle JavaScript dialogs (`accept` = OK vs dismiss).
@@ -1126,6 +1908,7 @@ mod tests {
                 path: None,
                 http_only: false,
                 secure: false,
+                expires: None,
             }],
             local_storage,
         };

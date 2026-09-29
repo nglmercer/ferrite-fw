@@ -243,7 +243,7 @@ pub(crate) struct E2eArgs {
     /// Web server command to boot (overrides config).
     #[arg(long)]
     pub(crate) web_server: Option<String>,
-    /// Reporter spec (`list`, `json`, `junit`, comma-separated).
+    /// Reporter spec (`list`, `json`, `junit`, `html`, comma-separated).
     #[arg(long)]
     pub(crate) reporter: Option<String>,
     /// Retries per test.
@@ -258,6 +258,9 @@ pub(crate) struct E2eArgs {
     /// Only run tests whose name or tags contain this (ANDed with `--filter`).
     #[arg(long)]
     pub(crate) grep: Option<String>,
+    /// Skip tests whose name or tags contain this.
+    #[arg(long)]
+    pub(crate) grep_invert: Option<String>,
     /// Run one shard (`1/3` = first third by name order).
     #[arg(long, value_parser = parse_shard)]
     pub(crate) shard: Option<(usize, usize)>,

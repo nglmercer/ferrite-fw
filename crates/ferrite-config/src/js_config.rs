@@ -115,7 +115,10 @@ fn load_one(path: &Path) -> Result<LoadedConfigFile> {
              or `module.exports = {{ ... }}`"
         ))
     })?;
-    let evaluator = Evaluator { locals: &locals, file: &file };
+    let evaluator = Evaluator {
+        locals: &locals,
+        file: &file,
+    };
     let mut warnings = Vec::new();
     // Top-level keys evaluate independently: one dynamic value skips its
     // key with a warning instead of failing the whole file.
@@ -236,7 +239,11 @@ impl<'a> Evaluator<'a> {
     }
 
     /// Evaluate `expression` to JSON, or describe why it is dynamic.
-    fn eval(&self, expression: &'a Expression<'a>, stack: &mut Vec<String>) -> std::result::Result<Value, String> {
+    fn eval(
+        &self,
+        expression: &'a Expression<'a>,
+        stack: &mut Vec<String>,
+    ) -> std::result::Result<Value, String> {
         match expression {
             Expression::StringLiteral(literal) => Ok(Value::String(literal.value.to_string())),
             Expression::NumericLiteral(literal) => number_from_f64(literal.value)
@@ -532,7 +539,10 @@ fn map_server(value: &Value, config: &mut UserConfig, warnings: &mut Vec<String>
                     }
                     Value::Object(options) => {
                         if let Some(target) = options.get("target").and_then(Value::as_str) {
-                            config.server.proxy.insert(prefix.clone(), target.to_string());
+                            config
+                                .server
+                                .proxy
+                                .insert(prefix.clone(), target.to_string());
                         } else {
                             warnings.push(format!(
                                 "{file}: ignoring `server.proxy.{prefix}`: expected a target URL"
@@ -545,7 +555,9 @@ fn map_server(value: &Value, config: &mut UserConfig, warnings: &mut Vec<String>
                 }
             }
         } else {
-            warnings.push(format!("{file}: ignoring `server.proxy`: expected an object"));
+            warnings.push(format!(
+                "{file}: ignoring `server.proxy`: expected an object"
+            ));
         }
     }
 }
@@ -570,7 +582,9 @@ fn map_build(value: &Value, config: &mut UserConfig, warnings: &mut Vec<String>,
     match build.get("minify") {
         Some(Value::Bool(minify)) => config.build.minify = *minify,
         Some(Value::String(mode)) => config.build.minify = mode != "false",
-        Some(_) => warnings.push(format!("{file}: ignoring `build.minify`: expected a boolean")),
+        Some(_) => warnings.push(format!(
+            "{file}: ignoring `build.minify`: expected a boolean"
+        )),
         None => {}
     }
     if let Some(text) = get_str(build, &["target"]) {
@@ -632,7 +646,10 @@ fn map_resolve(value: &Value, config: &mut UserConfig, warnings: &mut Vec<String
                         "{file}: alias `{find}` looks like a regex; Ferrite aliases are literal prefixes"
                     ));
                 }
-                config.resolve.alias.insert(find.to_string(), replacement.to_string());
+                config
+                    .resolve
+                    .alias
+                    .insert(find.to_string(), replacement.to_string());
             }
         }
         Some(_) => warnings.push(format!(
@@ -681,7 +698,9 @@ fn get_str(object: &JsonObject, names: &[&str]) -> Option<String> {
 
 /// First present boolean among `names`.
 fn get_bool(object: &JsonObject, names: &[&str]) -> Option<bool> {
-    names.iter().find_map(|name| object.get(*name).and_then(Value::as_bool))
+    names
+        .iter()
+        .find_map(|name| object.get(*name).and_then(Value::as_bool))
 }
 
 /// A string or string array as a list (non-strings warned + skipped).
@@ -700,7 +719,9 @@ fn string_list(value: &Value, what: &str, warnings: &mut Vec<String>, file: &str
             out
         }
         _ => {
-            warnings.push(format!("{file}: ignoring `{what}`: expected a string or array"));
+            warnings.push(format!(
+                "{file}: ignoring `{what}`: expected a string or array"
+            ));
             Vec::new()
         }
     }
@@ -729,10 +750,8 @@ mod tests {
     }
 
     fn temp_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "ferrite-jsconfig-{tag}-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("ferrite-jsconfig-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
     }
@@ -827,7 +846,10 @@ mod tests {
         // `base` failed to evaluate → skipped with a warning.
         assert!(loaded.config.base.is_none());
         assert!(
-            loaded.warnings.iter().any(|warning| warning.contains("base")),
+            loaded
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("base")),
             "{:?}",
             loaded.warnings
         );
@@ -857,7 +879,10 @@ mod tests {
             "export default defineConfig(({ mode }) => ({ base: mode }));",
         );
         let error = load_config_from_file(&dir).unwrap_err();
-        assert!(error.to_string().contains("not statically evaluable"), "{error}");
+        assert!(
+            error.to_string().contains("not statically evaluable"),
+            "{error}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -873,7 +898,10 @@ mod tests {
         let loaded = load_config_from_file(&dir).unwrap().expect("config");
         assert_eq!(loaded.config.server.port, 3001);
         assert!(
-            loaded.warnings.iter().any(|warning| warning.contains("plugins")),
+            loaded
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("plugins")),
             "{:?}",
             loaded.warnings
         );
@@ -885,8 +913,16 @@ mod tests {
         let dir = temp_dir("precedence");
         std::fs::create_dir_all(&dir).unwrap();
         assert!(load_config_from_file(&dir).unwrap().is_none());
-        write(&dir, "vite.config.js", "export default { server: { port: 1 } };");
-        write(&dir, "ferrite.config.js", "export default { server: { port: 2 } };");
+        write(
+            &dir,
+            "vite.config.js",
+            "export default { server: { port: 1 } };",
+        );
+        write(
+            &dir,
+            "ferrite.config.js",
+            "export default { server: { port: 2 } };",
+        );
         let loaded = load_config_from_file(&dir).unwrap().expect("config");
         assert_eq!(loaded.config.server.port, 2);
         let _ = std::fs::remove_dir_all(&dir);

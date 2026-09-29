@@ -11,9 +11,9 @@
 use std::time::Duration;
 
 use ferrite_e2e::{
-    describe, test, Browser, BrowserKind, ColorScheme, LaunchOptions, LoadState, NavigationOptions,
-    Page, RecordedRequest, ReducedMotion, RouteRule, Runner, TestStatus, Timeout, VideoMode,
-    VideoOptions,
+    describe, test, Browser, BrowserKind, ColorScheme, Cookie, DeviceDescriptor, E2eError,
+    LaunchOptions, LoadState, NavigationOptions, Page, RecordedRequest, ReducedMotion, RouteRule,
+    Runner, ScreenshotOptions, TestStatus, Timeout, VideoMode, VideoOptions,
 };
 
 const FIXTURE: &str = r#"<!doctype html><html><head><title>e2e fixture</title></head><body>
@@ -21,6 +21,7 @@ const FIXTURE: &str = r#"<!doctype html><html><head><title>e2e fixture</title></
 <button id="inc">inc</button>
 <span id="count">0</span>
 <input id="name" />
+<input type="file" id="upload" multiple />
 <select id="pick"><option value="a">A</option><option value="b">B</option></select>
 <input type="checkbox" id="agree" />
 <script>
@@ -42,7 +43,11 @@ const ASSERT_FIXTURE: &str = r#"<!doctype html><html><head><title>assert me</tit
 <span id="empty"></span>
 </body></html>"#;
 
-const LOCATE_FIXTURE: &str = r#"<!doctype html><html><head><title>locate me</title></head><body>
+const FRAMES_FIXTURE: &str = r#"<!doctype html><html><head><title>frames host</title></head><body>
+<iframe src="/assert" name="inner"></iframe>
+</body></html>"#;
+
+const LOCATE_FIXTURE: &str = r#"<!doctype html><html><head><title>locate me</title><meta name="viewport" content="width=device-width, initial-scale=1"></head><body>
 <ul id="items"><li class="item">apple</li><li class="item">banana</li><li class="item">cherry</li></ul>
 <form id="login">
 <label for="user">User name</label><input id="user" placeholder="Enter name" />
@@ -58,7 +63,14 @@ const LOCATE_FIXTURE: &str = r#"<!doctype html><html><head><title>locate me</tit
 <button id="dlg-alert" onclick="alert('hi there')">show alert</button>
 <button id="dlg-confirm" onclick="document.title='c:'+confirm('sure?')">show confirm</button>
 <button id="dlg-prompt" onclick="document.title='p:'+prompt('name?','ada')">show prompt</button>
+<button id="a11y" aria-label="Close dialog" aria-describedby="a11y-desc">X</button>
+<span id="a11y-desc">Closes the window</span>
 </body></html>"#;
+
+/// Echo the request method.
+async fn echo_method(method: axum::http::Method) -> String {
+    method.to_string()
+}
 
 /// Spawn the fixture app; returns (base_url, shutdown).
 async fn serve() -> (String, tokio::task::AbortHandle) {
@@ -76,8 +88,32 @@ async fn serve() -> (String, tokio::task::AbortHandle) {
             axum::routing::get(|| async { axum::response::Html(LOCATE_FIXTURE.to_string()) }),
         )
         .route(
+            "/frames",
+            axum::routing::get(|| async { axum::response::Html(FRAMES_FIXTURE.to_string()) }),
+        )
+        .route(
             "/api/hi",
             axum::routing::get(|| async { axum::Json(serde_json::json!({"real": true})) }),
+        )
+        .route(
+            "/api/method",
+            axum::routing::get(echo_method).post(echo_method),
+        )
+        .route(
+            "/api/echo",
+            axum::routing::post(|body: axum::body::Bytes| async move { body }),
+        )
+        .route(
+            "/download/report.txt",
+            axum::routing::get(|| async {
+                (
+                    [(
+                        axum::http::header::CONTENT_DISPOSITION,
+                        "attachment; filename=\"report.txt\"",
+                    )],
+                    "ferrite download contents",
+                )
+            }),
         )
         .route(
             "/api/echo-headers",
@@ -1038,8 +1074,7 @@ async fn locator_addressing() {
         let error = page
             .locator("#user")
             .or_(&other.locator("#user"))
-            .err()
-            .expect("or_ across pages must fail");
+            .expect_err("or_ across pages must fail");
         assert!(
             error.to_string().contains("different pages"),
             "{tag}: {error}"
@@ -1541,5 +1576,824 @@ async fn runner_tags_grep_shard_describe() {
 
         browser.close().await.unwrap();
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[tokio::test]
+async fn touchscreen_a11y_storage() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+
+        // A touchscreen tap activates the counter.
+        let center = page
+            .evaluate::<(f64, f64)>(
+                "(() => { const r = document.getElementById('inc').getBoundingClientRect(); \
+                 return [r.x + r.width / 2, r.y + r.height / 2]; })()",
+            )
+            .await
+            .unwrap();
+        page.touchscreen_tap(center.0, center.1).await.unwrap();
+        page.locator("#count").expect_text("1").await.unwrap();
+
+        // Web-storage helpers.
+        page.local_storage_set("theme", "dark").await.unwrap();
+        assert_eq!(
+            page.local_storage_get("theme").await.unwrap().as_deref(),
+            Some("dark"),
+            "{tag}"
+        );
+        page.local_storage_remove("theme").await.unwrap();
+        assert!(
+            page.local_storage_get("theme").await.unwrap().is_none(),
+            "{tag}"
+        );
+        page.local_storage_set("a", "1").await.unwrap();
+        page.local_storage_clear().await.unwrap();
+        assert!(
+            page.local_storage_get("a").await.unwrap().is_none(),
+            "{tag}"
+        );
+        page.session_storage_set("tab", "7").await.unwrap();
+        assert_eq!(
+            page.session_storage_get("tab").await.unwrap().as_deref(),
+            Some("7"),
+            "{tag}"
+        );
+        page.session_storage_remove("tab").await.unwrap();
+        assert!(
+            page.session_storage_get("tab").await.unwrap().is_none(),
+            "{tag}"
+        );
+        page.session_storage_set("b", "2").await.unwrap();
+        page.session_storage_clear().await.unwrap();
+        assert!(
+            page.session_storage_get("b").await.unwrap().is_none(),
+            "{tag}"
+        );
+
+        // innerHTML + accessible names.
+        page.goto(&format!("{base}locate")).await.unwrap();
+        let html = page
+            .locator("#items")
+            .inner_html()
+            .await
+            .unwrap()
+            .expect("items html");
+        assert!(html.contains("banana"), "{tag}: {html}");
+        assert!(
+            page.locator("#missing")
+                .inner_html()
+                .await
+                .unwrap()
+                .is_none(),
+            "{tag}"
+        );
+        page.locator("#a11y")
+            .expect()
+            .accessible_name("Close dialog")
+            .await
+            .unwrap();
+        page.locator("#a11y")
+            .expect()
+            .accessible_description("Closes the window")
+            .await
+            .unwrap();
+        page.locator("#a11y")
+            .expect()
+            .not()
+            .accessible_name("X")
+            .await
+            .unwrap();
+        page.locator("#deep")
+            .expect()
+            .accessible_name("deep")
+            .await
+            .unwrap();
+
+        // Viewport intersection.
+        page.locator("#user").expect().in_viewport().await.unwrap();
+        page.locator("#deep")
+            .expect()
+            .not()
+            .in_viewport()
+            .await
+            .unwrap();
+        page.locator("#deep").scroll_into_view().await.unwrap();
+        page.locator("#deep").expect().in_viewport().await.unwrap();
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn runner_modes_and_overrides() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let dir =
+            std::env::temp_dir().join(format!("ferrite-e2e-modes-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let out = || {
+            Runner::default()
+                .output_dir(dir.display().to_string())
+                .list_progress(false)
+        };
+
+        // skip/fixme report Skipped without running (bodies would fail).
+        let report = out()
+            .run(
+                &browser,
+                vec![
+                    test("skipped", |_| async {
+                        Err(E2eError::Config("must not run".to_string()))
+                    })
+                    .skip(),
+                    test("fixme", |_| async {
+                        Err(E2eError::Config("must not run".to_string()))
+                    })
+                    .fixme(),
+                    test("runs", |_| async { Ok(()) }),
+                ],
+            )
+            .await;
+        assert_eq!(report.results.len(), 3, "{tag}");
+        for result in &report.results {
+            match result.name.as_str() {
+                "runs" => assert_eq!(result.status, TestStatus::Passed, "{tag}"),
+                _ => {
+                    assert_eq!(result.status, TestStatus::Skipped, "{tag}");
+                    assert_eq!(result.attempts, 0, "{tag}");
+                }
+            }
+        }
+
+        // only() restricts the run.
+        let report = out()
+            .run(
+                &browser,
+                vec![
+                    test("a", |_| async { Ok(()) }),
+                    test("b", |_| async { Ok(()) }).only(),
+                ],
+            )
+            .await;
+        assert_eq!(report.results.len(), 1, "{tag}");
+        assert_eq!(report.results[0].name, "b", "{tag}");
+
+        // Per-test retries override the runner default.
+        let tries = std::sync::Arc::new(AtomicUsize::new(0));
+        let flaky = {
+            let tries = tries.clone();
+            test("flaky", move |_| {
+                let tries = tries.clone();
+                async move {
+                    if tries.fetch_add(1, Ordering::SeqCst) == 0 {
+                        Err(E2eError::Config("first attempt fails".to_string()))
+                    } else {
+                        Ok(())
+                    }
+                }
+            })
+            .retries(1)
+        };
+        let report = out().retries(0).run(&browser, vec![flaky]).await;
+        assert_eq!(report.results[0].status, TestStatus::Passed, "{tag}");
+        assert_eq!(report.results[0].attempts, 2, "{tag}");
+
+        // Per-test timeouts fail fast; slow() triples them.
+        let report = out()
+            .run(
+                &browser,
+                vec![test("tight", |_| async {
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                    Ok(())
+                })
+                .timeout(Duration::from_millis(100))],
+            )
+            .await;
+        assert_eq!(report.results[0].status, TestStatus::Failed, "{tag}");
+        let report = out()
+            .run(
+                &browser,
+                vec![test("roomy", |_| async {
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                    Ok(())
+                })
+                .timeout(Duration::from_millis(200))
+                .slow()],
+            )
+            .await;
+        assert_eq!(report.results[0].status, TestStatus::Passed, "{tag}");
+
+        browser.close().await.unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[tokio::test]
+async fn runner_hooks_steps_and_invert() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let dir =
+            std::env::temp_dir().join(format!("ferrite-e2e-hooks-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // Hooks run around every attempt; steps land in the trace.
+        let before = std::sync::Arc::new(AtomicUsize::new(0));
+        let after = std::sync::Arc::new(AtomicUsize::new(0));
+        let setup = std::sync::Arc::new(AtomicUsize::new(0));
+        let teardown = std::sync::Arc::new(AtomicUsize::new(0));
+        let h_before = before.clone();
+        let h_after = after.clone();
+        let h_setup = setup.clone();
+        let h_teardown = teardown.clone();
+        let seen_title = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let seen_title_hook = seen_title.clone();
+        let report = Runner::default()
+            .output_dir(dir.display().to_string())
+            .list_progress(false)
+            .global_setup(move || {
+                let h_setup = h_setup.clone();
+                async move {
+                    h_setup.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }
+            })
+            .global_teardown(move || {
+                let h_teardown = h_teardown.clone();
+                async move {
+                    h_teardown.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }
+            })
+            .before_each({
+                let h_before = h_before.clone();
+                let hook_base = base.clone();
+                move |page| {
+                    let h_before = h_before.clone();
+                    let hook_base = hook_base.clone();
+                    async move {
+                        h_before.fetch_add(1, Ordering::SeqCst);
+                        page.goto(&hook_base).await.map(|_| ())
+                    }
+                }
+            })
+            .after_each(move |page| {
+                let h_after = h_after.clone();
+                let seen_title_hook = seen_title_hook.clone();
+                async move {
+                    h_after.fetch_add(1, Ordering::SeqCst);
+                    let title = page.title().await.unwrap_or_default();
+                    *seen_title_hook.lock().unwrap() = title;
+                    Ok(())
+                }
+            })
+            .run(
+                &browser,
+                vec![test("stepped", |page| async move {
+                    page.step("assert title", async {
+                        page.expect().title("e2e fixture").await
+                    })
+                    .await
+                })],
+            )
+            .await;
+        assert_eq!(report.results[0].status, TestStatus::Passed, "{tag}");
+        assert_eq!(before.load(Ordering::SeqCst), 1, "{tag}");
+        assert_eq!(after.load(Ordering::SeqCst), 1, "{tag}");
+        assert_eq!(setup.load(Ordering::SeqCst), 1, "{tag}");
+        assert_eq!(teardown.load(Ordering::SeqCst), 1, "{tag}");
+        assert_eq!(seen_title.lock().unwrap().as_str(), "e2e fixture", "{tag}");
+        let trace_raw = std::fs::read_to_string(dir.join("stepped.json")).unwrap();
+        assert!(trace_raw.contains("assert title"), "{tag}: {trace_raw}");
+
+        // grep_invert drops matches.
+        let report = Runner::default()
+            .output_dir(dir.display().to_string())
+            .list_progress(false)
+            .grep_invert("slow")
+            .run(
+                &browser,
+                vec![
+                    test("quick", |_| async { Ok(()) }),
+                    test("slowpoke", |_| async { Ok(()) }),
+                ],
+            )
+            .await;
+        assert_eq!(report.results.len(), 1, "{tag}");
+        assert_eq!(report.results[0].name, "quick", "{tag}");
+
+        browser.close().await.unwrap();
+        shutdown.abort();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[tokio::test]
+async fn strict_cookies_device_clock_screenshot() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&format!("{base}locate")).await.unwrap();
+
+        // Strict mode: three `.item` matches is a violation; one match works.
+        let err = page.locator(".item").strict().click().await.unwrap_err();
+        assert!(
+            err.to_string().contains("strict mode violation"),
+            "{tag}: {err}"
+        );
+        page.locator("#a11y").strict().click().await.unwrap();
+
+        // Full-fidelity cookies round-trip (Chrome caps lifetime at 400 days).
+        let fresh = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+            + 3600;
+        page.add_cookies(&[Cookie {
+            name: "full".to_string(),
+            value: "fidelity".to_string(),
+            domain: None,
+            path: Some("/".to_string()),
+            http_only: true,
+            secure: false,
+            expires: Some(fresh),
+        }])
+        .await
+        .unwrap();
+        let found = page
+            .cookies()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|cookie| cookie.name == "full")
+            .unwrap();
+        assert_eq!(found.value, "fidelity", "{tag}");
+        assert_eq!(found.path.as_deref(), Some("/"), "{tag}");
+        assert!(found.http_only, "{tag}");
+        assert_eq!(found.expires, Some(fresh), "{tag}");
+
+        // Device emulation is Chromium-only.
+        if kind == BrowserKind::Chromium {
+            page.emulate_device(DeviceDescriptor::IPHONE_15)
+                .await
+                .unwrap();
+            let width: i64 = page.evaluate("window.innerWidth").await.unwrap();
+            assert_eq!(width, 393, "{tag}");
+            let touch: i64 = page.evaluate("navigator.maxTouchPoints").await.unwrap();
+            assert!(touch > 0, "{tag}");
+            page.emulate_device(DeviceDescriptor::DESKTOP_1080P)
+                .await
+                .unwrap();
+        } else {
+            let err = page
+                .emulate_device(DeviceDescriptor::IPHONE_15)
+                .await
+                .unwrap_err();
+            assert!(
+                err.to_string().contains("only supported on Chromium"),
+                "{tag}: {err}"
+            );
+        }
+
+        // Fake clock: advancing without installing fails loudly.
+        let err = page.clock_advance(1).await.unwrap_err();
+        assert!(err.to_string().contains("clock_install"), "{tag}: {err}");
+        page.clock_install().await.unwrap();
+        let before: i64 = page.evaluate("Date.now()").await.unwrap();
+        page.wait_for_timeout(Duration::from_millis(200))
+            .await
+            .unwrap();
+        let frozen: i64 = page.evaluate("Date.now()").await.unwrap();
+        assert_eq!(before, frozen, "{tag}: clock not frozen");
+        page.evaluate_value(
+            "window.__fired = []; \
+             setTimeout(() => window.__fired.push('a'), 1000); \
+             setTimeout(() => window.__fired.push('b'), 3000); 1",
+        )
+        .await
+        .unwrap();
+        page.clock_advance(1500).await.unwrap();
+        let fired: Vec<String> = page.evaluate("window.__fired").await.unwrap();
+        assert_eq!(fired, vec!["a".to_string()], "{tag}");
+        let mid: i64 = page.evaluate("Date.now()").await.unwrap();
+        assert_eq!(mid - frozen, 1500, "{tag}");
+        page.clock_advance(2000).await.unwrap();
+        let fired: Vec<String> = page.evaluate("window.__fired").await.unwrap();
+        assert_eq!(fired, vec!["a".to_string(), "b".to_string()], "{tag}");
+        let advanced: i64 = page.evaluate("Date.now()").await.unwrap();
+        assert_eq!(advanced - mid, 2000, "{tag}");
+        page.clock_uninstall().await.unwrap();
+        let r1: i64 = page.evaluate("Date.now()").await.unwrap();
+        page.wait_for_timeout(Duration::from_millis(100))
+            .await
+            .unwrap();
+        let r2: i64 = page.evaluate("Date.now()").await.unwrap();
+        assert!(r2 > r1, "{tag}: clock did not resume");
+
+        // Screenshot options: mask + flags capture and clean up.
+        let shot = page
+            .screenshot(ScreenshotOptions {
+                mask: vec![page.locator("#items")],
+                disable_animations: true,
+                hide_caret: true,
+                ..ScreenshotOptions::default()
+            })
+            .await
+            .unwrap();
+        assert!(!shot.is_empty(), "{tag}");
+        let leftover: i64 = page
+            .evaluate("document.querySelectorAll('.ferrite-shot-mask').length")
+            .await
+            .unwrap();
+        assert_eq!(leftover, 0, "{tag}");
+        let err = page
+            .screenshot(ScreenshotOptions {
+                full_page: true,
+                mask: vec![page.locator("#items")],
+                ..ScreenshotOptions::default()
+            })
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("mask"), "{tag}: {err}");
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn network_wait_and_route_overrides() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+
+        // wait_for_request resolves on a later matching request (the
+        // delayed trigger fires strictly after the waiter arms).
+        page.start_request_capture();
+        page.evaluate_value(
+            "setTimeout(() => fetch('api/hi').then(r => r.text()).then(t => window.__hi = t), 500); 1",
+        )
+        .await
+        .unwrap();
+        let seen = page
+            .wait_for_request("api/hi", Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(seen.method, "GET", "{tag}");
+        assert!(seen.url.contains("api/hi"), "{tag}");
+        page.wait_for_function("window.__hi !== undefined", Duration::from_secs(5))
+            .await
+            .unwrap();
+
+        // wait_for_response resolves with the HTTP status.
+        page.evaluate_value("setTimeout(() => fetch('nope-404').catch(() => 'failed'), 500); 1")
+            .await
+            .unwrap();
+        let response = page
+            .wait_for_response("nope-404", Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(response.status, 404, "{tag}");
+
+        // Nothing matches: loud timeout.
+        let err = page
+            .wait_for_request("never-happens-xyz", Duration::from_millis(300))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, E2eError::Timeout(..)), "{tag}: {err}");
+
+        // URL override: /api/hi serves the echo-headers response
+        // (Chromium-only; Firefox aborts redirected requests).
+        if kind == BrowserKind::Chromium {
+            page.route(vec![RouteRule::continue_with(
+                "**/api/hi",
+                Some(format!("{base}api/echo-headers")),
+                None,
+                None,
+                None,
+            )])
+            .await
+            .unwrap();
+            let text: String = page
+                .evaluate("fetch('api/hi').then(r => r.text())")
+                .await
+                .unwrap();
+            assert!(text.contains("probe="), "{tag}: {text}");
+        } else {
+            let err = page
+                .route(vec![RouteRule::continue_with(
+                    "**/api/hi",
+                    Some(format!("{base}api/echo-headers")),
+                    None,
+                    None,
+                    None,
+                )])
+                .await
+                .unwrap_err();
+            assert!(
+                err.to_string().contains("not supported on Firefox"),
+                "{tag}: {err}"
+            );
+        }
+
+        // Header override replaces the header set.
+        page.route(vec![RouteRule::continue_with(
+            "**/api/echo-headers",
+            None,
+            None,
+            Some(vec![(
+                "x-ferrite-probe".to_string(),
+                "override-1".to_string(),
+            )]),
+            None,
+        )])
+        .await
+        .unwrap();
+        let text: String = page
+            .evaluate("fetch('api/echo-headers').then(r => r.text())")
+            .await
+            .unwrap();
+        assert!(text.contains("probe=override-1"), "{tag}: {text}");
+
+        // Method override: the server sees POST.
+        page.route(vec![RouteRule::continue_with(
+            "**/api/method",
+            None,
+            Some("POST".to_string()),
+            None,
+            None,
+        )])
+        .await
+        .unwrap();
+        let text: String = page
+            .evaluate("fetch('api/method').then(r => r.text())")
+            .await
+            .unwrap();
+        assert_eq!(text, "POST", "{tag}");
+
+        // Body override: the server sees the replacement bytes.
+        page.route(vec![RouteRule::continue_with(
+            "**/api/echo",
+            None,
+            None,
+            None,
+            Some(b"overridden".to_vec()),
+        )])
+        .await
+        .unwrap();
+        let text: String = page
+            .evaluate("fetch('api/echo', { method: 'POST', body: 'original' }).then(r => r.text())")
+            .await
+            .unwrap();
+        assert_eq!(text, "overridden", "{tag}");
+        page.stop_routing().await;
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn files_and_downloads() {
+    for kind in [BrowserKind::Chromium, BrowserKind::Firefox] {
+        let tag = kind.name();
+        let exe = match kind {
+            BrowserKind::Chromium => ferrite_e2e::find_chromium(None),
+            BrowserKind::Firefox => ferrite_e2e::find_firefox(None),
+        };
+        let Some(exe) = exe else {
+            eprintln!("skipping {tag}: no executable found");
+            continue;
+        };
+        let dir = std::env::temp_dir().join(format!("ferrite-e2e-dl-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let browser = match Browser::launch(
+            LaunchOptions::default()
+                .browser(kind)
+                .executable(exe)
+                .download_dir(dir.clone()),
+        )
+        .await
+        {
+            Ok(browser) => browser,
+            Err(error) => {
+                eprintln!("skipping {tag}: {error}");
+                continue;
+            }
+        };
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+
+        // Upload fixtures.
+        let upload_dir = dir.join("uploads");
+        std::fs::create_dir_all(&upload_dir).unwrap();
+        let a = upload_dir.join("a.txt");
+        let b = upload_dir.join("b.bin");
+        std::fs::write(&a, "alpha").unwrap();
+        std::fs::write(&b, [0u8, 1, 2, 3]).unwrap();
+
+        // set_input_files via Page and Locator (empty list clears).
+        page.set_input_files("#upload", &[&a, &b]).await.unwrap();
+        let names: Vec<String> = page
+            .evaluate("[...document.getElementById('upload').files].map(f => f.name)")
+            .await
+            .unwrap();
+        assert_eq!(
+            names,
+            vec!["a.txt".to_string(), "b.bin".to_string()],
+            "{tag}"
+        );
+        let mime: String = page
+            .evaluate("document.getElementById('upload').files[0].type")
+            .await
+            .unwrap();
+        assert_eq!(mime, "text/plain", "{tag}");
+        page.locator("#upload")
+            .set_input_files::<std::path::PathBuf>(&[])
+            .await
+            .unwrap();
+        let len: i64 = page
+            .evaluate("document.getElementById('upload').files.length")
+            .await
+            .unwrap();
+        assert_eq!(len, 0, "{tag}");
+
+        // Loud errors: missing file, wrong element.
+        let err = page
+            .set_input_files("#upload", &[upload_dir.join("nope.txt")])
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("nope.txt"), "{tag}: {err}");
+        let err = page.set_input_files("#name", &[&a]).await.unwrap_err();
+        assert!(err.to_string().contains("not a file input"), "{tag}: {err}");
+
+        // Downloads land in the launch dir.
+        if kind == BrowserKind::Chromium {
+            page.set_download_dir(&dir).await.unwrap();
+        } else {
+            let err = page.set_download_dir(&dir).await.unwrap_err();
+            assert!(err.to_string().contains("launch-wide"), "{tag}: {err}");
+        }
+        page.evaluate_value("window.location = 'download/report.txt'; true")
+            .await
+            .unwrap();
+        let got = page
+            .wait_for_download(&dir, Duration::from_secs(15))
+            .await
+            .unwrap();
+        assert_eq!(got.file_name().unwrap(), "report.txt", "{tag}");
+        assert_eq!(
+            std::fs::read_to_string(&got).unwrap(),
+            "ferrite download contents",
+            "{tag}"
+        );
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[tokio::test]
+async fn scripts_and_exposed_functions() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+
+        // Init scripts run in future documents only, once per document.
+        page.add_init_script("window.__initSeen = (window.__initSeen || 0) + 1;")
+            .await
+            .unwrap();
+        let before: Option<i64> = page.evaluate("window.__initSeen ?? null").await.unwrap();
+        assert_eq!(before, None, "{tag}");
+        page.goto(&base).await.unwrap();
+        let after: i64 = page.evaluate("window.__initSeen").await.unwrap();
+        assert_eq!(after, 1, "{tag}");
+        page.goto(&base).await.unwrap();
+        // A fresh document starts undefined, so 1 proves the script ran again.
+        let again: i64 = page.evaluate("window.__initSeen").await.unwrap();
+        assert_eq!(again, 1, "{tag}");
+
+        // Exposed functions round-trip args and results.
+        page.expose_function("add", |args| {
+            let sum: i64 = args.iter().filter_map(|value| value.as_i64()).sum();
+            serde_json::json!(sum)
+        })
+        .await
+        .unwrap();
+        let sum: i64 = page.evaluate("window.add(2, 3)").await.unwrap();
+        assert_eq!(sum, 5, "{tag}");
+
+        // Panics reject the page promise.
+        page.expose_function("boom", |_| -> serde_json::Value { panic!("rust panic") })
+            .await
+            .unwrap();
+        let rejected: String = page
+            .evaluate("window.boom().then(() => 'resolved', (error) => String(error))")
+            .await
+            .unwrap();
+        assert!(rejected.contains("panicked"), "{tag}: {rejected}");
+
+        // Bad names fail loudly.
+        let err = page
+            .expose_function("not an identifier", |_| serde_json::Value::Null)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("identifier"), "{tag}: {err}");
+
+        // Clearing removes the globals.
+        page.clear_exposed_functions().await;
+        let gone: bool = page
+            .evaluate("typeof window.add === 'undefined'")
+            .await
+            .unwrap();
+        assert!(gone, "{tag}");
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn frames_listing_and_evaluate() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&format!("{base}frames")).await.unwrap();
+
+        // The iframe may attach after the host load event.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let frames = loop {
+            let frames = page.document_frames().await.unwrap();
+            if frames.len() >= 2 {
+                break frames;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "{tag}: only {} frame(s)",
+                frames.len()
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        };
+        assert!(
+            frames[0].url().contains("/frames"),
+            "{tag}: {:?}",
+            frames[0]
+        );
+        assert!(
+            frames[1].url().contains("/assert"),
+            "{tag}: {:?}",
+            frames[1]
+        );
+
+        // Frame-scoped evaluate reads the iframe document, not the host.
+        let inner = page.frame_by_url("assert").await.unwrap().unwrap();
+        let title: String = inner.evaluate("document.title").await.unwrap();
+        assert_eq!(title, "assert me", "{tag}");
+        assert_eq!(page.title().await.unwrap(), "frames host", "{tag}");
+
+        // Names are Chromium-only (Firefox reports none).
+        if kind == BrowserKind::Chromium {
+            assert_eq!(inner.name(), "inner", "{tag}");
+            assert!(
+                page.frame_by_name("inner").await.unwrap().is_some(),
+                "{tag}"
+            );
+        } else {
+            assert_eq!(inner.name(), "", "{tag}");
+            assert!(
+                page.frame_by_name("inner").await.unwrap().is_none(),
+                "{tag}"
+            );
+        }
+        assert!(
+            page.frame_by_url("no-such-frame").await.unwrap().is_none(),
+            "{tag}"
+        );
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
     }
 }
