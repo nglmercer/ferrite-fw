@@ -3,7 +3,7 @@
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
 
 Implement **G, then A, then B**, followed by the supported C extensions. This
-backlog contains **45 tasks (9 complete, 36 remaining)**: four foundations, 16 core tasks, 19 follow-ups
+backlog contains **45 tasks (13 complete, 32 remaining)**: four foundations, 16 core tasks, 19 follow-ups
 and six optional extensions. Start the feature work with typed DOM events,
 richer assertions and exposed callbacks. The ordering and effort assessments
 are recommendations based on the current source and parity audit.
@@ -56,6 +56,12 @@ they do not constitute differential Playwright conformance coverage.
 - `5c2c7aa`: G01–G03 and A01–A06. All 269 E2E checks and 23 CLI/configuration
   checks passed; the expanded native conformance groups and Send runner integration
   passed on installed Chromium and Firefox, with strict Clippy and formatting checks.
+- `ab28b99`: A07–A10. All 273 E2E checks and 23 CLI/configuration checks
+  passed; expanded native callback regressions additionally passed on full Chrome
+  and Firefox, including zero deadlines, enclosing runner budgets/retries,
+  cancellation and context-init ordering. Strict Clippy, formatting, generated
+  matrix and local evidence links verified. Fixed Firefox child-frame adoption
+  and subscribed to Chromium main-world events before enabling Runtime.
 - G04 remains open until callback and stream lifecycle coverage is complete.
   A14 has a verified zero-segment double-star correction; shared API integration
   and its remaining conformance cases are still open.
@@ -154,23 +160,30 @@ Reference: [page callbacks](https://playwright.dev/docs/api/class-page#page-expo
 and [context callbacks](https://playwright.dev/docs/api/class-browsercontext#browser-context-expose-binding).
 The existing synchronous Page callback survives navigation; extend it.
 
-- [ ] **A07 — Async Page callbacks (M).** Add callbacks returning a future and
+- [x] **A07 — Async Page callbacks (M).** Add callbacks returning a future and
   `E2eResult` without blocking the dispatch pump. Done when JavaScript awaits
   results, Rust errors/panics reject predictably, concurrent calls remain
   independent and navigation/disposal cancels or settles pending work.
-- [ ] **A08 — Context-wide exposed functions (L; needs A07).** Register callbacks
+  Evidence: `ab28b99`; independent bounded async Page calls, Rust errors/creation and future panics, navigation, scoped caller cancellation and close tested in `callback_lifecycle.rs` on both engines.
+
+- [x] **A08 — Context-wide exposed functions (L; needs A07).** Register callbacks
   for current/future pages and adopted popups. Done when the function is available
   to startup scripts and after navigation, registrations stay context-isolated
   and closing a context releases the associated pumps and callback state.
-- [ ] **A09 — Binding caller metadata (M; needs A07/A08).** Add Page/context
+  Evidence: `ab28b99`; current/future pages, application and context-init startup scripts and adopted popups tested on Chromium/Firefox. Chromium pauses popup targets; Firefox requires native scoped preloads (136+), rejects unknown/older capability and isolates contexts.
+
+- [x] **A09 — Binding caller metadata (M; needs A07/A08).** Add Page/context
   bindings carrying owning context, page and supported frame identity. Done when
   two pages and same-origin frames report the correct caller and async results
   and failures behave as in A07. Defer cross-origin/OOPIF binding dispatch.
-- [ ] **A10 — Callback registration/removal lifecycle (M; needs A07–A09).** Define
+  Evidence: `ab28b99`; Page/context async bindings return owning context/page/native frame identities; main and same-origin child callers on multiple pages/popups verified. Cross-origin/OOPIF and remote handle dispatch remain deferred.
+
+- [x] **A10 — Callback registration/removal lifecycle (M; needs A07–A09).** Define
   duplicate-name behavior and add removal handles or named removal helpers.
   Done when removal affects current/future documents, pending calls settle and
   unrelated bindings keep working; removed preload scripts cannot reintroduce
   the callback after navigation.
+  Evidence: `ab28b99`; duplicate names and competing page/context registration are defined; named removal aborts/rejects pending work and removes native preloads. Re-registration, navigation, unrelated callbacks and context capture release tested.
 
 ### Daily API gaps
 
