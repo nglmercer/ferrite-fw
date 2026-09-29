@@ -347,8 +347,37 @@ impl BrowserContext {
 
     /// Register a context-level route handler. Handlers run before
     /// declarative rules and page handlers; the first matching handler (or
-    /// rule) on the page wins (pattern match on `pattern`).
+    /// rule) on the page wins (pattern match on `pattern`), unless it
+    /// returns [`RouteAction::Fallback`].
     pub async fn route_with_handler<F, Fut>(&self, pattern: &str, handler: F) -> E2eResult<()>
+    where
+        F: Fn(RouteInfo) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = E2eResult<RouteAction>> + Send + 'static,
+    {
+        self.route_entry(pattern, handler, None).await
+    }
+
+    /// [`BrowserContext::route_with_handler`] limited to `n` matches.
+    pub async fn route_with_handler_times<F, Fut>(
+        &self,
+        pattern: &str,
+        n: u32,
+        handler: F,
+    ) -> E2eResult<()>
+    where
+        F: Fn(RouteInfo) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = E2eResult<RouteAction>> + Send + 'static,
+    {
+        self.route_entry(pattern, handler, Some(n)).await
+    }
+
+    /// Register a context handler entry with an optional match limit.
+    async fn route_entry<F, Fut>(
+        &self,
+        pattern: &str,
+        handler: F,
+        times: Option<u32>,
+    ) -> E2eResult<()>
     where
         F: Fn(RouteInfo) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = E2eResult<RouteAction>> + Send + 'static,
@@ -360,6 +389,8 @@ impl BrowserContext {
             .push(RouteHandlerEntry {
                 pattern: pattern.to_owned(),
                 handler,
+                times,
+                hits: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             });
         let mut failed = None;
         for page in self.pages() {
@@ -479,6 +510,51 @@ impl BrowserContext {
             page.restart_routing().await?;
         }
         Ok(removed_rules + removed_handlers)
+    }
+
+    /// Replay responses from a HAR 1.2 file on every current and future page.
+    ///
+    /// Entries match on exact method + URL; misses fall through. Returns how
+    /// many entries were loaded. Remove with `unroute("**")`.
+    pub async fn route_from_har(
+        &self,
+        path: impl AsRef<std::path::Path>,
+        options: crate::page::RouteFromHarOptions,
+    ) -> E2eResult<usize> {
+        let file = crate::har::HarFile::load(path)?;
+        let matcher = match options.url_filter.as_deref() {
+            Some(glob) => Some(globset::Glob::new(glob).map_err(|error| {
+                E2eError::Config(format!("invalid HAR url filter {glob:?}: {error}"))
+            })?),
+            None => None,
+        }
+        .map(|glob| glob.compile_matcher());
+        let mut map = file.lookup();
+        if let Some(matcher) = &matcher {
+            map.retain(|_, entry| matcher.is_match(&entry.url));
+        }
+        let count = map.len();
+        if count == 0 {
+            return Ok(0);
+        }
+        let map = Arc::new(map);
+        self.route_with_handler("**", move |info: RouteInfo| {
+            let map = Arc::clone(&map);
+            async move {
+                let key = (info.method.to_ascii_uppercase(), info.url.clone());
+                match map.get(&key) {
+                    Some(entry) => Ok(RouteAction::fulfill_full(
+                        entry.status,
+                        entry.status_text.clone(),
+                        entry.headers.clone(),
+                        entry.body.clone(),
+                    )),
+                    None => Ok(RouteAction::Fallback),
+                }
+            }
+        })
+        .await?;
+        Ok(count)
     }
 
     /// Grant permissions on every current and future page (replaces the set).

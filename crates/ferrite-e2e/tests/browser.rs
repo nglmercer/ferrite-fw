@@ -12,11 +12,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ferrite_e2e::{
-    describe, match_text_snapshot_with, test, test_with_context, Browser, BrowserKind, ColorScheme,
-    Cookie, DeviceDescriptor, DialogDecision, E2eError, LaunchOptions, LoadState,
-    NavigationOptions, Page, PageEvent, PageEventKind, Project, RecordedRequest, ReducedMotion,
-    RouteAction, RouteInfo, RouteRule, Runner, ScreenshotOptions, SnapshotOptions, SnapshotUpdate,
-    TestStatus, Timeout, TracingOptions, VideoMode, VideoOptions, WebSocketDirection,
+    describe, match_text_snapshot_with, test, test_with_context, AbortReason, Browser, BrowserKind,
+    ColorScheme, Cookie, DeviceDescriptor, DialogDecision, E2eError, HarContentMode, HarFile,
+    LaunchOptions, LoadState, NavigationOptions, Page, PageEvent, PageEventKind, Project,
+    RecordedRequest, ReducedMotion, RouteAction, RouteFromHarOptions, RouteInfo, RouteRule, Runner,
+    ScreenshotOptions, SnapshotOptions, SnapshotUpdate, TestStatus, Timeout, TracingOptions,
+    VideoMode, VideoOptions, WebSocketDirection,
 };
 
 const FIXTURE: &str = r#"<!doctype html><html><head><title>e2e fixture</title></head><body>
@@ -4296,5 +4297,265 @@ async fn runner_projects_repeats_forbid() {
 
     for (_kind, browser) in browsers {
         browser.close().await.unwrap();
+    }
+}
+
+/// Poll until the recorded request gains a body (CDP attaches them async).
+async fn wait_for_body(page: &Page, url_suffix: &str) -> Option<String> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let hit = page
+            .requests()
+            .into_iter()
+            .find(|r| r.url.ends_with(url_suffix))
+            .and_then(|r| r.body_text());
+        if hit.is_some() {
+            return hit;
+        }
+        if tokio::time::Instant::now() > deadline {
+            return None;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test]
+async fn network_response_bodies() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.start_request_capture();
+        page.goto(&format!("{base}api/hi")).await.unwrap();
+        assert!(
+            wait_for_recorded(&page, |r| r.url.ends_with("/api/hi") && r.status == 200).await,
+            "{tag}: {:?}",
+            page.requests()
+        );
+        if kind == BrowserKind::Chromium {
+            let body = wait_for_body(&page, "/api/hi").await;
+            assert_eq!(
+                body.as_deref().map(str::trim),
+                Some(r#"{"real":true}"#),
+                "{tag}"
+            );
+            let recorded = page
+                .requests()
+                .into_iter()
+                .find(|r| r.url.ends_with("/api/hi"))
+                .unwrap();
+            assert_eq!(
+                recorded.body_json(),
+                Some(serde_json::json!({"real": true})),
+                "{tag}"
+            );
+            assert!(!recorded.body_truncated, "{tag}");
+        } else {
+            // BiDi exposes no response-body channel: Firefox bodies stay None.
+            let recorded = page
+                .requests()
+                .into_iter()
+                .find(|r| r.url.ends_with("/api/hi"))
+                .unwrap();
+            assert!(recorded.body_text().is_none(), "{tag}");
+            assert!(recorded.body_json().is_none(), "{tag}");
+        }
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn network_route_times_and_fallback() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+
+        // times(1): the first fetch is mocked, the second hits the server.
+        page.route(vec![RouteRule::fulfill(
+            "**/api/hi",
+            200,
+            r#"{"mocked":true}"#,
+            "application/json",
+        )
+        .times(1)])
+            .await
+            .unwrap();
+        let first: serde_json::Value = page
+            .evaluate("fetch('/api/hi').then(r => r.json())")
+            .await
+            .unwrap();
+        assert_eq!(first, serde_json::json!({"mocked": true}), "{tag}");
+        let second: serde_json::Value = page
+            .evaluate("fetch('/api/hi').then(r => r.json())")
+            .await
+            .unwrap();
+        assert_eq!(second, serde_json::json!({"real": true}), "{tag}");
+        page.stop_routing().await;
+
+        // Fallback chains to the next matching handler in registration order.
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seen_first = Arc::clone(&seen);
+        page.route_with_handler("**/api/hi", move |_route: RouteInfo| {
+            let seen_first = Arc::clone(&seen_first);
+            async move {
+                seen_first.lock().unwrap().push("first");
+                Ok(RouteAction::Fallback)
+            }
+        })
+        .await
+        .unwrap();
+        let seen_second = Arc::clone(&seen);
+        page.route_with_handler("**/api/hi", move |_route: RouteInfo| {
+            let seen_second = Arc::clone(&seen_second);
+            async move {
+                seen_second.lock().unwrap().push("second");
+                Ok(RouteAction::fulfill(
+                    200,
+                    r#"{"chained":true}"#,
+                    "application/json",
+                ))
+            }
+        })
+        .await
+        .unwrap();
+        let chained: serde_json::Value = page
+            .evaluate("fetch('/api/hi').then(r => r.json())")
+            .await
+            .unwrap();
+        assert_eq!(chained, serde_json::json!({"chained": true}), "{tag}");
+        assert_eq!(*seen.lock().unwrap(), vec!["first", "second"], "{tag}");
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn network_route_fulfill_full_and_abort() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+
+        page.route(vec![RouteRule::fulfill_full(
+            "**/api/hi",
+            201,
+            "Created",
+            vec![
+                ("x-mock".to_string(), "yes".to_string()),
+                ("content-type".to_string(), "application/json".to_string()),
+            ],
+            br#"{"made":true}"#.to_vec(),
+        )])
+        .await
+        .unwrap();
+        let status: i64 = page
+            .evaluate("fetch('/api/hi').then(r => r.status)")
+            .await
+            .unwrap();
+        assert_eq!(status, 201, "{tag}");
+        let header: String = page
+            .evaluate("fetch('/api/hi').then(r => r.headers.get('x-mock'))")
+            .await
+            .unwrap();
+        assert_eq!(header, "yes", "{tag}");
+        let made: serde_json::Value = page
+            .evaluate("fetch('/api/hi').then(r => r.json())")
+            .await
+            .unwrap();
+        assert_eq!(made, serde_json::json!({"made": true}), "{tag}");
+        page.stop_routing().await;
+
+        // abort_with maps to a CDP error on Chromium, plain abort on Firefox.
+        page.route(vec![RouteRule::abort_with(
+            "**/api/hi",
+            AbortReason::ConnectionRefused,
+        )])
+        .await
+        .unwrap();
+        let failed: String = page
+            .evaluate("fetch('/api/hi').then(() => 'ok', () => 'failed')")
+            .await
+            .unwrap();
+        assert_eq!(failed, "failed", "{tag}");
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn network_har_export_embed_and_replay() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.start_request_capture();
+        page.goto(&base).await.unwrap();
+        let _: serde_json::Value = page
+            .evaluate("fetch('/api/hi').then(r => r.json())")
+            .await
+            .unwrap();
+        assert!(
+            wait_for_recorded(&page, |r| r.url.ends_with("/api/hi")).await,
+            "{tag}"
+        );
+
+        let dir =
+            std::env::temp_dir().join(format!("ferrite-e2e-har7-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let har_path = dir.join("rec.har");
+        if kind == BrowserKind::Chromium {
+            // Bodies attach async; embed only after the body lands.
+            assert!(wait_for_body(&page, "/api/hi").await.is_some(), "{tag}");
+        }
+        page.save_har_with(&har_path, HarContentMode::Embed)
+            .unwrap();
+        let har = HarFile::load(&har_path).unwrap();
+        let entry = har
+            .entries()
+            .iter()
+            .find(|entry| entry.url.ends_with("/api/hi") && entry.status == 200)
+            .unwrap_or_else(|| panic!("{tag}: no /api/hi entry in {har:?}"));
+        if kind == BrowserKind::Chromium {
+            assert_eq!(
+                entry.body_text().as_deref().map(str::trim),
+                Some(r#"{"real":true}"#),
+                "{tag}"
+            );
+        }
+
+        // Replay from HAR with the server shut down.
+        let replay = browser.new_page().await.unwrap();
+        let loaded = replay
+            .route_from_har(&har_path, RouteFromHarOptions::default())
+            .await
+            .unwrap();
+        assert!(loaded >= 1, "{tag}");
+        shutdown.abort();
+        // Navigation succeeds with the server gone: the HAR handler served it.
+        replay.goto(&format!("{base}api/hi")).await.unwrap();
+        if kind == BrowserKind::Chromium {
+            assert!(replay.content().await.unwrap().contains("real"), "{tag}");
+        } else {
+            // Firefox records no bodies, so replay serves the status with an
+            // empty body (documented BiDi gap); the goto above proves the
+            // interception path ran.
+            assert!(replay.content().await.is_ok(), "{tag}");
+        }
+
+        page.close().await.unwrap();
+        replay.close().await.unwrap();
+        browser.close().await.unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

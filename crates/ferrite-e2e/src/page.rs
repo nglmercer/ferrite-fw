@@ -115,6 +115,36 @@ pub struct RecordedRequest {
     /// Request start, milliseconds since the Unix epoch.
     #[serde(default)]
     pub started_ms: Option<u64>,
+    /// Engine request id (correlates with protocol logs).
+    #[serde(default)]
+    pub request_id: Option<String>,
+    /// Response body bytes (Chromium only; `None` when unavailable).
+    ///
+    /// In-memory only: skipped by serde so traces stay lean. Bodies larger
+    /// than 1 MiB are dropped (`body_truncated`).
+    #[serde(skip)]
+    pub body: Option<Vec<u8>>,
+    /// True when the body exceeded the 1 MiB capture cap.
+    #[serde(default)]
+    pub body_truncated: bool,
+}
+
+impl RecordedRequest {
+    /// Response body as lossy text (`None` when no body was captured).
+    #[must_use]
+    pub fn body_text(&self) -> Option<String> {
+        self.body
+            .as_ref()
+            .map(|body| String::from_utf8_lossy(body).into_owned())
+    }
+
+    /// Response body parsed as JSON (`None` when absent or not JSON).
+    #[must_use]
+    pub fn body_json(&self) -> Option<Value> {
+        self.body
+            .as_ref()
+            .and_then(|body| serde_json::from_slice(body).ok())
+    }
 }
 
 /// A JavaScript dialog observed while auto-handling.
@@ -533,20 +563,75 @@ impl From<&str> for KeyPress {
     }
 }
 
+/// Network error for [`RouteAction::AbortWith`] (Chromium reports the reason;
+/// Firefox fails plainly, ignoring it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AbortReason {
+    /// Generic failure.
+    Failed,
+    /// Aborted (`net::ERR_ABORTED`, the plain [`RouteAction::Abort`]).
+    Aborted,
+    /// Connection refused.
+    ConnectionRefused,
+    /// Connection reset.
+    ConnectionReset,
+    /// Connection closed.
+    ConnectionClosed,
+    /// Connection failed.
+    ConnectionFailed,
+    /// Timed out.
+    TimedOut,
+    /// DNS failure.
+    NameNotResolved,
+    /// No connectivity.
+    InternetDisconnected,
+    /// Blocked by the client.
+    BlockedByClient,
+    /// Access denied.
+    AccessDenied,
+}
+
+impl AbortReason {
+    /// CDP `Network.ErrorReason` name.
+    pub(crate) fn as_cdp(&self) -> &'static str {
+        match self {
+            Self::Failed => "Failed",
+            Self::Aborted => "Aborted",
+            Self::ConnectionRefused => "ConnectionRefused",
+            Self::ConnectionReset => "ConnectionReset",
+            Self::ConnectionClosed => "ConnectionClosed",
+            Self::ConnectionFailed => "ConnectionFailed",
+            Self::TimedOut => "TimedOut",
+            Self::NameNotResolved => "NameNotResolved",
+            Self::InternetDisconnected => "InternetDisconnected",
+            Self::BlockedByClient => "BlockedByClient",
+            Self::AccessDenied => "AccessDenied",
+        }
+    }
+}
+
 /// What to do with an intercepted request.
 #[derive(Debug, Clone)]
 pub enum RouteAction {
     /// Fail the request (`net::ERR_ABORTED`).
     Abort,
+    /// Fail the request with an explicit reason (Chromium; Firefox fails plainly).
+    AbortWith(AbortReason),
     /// Let the request through.
     Continue,
+    /// Pass to the next matching rule/handler (unmodified when none match).
+    Fallback,
     /// Respond with a synthetic body.
     Fulfill {
         /// HTTP status.
         status: u16,
-        /// Response body.
-        body: String,
-        /// Content type header.
+        /// Status text (`""` = engine default).
+        status_text: String,
+        /// Response headers (a `content-type` here wins over `content_type`).
+        headers: Vec<(String, String)>,
+        /// Response body bytes.
+        body: Vec<u8>,
+        /// Content type header (used unless `headers` sets one).
         content_type: String,
     },
     /// Continue with modified URL/method/headers/body (`None` = unchanged).
@@ -609,6 +694,22 @@ pub type RouteHandler = Arc<
     dyn Fn(RouteInfo) -> futures::future::BoxFuture<'static, E2eResult<RouteAction>> + Send + Sync,
 >;
 
+/// Options for [`Page::route_from_har`].
+#[derive(Debug, Clone, Default)]
+pub struct RouteFromHarOptions {
+    /// Only load entries whose URL matches this glob (`None` = all).
+    pub url_filter: Option<String>,
+}
+
+impl RouteFromHarOptions {
+    /// Only load entries whose URL matches `glob`.
+    #[must_use]
+    pub fn url_filter(mut self, glob: impl Into<String>) -> Self {
+        self.url_filter = Some(glob.into());
+        self
+    }
+}
+
 /// A glob pattern paired with its route handler.
 #[derive(Clone)]
 pub struct RouteHandlerEntry {
@@ -616,6 +717,25 @@ pub struct RouteHandlerEntry {
     pub pattern: String,
     /// Handler deciding matching requests.
     pub handler: RouteHandler,
+    /// Match at most this many requests (`None` = unlimited).
+    pub times: Option<u32>,
+    /// Matches consumed so far (shared across clones).
+    pub hits: Arc<std::sync::atomic::AtomicU32>,
+}
+
+impl RouteHandlerEntry {
+    /// Whether the entry still matches (`times` not exhausted).
+    pub(crate) fn allows_match(&self) -> bool {
+        match self.times {
+            Some(limit) => self.hits.load(std::sync::atomic::Ordering::Relaxed) < limit,
+            None => true,
+        }
+    }
+
+    /// Record one match.
+    pub(crate) fn record_match(&self) {
+        self.hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 /// A dialog answer decided by a handler.
@@ -653,18 +773,46 @@ impl RouteAction {
         Self::Abort
     }
 
+    /// Fail the request with an explicit reason.
+    pub fn abort_with(reason: AbortReason) -> Self {
+        Self::AbortWith(reason)
+    }
+
     /// Respond with a synthetic body.
-    pub fn fulfill(status: u16, body: impl Into<String>, content_type: impl Into<String>) -> Self {
+    pub fn fulfill(status: u16, body: impl Into<Vec<u8>>, content_type: impl Into<String>) -> Self {
         Self::Fulfill {
             status,
+            status_text: String::new(),
+            headers: Vec::new(),
             body: body.into(),
             content_type: content_type.into(),
+        }
+    }
+
+    /// Respond with a synthetic body, status text, and headers.
+    pub fn fulfill_full(
+        status: u16,
+        status_text: impl Into<String>,
+        headers: Vec<(String, String)>,
+        body: impl Into<Vec<u8>>,
+    ) -> Self {
+        Self::Fulfill {
+            status,
+            status_text: status_text.into(),
+            headers,
+            body: body.into(),
+            content_type: String::new(),
         }
     }
 
     /// Let the request through unchanged.
     pub fn continue_unchanged() -> Self {
         Self::Continue
+    }
+
+    /// Pass to the next matching rule/handler.
+    pub fn fallback() -> Self {
+        Self::Fallback
     }
 }
 
@@ -675,32 +823,101 @@ pub struct RouteRule {
     pub pattern: String,
     /// Action for matching requests.
     pub action: RouteAction,
+    /// Match at most this many requests (`None` = unlimited).
+    pub times: Option<u32>,
+    /// Matches consumed so far (shared across clones).
+    pub hits: Arc<std::sync::atomic::AtomicU32>,
 }
 
 impl RouteRule {
-    /// Abort matching requests.
-    pub fn abort(pattern: impl Into<String>) -> Self {
+    /// A rule with defaults (unlimited matches).
+    fn with_action(pattern: impl Into<String>, action: RouteAction) -> Self {
         Self {
             pattern: pattern.into(),
-            action: RouteAction::Abort,
+            action,
+            times: None,
+            hits: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         }
+    }
+
+    /// Whether the rule still matches (`times` not exhausted).
+    pub(crate) fn allows_match(&self) -> bool {
+        match self.times {
+            Some(limit) => self.hits.load(std::sync::atomic::Ordering::Relaxed) < limit,
+            None => true,
+        }
+    }
+
+    /// Record one match.
+    pub(crate) fn record_match(&self) {
+        self.hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Match at most `n` requests, then stop matching (stays registered).
+    #[must_use]
+    pub fn times(mut self, n: u32) -> Self {
+        self.times = Some(n);
+        self
+    }
+
+    /// Abort matching requests.
+    pub fn abort(pattern: impl Into<String>) -> Self {
+        Self::with_action(pattern, RouteAction::Abort)
+    }
+
+    /// Abort matching requests with an explicit reason.
+    pub fn abort_with(pattern: impl Into<String>, reason: AbortReason) -> Self {
+        Self::with_action(pattern, RouteAction::AbortWith(reason))
     }
 
     /// Fulfill matching requests with a synthetic response.
     pub fn fulfill(
         pattern: impl Into<String>,
         status: u16,
-        body: impl Into<String>,
+        body: impl Into<Vec<u8>>,
         content_type: impl Into<String>,
     ) -> Self {
-        Self {
-            pattern: pattern.into(),
-            action: RouteAction::Fulfill {
-                status,
-                body: body.into(),
-                content_type: content_type.into(),
-            },
-        }
+        Self::with_action(pattern, RouteAction::fulfill(status, body, content_type))
+    }
+
+    /// Fulfill matching requests with status text and headers.
+    pub fn fulfill_full(
+        pattern: impl Into<String>,
+        status: u16,
+        status_text: impl Into<String>,
+        headers: Vec<(String, String)>,
+        body: impl Into<Vec<u8>>,
+    ) -> Self {
+        Self::with_action(
+            pattern,
+            RouteAction::fulfill_full(status, status_text, headers, body),
+        )
+    }
+
+    /// Fulfill matching requests with a JSON body.
+    pub fn fulfill_json(pattern: impl Into<String>, status: u16, json: &Value) -> Self {
+        Self::fulfill(
+            pattern,
+            status,
+            serde_json::to_vec(json).unwrap_or_default(),
+            "application/json",
+        )
+    }
+
+    /// Fulfill matching requests with a file's bytes (read once, now).
+    pub fn fulfill_file(
+        pattern: impl Into<String>,
+        status: u16,
+        path: impl AsRef<Path>,
+        content_type: impl Into<String>,
+    ) -> E2eResult<Self> {
+        let body = std::fs::read(path.as_ref()).map_err(|error| {
+            E2eError::Config(format!(
+                "cannot read fulfill file {}: {error}",
+                path.as_ref().display()
+            ))
+        })?;
+        Ok(Self::fulfill(pattern, status, body, content_type))
     }
 
     /// Continue matching requests with modifications (`None` = unchanged).
@@ -714,15 +931,15 @@ impl RouteRule {
         headers: Option<Vec<(String, String)>>,
         body: Option<Vec<u8>>,
     ) -> Self {
-        Self {
-            pattern: pattern.into(),
-            action: RouteAction::ContinueWith {
+        Self::with_action(
+            pattern,
+            RouteAction::ContinueWith {
                 url,
                 method,
                 headers,
                 body,
             },
-        }
+        )
     }
 
     /// Modify the real response for matching requests (`None` = keep the
@@ -734,14 +951,14 @@ impl RouteRule {
         headers: Option<Vec<(String, String)>>,
         body: Option<Vec<u8>>,
     ) -> Self {
-        Self {
-            pattern: pattern.into(),
-            action: RouteAction::ModifyResponse {
+        Self::with_action(
+            pattern,
+            RouteAction::ModifyResponse {
                 status,
                 headers,
                 body,
             },
-        }
+        )
     }
 }
 
@@ -864,7 +1081,8 @@ pub struct Page {
     routes: Arc<Mutex<Vec<RouteRule>>>,
     /// Rules inherited from the owning context (shared; page rules win).
     context_routes: Arc<Mutex<Vec<RouteRule>>>,
-    /// Page-level route handlers (checked before rules, first match wins).
+    /// Page-level route handlers (checked before rules; first match wins
+    /// unless it returns [`RouteAction::Fallback`]).
     handlers: Arc<Mutex<Vec<RouteHandlerEntry>>>,
     /// Handlers inherited from the owning context (shared).
     context_handlers: Arc<Mutex<Vec<RouteHandlerEntry>>>,
@@ -2075,8 +2293,36 @@ impl Page {
     /// Intercept matching requests with an async handler (Playwright
     /// `page.route(handler)` equivalent): inspect the [`RouteInfo`], fetch
     /// the real response when needed, and return the [`RouteAction`].
-    /// Handlers run before rules; first match wins.
+    /// Handlers run before rules; first match wins unless it falls back.
     pub async fn route_with_handler<F, Fut>(&self, pattern: &str, handler: F) -> E2eResult<()>
+    where
+        F: Fn(RouteInfo) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = E2eResult<RouteAction>> + Send + 'static,
+    {
+        self.route_entry(pattern, handler, None).await
+    }
+
+    /// [`Page::route_with_handler`] limited to `n` matches.
+    pub async fn route_with_handler_times<F, Fut>(
+        &self,
+        pattern: &str,
+        n: u32,
+        handler: F,
+    ) -> E2eResult<()>
+    where
+        F: Fn(RouteInfo) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = E2eResult<RouteAction>> + Send + 'static,
+    {
+        self.route_entry(pattern, handler, Some(n)).await
+    }
+
+    /// Register a handler entry with an optional match limit.
+    async fn route_entry<F, Fut>(
+        &self,
+        pattern: &str,
+        handler: F,
+        times: Option<u32>,
+    ) -> E2eResult<()>
     where
         F: Fn(RouteInfo) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = E2eResult<RouteAction>> + Send + 'static,
@@ -2088,6 +2334,8 @@ impl Page {
             .push(RouteHandlerEntry {
                 pattern: pattern.to_string(),
                 handler,
+                times,
+                hits: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             });
         self.restart_routing().await
     }
@@ -2141,6 +2389,53 @@ impl Page {
             .unwrap_or(0);
         self.restart_routing().await?;
         Ok(removed + removed_handlers)
+    }
+
+    /// Replay responses from a HAR 1.2 file (Playwright `routeFromHAR`).
+    ///
+    /// Entries match on exact method + URL and fulfill status, headers, and
+    /// body; misses fall through to later handlers/rules and the network.
+    /// Returns how many entries were loaded. Remove with `unroute("**")`.
+    /// HAR-update mode is not supported (record with [`Page::save_har`]).
+    pub async fn route_from_har(
+        &self,
+        path: impl AsRef<Path>,
+        options: RouteFromHarOptions,
+    ) -> E2eResult<usize> {
+        let file = crate::har::HarFile::load(path)?;
+        let matcher = match options.url_filter.as_deref() {
+            Some(glob) => Some(globset::Glob::new(glob).map_err(|error| {
+                E2eError::Config(format!("invalid HAR url filter {glob:?}: {error}"))
+            })?),
+            None => None,
+        }
+        .map(|glob| glob.compile_matcher());
+        let mut map = file.lookup();
+        if let Some(matcher) = &matcher {
+            map.retain(|_, entry| matcher.is_match(&entry.url));
+        }
+        let count = map.len();
+        if count == 0 {
+            return Ok(0);
+        }
+        let map = Arc::new(map);
+        self.route_with_handler("**", move |info: RouteInfo| {
+            let map = Arc::clone(&map);
+            async move {
+                let key = (info.method.to_ascii_uppercase(), info.url.clone());
+                match map.get(&key) {
+                    Some(entry) => Ok(RouteAction::fulfill_full(
+                        entry.status,
+                        entry.status_text.clone(),
+                        entry.headers.clone(),
+                        entry.body.clone(),
+                    )),
+                    None => Ok(RouteAction::Fallback),
+                }
+            }
+        })
+        .await?;
+        Ok(count)
     }
 
     /// Apply the stored rules and handlers (page first, context fallback;
@@ -2216,6 +2511,21 @@ impl Page {
     /// headers, MIME types and timings are written.
     pub fn save_har(&self, path: impl AsRef<Path>) -> E2eResult<()> {
         let har = crate::har::har_json(&self.requests());
+        let text = serde_json::to_string_pretty(&har)?;
+        std::fs::write(path.as_ref(), text)?;
+        Ok(())
+    }
+
+    /// Write recorded traffic as HAR 1.2 with an explicit content mode.
+    ///
+    /// `Embed` base64-embeds captured bodies (Chromium records bodies;
+    /// entries without one export as in `Omit`).
+    pub fn save_har_with(
+        &self,
+        path: impl AsRef<Path>,
+        mode: crate::har::HarContentMode,
+    ) -> E2eResult<()> {
+        let har = crate::har::har_json_with(&self.requests(), mode);
         let text = serde_json::to_string_pretty(&har)?;
         std::fs::write(path.as_ref(), text)?;
         Ok(())
@@ -2958,5 +3268,106 @@ mod tests {
         assert_eq!(download.suggested_filename, "report.txt");
         let download = Download::from_path(PathBuf::from("bare.bin"));
         assert_eq!(download.suggested_filename, "bare.bin");
+    }
+
+    #[test]
+    fn recorded_body_helpers() {
+        let mut request = RecordedRequest {
+            method: "GET".to_string(),
+            url: "http://x.test/a".to_string(),
+            status: 200,
+            headers: Vec::new(),
+            post_data: None,
+            duration_ms: None,
+            status_text: "OK".to_string(),
+            mime_type: "application/json".to_string(),
+            response_headers: Vec::new(),
+            started_ms: None,
+            request_id: Some("1".to_string()),
+            body: None,
+            body_truncated: false,
+        };
+        assert!(request.body_text().is_none());
+        assert!(request.body_json().is_none());
+        request.body = Some(br#"{"n":1}"#.to_vec());
+        assert_eq!(request.body_text().as_deref(), Some(r#"{"n":1}"#));
+        assert_eq!(request.body_json(), Some(serde_json::json!({"n": 1})));
+        request.body = Some(vec![0xff, 0xfe]);
+        assert!(request.body_json().is_none());
+        // Bodies stay in memory (skipped by serde).
+        let json = serde_json::to_value(&request).unwrap();
+        assert!(json.get("body").is_none());
+        assert!(json.get("request_id").is_some());
+    }
+
+    #[test]
+    fn route_rule_constructors() {
+        let rule = RouteRule::fulfill("**/a", 200, "hi", "text/plain");
+        assert!(rule.times.is_none());
+        assert!(rule.allows_match());
+        rule.record_match();
+        let limited = RouteRule::abort("**/b").times(1);
+        assert!(limited.allows_match());
+        limited.record_match();
+        assert!(!limited.allows_match());
+
+        let json_rule = RouteRule::fulfill_json("**/j", 201, &serde_json::json!({"ok": true}));
+        match &json_rule.action {
+            RouteAction::Fulfill {
+                status,
+                body,
+                content_type,
+                ..
+            } => {
+                assert_eq!(*status, 201);
+                assert_eq!(content_type, "application/json");
+                assert_eq!(
+                    serde_json::from_slice::<Value>(body).unwrap(),
+                    serde_json::json!({"ok": true})
+                );
+            }
+            action => panic!("unexpected {action:?}"),
+        }
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("ferrite-fulfill-{}", std::process::id()));
+        std::fs::write(&path, [0u8, 1, 2, 255]).unwrap();
+        let file_rule =
+            RouteRule::fulfill_file("**/f", 200, &path, "application/octet-stream").unwrap();
+        match &file_rule.action {
+            RouteAction::Fulfill {
+                body, content_type, ..
+            } => {
+                assert_eq!(body, &vec![0u8, 1, 2, 255]);
+                assert_eq!(content_type, "application/octet-stream");
+            }
+            action => panic!("unexpected {action:?}"),
+        }
+        assert!(
+            RouteRule::fulfill_file("**/f", 200, dir.join("ferrite-nope"), "text/plain").is_err()
+        );
+        let _ = std::fs::remove_file(&path);
+
+        let abort = RouteRule::abort_with("**/x", AbortReason::ConnectionRefused);
+        assert!(matches!(
+            abort.action,
+            RouteAction::AbortWith(AbortReason::ConnectionRefused)
+        ));
+        assert_eq!(AbortReason::ConnectionRefused.as_cdp(), "ConnectionRefused");
+        assert_eq!(AbortReason::TimedOut.as_cdp(), "TimedOut");
+    }
+
+    #[test]
+    fn handler_entry_times() {
+        let entry = RouteHandlerEntry {
+            pattern: "**".to_string(),
+            handler: Arc::new(|_| Box::pin(async { Ok(RouteAction::Fallback) })),
+            times: Some(2),
+            hits: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+        };
+        assert!(entry.allows_match());
+        entry.record_match();
+        assert!(entry.allows_match());
+        entry.record_match();
+        assert!(!entry.allows_match());
     }
 }

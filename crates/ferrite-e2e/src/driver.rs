@@ -45,6 +45,10 @@ pub struct ConsoleSink {
 /// Maximum recorded requests per page (oldest dropped first).
 const MAX_RECORDED_REQUESTS: usize = 4096;
 
+/// Maximum captured response body per request (1 MiB; larger bodies are
+/// dropped with `body_truncated` set).
+pub(crate) const MAX_RESPONSE_BODY: usize = 1024 * 1024;
+
 /// Buffered page events per page (lagged readers skip ahead).
 const MAX_EVENT_BUFFER: usize = 256;
 
@@ -103,6 +107,21 @@ impl ConsoleSink {
             requests.push_back(request);
             while requests.len() > MAX_RECORDED_REQUESTS {
                 requests.pop_front();
+            }
+        }
+    }
+
+    /// Attach a response body to the most recent record with `request_id`
+    /// (bodies arrive at `loadingFinished`, after the record is pushed).
+    pub fn set_response_body(&self, request_id: &str, body: Option<Vec<u8>>, truncated: bool) {
+        if let Ok(mut requests) = self.requests.lock() {
+            if let Some(found) = requests
+                .iter_mut()
+                .rev()
+                .find(|record| record.request_id.as_deref() == Some(request_id))
+            {
+                found.body = body;
+                found.body_truncated = truncated;
             }
         }
     }
@@ -1674,38 +1693,54 @@ impl CdpDriver {
                     request_id
                         .as_str()
                         .and_then(|id| decided.remove(id))
-                        .or_else(|| set.matches(&url).first().map(|i| rules[*i].action.clone()))
-                } else if let Some(hit) = handler_set.matches(&url).first().map(|i| &handlers[*i]) {
-                    let info = RouteInfo {
-                        url: url.clone(),
-                        method: event.params["request"]["method"]
-                            .as_str()
-                            .unwrap_or_default()
-                            .to_string(),
-                        headers: cdp_header_pairs(&event.params["request"]["headers"]),
-                        post_data: event.params["request"]
-                            .get("postData")
-                            .and_then(Value::as_str)
-                            .map(|data| data.as_bytes().to_vec()),
-                    };
-                    let decision = match (hit.handler)(info).await {
-                        Ok(decision) => decision,
-                        Err(error) => {
-                            sink.record("route", format!("handler failed, aborting: {error}"));
-                            RouteAction::Abort
-                        }
-                    };
-                    if matches!(decision, RouteAction::ModifyResponse { .. }) {
-                        if decided.len() > 4096 {
-                            decided.clear();
-                        }
-                        if let Some(id) = request_id.as_str() {
-                            decided.insert(id.to_string(), decision.clone());
-                        }
-                    }
-                    Some(decision)
+                        .or_else(|| rule_action_for(&rules, &set, &url))
                 } else {
-                    set.matches(&url).first().map(|i| rules[*i].action.clone())
+                    let mut action = None;
+                    for index in sorted_matches(&handler_set, &url) {
+                        let hit = &handlers[index];
+                        if !hit.allows_match() {
+                            continue;
+                        }
+                        let info = RouteInfo {
+                            url: url.clone(),
+                            method: event.params["request"]["method"]
+                                .as_str()
+                                .unwrap_or_default()
+                                .to_string(),
+                            headers: cdp_header_pairs(&event.params["request"]["headers"]),
+                            post_data: event.params["request"]
+                                .get("postData")
+                                .and_then(Value::as_str)
+                                .map(|data| data.as_bytes().to_vec()),
+                        };
+                        let decision = match (hit.handler)(info).await {
+                            Ok(decision) => decision,
+                            Err(error) => {
+                                sink.record("route", format!("handler failed, aborting: {error}"));
+                                hit.record_match();
+                                action = Some(RouteAction::Abort);
+                                break;
+                            }
+                        };
+                        if matches!(decision, RouteAction::Fallback) {
+                            continue;
+                        }
+                        hit.record_match();
+                        if matches!(decision, RouteAction::ModifyResponse { .. }) {
+                            if decided.len() > 4096 {
+                                decided.clear();
+                            }
+                            if let Some(id) = request_id.as_str() {
+                                decided.insert(id.to_string(), decision.clone());
+                            }
+                        }
+                        action = Some(decision);
+                        break;
+                    }
+                    if action.is_none() {
+                        action = rule_action_for(&rules, &set, &url);
+                    }
+                    action
                 };
                 let action = decided_action.as_ref();
                 if response_stage {
@@ -1729,21 +1764,47 @@ impl CdpDriver {
                             "errorReason": "Aborted",
                         }),
                     ),
-                    Some(RouteAction::Fulfill {
-                        status,
-                        body,
-                        content_type,
-                    }) => (
-                        "Fetch.fulfillRequest",
+                    Some(RouteAction::AbortWith(reason)) => (
+                        "Fetch.failRequest",
                         serde_json::json!({
                             "requestId": request_id,
-                            "responseCode": status,
-                            "body": base64_encode(body.as_bytes()),
-                            "responseHeaders": [
-                                { "name": "Content-Type", "value": content_type },
-                            ],
+                            "errorReason": reason.as_cdp(),
                         }),
                     ),
+                    Some(RouteAction::Fulfill {
+                        status,
+                        status_text,
+                        headers,
+                        body,
+                        content_type,
+                    }) => {
+                        let mut response_headers: Vec<Value> = headers
+                            .iter()
+                            .map(
+                                |(name, value)| serde_json::json!({ "name": name, "value": value }),
+                            )
+                            .collect();
+                        if !content_type.is_empty()
+                            && !headers
+                                .iter()
+                                .any(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+                        {
+                            response_headers.push(serde_json::json!({
+                                "name": "Content-Type",
+                                "value": content_type,
+                            }));
+                        }
+                        let mut params = serde_json::json!({
+                            "requestId": request_id,
+                            "responseCode": status,
+                            "body": base64_encode(body),
+                            "responseHeaders": response_headers,
+                        });
+                        if !status_text.is_empty() {
+                            params["responsePhrase"] = Value::String(status_text.clone());
+                        }
+                        ("Fetch.fulfillRequest", params)
+                    }
                     Some(RouteAction::ContinueWith {
                         url,
                         method,
@@ -1808,8 +1869,11 @@ impl CdpDriver {
         let mut events = self.cdp.subscribe();
         let session = self.session.clone();
         let sink = self.sink.clone();
+        let cdp = self.cdp.clone();
+        let timeout = self.timeout;
         tokio::spawn(async move {
             let mut pending: HashMap<String, PendingRequest> = HashMap::new();
+            let mut responded: std::collections::HashSet<String> = std::collections::HashSet::new();
             loop {
                 let event = match events.recv().await {
                     Ok(event) => event,
@@ -1881,11 +1945,44 @@ impl CdpDriver {
                                         .min(u128::from(u64::MAX))
                                         as u64,
                                 ),
+                                request_id: Some(id.to_string()),
+                                body: None,
+                                body_truncated: false,
                             });
+                            if responded.len() > 4096 {
+                                responded.clear();
+                            }
+                            responded.insert(id.to_string());
+                        }
+                    }
+                    "Network.loadingFinished" => {
+                        let id = event.params["requestId"].as_str().unwrap_or_default();
+                        if !id.is_empty() && responded.remove(id) {
+                            // Bodies are best-effort: evicted/cached responses
+                            // simply keep `body: None`.
+                            if let Ok(got) = cdp
+                                .call(
+                                    Some(&session),
+                                    "Network.getResponseBody",
+                                    serde_json::json!({ "requestId": id }),
+                                    timeout,
+                                )
+                                .await
+                            {
+                                let bytes = network_response_bytes(&got);
+                                let (body, truncated) = match bytes {
+                                    Some(bytes) if bytes.len() > MAX_RESPONSE_BODY => (None, true),
+                                    bytes => (bytes, false),
+                                };
+                                if body.is_some() || truncated {
+                                    sink.set_response_body(id, body, truncated);
+                                }
+                            }
                         }
                     }
                     "Network.loadingFailed" => {
                         let id = event.params["requestId"].as_str().unwrap_or_default();
+                        responded.remove(id);
                         if let Some(request) = pending.remove(id) {
                             sink.push_request(RecordedRequest {
                                 method: request.method,
@@ -1905,6 +2002,9 @@ impl CdpDriver {
                                         .min(u128::from(u64::MAX))
                                         as u64,
                                 ),
+                                request_id: Some(id.to_string()),
+                                body: None,
+                                body_truncated: false,
                             });
                         }
                     }
@@ -3189,9 +3289,12 @@ impl BidiDriver {
                     .as_str()
                     .unwrap_or_default()
                     .to_string();
-                let decided_action: Option<RouteAction> = if let Some(hit) =
-                    handler_set.matches(&url).first().map(|i| &handlers[*i])
-                {
+                let mut decided_action: Option<RouteAction> = None;
+                for index in sorted_matches(&handler_set, &url) {
+                    let hit = &handlers[index];
+                    if !hit.allows_match() {
+                        continue;
+                    }
                     let info = RouteInfo {
                         url: url.clone(),
                         method: event.params["request"]["method"]
@@ -3213,40 +3316,65 @@ impl BidiDriver {
                                 "route",
                                 "handler decision not supported on Firefox, aborting".to_string(),
                             );
-                            Some(RouteAction::Abort)
+                            hit.record_match();
+                            decided_action = Some(RouteAction::Abort);
+                            break;
                         }
-                        Ok(decision) => Some(decision),
+                        Ok(RouteAction::Fallback) => continue,
+                        Ok(decision) => {
+                            hit.record_match();
+                            decided_action = Some(decision);
+                            break;
+                        }
                         Err(error) => {
                             sink.record("route", format!("handler failed, aborting: {error}"));
-                            Some(RouteAction::Abort)
+                            hit.record_match();
+                            decided_action = Some(RouteAction::Abort);
+                            break;
                         }
                     }
-                } else {
-                    set.matches(&url).first().map(|i| rules[*i].action.clone())
-                };
+                }
+                if decided_action.is_none() {
+                    decided_action = rule_action_for(&rules, &set, &url);
+                }
                 let action = decided_action.as_ref();
                 let is_override = matches!(action, Some(RouteAction::ContinueWith { .. }));
                 let (method, params) = match action {
-                    Some(RouteAction::Abort) => (
+                    Some(RouteAction::Abort) | Some(RouteAction::AbortWith(_)) => (
                         "network.failRequest",
                         serde_json::json!({ "request": request }),
                     ),
                     Some(RouteAction::Fulfill {
                         status,
+                        status_text,
+                        headers,
                         body,
                         content_type,
-                    }) => (
-                        "network.provideResponse",
-                        serde_json::json!({
+                    }) => {
+                        let mut all: Vec<(String, String)> = headers.clone();
+                        if !content_type.is_empty()
+                            && !all
+                                .iter()
+                                .any(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+                        {
+                            all.push(("Content-Type".to_string(), content_type.clone()));
+                        }
+                        let mut params = serde_json::json!({
                             "request": request,
                             "statusCode": status,
-                            "headers": [{
-                                "name": "Content-Type",
-                                "value": { "type": "string", "value": content_type },
-                            }],
-                            "body": { "type": "base64", "value": base64_encode(body.as_bytes()) },
-                        }),
-                    ),
+                            "headers": all.iter().map(|(name, value)| {
+                                serde_json::json!({
+                                    "name": name,
+                                    "value": { "type": "string", "value": value },
+                                })
+                            }).collect::<Vec<_>>(),
+                            "body": { "type": "base64", "value": base64_encode(body) },
+                        });
+                        if !status_text.is_empty() {
+                            params["reasonPhrase"] = Value::String(status_text.clone());
+                        }
+                        ("network.provideResponse", params)
+                    }
                     Some(RouteAction::ContinueWith {
                         url,
                         method,
@@ -3410,6 +3538,9 @@ impl BidiDriver {
                                         .min(u128::from(u64::MAX))
                                         as u64,
                                 ),
+                                request_id: Some(id.to_string()),
+                                body: None,
+                                body_truncated: false,
                             });
                         }
                     }
@@ -3436,6 +3567,9 @@ impl BidiDriver {
                                         .min(u128::from(u64::MAX))
                                         as u64,
                                 ),
+                                request_id: Some(id.to_string()),
+                                body: None,
+                                body_truncated: false,
                             });
                         }
                     }
@@ -3884,6 +4018,19 @@ fn decode_base64(data: &str) -> Result<Vec<u8>, String> {
         .map_err(|error| error.to_string())
 }
 
+/// Decode a `Network.getResponseBody` result (`None` when undecodable).
+fn network_response_bytes(got: &Value) -> Option<Vec<u8>> {
+    if got.get("base64Encoded").and_then(Value::as_bool) == Some(true) {
+        got.get("body")
+            .and_then(Value::as_str)
+            .and_then(|encoded| decode_base64(encoded).ok())
+    } else {
+        got.get("body")
+            .and_then(Value::as_str)
+            .map(|text| text.as_bytes().to_vec())
+    }
+}
+
 /// Collect frames from a CDP frame tree (main frame first, depth-first).
 /// Surface a CDP `exceptionDetails` payload as an [`E2eError`].
 fn check_cdp_exception(method: &str, result: &Value, expression: &str) -> E2eResult<()> {
@@ -4180,6 +4327,29 @@ fn routing_glob_set<'a>(
     builder
         .build()
         .map_err(|error| E2eError::Config(error.to_string()))
+}
+
+/// Glob match indices in registration order (fallback chains are ordered).
+fn sorted_matches(set: &globset::GlobSet, url: &str) -> Vec<usize> {
+    let mut hits = set.matches(url);
+    hits.sort_unstable();
+    hits
+}
+
+/// First non-fallback rule action for `url` (registration order; honors `times`).
+fn rule_action_for(rules: &[RouteRule], set: &globset::GlobSet, url: &str) -> Option<RouteAction> {
+    for index in sorted_matches(set, url) {
+        let rule = &rules[index];
+        if !rule.allows_match() {
+            continue;
+        }
+        if matches!(rule.action, RouteAction::Fallback) {
+            continue;
+        }
+        rule.record_match();
+        return Some(rule.action.clone());
+    }
+    None
 }
 
 fn with_content_length(mut headers: Vec<(String, String)>, len: usize) -> Vec<(String, String)> {

@@ -268,7 +268,8 @@ chaining, filters, and `and_`/`or_`, auto-retrying `expect_*` with `not()`,
 immediate `is_*` checks, `bounding_box`/`highlight`/`evaluate`, dialog info
 and `wait_for_dialog`, `wait_for_selector`/`wait_for_popup`, permissions and
 geolocation (plus clears), HTTP credentials, storage state, request routing
-(`unroute_all`) and observation, response bodies, aria snapshots with
+(handlers with fallback, `times` limits, abort reasons, `route_from_har`,
+`unroute_all`) and observation, response bodies with HAR embed, aria snapshots with
 screenshot/text/aria snapshot assertions (`missing`/`all`/`none` update modes),
 `Download`
 objects with save/delete, screenshots, video recording, live frame streams,
@@ -288,7 +289,9 @@ process); user agent, proxy, and certificate acceptance are
 launch-wide there (`[e2e] user_agent` / `proxy_server` /
 `ignore_https_errors`). Offline, extra headers, locale, timezone, media,
 HTTP credentials, and response modification are Chromium-only and fail
-loudly on Firefox. WebKit is intentionally unsupported — Linux
+loudly on Firefox; response bodies and HAR-embedded content are
+Chromium-only and empty on Firefox (BiDi exposes no body channel).
+WebKit is intentionally unsupported — Linux
 ships no stock WebKit browser with an automation protocol.
 
 ## License
