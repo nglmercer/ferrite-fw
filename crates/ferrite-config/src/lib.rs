@@ -393,14 +393,20 @@ impl Default for RuntimeConfig {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct E2eConfig {
-    /// Browser engine (`chromium` is the only v1 backend).
+    /// Browser engine (`chromium` or `firefox`).
     pub browser: String,
-    /// Launch Chromium headless.
+    /// Launch the browser headless.
     pub headless: bool,
-    /// Explicit Chromium executable path (overrides auto-detection).
+    /// Explicit browser executable path (overrides auto-detection).
     pub executable_path: Option<String>,
-    /// Extra Chromium CLI args.
+    /// Extra browser CLI args.
     pub args: Vec<String>,
+    /// Browser-wide user agent override.
+    pub user_agent: Option<String>,
+    /// Browser-wide proxy (`host:port`, `http(s)://…`, `socks5://…`).
+    pub proxy_server: Option<String>,
+    /// Accept insecure TLS certificates session-wide.
+    pub ignore_https_errors: bool,
     /// Base URL for relative navigations (`page.goto("/")`).
     /// Defaults to the booted dev server or `FERRITE_E2E_BASE_URL`.
     pub base_url: Option<String>,
@@ -433,6 +439,9 @@ impl Default for E2eConfig {
             headless: true,
             executable_path: None,
             args: Vec::new(),
+            user_agent: None,
+            proxy_server: None,
+            ignore_https_errors: false,
             base_url: None,
             timeout_ms: 30_000,
             expect_timeout_ms: 5_000,
@@ -449,10 +458,16 @@ impl Default for E2eConfig {
 }
 
 impl E2eConfig {
-    /// True for the only supported v1 engine.
+    /// True for Chromium (`chromium` / `chrome`).
     #[must_use]
     pub fn is_chromium(&self) -> bool {
         self.browser == "chromium" || self.browser == "chrome"
+    }
+
+    /// True for Firefox (`firefox` / `ff`).
+    #[must_use]
+    pub fn is_firefox(&self) -> bool {
+        self.browser == "firefox" || self.browser == "ff"
     }
 
     /// True when failures must capture a screenshot.
@@ -687,6 +702,15 @@ fn merge_e2e(mut base: E2eConfig, over: E2eConfig) -> E2eConfig {
     }
     if !over.args.is_empty() {
         base.args = over.args;
+    }
+    if over.user_agent.is_some() {
+        base.user_agent = over.user_agent;
+    }
+    if over.proxy_server.is_some() {
+        base.proxy_server = over.proxy_server;
+    }
+    if over.ignore_https_errors {
+        base.ignore_https_errors = true;
     }
     if over.base_url.is_some() {
         base.base_url = over.base_url;

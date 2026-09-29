@@ -30,15 +30,12 @@ pub(crate) async fn e2e(
     let (mut resolved, _) = config.resolve().await?;
     apply_flag_overrides(&mut resolved.e2e, &args);
 
-    if !resolved.e2e.is_chromium() {
-        return Err(ferrite::FerriteError::Other(format!(
-            "unsupported [e2e] browser {:?}: v1 supports chromium only",
-            resolved.e2e.browser
-        )));
-    }
+    // Validate the engine early (loud on webkit/unknown).
+    let kind = ferrite::e2e::BrowserKind::parse(&resolved.e2e.browser)
+        .map_err(ferrite::FerriteError::from)?;
 
     if args.check {
-        return check_chromium(&resolved.e2e).await;
+        return check_browser(&resolved.e2e, kind).await;
     }
 
     // Server lifecycle: explicit --url wins, then config, else boot.
@@ -51,6 +48,7 @@ pub(crate) async fn e2e(
         .args(&command[1..])
         .current_dir(&root)
         .env("FERRITE_E2E_BASE_URL", &booted.url)
+        .env("FERRITE_E2E_BROWSER", kind.name())
         .env("FERRITE_E2E_REPORTER", &resolved.e2e.reporter)
         .env("FERRITE_E2E_WORKERS", resolved.e2e.workers.to_string())
         .env("FERRITE_E2E_RETRIES", resolved.e2e.retries.to_string())
@@ -67,6 +65,9 @@ pub(crate) async fn e2e(
 }
 
 fn apply_flag_overrides(e2e: &mut ferrite::config::E2eConfig, args: &E2eArgs) {
+    if let Some(engine) = &args.engine {
+        e2e.browser = engine.clone();
+    }
     if args.headed {
         e2e.headless = false;
     }
@@ -94,18 +95,30 @@ fn apply_flag_overrides(e2e: &mut ferrite::config::E2eConfig, args: &E2eArgs) {
     }
 }
 
-async fn check_chromium(e2e: &ferrite::config::E2eConfig) -> ferrite::Result<()> {
+async fn check_browser(
+    e2e: &ferrite::config::E2eConfig,
+    kind: ferrite::e2e::BrowserKind,
+) -> ferrite::Result<()> {
+    use ferrite::e2e::BrowserKind;
     let hint = e2e.executable_path.clone().map(PathBuf::from);
-    let found = ferrite::e2e::find_chromium(hint.as_deref());
-    let Some(path) = found else {
-        return Err(ferrite::FerriteError::Other(
+    let (found, missing) = match kind {
+        BrowserKind::Chromium => (
+            ferrite::e2e::find_chromium(hint.as_deref()),
             "chromium not found; install chromium or google-chrome, or set \
-             [e2e] executable_path / FERRITE_CHROMIUM_PATH"
-                .to_string(),
-        ));
+             [e2e] executable_path / FERRITE_CHROMIUM_PATH",
+        ),
+        BrowserKind::Firefox => (
+            ferrite::e2e::find_firefox(hint.as_deref()),
+            "firefox not found; install firefox, or set [e2e] executable_path / \
+             FERRITE_FIREFOX_PATH",
+        ),
     };
-    println!("chromium: {}", path.display());
-    let mut options = ferrite::e2e::LaunchOptions::from_config(e2e);
+    let Some(path) = found else {
+        return Err(ferrite::FerriteError::Other(missing.to_string()));
+    };
+    println!("{}: {}", kind.name(), path.display());
+    let mut options =
+        ferrite::e2e::LaunchOptions::from_config(e2e).map_err(ferrite::FerriteError::from)?;
     options.executable_path = Some(path);
     let browser = ferrite::e2e::Browser::launch(options)
         .await

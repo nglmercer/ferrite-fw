@@ -138,13 +138,10 @@ impl Runner {
             }
             let permit = semaphore.clone().acquire_owned().await.expect("semaphore");
             let runner = self.clone();
-            let cdp = browser.cdp().clone();
-            let slow_mo = browser.slow_mo();
-            let timeout = browser.timeout();
-            let base_url = browser.base_url().map(str::to_string);
+            let context = browser.default_context();
             handles.push(tokio::spawn(async move {
                 let _permit = permit;
-                run_one(&runner, &cdp, slow_mo, timeout, base_url.as_deref(), &test).await
+                run_one(&runner, &context, &test).await
             }));
         }
         let mut report = TestReport::default();
@@ -207,10 +204,7 @@ impl Runner {
 
 async fn run_one(
     runner: &Runner,
-    cdp: &crate::cdp::CdpConnection,
-    slow_mo: Duration,
-    browser_timeout: Duration,
-    base_url: Option<&str>,
+    context: &crate::context::BrowserContext,
     test: &Test,
 ) -> TestResult {
     let started = Instant::now();
@@ -222,7 +216,7 @@ async fn run_one(
 
     for _ in 0..=runner.retries {
         attempts += 1;
-        let page = match open_page(cdp, slow_mo, browser_timeout, base_url).await {
+        let page = match context.new_page().await {
             Ok(page) => page,
             Err(error) => {
                 last_error = error.to_string();
@@ -296,49 +290,6 @@ async fn run_one(
         screenshots,
         trace: trace_path,
     }
-}
-
-async fn open_page(
-    cdp: &crate::cdp::CdpConnection,
-    slow_mo: Duration,
-    timeout: Duration,
-    base_url: Option<&str>,
-) -> E2eResult<Page> {
-    let target = cdp
-        .call(
-            None,
-            "Target.createTarget",
-            serde_json::json!({ "url": "about:blank" }),
-            timeout,
-        )
-        .await?;
-    let target_id = target
-        .get("targetId")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| crate::error::E2eError::Launch("no targetId".to_string()))?
-        .to_string();
-    let attached = cdp
-        .call(
-            None,
-            "Target.attachToTarget",
-            serde_json::json!({ "targetId": target_id, "flatten": true }),
-            timeout,
-        )
-        .await?;
-    let session = attached
-        .get("sessionId")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| crate::error::E2eError::Launch("no sessionId".to_string()))?
-        .to_string();
-    Page::new(
-        cdp.clone(),
-        session,
-        target_id,
-        slow_mo,
-        timeout,
-        base_url.map(str::to_string),
-    )
-    .await
 }
 
 pub(crate) fn slug(name: &str) -> String {

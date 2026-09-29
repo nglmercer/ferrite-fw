@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::cdp::CdpConnection;
+use crate::browser::Backend;
+use crate::driver::{BidiDriver, CdpDriver, ConsoleSink, Driver};
 use crate::error::{E2eError, E2eResult};
 use crate::page::{Cookie, Page, Viewport};
 
@@ -13,9 +14,11 @@ use crate::page::{Cookie, Page, Viewport};
 pub struct ContextOptions {
     /// Default viewport applied to every page in the context.
     pub viewport: Option<Viewport>,
-    /// Default user agent override.
+    /// Default user agent override (Chromium per-page; Firefox is
+    /// launch-wide, so this errors on Firefox pages).
     pub user_agent: Option<String>,
-    /// Proxy server (`host:port` or `socks5://...`).
+    /// Proxy server (`host:port`, `http(s)://…`, `socks5://…`); must match
+    /// the launch proxy (stock engines apply proxies browser-wide).
     pub proxy_server: Option<String>,
     /// Ignore HTTPS certificate errors.
     pub ignore_https_errors: bool,
@@ -38,8 +41,9 @@ impl ContextOptions {
 }
 
 /// An isolated browser context; pages inside it share cookies and storage.
+#[derive(Clone)]
 pub struct BrowserContext {
-    cdp: CdpConnection,
+    backend: Backend,
     id: Option<String>,
     options: ContextOptions,
     slow_mo: Duration,
@@ -49,7 +53,7 @@ pub struct BrowserContext {
 
 impl BrowserContext {
     pub(crate) fn new(
-        cdp: CdpConnection,
+        backend: Backend,
         id: Option<String>,
         options: ContextOptions,
         slow_mo: Duration,
@@ -57,7 +61,7 @@ impl BrowserContext {
         base_url: Option<String>,
     ) -> Self {
         Self {
-            cdp,
+            backend,
             id,
             options,
             slow_mo,
@@ -74,43 +78,67 @@ impl BrowserContext {
 
     /// Open a new page in this context.
     pub async fn new_page(&self) -> E2eResult<Page> {
-        let mut params = serde_json::json!({ "url": "about:blank" });
-        if let Some(id) = &self.id {
-            params["browserContextId"] = Value::String(id.clone());
-        }
-        let target = self
-            .cdp
-            .call(None, "Target.createTarget", params, self.timeout)
-            .await?;
-        let target_id = target
-            .get("targetId")
-            .and_then(Value::as_str)
-            .ok_or_else(|| E2eError::Launch("no targetId".to_string()))?
-            .to_string();
-        let attached = self
-            .cdp
-            .call(
-                None,
-                "Target.attachToTarget",
-                serde_json::json!({ "targetId": target_id, "flatten": true }),
-                self.timeout,
-            )
-            .await?;
-        let session = attached
-            .get("sessionId")
-            .and_then(Value::as_str)
-            .ok_or_else(|| E2eError::Launch("no sessionId".to_string()))?
-            .to_string();
+        let sink = ConsoleSink::new();
+        let driver = match &self.backend {
+            Backend::Cdp(cdp) => {
+                let mut params = serde_json::json!({ "url": "about:blank" });
+                if let Some(id) = &self.id {
+                    params["browserContextId"] = Value::String(id.clone());
+                }
+                let target = cdp
+                    .call(None, "Target.createTarget", params, self.timeout)
+                    .await?;
+                let target_id = target
+                    .get("targetId")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| E2eError::Launch("no targetId".to_string()))?
+                    .to_string();
+                let attached = cdp
+                    .call(
+                        None,
+                        "Target.attachToTarget",
+                        serde_json::json!({ "targetId": target_id, "flatten": true }),
+                        self.timeout,
+                    )
+                    .await?;
+                let session = attached
+                    .get("sessionId")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| E2eError::Launch("no sessionId".to_string()))?
+                    .to_string();
+                Driver::Cdp(
+                    CdpDriver::spawn(cdp.clone(), session, target_id, self.timeout, sink.clone())
+                        .await?,
+                )
+            }
+            Backend::Bidi {
+                conn,
+                insecure_certs,
+                ..
+            } => {
+                let mut params = serde_json::json!({ "type": "tab" });
+                if let Some(id) = &self.id {
+                    params["userContext"] = Value::String(id.clone());
+                }
+                let created = conn
+                    .call("browsingContext.create", params, self.timeout)
+                    .await?;
+                let context = created
+                    .get("context")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| E2eError::Launch("no BiDi context".to_string()))?
+                    .to_string();
+                Driver::Bidi(BidiDriver::spawn(
+                    conn.clone(),
+                    context,
+                    self.timeout,
+                    *insecure_certs,
+                    sink.clone(),
+                ))
+            }
+        };
 
-        let page = Page::new(
-            self.cdp.clone(),
-            session,
-            target_id,
-            self.slow_mo,
-            self.timeout,
-            self.base_url.clone(),
-        )
-        .await?;
+        let page = Page::new(driver, sink, self.slow_mo, self.base_url.clone());
         if let Some(viewport) = self.options.viewport {
             page.set_viewport(viewport).await?;
         }
@@ -125,7 +153,6 @@ impl BrowserContext {
 
     /// Read cookies visible to this context.
     pub async fn cookies(&self) -> E2eResult<Vec<Cookie>> {
-        // Network domain needs a session; use a throwaway page target.
         let page = self.new_page().await?;
         let cookies = page.cookies().await?;
         page.close().await?;
@@ -142,16 +169,27 @@ impl BrowserContext {
 
     /// Close the context and all its pages.
     pub async fn close(self) -> E2eResult<()> {
-        if let Some(id) = self.id {
-            let _ = self
-                .cdp
-                .call(
-                    None,
-                    "Target.disposeBrowserContext",
-                    serde_json::json!({ "browserContextId": id }),
-                    self.timeout,
-                )
-                .await;
+        match (&self.backend, self.id) {
+            (Backend::Cdp(cdp), Some(id)) => {
+                let _ = cdp
+                    .call(
+                        None,
+                        "Target.disposeBrowserContext",
+                        serde_json::json!({ "browserContextId": id }),
+                        self.timeout,
+                    )
+                    .await;
+            }
+            (Backend::Bidi { conn, .. }, Some(id)) => {
+                let _ = conn
+                    .call(
+                        "browser.removeUserContext",
+                        serde_json::json!({ "userContext": id }),
+                        self.timeout,
+                    )
+                    .await;
+            }
+            _ => {}
         }
         Ok(())
     }

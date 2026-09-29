@@ -1,5 +1,5 @@
 //! Ferrite end-to-end testing: Playwright-style browser automation in pure
-//! Rust, Chromium-first, with no Node.js required.
+//! Rust, with no Node.js required (Chromium over CDP, Firefox over BiDi).
 //!
 //! ```rust,no_run
 //! use ferrite_e2e::{Browser, E2eResult};
@@ -37,9 +37,11 @@
 //! }
 //! ```
 
+mod bidi;
 mod browser;
 mod cdp;
 mod context;
+mod driver;
 mod error;
 mod expect;
 mod locator;
@@ -48,7 +50,9 @@ mod report;
 mod runner;
 mod webserver;
 
-pub use browser::{find_chromium, Browser, LaunchOptions};
+pub use bidi::BidiConnection;
+pub use browser::{find_chromium, find_firefox, Browser, BrowserKind, LaunchOptions};
+pub use cdp::CdpConnection;
 pub use context::{BrowserContext, ContextOptions};
 pub use error::{E2eError, E2eResult};
 pub use expect::{PageExpect, Timeout};

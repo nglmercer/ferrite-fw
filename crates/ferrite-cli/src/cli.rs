@@ -206,7 +206,10 @@ pub(crate) struct E2eArgs {
     /// Run with a visible browser window.
     #[arg(long)]
     pub(crate) headed: bool,
-    /// Chromium executable path.
+    /// Browser engine (`chromium` or `firefox`).
+    #[arg(long)]
+    pub(crate) engine: Option<String>,
+    /// Browser executable path.
     #[arg(long)]
     pub(crate) browser: Option<PathBuf>,
     /// Base URL for tests (overrides config).
@@ -230,7 +233,7 @@ pub(crate) struct E2eArgs {
     /// Only run tests whose name contains this.
     #[arg(long)]
     pub(crate) filter: Option<String>,
-    /// Only verify Chromium launches, then exit.
+    /// Only verify the browser launches, then exit.
     #[arg(long)]
     pub(crate) check: bool,
     /// Test command to run (default: `cargo test --test e2e`).

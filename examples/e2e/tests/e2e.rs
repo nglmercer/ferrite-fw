@@ -6,22 +6,30 @@
 //! ferrite e2e
 //! ```
 
-use ferrite_e2e::{test, Browser, LaunchOptions, Runner};
+use ferrite_e2e::{test, Browser, BrowserKind, LaunchOptions, Runner};
 
-fn chromium_or_skip() -> Option<std::path::PathBuf> {
-    let found = ferrite_e2e::find_chromium(None);
-    if found.is_none() {
-        eprintln!("skipping e2e demo: no chromium found");
+fn browser_or_skip() -> Option<(BrowserKind, std::path::PathBuf)> {
+    let name = std::env::var("FERRITE_E2E_BROWSER").unwrap_or_else(|_| "chromium".to_string());
+    let kind = BrowserKind::parse(&name).unwrap_or(BrowserKind::Chromium);
+    let found = match kind {
+        BrowserKind::Chromium => ferrite_e2e::find_chromium(None),
+        BrowserKind::Firefox => ferrite_e2e::find_firefox(None),
+    };
+    match found {
+        Some(exe) => Some((kind, exe)),
+        None => {
+            eprintln!("skipping e2e demo: no {} found", kind.name());
+            None
+        }
     }
-    found
 }
 
 #[tokio::test]
 async fn demo_suite() {
-    let Some(exe) = chromium_or_skip() else {
+    let Some((kind, exe)) = browser_or_skip() else {
         return;
     };
-    let mut browser = Browser::launch(LaunchOptions::default().executable(exe))
+    let mut browser = Browser::launch(LaunchOptions::default().browser(kind).executable(exe))
         .await
         .unwrap();
     if let Ok(base) = std::env::var("FERRITE_E2E_BASE_URL") {

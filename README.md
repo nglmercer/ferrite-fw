@@ -229,13 +229,16 @@ ferrite compat            # live self-checks against the real pipeline
 
 ## End-to-end testing
 
-Playwright-style e2e in pure Rust, Chromium-first, no Node required.
+Playwright-style e2e in pure Rust, no Node required: Chromium over
+CDP plus Firefox over WebDriver BiDi behind one `Page` API.
 `ferrite e2e` boots the web server (in-process dev server by default),
-sets `FERRITE_E2E_BASE_URL`, and runs your Rust suite:
+sets `FERRITE_E2E_BASE_URL` / `FERRITE_E2E_BROWSER`, and runs your Rust suite:
 
 ```bash
 ferrite e2e --check                 # verify Chromium launches
+ferrite e2e --check --engine firefox
 ferrite e2e                         # boot + cargo test --test e2e
+ferrite e2e --engine firefox        # same suite on Firefox
 ferrite e2e --headed --retries 2    # visible browser, retries
 ferrite e2e --url http://127.0.0.1:3000/ -- cargo test --test shop
 ```
@@ -243,6 +246,7 @@ ferrite e2e --url http://127.0.0.1:3000/ -- cargo test --test shop
 ```toml
 # ferrite.toml
 [e2e]
+browser = "chromium"                # chromium | firefox
 retries = 1
 workers = 4
 reporter = "list,json"              # list | json | junit (comma-separated)
@@ -256,9 +260,15 @@ Suites use the `ferrite_e2e` library (`Browser`, `Page`, locators with
 `css`/`text=`/`xpath=`/`role=` engines, auto-retrying `expect_*`,
 request routing, screenshots, traces, parallel `Runner`). See
 `examples/e2e/` for a runnable project and
-`crates/ferrite-e2e/tests/browser.rs` for coverage (skipped when no
-Chromium is found; point `FERRITE_CHROMIUM_PATH` at any
-Chromium/Chrome/headless-shell binary).
+`crates/ferrite-e2e/tests/browser.rs` for coverage (per-engine tests
+skip when that browser is missing; point `FERRITE_CHROMIUM_PATH` at any
+Chromium/Chrome/headless-shell binary, `FERRITE_FIREFOX_PATH` at Firefox).
+
+Engine notes: stock Firefox exposes BiDi only (one session per
+process); user agent, proxy, and certificate acceptance are
+launch-wide there (`[e2e] user_agent` / `proxy_server` /
+`ignore_https_errors`). WebKit is intentionally unsupported — Linux
+ships no stock WebKit browser with an automation protocol.
 
 ## License
 

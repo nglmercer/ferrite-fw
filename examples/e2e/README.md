@@ -4,8 +4,10 @@ Minimal consumer of `ferrite e2e`: a counter app plus a Rust test suite.
 
 ```bash
 cd examples/e2e
-ferrite e2e --check   # verify Chromium launches
-ferrite e2e           # boot dev server + run tests/e2e.rs
+ferrite e2e --check                # verify Chromium launches
+ferrite e2e --check --engine firefox
+ferrite e2e                        # boot dev server + run tests/e2e.rs
+ferrite e2e --engine firefox       # same suite on Firefox
 ```
 
 `ferrite e2e` boots an in-process dev server on the `[e2e.web_server]` URL
