@@ -227,6 +227,9 @@ put('TestOptions','testIdAttribute','set_test_id_attribute','Process-global sett
 put('TestOptions','trace','BrowserContext.start_tracing','Manual custom JSON traces plus runner JSON; no trace mode policy or Trace Viewer compatibility.')
 for m in ['colorScheme','reducedMotion']:put('TestOptions',m,'Page.emulate_media','Chromium page-level manual emulation; no context/test option binding.')
 # Practical parity implementation updates (2026-09-29).
+put('Page','close','Page.close','Closes the target and its owning convenience context; no runBeforeUnload/reason options.',kind='method')
+put('BrowserContext','isClosed','BrowserContext.is_closed','Tracks explicit context disposal; no full remote-disconnection lifecycle semantics.')
+put('Locator','visible','Locator.visible','Lazy visibility filter reapplied when resolving; uses the shared DOM visibility approximation.')
 put('Browser','newPage','Browser.new_page','Fresh owning context; closing the page disposes it, including its popups.')
 put('BrowserType','launchPersistentContext','LaunchOptions.user_data_dir','Reusable Chromium/Firefox profile; obtain browser.default_context(). Dedicated contexts remain isolated from persistent storage.')
 put('BrowserType','connectOverCDP','Browser.connect_over_cdp','Chromium HTTP or browser WebSocket endpoint; no Playwright remote protocol or headers/options surface.')

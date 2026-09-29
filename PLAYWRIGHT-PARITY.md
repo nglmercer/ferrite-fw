@@ -19,9 +19,9 @@ reporter, Android and Electron APIs:
 | Classification | Members | Meaning |
 |---|---:|---|
 | Equivalent | 15 | Counterpart for the basic operation/value, without full options or engine compatibility |
-| Partial | 508 | Related exposed operation with material semantic, option or engine differences |
+| Partial | 511 | Related exposed operation with material semantic, option or engine differences |
 | Idiomatic | 42 | Comparable operation through Rust language/library facilities |
-| Missing | 453 | No dedicated public counterpart |
+| Missing | 450 | No dedicated public counterpart |
 
 These counts describe an inventory, **not a behavioral compatibility
 percentage**. The earlier inventory had 458 Partial and 503 Missing members.
@@ -31,6 +31,12 @@ are discussed below rather than counted individually. Runtime checks exercise
 Ferrite's tests; they are not a differential Playwright conformance suite.
 The [generator](scripts/playwright-parity/README.md) pins official sources,
 requires a complete inventory and validates local evidence links.
+
+A follow-up audit corrected three false Missing entries: `Page.close`,
+`BrowserContext.isClosed` and `Locator.visible` already have implementations.
+They are classified Partial because their options or lifecycle/visibility
+semantics remain narrower. This correction changes the inventory, not the
+implementation.
 
 ## Practical parity implemented
 

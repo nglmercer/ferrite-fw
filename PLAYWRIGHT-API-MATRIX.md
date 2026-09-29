@@ -13,7 +13,7 @@ This inventory covers every JavaScript-applicable method, property and event doc
 | Idiomatic | Comparable checks/operations are expressed through Rust language/library facilities; no Playwright-style API object. |
 | Missing | No dedicated counterpart found; arbitrary JS evaluation or raw CDP/BiDi calls do not establish feature parity. |
 
-Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 508; Idiomatic: 42; Missing: 453. These counts are inventory labels, not a percentage of behavioral compatibility.
+Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 511; Idiomatic: 42; Missing: 450. These counts are inventory labels, not a percentage of behavioral compatibility.
 
 ## APIRequest
 
@@ -209,7 +209,7 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 508; 
 | `BrowserContext.exposeBinding` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `BrowserContext.exposeFunction` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `BrowserContext.grantPermissions` | method | Partial | `BrowserContext.grant_permissions` ([source](crates/ferrite-e2e/src/context.rs#L866)) | No origin argument; Chromium grants broadly, Firefox grants after navigation for the current origin. |
-| `BrowserContext.isClosed` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
+| `BrowserContext.isClosed` | method | Partial | `BrowserContext.is_closed` ([source](crates/ferrite-e2e/src/context.rs#L1170)) | Tracks explicit context disposal; no full remote-disconnection lifecycle semantics. |
 | `BrowserContext.newCDPSession` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `BrowserContext.newPage` | method | Partial | `BrowserContext.new_page` ([source](crates/ferrite-e2e/src/context.rs#L395)) | Context API exists, with fewer options and engine restrictions; see the feature audit. |
 | `BrowserContext.pages` | method | Partial | `BrowserContext.pages` ([source](crates/ferrite-e2e/src/context.rs#L552)) | Context API exists, with fewer options and engine restrictions; see the feature audit. |
@@ -757,7 +757,7 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 508; 
 | `Locator.toString` | method | Idiomatic | `Locator.selector` ([source](crates/ferrite-e2e/src/locator.rs#L874)) | Selector string available; no Playwright locator expression representation. |
 | `Locator.type` (deprecated) | method | Partial | `Locator.press_sequentially_with` ([source](crates/ferrite-e2e/src/locator.rs#L1400)) | Strict single-target operation with actionability retries; option sets and some input/event semantics remain narrower. |
 | `Locator.uncheck` | method | Partial | `Locator.uncheck` ([source](crates/ferrite-e2e/src/locator.rs#L1469)) | Strict single-target operation with actionability retries; option sets and some input/event semantics remain narrower. |
-| `Locator.visible` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
+| `Locator.visible` | method | Partial | `Locator.visible` ([source](crates/ferrite-e2e/src/locator.rs#L757)) | Lazy visibility filter reapplied when resolving; uses the shared DOM visibility approximation. |
 | `Locator.waitFor` | method | Partial | `Locator.wait_for_state` ([source](crates/ferrite-e2e/src/locator.rs#L1121)) | Strict single-target operation with actionability retries; option sets and some input/event semantics remain narrower. |
 | `Locator.waitForFunction` | method | Partial | `Locator.wait_for_function` ([source](crates/ferrite-e2e/src/locator.rs#L852)) | Dedicated counterpart; strict/DOM/accessibility/frame/options differences remain. Lazy frame selection is same-origin only. |
 
@@ -852,7 +852,7 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 508; 
 | `Page.cancelPickLocator` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Page.check` | method | Partial | `Locator.check` ([source](crates/ferrite-e2e/src/locator.rs#L1464)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Page.click` | method | Partial | `Locator.click` ([source](crates/ferrite-e2e/src/locator.rs#L1199)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
-| `Page.close` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
+| `Page.close` | method | Partial | `Page.close` ([source](crates/ferrite-e2e/src/page.rs#L3955)) | Closes the target and its owning convenience context; no runBeforeUnload/reason options. |
 | `Page.content` | method | Equivalent | `Page.content` ([source](crates/ferrite-e2e/src/page.rs#L1939)) | Basic document access. |
 | `Page.context` | method | Partial | `Page.context` ([source](crates/ferrite-e2e/src/page.rs#L1522)) | Owning context while registered; returns Option and becomes None after context disposal. |
 | `Page.coverage` | property | Partial | `Page.coverage` ([source](crates/ferrite-e2e/src/page.rs#L1492)) | Dedicated API exists; coverage is Chromium-only, lazy frame locators are same-origin, exceptions have ConsoleMessage shape. |
