@@ -3,7 +3,7 @@
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
 
 Implement **G, then A, then B**, followed by the supported C extensions. This
-backlog contains **45 open tasks**: four foundations, 16 core tasks, 19 follow-ups
+backlog contains **45 tasks (9 complete, 36 remaining)**: four foundations, 16 core tasks, 19 follow-ups
 and six optional extensions. Start the feature work with typed DOM events,
 richer assertions and exposed callbacks. The ordering and effort assessments
 are recommendations based on the current source and parity audit.
@@ -51,28 +51,43 @@ Baseline evidence: the latest implementation passed 265 E2E checks plus 23
 CLI/configuration checks, with strict Clippy. These are Ferrite regressions;
 they do not constitute differential Playwright conformance coverage.
 
+## Verified implementation checkpoints
+
+- `5c2c7aa`: G01–G03 and A01–A06. All 269 E2E checks and 23 CLI/configuration
+  checks passed; the expanded native conformance groups and Send runner integration
+  passed on installed Chromium and Firefox, with strict Clippy and formatting checks.
+- G04 remains open until callback and stream lifecycle coverage is complete.
+  A14 has a verified zero-segment double-star correction; shared API integration
+  and its remaining conformance cases are still open.
+
 ## G — Foundations for the larger session
 
 Work in [the audit generator](scripts/playwright-parity/build_matrix.py),
 [tests](crates/ferrite-e2e/tests) and the parity documents.
 
-- [ ] **G01 — Reconcile the matrix with current behavior (S).** Audit mappings
+- [x] **G01 — Reconcile the matrix with current behavior (S).** Audit mappings
   against public APIs and native regressions before treating a Missing label as
   work to implement. In particular, check `Page::request`, Page/Frame text
   getters, context dialog/download/close events and timeout settings. Done when
   stale mappings/notes are corrected and every changed evidence link resolves.
-- [ ] **G02 — Maintain an explicit engine capability table (S).** Describe
+  Evidence: Matrix regenerated in `5c2c7aa`: 73 classes / 1,018 members; corrected public API mappings and source evidence links.
+
+- [x] **G02 — Maintain an explicit engine capability table (S).** Describe
   supported, partial and unsupported operations, including native metadata
   availability. Done when portable regression jobs require both installed
   engines and engine-specific jobs assert the unsupported result on the other
   engine. Browser absence must be visible in the validation report.
-- [ ] **G03 — Add a focused conformance corpus (M).** Reuse small deterministic
+  Evidence: `5c2c7aa`; [engine capabilities](E2E-ENGINE-CAPABILITIES.md), fail-fast two-browser validation gate and native unsupported-result probes in `core_conformance.rs`.
+
+- [x] **G03 — Add a focused conformance corpus (M).** Reuse small deterministic
   HTML/HTTP fixtures for events, text/class assertions, URL globs, redirects,
   callbacks and screenshots. Record pinned Playwright reference behavior and
   compare Ferrite results. An optional development-only Playwright job may use
   Node; Ferrite's library and normal Rust tests retain their current runtime.
   Done when failures identify the semantic difference and the corpus can be
   rerun against the pinned version.
+  Evidence: `5c2c7aa`; [pinned corpus](scripts/e2e-conformance/README.md) records actual Playwright 1.63.0 Chromium results and compares shared native Chromium/Firefox behavior.
+
 - [ ] **G04 — Apply lifecycle checks to every new API (M).** Reuse existing
   operation budgets and cancellation rather than adding independent timers.
   Done when representative new waits/callbacks/streams handle zero timeout,
@@ -93,34 +108,45 @@ Main files: [locator.rs](crates/ferrite-e2e/src/locator.rs),
 These extend the official [event dispatch API](https://playwright.dev/docs/api/class-locator#locator-dispatch-event)
 and [locator assertions](https://playwright.dev/docs/api/class-locatorassertions).
 
-- [ ] **A01 — Typed DOM event dispatch (M).** Add an options-based companion to
+- [x] **A01 — Typed DOM event dispatch (M).** Add an options-based companion to
   the existing CustomEvent helper: Event, MouseEvent, KeyboardEvent, FocusEvent,
   InputEvent and PointerEvent, with event-specific initialization and explicit
   bubbles/cancelable/composed defaults. Done when listeners observe the correct
   constructor and fields, shadow-boundary behavior and cancellation; retain the
   existing CustomEvent detail contract. Live JSHandle event arguments are deferred.
-- [ ] **A02 — Text assertion options (M).** Support exact/contains/regex text,
+  Evidence: `5c2c7aa`; seven constructor/field samples, flags, cancellation, shadow composition and legacy CustomEvent compatibility in the native corpus.
+
+- [x] **A02 — Text assertion options (M).** Support exact/contains/regex text,
   case handling and a rendered-text option using existing innerText getters.
   Done when exact-string whitespace rules and raw regex matching are specified
   separately and hidden text, newlines, negation and delayed updates are tested.
-- [ ] **A03 — Mixed list, class and value matchers (M).** Extend existing text,
+  Evidence: `5c2c7aa`; exact-string normalization, raw regex, rendered text, case/negation and delayed updates covered on both engines. Rust regex flags retain Rust semantics.
+
+- [x] **A03 — Mixed list, class and value matchers (M).** Extend existing text,
   class and selected-value assertions with string/regex lists, class-token
   semantics and ordered subset matching for contains-text lists. Done when
   empty lists, ordering, duplicates, negation and retrying list changes match
   the documented contract and produce useful expected/actual diagnostics.
-- [ ] **A04 — State assertion options (S).** Extend existing state matchers with
+  Evidence: `5c2c7aa`; mixed exact/regex lists, ordered subsets, raw class order, native class tokens and selected values; empty/duplicate/negated/delayed cases covered.
+
+- [x] **A04 — State assertion options (S).** Extend existing state matchers with
   explicit expected states and checkbox indeterminate handling. Done when true,
   false and mixed-state assertions work, invalid combinations/types fail clearly
   and negation does not hide a locator resolution error.
-- [ ] **A05 — Viewport intersection ratios (M).** Add a ratio option to the
+  Evidence: `5c2c7aa`; explicit state and indeterminate options; invalid types/combinations, strict resolution and missing-element behavior covered.
+
+- [x] **A05 — Viewport intersection ratios (M).** Add a ratio option to the
   current overlap assertion using browser intersection observations. Done when
   partial visibility, clipping ancestors, scrolling and thresholds are tested;
   the default behavior and supported same-origin frame scope are documented.
-- [ ] **A06 — Accessible assertion regex/options (S).** Extend accessible name,
+  Evidence: `5c2c7aa`; native IntersectionObserver ratio, clipping/transforms, thresholds and same-origin frame coverage; default assertion/getter migrated to positive native intersection.
+
+- [x] **A06 — Accessible assertion regex/options (S).** Extend accessible name,
   description and error-message assertions with common string/regex/case options.
   Done when they use the shared DOM computation consistently and test label
   changes and missing relationships. Keep the existing accessibility algorithm
   approximation explicit.
+  Evidence: `5c2c7aa`; shared string/regex/case options with changing labels and missing relationships covered. Existing DOM accessibility approximation remains explicit.
 
 ### Rust callbacks
 
