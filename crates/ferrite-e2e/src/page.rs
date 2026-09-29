@@ -274,6 +274,10 @@ fn is_temp_download(name: &str) -> bool {
     name.ends_with(".part") || name.ends_with(".crdownload") || name.ends_with(".tmp")
 }
 
+/// How recently a pre-existing file must be modified to count as this wait's
+/// download (local downloads routinely land before the wait starts).
+const PREEXISTING_DOWNLOAD_GRACE: Duration = Duration::from_secs(30);
+
 /// A frame listing entry (ids are opaque engine handles).
 #[derive(Debug, Clone)]
 pub(crate) struct FrameInfo {
@@ -2484,6 +2488,9 @@ impl Page {
 
     /// Wait for a new file in `dir`, returning once it stops growing.
     /// In-progress downloads (`*.part`, `*.crdownload`, `*.tmp`) are skipped.
+    /// A file already present also matches when modified within the last 30s
+    /// (fast local downloads often land before the wait starts); use a fresh
+    /// dir per download to keep this unambiguous.
     pub async fn wait_for_download(
         &self,
         dir: impl AsRef<Path>,
@@ -2557,22 +2564,43 @@ impl Page {
     /// Download watcher without the event emission (shared implementation).
     async fn wait_for_download_in(&self, dir: &Path, timeout: Duration) -> E2eResult<PathBuf> {
         let before = dir_names(dir)?;
+        let cutoff = std::time::SystemTime::now()
+            .checked_sub(PREEXISTING_DOWNLOAD_GRACE)
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
         let deadline = tokio::time::Instant::now() + timeout;
         let mut stable: Option<(PathBuf, u64)> = None;
         loop {
             let mut candidate: Option<(PathBuf, u64)> = None;
+            // Most recently modified fresh pre-existing file (fallback when
+            // nothing new appears: the download may have landed first).
+            let mut fallback: Option<(PathBuf, u64, std::time::SystemTime)> = None;
             if let Ok(entries) = std::fs::read_dir(dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
                     let name = entry.file_name().to_string_lossy().into_owned();
-                    if before.contains(&name) || !path.is_file() || is_temp_download(&name) {
+                    if !path.is_file() || is_temp_download(&name) {
                         continue;
                     }
                     let size = entry.metadata().map(|meta| meta.len()).unwrap_or(0);
-                    candidate = Some((path, size));
-                    break;
+                    if !before.contains(&name) {
+                        candidate = Some((path, size));
+                        break;
+                    }
+                    let mtime = entry
+                        .metadata()
+                        .and_then(|meta| meta.modified())
+                        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                    if mtime >= cutoff
+                        && fallback
+                            .as_ref()
+                            .map(|(_, _, prev)| mtime > *prev)
+                            .unwrap_or(true)
+                    {
+                        fallback = Some((path, size, mtime));
+                    }
                 }
             }
+            let candidate = candidate.or_else(|| fallback.map(|(path, size, _)| (path, size)));
             if let Some((path, size)) = candidate {
                 if stable.as_ref() == Some(&(path.clone(), size)) {
                     return Ok(path);

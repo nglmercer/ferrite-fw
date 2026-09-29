@@ -270,6 +270,9 @@ pub(crate) struct E2eArgs {
     /// Snapshot update mode (`missing`, `all`, `none`).
     #[arg(long)]
     pub(crate) update_snapshots: Option<String>,
+    /// Run only these projects (repeatable).
+    #[arg(long)]
+    pub(crate) project: Vec<String>,
     /// Only verify the browser launches, then exit.
     #[arg(long)]
     pub(crate) check: bool,

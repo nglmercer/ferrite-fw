@@ -12,11 +12,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ferrite_e2e::{
-    describe, match_text_snapshot_with, test, Browser, BrowserKind, ColorScheme, Cookie,
-    DeviceDescriptor, DialogDecision, E2eError, LaunchOptions, LoadState, NavigationOptions, Page,
-    PageEvent, PageEventKind, RecordedRequest, ReducedMotion, RouteAction, RouteInfo, RouteRule,
-    Runner, ScreenshotOptions, SnapshotOptions, SnapshotUpdate, TestStatus, Timeout,
-    TracingOptions, VideoMode, VideoOptions, WebSocketDirection,
+    describe, match_text_snapshot_with, test, test_with_context, Browser, BrowserKind, ColorScheme,
+    Cookie, DeviceDescriptor, DialogDecision, E2eError, LaunchOptions, LoadState,
+    NavigationOptions, Page, PageEvent, PageEventKind, Project, RecordedRequest, ReducedMotion,
+    RouteAction, RouteInfo, RouteRule, Runner, ScreenshotOptions, SnapshotOptions, SnapshotUpdate,
+    TestStatus, Timeout, TracingOptions, VideoMode, VideoOptions, WebSocketDirection,
 };
 
 const FIXTURE: &str = r#"<!doctype html><html><head><title>e2e fixture</title></head><body>
@@ -4135,5 +4135,166 @@ async fn snapshot_text_and_aria() {
         browser.close().await.unwrap();
         shutdown.abort();
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[tokio::test]
+async fn runner_context_fixtures() {
+    let browsers = browsers().await;
+    if browsers.is_empty() {
+        eprintln!("skipping runner_context_fixtures: no browser");
+        return;
+    }
+    let out = std::env::temp_dir().join(format!("ferrite-w6-run-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&out);
+    let teardown_log = Arc::new(Mutex::new(Vec::<String>::new()));
+    let log = teardown_log.clone();
+    let runner = Runner::default()
+        .workers(2)
+        .list_progress(false)
+        .output_dir(out.display().to_string())
+        .fixture(|| async { Ok::<_, E2eError>("w6-value".to_string()) })
+        .fixture_with_teardown(
+            || async { Ok::<_, E2eError>(7u32) },
+            move |value: Arc<u32>| {
+                let log = log.clone();
+                async move {
+                    log.lock().unwrap().push(format!("down-{value}"));
+                    Ok(())
+                }
+            },
+        );
+    let (_kind, browser) = &browsers[0];
+    let report = runner
+        .run(
+            browser,
+            vec![
+                test_with_context("w6 ctx", |ctx| async move {
+                    assert_eq!(ctx.info.title, "w6 ctx");
+                    assert!(!ctx.info.file.is_empty());
+                    assert!(ctx.info.line > 0);
+                    assert_eq!(ctx.info.retry, 0);
+                    assert!(ctx.info.worker_index < 2);
+                    assert_eq!(ctx.info.repeat_each_index, 0);
+                    assert!(ctx.info.project.is_none());
+                    assert_eq!(ctx.get::<String>().unwrap().as_str(), "w6-value");
+                    assert_eq!(*ctx.get::<u32>().unwrap(), 7);
+                    assert!(ctx.get::<bool>().is_none());
+                    assert!(!ctx.is_closed());
+                    ctx.info.attach("note", b"w6", "text/plain")?;
+                    Ok(())
+                })
+                .tag("w6")
+                .annotate("area", "runner"),
+                test("w6 expected flop", |_page| async move {
+                    Err(E2eError::Config("boom".to_string()))
+                })
+                .fail(),
+                test("w6 unexpected pass", |_page| async move { Ok(()) }).fail(),
+            ],
+        )
+        .await;
+
+    // Sorted: ctx (.), expected flop (E), unexpected pass (F).
+    assert_eq!(report.passed(), 1);
+    assert_eq!(report.expected_failed(), 1);
+    assert_eq!(report.failed(), 1);
+    assert!(!report.ok());
+    assert!(report.to_dot().starts_with(".EF\n"), "{}", report.to_dot());
+    let flop = report
+        .results
+        .iter()
+        .find(|r| r.name == "w6 expected flop")
+        .unwrap();
+    assert_eq!(flop.status, TestStatus::FailedExpected);
+    assert!(flop.error.as_deref().unwrap_or_default().contains("boom"));
+    let surprise = report
+        .results
+        .iter()
+        .find(|r| r.name == "w6 unexpected pass")
+        .unwrap();
+    assert_eq!(surprise.status, TestStatus::Failed);
+    assert_eq!(surprise.attempts, 1);
+    assert!(surprise
+        .error
+        .as_deref()
+        .unwrap_or_default()
+        .contains("expected to fail, but passed"));
+    let ctx_result = report.results.iter().find(|r| r.name == "w6 ctx").unwrap();
+    assert_eq!(ctx_result.attachments.len(), 1);
+    assert!(std::path::Path::new(&ctx_result.attachments[0].path).is_file());
+    assert_eq!(
+        ctx_result.annotations,
+        vec![("area".to_string(), "runner".to_string())]
+    );
+    assert!(report.to_json().contains("w6-ctx-note.txt"));
+    // Teardown ran once per test (single attempt each).
+    assert_eq!(teardown_log.lock().unwrap().len(), 3);
+
+    for (_kind, browser) in browsers {
+        browser.close().await.unwrap();
+    }
+    let _ = std::fs::remove_dir_all(&out);
+}
+
+#[tokio::test]
+async fn runner_projects_repeats_forbid() {
+    let browsers = browsers().await;
+    if browsers.is_empty() {
+        eprintln!("skipping runner_projects_repeats_forbid: no browser");
+        return;
+    }
+    let (_kind, browser) = &browsers[0];
+
+    // Projects scope selection and prefix result names.
+    let runner = Runner::default()
+        .workers(1)
+        .list_progress(false)
+        .project(Project::new("a").grep("apple"))
+        .project(Project::new("b").grep("banana"));
+    let report = runner
+        .run(
+            browser,
+            vec![
+                test("apple test", |_page| async move { Ok(()) }),
+                test("banana test", |_page| async move { Ok(()) }),
+                test("cherry test", |_page| async move { Ok(()) }),
+            ],
+        )
+        .await;
+    assert_eq!(report.passed(), 2);
+    assert_eq!(report.results[0].name, "a > apple test");
+    assert_eq!(report.results[0].project.as_deref(), Some("a"));
+    assert_eq!(report.results[1].name, "b > banana test");
+    assert!(report.ok());
+
+    // Repeats run the same test N times with distinct indices.
+    let runner = Runner::default()
+        .workers(1)
+        .list_progress(false)
+        .repeat_each(2);
+    let report = runner
+        .run(
+            browser,
+            vec![test("w6 repeat", |_page| async move { Ok(()) })],
+        )
+        .await;
+    assert_eq!(report.passed(), 2);
+    let indices: Vec<u32> = report.results.iter().map(|r| r.repeat_each_index).collect();
+    assert_eq!(indices, vec![0, 1]);
+
+    // forbid_only rejects Only tests without running anything.
+    let runner = Runner::default().list_progress(false).forbid_only(true);
+    let report = runner
+        .run(
+            browser,
+            vec![test("w6 only", |_page| async move { Ok(()) }).only()],
+        )
+        .await;
+    assert_eq!(report.failed(), 1);
+    assert_eq!(report.results[0].name, "<forbid-only>");
+
+    for (_kind, browser) in browsers {
+        browser.close().await.unwrap();
     }
 }

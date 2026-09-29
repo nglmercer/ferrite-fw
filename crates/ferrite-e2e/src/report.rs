@@ -1,4 +1,4 @@
-//! Test results and reporters (`list`, `json`, `junit`, `html`).
+//! Test results and reporters (`list`, `dot`, `json`, `junit`, `html`).
 
 use serde::{Deserialize, Serialize};
 
@@ -12,6 +12,20 @@ pub enum TestStatus {
     Failed,
     /// Skipped by the filter.
     Skipped,
+    /// Failed as expected (`Test::fail`); does not fail the run.
+    #[serde(rename = "expected")]
+    FailedExpected,
+}
+
+/// One file attached to a test via [`TestInfo`](crate::runner::TestInfo).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Attachment {
+    /// Attachment name.
+    pub name: String,
+    /// File path (under the output dir).
+    pub path: String,
+    /// MIME type.
+    pub content_type: String,
 }
 
 /// Result of one test.
@@ -37,6 +51,18 @@ pub struct TestResult {
     /// Video artifact path, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub video: Option<String>,
+    /// Project name, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// `repeat_each` index (0 = single run).
+    #[serde(default)]
+    pub repeat_each_index: u32,
+    /// Annotations as (kind, description) pairs.
+    #[serde(default)]
+    pub annotations: Vec<(String, String)>,
+    /// Attached files.
+    #[serde(default)]
+    pub attachments: Vec<Attachment>,
 }
 
 /// Aggregate report for a run.
@@ -81,6 +107,15 @@ impl TestReport {
         }
     }
 
+    /// Number of expected failures.
+    #[must_use]
+    pub fn expected_failed(&self) -> usize {
+        self.results
+            .iter()
+            .filter(|r| r.status == TestStatus::FailedExpected)
+            .count()
+    }
+
     /// One-line summary.
     #[must_use]
     pub fn summary(&self) -> String {
@@ -89,13 +124,38 @@ impl TestReport {
             .iter()
             .filter(|r| r.status == TestStatus::Skipped)
             .count();
-        format!(
-            "{} passed, {} failed, {} skipped ({} total)",
+        let expected = self.expected_failed();
+        let mut out = format!(
+            "{} passed, {} failed, {} skipped",
             self.passed(),
             self.failed(),
             skipped,
-            self.results.len()
-        )
+        );
+        if expected > 0 {
+            out.push_str(&format!(", {expected} expected-failed"));
+        }
+        out.push_str(&format!(" ({} total)", self.results.len()));
+        out
+    }
+
+    /// Render the `dot` reporter output (one char per test + summary).
+    ///
+    /// `.` passed, `F` failed, `s` skipped, `E` failed-as-expected.
+    #[must_use]
+    pub fn to_dot(&self) -> String {
+        let mut out = String::new();
+        for result in &self.results {
+            out.push(match result.status {
+                TestStatus::Passed => '.',
+                TestStatus::Failed => 'F',
+                TestStatus::Skipped => 's',
+                TestStatus::FailedExpected => 'E',
+            });
+        }
+        out.push('\n');
+        out.push_str(&self.summary());
+        out.push('\n');
+        out
     }
 
     /// Render the `list` reporter output.
@@ -107,6 +167,7 @@ impl TestReport {
                 TestStatus::Passed => "ok",
                 TestStatus::Failed => "FAIL",
                 TestStatus::Skipped => "skip",
+                TestStatus::FailedExpected => "expected",
             };
             out.push_str(&format!(
                 "[{mark}] {} ({}ms, {} attempt{})\n",
@@ -128,6 +189,15 @@ impl TestReport {
             }
             if let Some(video) = &result.video {
                 out.push_str(&format!("       video: {video}\n"));
+            }
+            if let Some(project) = &result.project {
+                out.push_str(&format!("       project: {project}\n"));
+            }
+            for (kind, description) in &result.annotations {
+                out.push_str(&format!("       annotation: {kind}={description}\n"));
+            }
+            for attachment in &result.attachments {
+                out.push_str(&format!("       attachment: {}\n", attachment.path));
             }
         }
         out.push_str(&self.summary());
@@ -152,18 +222,22 @@ impl TestReport {
         ));
         for result in &self.results {
             out.push_str(&format!(
-                "  <testcase name=\"{}\" time=\"{:.3}\">\n",
+                "  <testcase name=\"{}\" classname=\"{}\" time=\"{:.3}\">\n",
                 xml_escape(&result.name),
+                xml_escape(result.project.as_deref().unwrap_or("ferrite-e2e")),
                 result.duration_ms as f64 / 1000.0
             ));
             if result.status == TestStatus::Skipped {
                 out.push_str("    <skipped/>\n");
             }
-            if let Some(error) = &result.error {
-                out.push_str(&format!(
-                    "    <failure message=\"{}\"/>\n",
-                    xml_escape(&one_line(error))
-                ));
+            // Expected failures keep their message but never fail the suite.
+            if result.status == TestStatus::Failed {
+                if let Some(error) = &result.error {
+                    out.push_str(&format!(
+                        "    <failure message=\"{}\"/>\n",
+                        xml_escape(&one_line(error))
+                    ));
+                }
             }
             if let Some(video) = &result.video {
                 out.push_str(&format!(
@@ -189,6 +263,7 @@ impl TestReport {
              th{background:#f0f0f0}pre{background:#f6f6f6;padding:.4em;white-space:pre-wrap}\
              .pill{display:inline-block;padding:.1em .6em;border-radius:1em;color:#fff;font-size:.85em}\
              .pass{background:#2a7}.fail{background:#c33}.skip{background:#888}\
+             .exp{background:#b96}\
              </style></head><body>",
         );
         out.push_str(&format!(
@@ -204,6 +279,7 @@ impl TestReport {
                 TestStatus::Passed => ("passed", "pass"),
                 TestStatus::Failed => ("failed", "fail"),
                 TestStatus::Skipped => ("skipped", "skip"),
+                TestStatus::FailedExpected => ("expected-failed", "exp"),
             };
             out.push_str(&format!(
                 "<tr><td><span class=\"pill {class}\">{label}</span></td><td>{}</td>\
@@ -212,6 +288,16 @@ impl TestReport {
                 result.duration_ms,
                 result.attempts
             ));
+            if let Some(project) = &result.project {
+                out.push_str(&format!("<div>project: {}</div>", xml_escape(project)));
+            }
+            for (kind, description) in &result.annotations {
+                out.push_str(&format!(
+                    "<div>{}={}</div>",
+                    xml_escape(kind),
+                    xml_escape(description)
+                ));
+            }
             if let Some(error) = &result.error {
                 out.push_str(&format!("<pre>{}</pre>", xml_escape(error)));
             }
@@ -225,7 +311,14 @@ impl TestReport {
             }
             if let Some(video) = &result.video {
                 let href = xml_escape(video);
-                out.push_str(&format!("<a href=\"{href}\">video</a>"));
+                out.push_str(&format!("<a href=\"{href}\">video</a> "));
+            }
+            for attachment in &result.attachments {
+                let href = xml_escape(&attachment.path);
+                out.push_str(&format!(
+                    "<a href=\"{href}\">{}</a> ",
+                    xml_escape(&attachment.name)
+                ));
             }
             out.push_str("</td></tr>");
         }
@@ -250,19 +343,27 @@ fn xml_escape(text: &str) -> String {
 mod tests {
     use super::*;
 
+    fn sample_result(name: &str, status: TestStatus) -> TestResult {
+        TestResult {
+            name: name.to_string(),
+            status,
+            attempts: 1,
+            duration_ms: 120,
+            error: None,
+            screenshots: vec![],
+            trace: None,
+            video: None,
+            project: None,
+            repeat_each_index: 0,
+            annotations: Vec::new(),
+            attachments: Vec::new(),
+        }
+    }
+
     fn sample() -> TestReport {
         TestReport {
             results: vec![
-                TestResult {
-                    name: "passes".to_string(),
-                    status: TestStatus::Passed,
-                    attempts: 1,
-                    duration_ms: 120,
-                    error: None,
-                    screenshots: vec![],
-                    trace: None,
-                    video: None,
-                },
+                sample_result("passes", TestStatus::Passed),
                 TestResult {
                     name: "fails <bad>".to_string(),
                     status: TestStatus::Failed,
@@ -272,6 +373,14 @@ mod tests {
                     screenshots: vec!["test-results/fails.png".to_string()],
                     trace: Some("test-results/fails.json".to_string()),
                     video: Some("test-results/fails.webm".to_string()),
+                    project: Some("shop".to_string()),
+                    repeat_each_index: 0,
+                    annotations: vec![("flaky".to_string(), "retry".to_string())],
+                    attachments: vec![Attachment {
+                        name: "console".to_string(),
+                        path: "test-results/console.txt".to_string(),
+                        content_type: "text/plain".to_string(),
+                    }],
                 },
             ],
         }
@@ -324,9 +433,54 @@ mod tests {
         assert!(junit.contains("tests=\"2\" failures=\"1\""), "{junit}");
         assert!(junit.contains("fails &lt;bad&gt;"), "{junit}");
         assert!(junit.contains("<failure"), "{junit}");
+        assert!(junit.contains("classname=\"shop\""), "{junit}");
         assert!(
             junit.contains("<property name=\"video\" value=\"test-results/fails.webm\"/>"),
             "{junit}"
+        );
+    }
+
+    #[test]
+    fn dot_marks_statuses() {
+        let report = TestReport {
+            results: vec![
+                sample_result("a", TestStatus::Passed),
+                sample_result("b", TestStatus::Failed),
+                sample_result("c", TestStatus::Skipped),
+                sample_result("d", TestStatus::FailedExpected),
+            ],
+        };
+        let dot = report.to_dot();
+        assert!(dot.starts_with(".FsE\n"), "{dot}");
+        assert!(dot.contains("1 expected-failed"), "{dot}");
+    }
+
+    #[test]
+    fn expected_failures_do_not_fail_the_run() {
+        let mut expected = sample_result("flaky", TestStatus::FailedExpected);
+        expected.error = Some("timed out".to_string());
+        let report = TestReport {
+            results: vec![expected],
+        };
+        assert_eq!(report.expected_failed(), 1);
+        assert!(report.ok());
+        assert_eq!(report.exit_code(), 0);
+        assert!(
+            !report.to_junit().contains("<failure"),
+            "must not fail suite"
+        );
+        assert!(report.to_list().contains("[expected] flaky"));
+        assert!(report.to_html().contains("pill exp"));
+    }
+
+    #[test]
+    fn list_shows_project_annotations_attachments() {
+        let list = sample().to_list();
+        assert!(list.contains("project: shop"), "{list}");
+        assert!(list.contains("annotation: flaky=retry"), "{list}");
+        assert!(
+            list.contains("attachment: test-results/console.txt"),
+            "{list}"
         );
     }
 }

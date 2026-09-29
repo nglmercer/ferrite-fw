@@ -72,8 +72,11 @@ pub use page::{
     RouteHandlerEntry, RouteInfo, RouteRule, ScreenshotOptions, StorageState, Viewport,
     WebSocketDirection, WebSocketEvent,
 };
-pub use report::{TestReport, TestResult, TestStatus};
-pub use runner::{describe, test, GlobalHook, HookFn, Runner, Test, TestMode};
+pub use report::{Attachment, TestReport, TestResult, TestStatus};
+pub use runner::{
+    describe, test, test_with_context, FixtureMap, GlobalHook, HookFn, Project, Runner, Test,
+    TestContext, TestContextFn, TestInfo, TestMode,
+};
 pub use snapshot::{
     assert_snapshot_png, assert_snapshot_text, compare_png, match_text_snapshot,
     match_text_snapshot_with, SnapshotDiff, SnapshotOptions, SnapshotUpdate,

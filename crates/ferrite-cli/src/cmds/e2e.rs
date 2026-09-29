@@ -125,6 +125,9 @@ fn apply_flag_overrides(e2e: &mut ferrite::config::E2eConfig, args: &E2eArgs) {
     if let Some((index, total)) = args.shard {
         std::env::set_var("FERRITE_E2E_SHARD", format!("{index}/{total}"));
     }
+    if !args.project.is_empty() {
+        std::env::set_var("FERRITE_E2E_PROJECT", args.project.join(","));
+    }
 }
 
 async fn check_browser(

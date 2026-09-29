@@ -6,7 +6,7 @@
 //! ferrite e2e
 //! ```
 
-use ferrite_e2e::{test, Browser, BrowserKind, LaunchOptions, Runner};
+use ferrite_e2e::{test, test_with_context, Browser, BrowserKind, LaunchOptions, Runner};
 
 fn browser_or_skip() -> Option<(BrowserKind, std::path::PathBuf)> {
     let name = std::env::var("FERRITE_E2E_BROWSER").unwrap_or_else(|_| "chromium".to_string());
@@ -42,6 +42,7 @@ async fn demo_suite() {
         .unwrap_or(ferrite_e2e::VideoMode::Off);
     let report = Runner::default()
         .video_mode(video)
+        .fixture(|| async { Ok::<_, ferrite_e2e::E2eError>("named-user".to_string()) })
         .run(
             &browser,
             vec![
@@ -59,6 +60,21 @@ async fn demo_suite() {
                     page.locator("#greeting")
                         .expect_contains_text("hello ada")
                         .await?;
+                    Ok(())
+                })
+                .annotate("area", "greeting"),
+                test_with_context("context greets the fixture", |ctx| async move {
+                    let name = ctx
+                        .get::<String>()
+                        .map(|name| name.as_str().to_string())
+                        .unwrap_or_else(|| "ada".to_string());
+                    ctx.goto("/").await?;
+                    ctx.locator("#name").fill(&name).await?;
+                    ctx.locator("#greeting")
+                        .expect_contains_text("hello named-user")
+                        .await?;
+                    let title = ctx.title().await?;
+                    ctx.info.attach("title", title.as_bytes(), "text/plain")?;
                     Ok(())
                 }),
             ],

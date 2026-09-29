@@ -242,6 +242,7 @@ ferrite e2e --engine firefox        # same suite on Firefox
 ferrite e2e --headed --retries 2    # visible browser, retries
 ferrite e2e --video only-on-failure # record test videos (webm)
 ferrite e2e --grep auth --shard 1/3 # filter by name/tag, run one shard
+ferrite e2e --project shop --project blog # run named projects only
 ferrite e2e --url http://127.0.0.1:3000/ -- cargo test --test shop
 ```
 
@@ -272,6 +273,8 @@ screenshot/text/aria snapshot assertions (`missing`/`all`/`none` update modes),
 `Download`
 objects with save/delete, screenshots, video recording, live frame streams,
 traces, `ApiClient` verbs with `fetch`, parallel `Runner` with tags, sharding,
+projects, `repeat_each`, fixtures, `TestInfo` attachments/annotations,
+expected failures, `forbid_only`, dot/list/json/junit/html reporters,
 and `before_all`/`after_all` hooks). Chromium recordings assemble via `ffmpeg`
 (fail-fast hint when missing; `FERRITE_FFMPEG_PATH` override); Firefox
 records natively. See

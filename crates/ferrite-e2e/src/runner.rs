@@ -1,14 +1,18 @@
 //! Parallel test runner with retries, timeouts, and artifact capture.
 
+use std::any::{Any, TypeId};
+use std::collections::{HashMap, VecDeque};
 use std::future::Future;
+use std::ops::Deref;
+use std::panic::Location;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::browser::Browser;
-use crate::error::E2eResult;
+use crate::error::{E2eError, E2eResult};
 use crate::page::{Page, ScreenshotOptions};
-use crate::report::{TestReport, TestResult, TestStatus};
+use crate::report::{Attachment, TestReport, TestResult, TestStatus};
 use crate::video::{VideoMode, VideoOptions};
 
 /// A boxed test future.
@@ -16,6 +20,9 @@ pub type BoxTestFuture = Pin<Box<dyn Future<Output = E2eResult<()>> + Send + 'st
 
 /// A test body: receives a fresh [`Page`].
 pub type TestFn = Arc<dyn Fn(Page) -> BoxTestFuture + Send + Sync>;
+
+/// A test body: receives a [`TestContext`] (page + info + fixtures).
+pub type TestContextFn = Arc<dyn Fn(TestContext) -> BoxTestFuture + Send + Sync>;
 
 /// How a test runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -27,8 +34,10 @@ pub enum TestMode {
     Skip,
     /// Restrict the run to `Only` tests.
     Only,
-    /// Report skipped (expected to fail, tracked separately).
+    /// Report skipped (known failure, tracked separately).
     Fixme,
+    /// Expect failure: a failed test passes the run, a passing test fails it.
+    Fail,
 }
 
 /// One named test.
@@ -38,8 +47,16 @@ pub struct Test {
     pub name: String,
     /// Test body.
     pub func: TestFn,
+    /// Context-aware body ([`test_with_context`]; wins over [`Test::func`]).
+    pub ctx_func: Option<TestContextFn>,
     /// Tags for filtering.
     pub tags: Vec<String>,
+    /// Annotations as (kind, description) pairs (reported, never filtered).
+    pub annotations: Vec<(String, String)>,
+    /// Source file of the `test()` call.
+    pub file: String,
+    /// Source line of the `test()` call.
+    pub line: u32,
     /// Run mode.
     pub mode: TestMode,
     /// Retry override (runner default when unset).
@@ -79,6 +96,20 @@ impl Test {
         self
     }
 
+    /// Expect failure (a failure passes the run, a pass fails it).
+    #[must_use]
+    pub fn fail(mut self) -> Self {
+        self.mode = TestMode::Fail;
+        self
+    }
+
+    /// Add a reported annotation (never filtered on).
+    #[must_use]
+    pub fn annotate(mut self, kind: impl Into<String>, description: impl Into<String>) -> Self {
+        self.annotations.push((kind.into(), description.into()));
+        self
+    }
+
     /// Triple the effective timeout.
     #[must_use]
     pub fn slow(mut self) -> Self {
@@ -102,20 +133,40 @@ impl Test {
 }
 
 /// Define a test.
+#[track_caller]
 pub fn test<F, Fut>(name: impl Into<String>, func: F) -> Test
 where
     F: Fn(Page) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = E2eResult<()>> + Send + 'static,
 {
+    let caller = Location::caller();
     Test {
         name: name.into(),
         func: Arc::new(move |page| Box::pin(func(page))),
+        ctx_func: None,
         tags: Vec::new(),
+        annotations: Vec::new(),
+        file: caller.file().to_string(),
+        line: caller.line(),
         mode: TestMode::Run,
         retries: None,
         timeout: None,
         slow: false,
     }
+}
+
+/// Define a test receiving a [`TestContext`] (page + info + fixtures).
+///
+/// The context derefs to [`Page`], so `ctx.goto(..)` keeps working.
+#[track_caller]
+pub fn test_with_context<F, Fut>(name: impl Into<String>, func: F) -> Test
+where
+    F: Fn(TestContext) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = E2eResult<()>> + Send + 'static,
+{
+    let mut test = test(name, |_page: Page| async { Ok(()) });
+    test.ctx_func = Some(Arc::new(move |ctx| Box::pin(func(ctx))));
+    test
 }
 
 /// Group tests under `name` (`"group > test"`); nests naturally.
@@ -128,6 +179,189 @@ pub fn describe(name: &str, tests: Vec<Test>) -> Vec<Test> {
             test
         })
         .collect()
+}
+
+/// Metadata for one test execution (Playwright `TestInfo`).
+#[derive(Clone)]
+pub struct TestInfo {
+    /// Test title.
+    pub title: String,
+    /// Source file of the `test()` call.
+    pub file: String,
+    /// Source line of the `test()` call.
+    pub line: u32,
+    /// Test tags.
+    pub tags: Vec<String>,
+    /// Current attempt (0-based).
+    pub retry: u32,
+    /// Worker index (`0..workers`).
+    pub worker_index: usize,
+    /// `repeat_each` index (`0` = single run).
+    pub repeat_each_index: u32,
+    /// Effective per-attempt timeout.
+    pub timeout: Duration,
+    /// Artifact directory.
+    pub output_dir: String,
+    /// Project name, if any.
+    pub project: Option<String>,
+    /// Attachments shared across attempts.
+    attachments: Arc<Mutex<Vec<Attachment>>>,
+}
+
+impl TestInfo {
+    /// Attach bytes as a file under `<output_dir>/attachments/`.
+    ///
+    /// Returns the written path. The extension is derived from well-known
+    /// content types (`.txt`, `.json`, `.png`, `.html`); anything else keeps
+    /// the slugged name without an extension.
+    pub fn attach(&self, name: &str, body: &[u8], content_type: &str) -> E2eResult<String> {
+        let dir = std::path::Path::new(&self.output_dir).join("attachments");
+        std::fs::create_dir_all(&dir)?;
+        let file = format!(
+            "{}-{}{}",
+            slug(&self.title),
+            slug(name),
+            attach_extension(content_type)
+        );
+        let path = dir.join(file);
+        std::fs::write(&path, body)?;
+        let path = path.display().to_string();
+        self.attachments
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(Attachment {
+                name: name.to_string(),
+                path: path.clone(),
+                content_type: content_type.to_string(),
+            });
+        Ok(path)
+    }
+
+    /// Attachments recorded so far (across attempts).
+    #[must_use]
+    pub fn attachments(&self) -> Vec<Attachment> {
+        self.attachments
+            .lock()
+            .map(|a| a.clone())
+            .unwrap_or_default()
+    }
+}
+
+/// Extension suffix for well-known attachment content types.
+fn attach_extension(content_type: &str) -> &'static str {
+    let mime = content_type.split(';').next().unwrap_or("").trim();
+    match mime {
+        "text/plain" => ".txt",
+        "text/html" => ".html",
+        "application/json" => ".json",
+        "image/png" => ".png",
+        _ => "",
+    }
+}
+
+/// Values built by [`Runner::fixture`] setup closures, keyed by type.
+#[derive(Clone, Default)]
+pub struct FixtureMap {
+    inner: HashMap<TypeId, Arc<dyn Any + Send + Sync>>,
+}
+
+impl FixtureMap {
+    /// The fixture value of type `T`, if one was registered.
+    #[must_use]
+    pub fn get<T: Send + Sync + 'static>(&self) -> Option<Arc<T>> {
+        self.inner
+            .get(&TypeId::of::<T>())?
+            .clone()
+            .downcast::<T>()
+            .ok()
+    }
+}
+
+/// What a test body receives under [`test_with_context`].
+#[derive(Clone)]
+pub struct TestContext {
+    /// Fresh page for this attempt.
+    pub page: Page,
+    /// Execution metadata (attach via [`TestInfo::attach`]).
+    pub info: TestInfo,
+    /// Fixture values for this attempt.
+    fixtures: FixtureMap,
+}
+
+impl Deref for TestContext {
+    type Target = Page;
+
+    fn deref(&self) -> &Page {
+        &self.page
+    }
+}
+
+impl TestContext {
+    /// The fixture value of type `T`, if one was registered.
+    #[must_use]
+    pub fn get<T: Send + Sync + 'static>(&self) -> Option<Arc<T>> {
+        self.fixtures.get()
+    }
+}
+
+/// A boxed fixture setup future.
+type SetupFuture =
+    Pin<Box<dyn Future<Output = E2eResult<Arc<dyn Any + Send + Sync>>> + Send + 'static>>;
+
+/// A boxed fixture teardown: receives the setup value.
+type TeardownFn = Arc<dyn Fn(Arc<dyn Any + Send + Sync>) -> BoxTestFuture + Send + Sync>;
+
+/// One registered fixture (setup + optional teardown).
+#[derive(Clone)]
+struct FixtureDef {
+    type_id: TypeId,
+    setup: Arc<dyn Fn() -> SetupFuture + Send + Sync>,
+    teardown: Option<TeardownFn>,
+}
+
+/// A named group of tests with its own settings (Playwright projects).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Project {
+    /// Project name (prefixes result names as `"name > test"`).
+    pub name: String,
+    /// Extra name-or-tag filter applied within this project.
+    pub grep: Option<String>,
+    /// Retry override for this project.
+    pub retries: Option<u32>,
+    /// Timeout override for this project.
+    pub timeout: Option<Duration>,
+}
+
+impl Project {
+    /// A project with defaults (name only).
+    #[must_use]
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            ..Default::default()
+        }
+    }
+
+    /// Only run tests whose name or tags contain `grep` in this project.
+    #[must_use]
+    pub fn grep(mut self, grep: impl Into<String>) -> Self {
+        self.grep = Some(grep.into());
+        self
+    }
+
+    /// Retry override for this project.
+    #[must_use]
+    pub fn retries(mut self, retries: u32) -> Self {
+        self.retries = Some(retries);
+        self
+    }
+
+    /// Timeout override for this project.
+    #[must_use]
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
 }
 
 /// Select the tests to run: `Only` restriction, name-or-tag substring
@@ -191,6 +425,150 @@ fn env_filter(var: &str) -> Option<String> {
     std::env::var(var).ok().filter(|value| !value.is_empty())
 }
 
+/// True when `CI` is `"1"`/`"true"` (case-insensitive).
+fn ci_truthy() -> bool {
+    matches!(std::env::var("CI"), Ok(value) if value == "1" || value.eq_ignore_ascii_case("true"))
+}
+
+/// Display name (`"project > test"` when projected).
+fn display_name(project: Option<&str>, test: &str) -> String {
+    match project {
+        Some(name) => format!("{name} > {test}"),
+        None => test.to_string(),
+    }
+}
+
+/// One runnable test with resolved settings.
+#[derive(Clone)]
+pub(crate) struct WorkItem {
+    test: Test,
+    project: Option<String>,
+    retries: u32,
+    timeout: Duration,
+    repeat_each_index: u32,
+}
+
+impl WorkItem {
+    fn display_name(&self) -> String {
+        display_name(self.project.as_deref(), &self.test.name)
+    }
+}
+
+/// Resolve which projects run (`None` = the implicit unprefixed project).
+///
+/// Unknown wanted names fail loudly.
+pub(crate) fn resolve_projects(
+    all: &[Project],
+    wanted: &[String],
+) -> Result<Vec<Option<Project>>, String> {
+    if wanted.is_empty() {
+        if all.is_empty() {
+            return Ok(vec![None]);
+        }
+        return Ok(all.iter().cloned().map(Some).collect());
+    }
+    let mut out = Vec::with_capacity(wanted.len());
+    for name in wanted {
+        match all.iter().find(|project| &project.name == name) {
+            Some(project) => out.push(Some(project.clone())),
+            None => {
+                let have: Vec<&str> = all.iter().map(|p| p.name.as_str()).collect();
+                return Err(format!(
+                    "unknown project {name:?} (have: {})",
+                    have.join(", ")
+                ));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Build the runnable and skipped lists: per-project selection (global
+/// filters plus the project grep), `repeat_each` expansion, then one shard
+/// over the combined display names.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_work_items(
+    tests: &[Test],
+    filter: Option<&str>,
+    grep: Option<&str>,
+    grep_invert: Option<&str>,
+    projects: &[Option<Project>],
+    runner_retries: u32,
+    runner_timeout: Duration,
+    repeat_each: u32,
+    shard: Option<(usize, usize)>,
+) -> (Vec<WorkItem>, Vec<(Test, Option<String>)>) {
+    let mut runnable = Vec::new();
+    let mut skipped = Vec::new();
+    for project in projects {
+        for test in select(tests, filter, grep, grep_invert, None) {
+            if let Some(want) = project.as_ref().and_then(|p| p.grep.as_deref()) {
+                if !(test.name.contains(want) || test.tags.iter().any(|tag| tag.contains(want))) {
+                    continue;
+                }
+            }
+            let name = project.clone().map(|p| p.name);
+            match test.mode {
+                TestMode::Skip | TestMode::Fixme => skipped.push(((*test).clone(), name)),
+                _ => {
+                    for repeat in 0..repeat_each.max(1) {
+                        runnable.push(WorkItem {
+                            test: (*test).clone(),
+                            project: name.clone(),
+                            retries: test
+                                .retries
+                                .or_else(|| project.as_ref().and_then(|p| p.retries))
+                                .unwrap_or(runner_retries),
+                            timeout: test
+                                .timeout
+                                .or_else(|| project.as_ref().and_then(|p| p.timeout))
+                                .unwrap_or(runner_timeout),
+                            repeat_each_index: repeat,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    if let Some((index, total)) = shard {
+        runnable = take_shard(runnable, index, total);
+    }
+    (runnable, skipped)
+}
+
+/// Take one 1-based shard by display-name order (`repeat_each_index` breaks ties).
+fn take_shard(mut items: Vec<WorkItem>, index: usize, total: usize) -> Vec<WorkItem> {
+    items.sort_by(|a, b| {
+        (a.display_name(), a.repeat_each_index).cmp(&(b.display_name(), b.repeat_each_index))
+    });
+    let total = total.max(1);
+    let want = index.saturating_sub(1) % total;
+    items
+        .into_iter()
+        .enumerate()
+        .filter(|(position, _)| position % total == want)
+        .map(|(_, item)| item)
+        .collect()
+}
+
+/// A one-off failed result (`<global setup>`, `<join>`, ...).
+fn failed_result(name: &str, error: String) -> TestResult {
+    TestResult {
+        name: name.to_string(),
+        status: TestStatus::Failed,
+        attempts: 1,
+        duration_ms: 0,
+        error: Some(error),
+        screenshots: vec![],
+        trace: None,
+        video: None,
+        project: None,
+        repeat_each_index: 0,
+        annotations: Vec::new(),
+        attachments: Vec::new(),
+    }
+}
+
 /// Runs tests against a [`Browser`] with workers, retries, and artifacts.
 /// A per-test hook (`Page` in, unit out).
 pub type HookFn = Arc<dyn Fn(Page) -> BoxTestFuture + Send + Sync>;
@@ -220,6 +598,10 @@ pub struct Runner {
     list_progress: bool,
     video: VideoMode,
     video_fps: u32,
+    projects: Vec<Project>,
+    repeat_each: u32,
+    forbid_only: bool,
+    fixtures: Vec<FixtureDef>,
 }
 
 impl Default for Runner {
@@ -245,6 +627,10 @@ impl Default for Runner {
             list_progress: true,
             video: VideoMode::Off,
             video_fps: 10,
+            projects: Vec::new(),
+            repeat_each: 1,
+            forbid_only: false,
+            fixtures: Vec::new(),
         }
     }
 }
@@ -274,6 +660,10 @@ impl Runner {
             list_progress: true,
             video: VideoMode::parse(&config.video).unwrap_or(VideoMode::Off),
             video_fps: config.video_fps.max(1),
+            projects: Vec::new(),
+            repeat_each: 1,
+            forbid_only: false,
+            fixtures: Vec::new(),
         }
     }
 
@@ -444,13 +834,105 @@ impl Runner {
         self
     }
 
+    /// Add a project (repeatable; result names gain a `"name > "` prefix).
+    ///
+    /// Use `--project` (`FERRITE_E2E_PROJECT`, comma-separated) to run a
+    /// subset; unknown names fail the run loudly.
+    #[must_use]
+    pub fn project(mut self, project: Project) -> Self {
+        self.projects.push(project);
+        self
+    }
+
+    /// Run every test `n` times (distinguished by `repeat_each_index`).
+    #[must_use]
+    pub fn repeat_each(mut self, n: u32) -> Self {
+        self.repeat_each = n.max(1);
+        self
+    }
+
+    /// Fail the run when any test uses [`TestMode::Only`].
+    ///
+    /// Also enforced automatically when `CI` is `"1"`/`"true"`.
+    #[must_use]
+    pub fn forbid_only(mut self, forbid: bool) -> Self {
+        self.forbid_only = forbid;
+        self
+    }
+
+    /// Register a fixture value built fresh for every attempt.
+    ///
+    /// `setup` runs before each attempt (failures fail the attempt);
+    /// read the value via [`TestContext::get`]. Later fixtures see nothing
+    /// of earlier ones (no ordering dependency).
+    #[must_use]
+    pub fn fixture<T, F, Fut>(mut self, setup: F) -> Self
+    where
+        T: Send + Sync + 'static,
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = E2eResult<T>> + Send + 'static,
+    {
+        let setup = Arc::new(move || {
+            let fut = setup();
+            Box::pin(async move {
+                fut.await
+                    .map(|value| Arc::new(value) as Arc<dyn Any + Send + Sync>)
+            }) as SetupFuture
+        });
+        self.fixtures.push(FixtureDef {
+            type_id: TypeId::of::<T>(),
+            setup,
+            teardown: None,
+        });
+        self
+    }
+
+    /// Register a fixture with teardown (runs after every attempt, in reverse).
+    ///
+    /// Teardown failures fail the attempt; all teardowns still run.
+    #[must_use]
+    pub fn fixture_with_teardown<T, F, Fut, G, Fut2>(mut self, setup: F, teardown: G) -> Self
+    where
+        T: Send + Sync + 'static,
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = E2eResult<T>> + Send + 'static,
+        G: Fn(Arc<T>) -> Fut2 + Send + Sync + 'static,
+        Fut2: Future<Output = E2eResult<()>> + Send + 'static,
+    {
+        let setup = Arc::new(move || {
+            let fut = setup();
+            Box::pin(async move {
+                fut.await
+                    .map(|value| Arc::new(value) as Arc<dyn Any + Send + Sync>)
+            }) as SetupFuture
+        });
+        let teardown_fn = Arc::new(teardown);
+        let teardown = Arc::new(move |any: Arc<dyn Any + Send + Sync>| {
+            let teardown_fn = Arc::clone(&teardown_fn);
+            Box::pin(async move {
+                let typed: Arc<T> = any.downcast::<T>().map_err(|_| {
+                    E2eError::Config("fixture type mismatch in teardown".to_string())
+                })?;
+                teardown_fn(typed).await
+            }) as BoxTestFuture
+        });
+        self.fixtures.push(FixtureDef {
+            type_id: TypeId::of::<T>(),
+            setup,
+            teardown: Some(teardown),
+        });
+        self
+    }
+
     /// Run tests to completion (never fails the call itself).
     ///
     /// Unset builder filters fall back to `FERRITE_E2E_FILTER`,
     /// `FERRITE_E2E_GREP`, `FERRITE_E2E_GREP_INVERT`, and `FERRITE_E2E_SHARD`
-    /// (set by the CLI flags). Snapshot assertions resolve their directory
-    /// from `FERRITE_SNAPSHOT_DIR`, which this run seeds from the output dir
-    /// unless already set.
+    /// (set by the CLI flags); `FERRITE_E2E_PROJECT` (comma-separated, from
+    /// `--project`) selects which projects run. Snapshot assertions resolve
+    /// their directory from `FERRITE_SNAPSHOT_DIR`, which this run seeds from
+    /// the output dir unless already set. Tests run on a worker pool
+    /// (`worker_index` in [`TestInfo`]); progress prints in completion order.
     pub async fn run(&self, browser: &Browser, tests: Vec<Test>) -> TestReport {
         if std::env::var("FERRITE_SNAPSHOT_DIR").is_err() {
             std::env::set_var(
@@ -461,16 +943,9 @@ impl Runner {
         let mut report = TestReport::default();
         for setup in &self.global_setup {
             if let Err(error) = setup().await {
-                report.results.push(TestResult {
-                    name: "<global setup>".to_string(),
-                    status: TestStatus::Failed,
-                    attempts: 1,
-                    duration_ms: 0,
-                    error: Some(error.to_string()),
-                    screenshots: vec![],
-                    trace: None,
-                    video: None,
-                });
+                report
+                    .results
+                    .push(failed_result("<global setup>", error.to_string()));
                 return report;
             }
         }
@@ -484,125 +959,137 @@ impl Runner {
             .clone()
             .or_else(|| env_filter("FERRITE_E2E_GREP_INVERT"));
         let shard = self.shard.or_else(shard_from_env);
-        let selected: Vec<Test> = select(
+        let project_filter: Vec<String> = env_filter("FERRITE_E2E_PROJECT")
+            .map(|raw| {
+                raw.split(',')
+                    .map(|name| name.trim().to_string())
+                    .filter(|name| !name.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let projects = match resolve_projects(&self.projects, &project_filter) {
+            Ok(projects) => projects,
+            Err(error) => {
+                report.results.push(failed_result("<project>", error));
+                return report;
+            }
+        };
+        let (runnable, skipped) = build_work_items(
             &tests,
             filter.as_deref(),
             grep.as_deref(),
             grep_invert.as_deref(),
+            &projects,
+            self.retries,
+            self.test_timeout,
+            self.repeat_each,
             shard,
-        )
-        .into_iter()
-        .cloned()
-        .collect();
-        let mut runnable = Vec::new();
-        for test in selected {
-            match test.mode {
-                TestMode::Skip | TestMode::Fixme => {
-                    if self.list_progress {
-                        println!("[skip] {}", test.name);
-                    }
-                    report.results.push(TestResult {
-                        name: test.name.clone(),
-                        status: TestStatus::Skipped,
-                        attempts: 0,
-                        duration_ms: 0,
-                        error: None,
-                        screenshots: vec![],
-                        trace: None,
-                        video: None,
-                    });
-                }
-                TestMode::Run | TestMode::Only => runnable.push(test),
+        );
+        if (self.forbid_only || ci_truthy())
+            && runnable.iter().any(|item| item.test.mode == TestMode::Only)
+        {
+            report.results.push(failed_result(
+                "<forbid-only>",
+                "test.only is forbidden (forbid_only/CI)".to_string(),
+            ));
+            return report;
+        }
+        for (test, project) in &skipped {
+            let name = display_name(project.as_deref(), &test.name);
+            if self.list_progress {
+                println!("[skip] {name}");
             }
+            report.results.push(TestResult {
+                name,
+                status: TestStatus::Skipped,
+                attempts: 0,
+                duration_ms: 0,
+                error: None,
+                screenshots: vec![],
+                trace: None,
+                video: None,
+                project: project.clone(),
+                repeat_each_index: 0,
+                annotations: test.annotations.clone(),
+                attachments: Vec::new(),
+            });
         }
         for hook in &self.before_all {
             if let Err(error) = hook().await {
-                report.results.push(TestResult {
-                    name: "<before_all>".to_string(),
-                    status: TestStatus::Failed,
-                    attempts: 1,
-                    duration_ms: 0,
-                    error: Some(error.to_string()),
-                    screenshots: vec![],
-                    trace: None,
-                    video: None,
-                });
+                report
+                    .results
+                    .push(failed_result("<before_all>", error.to_string()));
                 return report;
             }
         }
-        let semaphore = Arc::new(tokio::sync::Semaphore::new(self.workers));
-        let mut handles = Vec::new();
-        for test in runnable {
-            let permit = semaphore.clone().acquire_owned().await.expect("semaphore");
+        // Worker pool: stable `worker_index` per task, completion-order results.
+        let queue = Arc::new(Mutex::new(VecDeque::from(runnable)));
+        let context = browser.default_context();
+        let mut workers = tokio::task::JoinSet::new();
+        for worker_index in 0..self.workers {
+            let queue = Arc::clone(&queue);
             let runner = self.clone();
-            let context = browser.default_context();
-            handles.push(tokio::spawn(async move {
-                let _permit = permit;
-                run_one(&runner, &context, &test).await
-            }));
-        }
-        for handle in handles {
-            match handle.await {
-                Ok(result) => {
-                    if self.list_progress {
-                        let mark = match result.status {
-                            TestStatus::Passed => "ok",
-                            TestStatus::Failed => "FAIL",
-                            TestStatus::Skipped => "skip",
-                        };
-                        println!("[{mark}] {}", result.name);
-                        if let Some(error) = &result.error {
-                            println!("       {error}");
+            let context = context.clone();
+            workers.spawn(async move {
+                let mut results = Vec::new();
+                loop {
+                    let item = queue.lock().map(|mut q| q.pop_front()).unwrap_or(None);
+                    match item {
+                        Some(item) => {
+                            results.push(run_one(&runner, &context, &item, worker_index).await);
                         }
+                        None => break,
                     }
-                    report.results.push(result);
                 }
-                Err(error) => report.results.push(TestResult {
-                    name: "<join>".to_string(),
-                    status: TestStatus::Failed,
-                    attempts: 1,
-                    duration_ms: 0,
-                    error: Some(error.to_string()),
-                    screenshots: vec![],
-                    trace: None,
-                    video: None,
-                }),
+                results
+            });
+        }
+        while let Some(joined) = workers.join_next().await {
+            match joined {
+                Ok(results) => {
+                    for result in results {
+                        if self.list_progress {
+                            let mark = match result.status {
+                                TestStatus::Passed => "ok",
+                                TestStatus::Failed => "FAIL",
+                                TestStatus::Skipped => "skip",
+                                TestStatus::FailedExpected => "expected",
+                            };
+                            println!("[{mark}] {}", result.name);
+                            if let Some(error) = &result.error {
+                                println!("       {error}");
+                            }
+                        }
+                        report.results.push(result);
+                    }
+                }
+                Err(error) => report
+                    .results
+                    .push(failed_result("<join>", error.to_string())),
             }
         }
         for hook in &self.after_all {
             if let Err(error) = hook().await {
-                report.results.push(TestResult {
-                    name: "<after_all>".to_string(),
-                    status: TestStatus::Failed,
-                    attempts: 1,
-                    duration_ms: 0,
-                    error: Some(error.to_string()),
-                    screenshots: vec![],
-                    trace: None,
-                    video: None,
-                });
+                report
+                    .results
+                    .push(failed_result("<after_all>", error.to_string()));
             }
         }
         for teardown in &self.global_teardown {
             if let Err(error) = teardown().await {
-                report.results.push(TestResult {
-                    name: "<global teardown>".to_string(),
-                    status: TestStatus::Failed,
-                    attempts: 1,
-                    duration_ms: 0,
-                    error: Some(error.to_string()),
-                    screenshots: vec![],
-                    trace: None,
-                    video: None,
-                });
+                report
+                    .results
+                    .push(failed_result("<global teardown>", error.to_string()));
             }
         }
         report.results.sort_by(|a, b| a.name.cmp(&b.name));
         report
     }
 
-    /// Write `json`/`junit` artifacts for the reporters in `spec`
-    /// (comma-separated `list`, `json`, `junit`).
+    /// Write file artifacts for the reporters in `spec` (comma-separated).
+    ///
+    /// `json`, `junit`, and `html` write files; `list` and `dot` are printed
+    /// by the caller via [`TestReport::to_list`] / [`TestReport::to_dot`].
     pub fn write_artifacts(&self, report: &TestReport, spec: &str) -> Vec<String> {
         let mut written = Vec::new();
         std::fs::create_dir_all(&self.output_dir).ok();
@@ -636,22 +1123,30 @@ impl Runner {
 async fn run_one(
     runner: &Runner,
     context: &crate::context::BrowserContext,
-    test: &Test,
+    item: &WorkItem,
+    worker_index: usize,
 ) -> TestResult {
+    let test = &item.test;
     let started = Instant::now();
     let mut attempts = 0;
     let mut last_error = String::new();
     let mut screenshots = Vec::new();
     let mut trace_path = None;
     let mut video_path = None;
-    let slug = slug(&test.name);
-    let retries = test.retries.unwrap_or(runner.retries);
-    let mut timeout = test.timeout.unwrap_or(runner.test_timeout);
+    let attachments = Arc::new(Mutex::new(Vec::new()));
+    let name = item.display_name();
+    let slug = if item.repeat_each_index == 0 {
+        slug(&name)
+    } else {
+        format!("{}-r{}", slug(&name), item.repeat_each_index)
+    };
+    let mut timeout = item.timeout;
     if test.slow {
         timeout = timeout.saturating_mul(3);
     }
+    let expected_fail = test.mode == TestMode::Fail;
 
-    for _ in 0..=retries {
+    for _ in 0..=item.retries {
         attempts += 1;
         let page = match context.new_page().await {
             Ok(page) => page,
@@ -668,6 +1163,27 @@ async fn run_one(
             }
         }
         if let Some(error) = hooked {
+            last_error = error;
+            page.close().await.ok();
+            continue;
+        }
+        // Fixtures build fresh per attempt; teardown runs in reverse below.
+        let mut fixtures = FixtureMap::default();
+        let mut built = Vec::with_capacity(runner.fixtures.len());
+        let mut fixture_error = None;
+        for def in &runner.fixtures {
+            match (def.setup)().await {
+                Ok(value) => {
+                    fixtures.inner.insert(def.type_id, Arc::clone(&value));
+                    built.push(value);
+                }
+                Err(error) => {
+                    fixture_error = Some(format!("fixture setup: {error}"));
+                    break;
+                }
+            }
+        }
+        if let Some(error) = fixture_error {
             last_error = error;
             page.close().await.ok();
             continue;
@@ -691,7 +1207,28 @@ async fn run_one(
         } else {
             false
         };
-        let outcome = tokio::time::timeout(timeout, (test.func)(page.clone())).await;
+        let info = TestInfo {
+            title: test.name.clone(),
+            file: test.file.clone(),
+            line: test.line,
+            tags: test.tags.clone(),
+            retry: attempts - 1,
+            worker_index,
+            repeat_each_index: item.repeat_each_index,
+            timeout,
+            output_dir: runner.output_dir.clone(),
+            project: item.project.clone(),
+            attachments: Arc::clone(&attachments),
+        };
+        let body = match &test.ctx_func {
+            Some(func) => func(TestContext {
+                page: page.clone(),
+                info,
+                fixtures: fixtures.clone(),
+            }),
+            None => (test.func)(page.clone()),
+        };
+        let outcome = tokio::time::timeout(timeout, body).await;
         let mut failed = match outcome {
             Ok(Ok(())) => None,
             Ok(Err(error)) => Some(error.to_string()),
@@ -705,6 +1242,22 @@ async fn run_one(
                     None => note,
                 });
             }
+        }
+        // Fixture teardown in reverse (all run; failures fail the attempt).
+        for (def, value) in runner.fixtures.iter().zip(built.iter()).rev() {
+            if let Some(teardown) = &def.teardown {
+                if let Err(error) = teardown(Arc::clone(value)).await {
+                    let note = format!("fixture teardown: {error}");
+                    failed = Some(match failed {
+                        Some(prior) => format!("{prior} ({note})"),
+                        None => note,
+                    });
+                }
+            }
+        }
+        let unexpected_pass = failed.is_none() && expected_fail;
+        if unexpected_pass {
+            failed = Some("expected to fail, but passed".to_string());
         }
         if recording {
             let keep = runner.video == VideoMode::On
@@ -745,8 +1298,10 @@ async fn run_one(
                 std::fs::create_dir_all(parent).ok();
             }
             let payload = serde_json::json!({
-                "test": test.name,
+                "test": name,
                 "attempt": attempts,
+                "worker": worker_index,
+                "repeat": item.repeat_each_index,
                 "console": page.console_messages(),
                 "trace": page.trace(),
             });
@@ -760,10 +1315,27 @@ async fn run_one(
             }
         }
         page.close().await.ok();
+        // Unexpected passes fail immediately (no retry can redeem a pass).
+        if unexpected_pass {
+            return TestResult {
+                name: name.clone(),
+                status: TestStatus::Failed,
+                attempts,
+                duration_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+                error: failed,
+                screenshots,
+                trace: trace_path,
+                video: video_path,
+                project: item.project.clone(),
+                repeat_each_index: item.repeat_each_index,
+                annotations: test.annotations.clone(),
+                attachments: attachments.lock().map(|a| a.clone()).unwrap_or_default(),
+            };
+        }
         match failed {
             None => {
                 return TestResult {
-                    name: test.name.clone(),
+                    name: name.clone(),
                     status: TestStatus::Passed,
                     attempts,
                     duration_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
@@ -771,20 +1343,32 @@ async fn run_one(
                     screenshots,
                     trace: trace_path,
                     video: video_path,
+                    project: item.project.clone(),
+                    repeat_each_index: item.repeat_each_index,
+                    annotations: test.annotations.clone(),
+                    attachments: attachments.lock().map(|a| a.clone()).unwrap_or_default(),
                 };
             }
             Some(error) => last_error = error,
         }
     }
     TestResult {
-        name: test.name.clone(),
-        status: TestStatus::Failed,
+        name: name.clone(),
+        status: if expected_fail {
+            TestStatus::FailedExpected
+        } else {
+            TestStatus::Failed
+        },
         attempts,
         duration_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
         error: Some(last_error),
         screenshots,
         trace: trace_path,
         video: video_path,
+        project: item.project.clone(),
+        repeat_each_index: item.repeat_each_index,
+        annotations: test.annotations.clone(),
+        attachments: attachments.lock().map(|a| a.clone()).unwrap_or_default(),
     }
 }
 
@@ -970,6 +1554,10 @@ mod tests {
                 screenshots: vec![],
                 trace: None,
                 video: None,
+                project: None,
+                repeat_each_index: 0,
+                annotations: Vec::new(),
+                attachments: Vec::new(),
             }],
         };
         let written = runner.write_artifacts(&report, "list,json,junit");
@@ -977,6 +1565,181 @@ mod tests {
         assert!(dir.join("results.json").is_file());
         assert!(dir.join("junit.xml").is_file());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn projects_resolve() {
+        let all = vec![Project::new("shop"), Project::new("blog").grep("post")];
+        // No filter: implicit single project when unconfigured...
+        assert_eq!(resolve_projects(&[], &[]).unwrap(), vec![None]);
+        // ...all projects when configured.
+        let resolved = resolve_projects(&all, &[]).unwrap();
+        assert_eq!(resolved.len(), 2);
+        assert_eq!(resolved[0].as_ref().unwrap().name, "shop");
+        // Exact-name subset.
+        let resolved = resolve_projects(&all, &["blog".to_string()]).unwrap();
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].as_ref().unwrap().grep.as_deref(), Some("post"));
+        // Unknown names fail loudly.
+        let error = resolve_projects(&all, &["nope".to_string()]).unwrap_err();
+        assert!(error.contains("unknown project"), "{error}");
+        assert!(error.contains("shop"), "{error}");
+    }
+
+    #[test]
+    fn work_items_partition_expand_and_shard() {
+        let tests = vec![
+            named("home renders"),
+            named("auth > login").tag("fast"),
+            named("flaky thing").skip(),
+        ];
+        let projects = vec![None];
+        let (runnable, skipped) = build_work_items(
+            &tests,
+            None,
+            None,
+            None,
+            &projects,
+            2,
+            Duration::from_secs(9),
+            1,
+            None,
+        );
+        assert_eq!(runnable.len(), 2);
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(skipped[0].0.name, "flaky thing");
+        assert_eq!(runnable[0].retries, 2);
+        assert_eq!(runnable[0].timeout, Duration::from_secs(9));
+        assert_eq!(runnable[0].repeat_each_index, 0);
+        assert!(runnable[0].project.is_none());
+
+        // Project grep + overrides + repeats.
+        let projects = vec![Some(Project::new("fast").grep("fast").retries(5))];
+        let (runnable, _) = build_work_items(
+            &tests,
+            None,
+            None,
+            None,
+            &projects,
+            0,
+            Duration::from_secs(30),
+            3,
+            None,
+        );
+        assert_eq!(runnable.len(), 3);
+        assert_eq!(runnable[0].project.as_deref(), Some("fast"));
+        assert_eq!(runnable[0].retries, 5);
+        assert_eq!(runnable[0].timeout, Duration::from_secs(30));
+        assert_eq!(runnable[0].display_name(), "fast > auth > login");
+        assert_eq!(runnable[2].repeat_each_index, 2);
+        // Test-level overrides win over project-level ones.
+        let tests = vec![named("auth > login").tag("fast").retries(1)];
+        let (runnable, _) = build_work_items(
+            &tests,
+            None,
+            None,
+            None,
+            &projects,
+            0,
+            Duration::from_secs(30),
+            1,
+            None,
+        );
+        assert_eq!(runnable[0].retries, 1);
+
+        // One shard spans the combined, display-name-ordered list.
+        let projects = vec![None];
+        let (runnable, _) = build_work_items(
+            &tests,
+            None,
+            None,
+            None,
+            &projects,
+            0,
+            Duration::from_secs(30),
+            4,
+            Some((2, 2)),
+        );
+        assert_eq!(runnable.len(), 2);
+        assert_eq!(runnable[0].repeat_each_index, 1);
+        assert_eq!(runnable[1].repeat_each_index, 3);
+    }
+
+    #[test]
+    fn ci_env_triggers_forbid() {
+        let key = "CI";
+        let saved = std::env::var(key).ok();
+        std::env::remove_var(key);
+        assert!(!ci_truthy());
+        std::env::set_var(key, "true");
+        assert!(ci_truthy());
+        std::env::set_var(key, "1");
+        assert!(ci_truthy());
+        std::env::set_var(key, "false");
+        assert!(!ci_truthy());
+        match saved {
+            Some(value) => std::env::set_var(key, value),
+            None => std::env::remove_var(key),
+        }
+    }
+
+    #[test]
+    fn test_info_attaches_files() {
+        let dir = std::env::temp_dir().join(format!("ferrite-w6-attach-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let info = TestInfo {
+            title: "home renders!".to_string(),
+            file: "suite.rs".to_string(),
+            line: 42,
+            tags: Vec::new(),
+            retry: 0,
+            worker_index: 0,
+            repeat_each_index: 0,
+            timeout: Duration::from_secs(1),
+            output_dir: dir.display().to_string(),
+            project: None,
+            attachments: Arc::new(Mutex::new(Vec::new())),
+        };
+        let path = info.attach("console log", b"hello", "text/plain").unwrap();
+        assert!(path.ends_with("home-renders-console-log.txt"), "{path}");
+        assert!(std::path::Path::new(&path).is_file());
+        let path = info.attach("data", b"{}", "application/json").unwrap();
+        assert!(path.ends_with(".json"), "{path}");
+        let path = info
+            .attach("blob", b"x", "application/octet-stream")
+            .unwrap();
+        assert!(!path.ends_with(".txt"), "{path}");
+        assert_eq!(info.attachments().len(), 3);
+        assert_eq!(info.attachments()[0].content_type, "text/plain");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fixture_map_types() {
+        let map = FixtureMap::default();
+        assert!(map.get::<String>().is_none());
+        let mut map = FixtureMap::default();
+        map.inner.insert(
+            TypeId::of::<String>(),
+            Arc::new("value".to_string()) as Arc<dyn Any + Send + Sync>,
+        );
+        assert_eq!(map.get::<String>().unwrap().as_str(), "value");
+        assert!(map.get::<u32>().is_none());
+    }
+
+    #[test]
+    fn fail_annotate_and_context_constructors() {
+        let failing = named("boom").fail().annotate("issue", "123");
+        assert_eq!(failing.mode, TestMode::Fail);
+        assert_eq!(
+            failing.annotations,
+            vec![("issue".to_string(), "123".to_string())]
+        );
+        let ctx = test_with_context("with ctx", |_| async { Ok(()) });
+        assert!(ctx.ctx_func.is_some());
+        assert!(!ctx.file.is_empty());
+        assert!(ctx.line > 0);
+        assert!(named("plain").ctx_func.is_none());
     }
 
     #[test]
@@ -994,6 +1757,10 @@ mod tests {
                 screenshots: vec![],
                 trace: None,
                 video: None,
+                project: None,
+                repeat_each_index: 0,
+                annotations: Vec::new(),
+                attachments: Vec::new(),
             }],
         };
         let written = runner.write_artifacts(&report, "html");
