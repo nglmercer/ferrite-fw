@@ -91,17 +91,56 @@ impl HttpCredentials {
     }
 }
 
-/// Saved storage state: cookies plus one origin's localStorage.
+/// Saved cookies and localStorage for multiple origins (Playwright JSON compatible).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageState {
     /// Origin the state belongs to.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub origin: String,
     /// Cookies (restored by name/value on the current origin).
     #[serde(default)]
     pub cookies: Vec<Cookie>,
     /// localStorage entries.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub local_storage: HashMap<String, String>,
+    /// Origins in Playwright storage-state format. Legacy single-origin fields remain readable.
+    #[serde(default)]
+    pub origins: Vec<StorageOrigin>,
+}
+
+/// Storage state for one origin.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageOrigin {
+    pub origin: String,
+    #[serde(default, rename = "localStorage")]
+    pub local_storage: Vec<StorageEntry>,
+}
+
+/// A localStorage name/value pair.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageEntry {
+    pub name: String,
+    pub value: String,
+}
+
+impl StorageState {
+    pub(crate) fn all_origins(&self) -> Vec<StorageOrigin> {
+        let mut origins = self.origins.clone();
+        if !self.origin.is_empty() && !origins.iter().any(|entry| entry.origin == self.origin) {
+            origins.push(StorageOrigin {
+                origin: self.origin.clone(),
+                local_storage: self
+                    .local_storage
+                    .iter()
+                    .map(|(name, value)| StorageEntry {
+                        name: name.clone(),
+                        value: value.clone(),
+                    })
+                    .collect(),
+            });
+        }
+        origins
+    }
 }
 
 /// A network request observed while capturing.
@@ -1150,6 +1189,9 @@ pub struct TraceEntry {
 /// Element state snapshot for one selector.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ElementState {
+    /// Element receives pointer input at its center.
+    #[serde(default)]
+    pub receives_events: bool,
     /// Number of matching elements.
     #[serde(default)]
     pub count: usize,
@@ -1180,7 +1222,7 @@ pub struct ElementState {
 }
 
 /// Bounding box in CSS pixels.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ElementRect {
     /// Left edge.
     #[serde(default)]
@@ -1256,7 +1298,12 @@ impl Download {
 /// An automated page (one browser tab).
 #[derive(Clone)]
 pub struct Page {
+    expect_timeout: Arc<Mutex<Duration>>,
+    action_timeout: Arc<Mutex<Duration>>,
+    navigation_timeout: Arc<Mutex<Option<Duration>>>,
+    pub(crate) snapshot_dir: Option<PathBuf>,
     driver: Driver,
+    pub(crate) coverage_state: Arc<tokio::sync::Mutex<crate::coverage::CoverageState>>,
     sink: ConsoleSink,
     slow_mo: Duration,
     base_url: Option<String>,
@@ -1274,13 +1321,18 @@ pub struct Page {
     /// Context grants waiting for the first http(s) navigation (Firefox
     /// grants need an origin, so fresh pages cannot take them yet).
     pending_grants: Arc<Mutex<Vec<String>>>,
-    /// Storage state waiting for a navigation to its origin (localStorage
-    /// needs a live document on the saved origin).
-    pending_storage: Arc<Mutex<Option<StorageState>>>,
     net_capture: Arc<Mutex<Option<tokio::task::AbortHandle>>>,
     exposed: ExposedState,
+    extra_headers: Arc<Mutex<Vec<(String, String)>>>,
+    auth_credentials: Arc<Mutex<Option<(String, String)>>>,
+    cleared_auth: Arc<Mutex<bool>>,
     registry: Weak<Mutex<Vec<Page>>>,
+    pub(crate) context_registry: Weak<Mutex<Vec<crate::BrowserContext>>>,
+    pub(crate) context_id: Option<String>,
+    pub(crate) owns_context: bool,
     frame_id: Option<String>,
+    pub(crate) lazy_frames: Vec<Selector>,
+    download_consumed: Arc<Mutex<HashMap<PathBuf, (u64, std::time::SystemTime)>>>,
     download_dir: Arc<Mutex<Option<PathBuf>>>,
     /// Tracing session shared with the owning context (screenshots on steps).
     tracing: Arc<Mutex<Option<TracingState>>>,
@@ -1345,84 +1397,7 @@ struct ExposedState {
 /// Fake clock injected by [`Page::clock_install`]: overrides `Date`,
 /// `setTimeout`/`setInterval`, `requestAnimationFrame` and `performance.now`
 /// with a virtual queue drained by `__ferriteClock.tick(ms)`.
-const CLOCK_SCRIPT: &str = r#"(() => {
-  if (window.__ferriteClock) return true;
-  const native = {
-    date: Date, setTimeout, clearTimeout, setInterval, clearInterval,
-    raf: requestAnimationFrame, caf: cancelAnimationFrame,
-    perf: performance.now.bind(performance),
-  };
-  let now = native.date.now();
-  const origin = now;
-  let seq = 1;
-  const timers = new Map();
-  const asFn = (cb) => typeof cb === "function" ? cb : (() => Function(String(cb))());
-  function fakeDate(...args) { return args.length ? new native.date(...args) : new native.date(now); }
-  fakeDate.now = () => now;
-  fakeDate.parse = native.date.parse;
-  fakeDate.UTC = native.date.UTC;
-  fakeDate.prototype = native.date.prototype;
-  window.Date = fakeDate;
-  window.setTimeout = (cb, ms = 0, ...args) => {
-    const id = seq++;
-    timers.set(id, { time: now + Math.max(0, +ms || 0), cb: asFn(cb), args, repeat: 0 });
-    return id;
-  };
-  window.clearTimeout = (id) => { timers.delete(id); };
-  window.setInterval = (cb, ms = 0, ...args) => {
-    const id = seq++;
-    const step = Math.max(0, +ms || 0);
-    timers.set(id, { time: now + step, cb: asFn(cb), args, repeat: step });
-    return id;
-  };
-  window.clearInterval = (id) => { timers.delete(id); };
-  window.requestAnimationFrame = (cb) => window.setTimeout(() => cb(now), 16);
-  window.cancelAnimationFrame = (id) => { timers.delete(id); };
-  performance.now = () => now - origin;
-  let paused = false;
-  window.__ferriteClock = {
-    setFixed(ms) {
-      now = +ms || 0;
-      return now;
-    },
-    now() { return now; },
-    pause() { paused = true; return now; },
-    resume() { paused = false; return now; },
-    isPaused() { return paused; },
-    tick(ms) {
-      const end = now + Math.max(0, +ms || 0);
-      let fired = 0;
-      for (;;) {
-        let best = 0, bestTime = Infinity;
-        for (const [id, t] of timers) {
-          if (t.time <= end && t.time < bestTime) { best = id; bestTime = t.time; }
-        }
-        if (!best) break;
-        if (++fired > 10000) throw new Error("clock tick exceeded 10000 timers (infinite timer loop?)");
-        const t = timers.get(best);
-        timers.delete(best);
-        now = t.time;
-        if (t.repeat) timers.set(best, { time: now + t.repeat, cb: t.cb, args: t.args, repeat: t.repeat });
-        t.cb(...t.args);
-      }
-      now = end;
-      return now;
-    },
-    uninstall() {
-      window.Date = native.date;
-      window.setTimeout = native.setTimeout;
-      window.clearTimeout = native.clearTimeout;
-      window.setInterval = native.setInterval;
-      window.clearInterval = native.clearInterval;
-      window.requestAnimationFrame = native.raf;
-      window.cancelAnimationFrame = native.caf;
-      performance.now = native.perf;
-      delete window.__ferriteClock;
-      return true;
-    },
-  };
-  return true;
-})()"#;
+const CLOCK_SCRIPT: &str = include_str!("clock.js");
 
 /// At most one capture (recording or frame stream) per page: both use the
 /// same screencast session on Chromium.
@@ -1445,8 +1420,10 @@ impl Page {
         context_handlers: Arc<Mutex<Vec<RouteHandlerEntry>>>,
         tracing: Arc<Mutex<Option<TracingState>>>,
     ) -> Self {
+        let action_timeout = driver.timeout();
         Self {
             driver,
+            coverage_state: Arc::new(tokio::sync::Mutex::new(Default::default())),
             sink,
             slow_mo,
             base_url,
@@ -1457,12 +1434,25 @@ impl Page {
             context_routes,
             handlers: Arc::new(Mutex::new(Vec::new())),
             context_handlers,
+            expect_timeout: Arc::new(Mutex::new(Duration::from_millis(
+                crate::expect::DEFAULT_EXPECT_MS,
+            ))),
+            action_timeout: Arc::new(Mutex::new(action_timeout)),
+            navigation_timeout: Arc::new(Mutex::new(None)),
+            snapshot_dir: None,
             pending_grants: Arc::new(Mutex::new(Vec::new())),
-            pending_storage: Arc::new(Mutex::new(None)),
             net_capture: Arc::new(Mutex::new(None)),
             exposed: ExposedState::default(),
+            extra_headers: Arc::new(Mutex::new(Vec::new())),
+            auth_credentials: Arc::new(Mutex::new(None)),
+            cleared_auth: Arc::new(Mutex::new(false)),
             registry,
+            context_registry: Weak::new(),
+            context_id: None,
+            owns_context: false,
             frame_id: None,
+            lazy_frames: Vec::new(),
+            download_consumed: Arc::new(Mutex::new(HashMap::new())),
             download_dir: Arc::new(Mutex::new(None)),
             tracing,
             closed: Arc::new(Mutex::new(false)),
@@ -1476,6 +1466,100 @@ impl Page {
     pub(crate) fn scoped(mut self, frame_id: String) -> Self {
         self.frame_id = Some(frame_id);
         self
+    }
+
+    pub(crate) fn owning_page(&self) -> Self {
+        let mut page = self.clone();
+        page.frame_id = None;
+        page.lazy_frames.clear();
+        page
+    }
+
+    /// Lazily locate an iframe. Nested same-origin frames and frame replacements
+    /// are supported; use document_frames() for protocol-backed cross-origin frames.
+    pub fn frame_locator(&self, selector: &str) -> crate::FrameLocator {
+        crate::FrameLocator::new(self.clone(), Selector::parse(selector.to_string()))
+    }
+
+    pub fn browser_kind(&self) -> crate::BrowserKind {
+        match &self.driver {
+            Driver::Cdp(_) => crate::BrowserKind::Chromium,
+            Driver::Bidi(_) => crate::BrowserKind::Firefox,
+        }
+    }
+
+    /// Chromium JavaScript and CSS coverage controller.
+    pub fn coverage(&self) -> crate::Coverage {
+        crate::Coverage::new(self.clone())
+    }
+
+    pub(crate) fn cdp_events(
+        &self,
+    ) -> E2eResult<(
+        String,
+        tokio::sync::broadcast::Receiver<crate::cdp::CdpEvent>,
+    )> {
+        self.driver.cdp_events()
+    }
+
+    /// Default retry window for assertions on this page.
+    pub fn expect_timeout(&self) -> Duration {
+        *self
+            .expect_timeout
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Set the default assertion retry window.
+    pub fn set_expect_timeout(&self, timeout: Duration) {
+        *self
+            .expect_timeout
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = timeout;
+    }
+
+    /// The context owning this page, while it remains registered.
+    pub fn context(&self) -> Option<crate::BrowserContext> {
+        self.context_registry
+            .upgrade()?
+            .lock()
+            .ok()?
+            .iter()
+            .find(|c| c.id() == self.context_id.as_deref())
+            .cloned()
+    }
+
+    /// HTTP client sharing cookies with this page's owning context.
+    pub fn request(&self) -> E2eResult<crate::ApiClient> {
+        self.context()
+            .map(|context| context.request())
+            .ok_or_else(|| E2eError::Config("page's owning context is no longer available".into()))
+    }
+
+    /// Clear buffered console messages.
+    pub fn clear_console_messages(&self) {
+        self.sink
+            .console
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+    }
+
+    /// Captured JavaScript exceptions.
+    pub fn page_errors(&self) -> Vec<ConsoleMessage> {
+        self.console_messages()
+            .into_iter()
+            .filter(|m| m.kind == "exception")
+            .collect()
+    }
+
+    /// Clear buffered JavaScript exceptions while retaining console output.
+    pub fn clear_page_errors(&self) {
+        self.sink
+            .console
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|m| m.kind != "exception");
     }
 
     /// Target id.
@@ -1644,12 +1728,34 @@ impl Page {
     /// Default timeout for protocol calls.
     #[must_use]
     pub fn timeout(&self) -> Duration {
-        self.driver.timeout()
+        *self
+            .action_timeout
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
     }
 
     /// Override the default timeout.
     pub fn set_timeout(&mut self, timeout: Duration) {
+        *self
+            .action_timeout
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = timeout;
         self.driver.set_timeout(timeout);
+    }
+
+    /// Override the navigation timeout, independently of locator actions.
+    pub fn set_navigation_timeout(&self, timeout: Duration) {
+        *self
+            .navigation_timeout
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(timeout);
+    }
+
+    pub fn navigation_timeout(&self) -> Duration {
+        self.navigation_timeout
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(|| self.timeout())
     }
 
     /// Raw protocol call with the page timeout (CDP method on Chromium,
@@ -1695,7 +1801,7 @@ impl Page {
     }
 
     /// Resolve a possibly-relative URL against the base URL.
-    fn resolve_url(&self, url: &str) -> E2eResult<String> {
+    pub(crate) fn resolve_url(&self, url: &str) -> E2eResult<String> {
         if url.starts_with("http://")
             || url.starts_with("https://")
             || url.starts_with("about:")
@@ -1704,23 +1810,18 @@ impl Page {
         {
             return Ok(url.to_string());
         }
-        if let Some(base) = &self.base_url {
-            let base = base.trim_end_matches('/');
-            let path = if url.starts_with('/') {
-                url.to_string()
-            } else {
-                format!("/{url}")
-            };
-            return Ok(format!("{base}{path}"));
-        }
-        if let Ok(base) = std::env::var("FERRITE_E2E_BASE_URL") {
-            let base = base.trim_end_matches('/').to_string();
-            let path = if url.starts_with('/') {
-                url.to_string()
-            } else {
-                format!("/{url}")
-            };
-            return Ok(format!("{base}{path}"));
+        if let Some(base) = self
+            .base_url
+            .clone()
+            .or_else(|| std::env::var("FERRITE_E2E_BASE_URL").ok())
+        {
+            return reqwest::Url::parse(&base)
+                .and_then(|base| base.join(url))
+                .map(|url| url.to_string())
+                .map_err(|error| E2eError::Navigation {
+                    url: url.to_string(),
+                    message: error.to_string(),
+                });
         }
         Err(E2eError::Navigation {
             url: url.to_string(),
@@ -1739,7 +1840,7 @@ impl Page {
     /// Navigate with explicit options.
     pub async fn goto_with_options(&self, url: &str, options: NavigationOptions) -> E2eResult<()> {
         let url = self.resolve_url(url)?;
-        let timeout = options.timeout.unwrap_or_else(|| self.timeout());
+        let timeout = options.timeout.unwrap_or_else(|| self.navigation_timeout());
         self.driver
             .navigate(&url, options.wait_until, timeout)
             .await
@@ -1752,7 +1853,6 @@ impl Page {
             })?;
         self.slow_mo().await;
         self.apply_pending_grants(&url).await?;
-        self.apply_pending_storage(&url).await?;
         Ok(())
     }
 
@@ -1781,59 +1881,32 @@ impl Page {
         self.grant_permissions(&names).await
     }
 
-    /// Queue storage state until a navigation lands on its origin.
-    pub(crate) fn defer_storage(&self, state: StorageState) {
-        *self
-            .pending_storage
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some(state);
-    }
-
-    /// Inject queued storage once its origin loads (single-shot).
-    async fn apply_pending_storage(&self, url: &str) -> E2eResult<()> {
-        let pending = self
-            .pending_storage
-            .lock()
-            .map(|mut slot| slot.take())
-            .unwrap_or(None);
-        let Some(state) = pending else {
-            return Ok(());
-        };
-        if !url.starts_with(state.origin.as_str()) {
-            self.defer_storage(state);
-            return Ok(());
-        }
-        self.driver
-            .add_cookies(&state.cookies, &state.origin)
-            .await?;
-        self.inject_local_storage(&state.local_storage).await
-    }
-
-    /// Replace this document's localStorage wholesale.
-    async fn inject_local_storage(&self, entries: &HashMap<String, String>) -> E2eResult<()> {
-        let entries = serde_json::to_string(entries)?;
-        self.evaluate_value(&format!(
-            "(() => {{ localStorage.clear(); \
-             for (const [k, v] of Object.entries({entries})) localStorage.setItem(k, v); \
-             return true; }})()"
-        ))
-        .await?;
-        Ok(())
-    }
-
-    /// Apply context storage state now when already on the saved origin,
-    /// else queue the whole state (cookies set on a blank page lose their
-    /// origin association, so they wait for navigation like grants do).
+    /// Restore cookies before the first request and localStorage before app scripts.
     pub(crate) async fn apply_storage_state(&self, state: &StorageState) -> E2eResult<()> {
-        let url = self.url().await.unwrap_or_default();
-        if url.starts_with(state.origin.as_str()) {
+        let origins = state.all_origins();
+        for cookie in &state.cookies {
+            let url = cookie
+                .domain
+                .as_deref()
+                .map(|domain| {
+                    format!(
+                        "{}://{}/",
+                        if cookie.secure { "https" } else { "http" },
+                        domain.trim_start_matches('.')
+                    )
+                })
+                .or_else(|| origins.first().map(|entry| entry.origin.clone()))
+                .ok_or_else(|| {
+                    E2eError::Config("storage-state cookie needs a domain or origin".into())
+                })?;
             self.driver
-                .add_cookies(&state.cookies, &state.origin)
+                .add_cookies(std::slice::from_ref(cookie), &url)
                 .await?;
-            self.inject_local_storage(&state.local_storage).await?;
-        } else {
-            self.defer_storage(state.clone());
         }
+        let origins_json = serde_json::to_string(&origins)?;
+        let script = format!("(() => {{ const state = {origins_json}.find(entry => entry.origin === location.origin); if (state) {{ localStorage.clear(); for (const entry of state.localStorage) localStorage.setItem(entry.name, entry.value); }} return true; }})()");
+        self.add_init_script(&script).await?;
+        self.evaluate_value(&script).await?;
         Ok(())
     }
 
@@ -1878,6 +1951,19 @@ impl Page {
         self.driver.bring_to_front().await
     }
 
+    /// Evaluate a function with a JSON-serializable argument.
+    pub async fn evaluate_with_arg<T: serde::de::DeserializeOwned, A: Serialize>(
+        &self,
+        function: &str,
+        argument: &A,
+    ) -> E2eResult<T> {
+        self.evaluate(&format!(
+            "({function})({})",
+            serde_json::to_string(argument)?
+        ))
+        .await
+    }
+
     /// Evaluate JavaScript and deserialize the returned value.
     pub async fn evaluate<T>(&self, expression: &str) -> E2eResult<T>
     where
@@ -1889,6 +1975,20 @@ impl Page {
 
     /// Evaluate JavaScript and return the raw JSON value.
     pub async fn evaluate_value(&self, expression: &str) -> E2eResult<Value> {
+        let wrapped;
+        let expression = if self.lazy_frames.is_empty() {
+            expression
+        } else {
+            let selectors = self
+                .lazy_frames
+                .iter()
+                .map(|selector| serde_json::to_string(&selector.resolve_js()))
+                .collect::<Result<Vec<_>, _>>()?
+                .join(",");
+            let source = serde_json::to_string(expression)?;
+            wrapped = format!("(() => {{ let frame = window; for (const selector of [{selectors}]) {{ let elements; try {{ elements = frame.eval(selector); }} catch (error) {{ throw new Error('FrameLocator supports same-origin frames; use the Frame API for cross-origin frames: ' + error.message); }} if (elements.length !== 1) throw new Error('strict frame locator: expected exactly one iframe, got ' + elements.length); if (!elements[0].matches('iframe,frame')) throw new Error('frame locator target is not an iframe'); frame = elements[0].contentWindow; if (!frame) throw new Error('iframe is not attached'); }} return frame.eval({source}); }})()");
+            &wrapped
+        };
         match &self.frame_id {
             Some(id) => self.driver.frame_evaluate(id, expression).await,
             None => self.driver.evaluate(expression).await,
@@ -1917,7 +2017,7 @@ impl Page {
     /// Wait until a JS expression returns truthy.
     pub async fn wait_for_function(&self, expression: &str, timeout: Duration) -> E2eResult<()> {
         let deadline = tokio::time::Instant::now() + timeout;
-        let wrapped = format!("Boolean((async () => {{ return ({expression}); }})())");
+        let wrapped = format!("(async () => Boolean(await ({expression})))()");
         loop {
             if let Ok(value) = self.evaluate_value(&wrapped).await {
                 if value.as_bool().unwrap_or(false) {
@@ -2076,7 +2176,7 @@ impl Page {
     }
 
     /// Run due handlers (each matching locator, within budget).
-    async fn run_locator_handlers(&self) -> E2eResult<()> {
+    pub(crate) async fn run_locator_handlers(&self) -> E2eResult<()> {
         {
             let mut running = self
                 .handlers_running
@@ -2109,7 +2209,7 @@ impl Page {
             })
             .unwrap_or_default();
         for (locator, handler) in pending {
-            if locator.count().await.unwrap_or(0) == 0 {
+            if !locator.is_visible().await.unwrap_or(false) {
                 continue;
             }
             handler(locator.clone()).await?;
@@ -2131,19 +2231,49 @@ impl Page {
         action: &str,
         argument: Option<&str>,
     ) -> E2eResult<Value> {
-        self.run_locator_handlers().await?;
-        let expression = selector.action_expression(action, argument);
-        let value = self.evaluate_value(&expression).await?;
-        if value.get("ok").and_then(Value::as_bool) == Some(false) {
-            let message = value
-                .get("error")
-                .and_then(Value::as_str)
-                .unwrap_or("action failed");
-            return Err(E2eError::Locator {
-                selector: selector.raw().to_string(),
-                message: message.to_string(),
-            });
-        }
+        let deadline = tokio::time::Instant::now() + self.timeout();
+        let value = loop {
+            self.run_locator_handlers().await?;
+            let state = self.query_state(selector).await?;
+            if selector.is_strict() && state.count > 1 {
+                return Err(E2eError::Locator {
+                    selector: selector.raw().into(),
+                    message: "strict mode violation: multiple elements match".into(),
+                });
+            }
+            let needs_visible = matches!(
+                action,
+                "fill" | "clear" | "check" | "select" | "select_many"
+            );
+            let needs_editable = matches!(action, "fill" | "clear");
+            if state.count > 0
+                && (!needs_visible || (state.visible && state.enabled))
+                && (!needs_editable || state.editable)
+            {
+                let expression = selector.action_expression(action, argument);
+                let value = self.evaluate_value(&expression).await?;
+                if value.get("ok").and_then(Value::as_bool) != Some(false) {
+                    break value;
+                }
+                let message = value
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .unwrap_or("action failed");
+                if message != "option not found" {
+                    return Err(E2eError::Locator {
+                        selector: selector.raw().into(),
+                        message: message.into(),
+                    });
+                }
+            }
+            if !self.timeout().is_zero() && tokio::time::Instant::now() > deadline {
+                return Err(E2eError::Timeout(
+                    self.timeout().as_millis() as u64,
+                    format!("{action} {}: element not ready", selector.raw()),
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
         self.sink
             .record("action", format!("{action} {}", selector.raw()));
         self.slow_mo().await;
@@ -2486,8 +2616,9 @@ impl Page {
 
     /// Install a fake clock in the current document (freezes `Date`,
     /// `setTimeout`/`setInterval`, `requestAnimationFrame`, `performance.now`).
-    /// Applies to the current document only; navigations reset it.
+    /// Installs in current and future documents; starts paused for compatibility.
     pub async fn clock_install(&self) -> E2eResult<()> {
+        self.add_init_script(CLOCK_SCRIPT).await?;
         self.evaluate_value(CLOCK_SCRIPT).await?;
         Ok(())
     }
@@ -2508,7 +2639,7 @@ impl Page {
         }
     }
 
-    /// Jump the fake clock to an exact epoch-millisecond time.
+    /// Freeze Date at an exact epoch-millisecond time while timers continue.
     /// Fails loudly when no clock is installed.
     pub async fn clock_set_fixed_time(&self, ms: i64) -> E2eResult<()> {
         let now: Option<i64> = self
@@ -2526,14 +2657,16 @@ impl Page {
 
     /// Restore the native clock (idempotent).
     pub async fn clock_uninstall(&self) -> E2eResult<()> {
+        self.add_init_script("window.__ferriteClock ? window.__ferriteClock.uninstall() : true")
+            .await?;
         self.evaluate_value("window.__ferriteClock ? window.__ferriteClock.uninstall() : true")
             .await?;
         Ok(())
     }
 
-    /// Advance the fake clock by `ms` (alias for [`Page::clock_advance`]).
+    /// Jump forward, firing each due timer at most once.
     pub async fn clock_fast_forward(&self, ms: u64) -> E2eResult<()> {
-        self.clock_advance(ms).await
+        self.clock_command(&format!("fastForward({ms})")).await
     }
 
     /// Run the fake clock forward by `ms` (alias for [`Page::clock_advance`]).
@@ -2541,10 +2674,36 @@ impl Page {
         self.clock_advance(ms).await
     }
 
-    /// Set the fake clock to an exact epoch-millisecond time
-    /// (alias for [`Page::clock_set_fixed_time`]).
+    /// Change system time without shifting timer deadlines or firing timers.
     pub async fn clock_set_system_time(&self, ms: i64) -> E2eResult<()> {
-        self.clock_set_fixed_time(ms).await
+        self.clock_command(&format!("setSystem({ms})")).await
+    }
+
+    /// Jump to an epoch time and pause; each due timer fires at most once.
+    pub async fn clock_pause_at(&self, ms: i64) -> E2eResult<()> {
+        self.clock_command(&format!("pauseAt({ms})")).await
+    }
+
+    /// Install with an initial epoch time and optional real-time progression.
+    pub async fn clock_install_at(&self, ms: i64, paused: bool) -> E2eResult<()> {
+        let script = format!(
+            "{CLOCK_SCRIPT}; window.__ferriteClock.setSystem({ms}); window.__ferriteClock.{}();",
+            if paused { "pause" } else { "resume" }
+        );
+        self.add_init_script(&script).await?;
+        self.evaluate_value(&script).await?;
+        Ok(())
+    }
+
+    async fn clock_command(&self, command: &str) -> E2eResult<()> {
+        let result: Option<f64> = self
+            .evaluate(&format!(
+                "window.__ferriteClock ? window.__ferriteClock.{command} : null"
+            ))
+            .await?;
+        result
+            .map(|_| ())
+            .ok_or_else(|| E2eError::Config("clock control needs clock_install first".into()))
     }
 
     /// Current fake-clock time in epoch milliseconds.
@@ -2609,6 +2768,10 @@ impl Page {
         self.driver.add_cookies(cookies, &url).await
     }
 
+    pub(crate) async fn add_cookies_for_url(&self, cookies: &[Cookie], url: &str) -> E2eResult<()> {
+        self.driver.add_cookies(cookies, url).await
+    }
+
     /// Clear browser cookies.
     pub async fn clear_cookies(&self) -> E2eResult<()> {
         self.driver.clear_cookies().await
@@ -2620,6 +2783,16 @@ impl Page {
         let local_storage: HashMap<String, String> =
             serde_json::from_value(self.evaluate_value("({ ...localStorage })").await?)?;
         Ok(StorageState {
+            origins: vec![StorageOrigin {
+                origin: origin.clone(),
+                local_storage: local_storage
+                    .iter()
+                    .map(|(name, value)| StorageEntry {
+                        name: name.clone(),
+                        value: value.clone(),
+                    })
+                    .collect(),
+            }],
             origin,
             cookies: self.cookies().await?,
             local_storage,
@@ -2641,15 +2814,16 @@ impl Page {
         let raw = std::fs::read_to_string(path)?;
         let state: StorageState = serde_json::from_str(&raw)?;
         let origin = self.evaluate_string("location.origin").await?;
-        if origin != state.origin {
+        if !state
+            .all_origins()
+            .iter()
+            .any(|entry| entry.origin == origin)
+        {
             return Err(E2eError::Config(format!(
-                "storage state is for origin '{}', navigate there first (at '{origin}')",
-                state.origin
+                "storage state has no origin {origin}, navigate there first (to a saved origin)"
             )));
         }
-        let url = self.url().await?;
-        self.driver.add_cookies(&state.cookies, &url).await?;
-        self.inject_local_storage(&state.local_storage).await?;
+        self.apply_storage_state(&state).await?;
         Ok(())
     }
 
@@ -2681,7 +2855,7 @@ impl Page {
 
     /// Send HTTP credentials with subsequent requests (Chromium only).
     ///
-    /// Basic auth is preempted with an `Authorization` header and digest
+    /// Basic and Digest authenticate through browser challenges; digest
     /// (or proxy) challenges are answered from the Fetch domain; pass
     /// `None` to clear both. Firefox has neither override, so this fails
     /// loudly there.
@@ -2690,26 +2864,31 @@ impl Page {
         username: Option<&str>,
         password: Option<&str>,
     ) -> E2eResult<()> {
-        match (username, password) {
-            (Some(user), Some(pass)) => {
-                let token = base64_encode(format!("{user}:{pass}").as_bytes());
-                let value = format!("Basic {token}");
-                self.driver
-                    .set_extra_http_headers(&[("Authorization", value.as_str())])
-                    .await?;
-                self.driver
-                    .set_auth_credentials(Some(user), Some(pass))
-                    .await
-            }
-            (None, None) => {
-                self.driver.set_extra_http_headers(&[]).await?;
-                self.driver.set_auth_credentials(None, None).await
-            }
-            _ => Err(E2eError::Config(
-                "set_http_credentials needs both username and password (or neither to clear)"
-                    .to_string(),
-            )),
-        }
+        let credentials =
+            match (username, password) {
+                (Some(user), Some(pass)) => Some((user.to_string(), pass.to_string())),
+                (None, None) => None,
+                _ => return Err(E2eError::Config(
+                    "set_http_credentials needs both username and password (or neither to clear)"
+                        .into(),
+                )),
+            };
+        self.driver.set_auth_credentials(username, password).await?;
+        *self
+            .auth_credentials
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = None;
+        *self.cleared_auth.lock().unwrap_or_else(|e| e.into_inner()) = credentials.is_none();
+        let headers = self
+            .extra_headers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let headers: Vec<_> = headers
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect();
+        self.set_extra_http_headers(&headers).await
     }
 
     /// Enable or disable JavaScript execution (Chromium only).
@@ -2746,9 +2925,75 @@ impl Page {
         self.driver.set_offline(offline).await
     }
 
+    /// Send Basic credentials preemptively, for servers without a challenge.
+    /// Ordinary set_http_credentials uses browser challenges and supports Digest.
+    pub async fn set_http_credentials_preemptive(
+        &self,
+        username: &str,
+        password: &str,
+    ) -> E2eResult<()> {
+        self.set_http_credentials(Some(username), Some(password))
+            .await?;
+        *self
+            .auth_credentials
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some((username.into(), password.into()));
+        let headers = self
+            .extra_headers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        self.set_extra_http_headers(
+            &headers
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_str()))
+                .collect::<Vec<_>>(),
+        )
+        .await
+    }
+
     /// Set extra HTTP headers for subsequent requests (Chromium only).
     pub async fn set_extra_http_headers(&self, headers: &[(&str, &str)]) -> E2eResult<()> {
-        self.driver.set_extra_http_headers(headers).await
+        let mut combined: Vec<(String, String)> = headers
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect();
+        let credentials = self
+            .auth_credentials
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some((user, pass)) = credentials {
+            if !combined
+                .iter()
+                .any(|(key, _)| key.eq_ignore_ascii_case("authorization"))
+            {
+                combined.push((
+                    "Authorization".into(),
+                    format!(
+                        "Basic {}",
+                        base64_encode(format!("{user}:{pass}").as_bytes())
+                    ),
+                ));
+            }
+        }
+        if *self.cleared_auth.lock().unwrap_or_else(|e| e.into_inner())
+            && !combined
+                .iter()
+                .any(|(key, _)| key.eq_ignore_ascii_case("authorization"))
+        {
+            combined.push(("Authorization".into(), String::new()));
+        }
+        let borrowed: Vec<_> = combined
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect();
+        self.driver.set_extra_http_headers(&borrowed).await?;
+        *self.extra_headers.lock().unwrap_or_else(|e| e.into_inner()) = headers
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect();
+        Ok(())
     }
 
     /// Override the locale (Chromium only).
@@ -3156,7 +3401,7 @@ impl Page {
     /// it like `await window[name](...args)`; the callback receives all args
     /// and its return value resolves the promise (panics reject it).
     /// Dispatch polls (~50ms latency), so keep handlers fast. Applies to the
-    /// current document only: re-expose after navigation.
+    /// current and future documents, including after navigation.
     pub async fn expose_function<F>(&self, name: &str, f: F) -> E2eResult<()>
     where
         F: Fn(Vec<Value>) -> Value + Send + Sync + 'static,
@@ -3167,7 +3412,7 @@ impl Page {
             )));
         }
         let name_json = serde_json::to_string(name).map_err(E2eError::Json)?;
-        self.evaluate_value(&format!(
+        let source = format!(
             "(() => {{ \
              window.__ferriteExpose = window.__ferriteExpose \
              || {{ seq: 0, queue: [], pending: {{}} }}; \
@@ -3177,8 +3422,9 @@ impl Page {
              bx.pending[id] = {{ resolve, reject }}; \
              bx.queue.push([{name_json}, id, args]); }}); \
              return true; }})()"
-        ))
-        .await?;
+        );
+        self.add_init_script(&source).await?;
+        self.evaluate_value(&source).await?;
         self.exposed
             .fns
             .lock()
@@ -3214,6 +3460,7 @@ impl Page {
                 ));
             }
             script.push_str("delete window.__ferriteExpose; return true; })()");
+            self.add_init_script(&script).await.ok();
             self.evaluate_value(&script).await.ok();
         }
     }
@@ -3372,52 +3619,19 @@ impl Page {
             .map_err(|_| E2eError::Config(format!("response_body({url}) returned invalid base64")))
     }
 
-    /// Accessibility snapshot as JSON: `[{ role, name }]` for interactive
-    /// elements (same query as [`Page::aria_snapshot`).
+    /// Structured accessibility tree using implicit roles, associated labels,
+    /// visibility, states and open shadow roots. This is a DOM approximation.
     pub async fn aria_snapshot_json(&self) -> E2eResult<Value> {
-        self.evaluate_value(
-            "(() => { \
-             const out = []; \
-             const els = document.querySelectorAll( \
-               'a,button,input,select,textarea,[role],[aria-label],h1,h2,h3'); \
-             for (const el of els) { \
-               const role = el.getAttribute('role') \
-                 || el.tagName.toLowerCase(); \
-               const name = (el.getAttribute('aria-label') \
-                 || el.getAttribute('alt') \
-                 || (el.textContent || '').trim().slice(0, 80) \
-                 || el.value || '').trim(); \
-               if (!name && !['input','select','textarea'].includes(role)) continue; \
-               out.push({ role, name }); \
-               if (out.length >= 200) break; \
-             } \
-             return out; })()",
-        )
-        .await
+        self.evaluate_value(&format!("({}).aria(document.body)", include_str!("dom.js")))
+            .await
     }
 
-    /// Accessibility snapshot: indented `role "name"` lines for interactive
-    /// elements (approximation of Playwright `aria_snapshot`, same shape on
-    /// both engines).
+    /// Indented accessibility snapshot, without truncating names or node counts.
     pub async fn aria_snapshot(&self) -> E2eResult<String> {
-        self.evaluate_string(
-            "(() => { \
-             const out = []; \
-             const els = document.querySelectorAll( \
-               'a,button,input,select,textarea,[role],[aria-label],h1,h2,h3'); \
-             for (const el of els) { \
-               const role = el.getAttribute('role') \
-                 || el.tagName.toLowerCase(); \
-               const name = (el.getAttribute('aria-label') \
-                 || el.getAttribute('alt') \
-                 || (el.textContent || '').trim().slice(0, 80) \
-                 || el.value || '').trim(); \
-               if (!name && !['input','select','textarea'].includes(role)) continue; \
-               out.push('- ' + role + (name ? ' \"' + name + '\"' : '')); \
-               if (out.length >= 200) break; \
-             } \
-             return out.join('\\n'); })()",
-        )
+        self.evaluate_string(&format!(
+            "(() => {{ const f = {}; return f.render(f.aria(document.body)).join('\\n'); }})()",
+            include_str!("dom.js")
+        ))
         .await
     }
 
@@ -3442,6 +3656,19 @@ impl Page {
                         continue;
                     }
                     let size = entry.metadata().map(|meta| meta.len()).unwrap_or(0);
+                    let mtime = entry
+                        .metadata()
+                        .and_then(|meta| meta.modified())
+                        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                    if self
+                        .download_consumed
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .get(&path)
+                        == Some(&(size, mtime))
+                    {
+                        continue;
+                    }
                     if !before.contains(&name) {
                         candidate = Some((path, size));
                         break;
@@ -3463,6 +3690,11 @@ impl Page {
             let candidate = candidate.or_else(|| fallback.map(|(path, size, _)| (path, size)));
             if let Some((path, size)) = candidate {
                 if stable.as_ref() == Some(&(path.clone(), size)) {
+                    let modified = path.metadata()?.modified()?;
+                    self.download_consumed
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(path.clone(), (size, modified));
                     return Ok(path);
                 }
                 stable = Some((path, size));
@@ -3721,6 +3953,25 @@ impl Page {
 
     /// Close the page target.
     pub async fn close(&self) -> E2eResult<()> {
+        if self.is_closed() {
+            return Ok(());
+        }
+        let context = if self.owns_context {
+            self.context()
+        } else {
+            None
+        };
+        let result = self.close_target().await;
+        if let Some(context) = context {
+            context.close().await?;
+        }
+        result
+    }
+
+    pub(crate) async fn close_target(&self) -> E2eResult<()> {
+        if self.is_closed() {
+            return Ok(());
+        }
         if let Some(registry) = self.registry.upgrade() {
             let target = self.target_id().to_string();
             registry
@@ -3731,6 +3982,7 @@ impl Page {
         // Explicit closes emit directly (deregistration already happened, so
         // the browser-side destroy watcher stays quiet: exactly one event).
         self.mark_closed();
+        self.coverage_state.lock().await.cancel();
         self.stop_routing().await;
         self.stop_dialog_handling().await;
         self.stop_request_capture();
@@ -3790,6 +4042,7 @@ mod tests {
                 expires: None,
             }],
             local_storage,
+            origins: Vec::new(),
         };
         let json = serde_json::to_string(&state).unwrap();
         let back: StorageState = serde_json::from_str(&json).unwrap();

@@ -238,11 +238,24 @@ async fn serve() -> (String, tokio::task::AbortHandle) {
         .route(
             "/api/auth",
             axum::routing::get(|headers: axum::http::HeaderMap| async move {
-                headers
+                let authorization = headers
                     .get(axum::http::header::AUTHORIZATION)
                     .and_then(|value| value.to_str().ok())
-                    .unwrap_or("absent")
-                    .to_string()
+                    .unwrap_or("");
+                let status = if authorization.is_empty() {
+                    axum::http::StatusCode::UNAUTHORIZED
+                } else {
+                    axum::http::StatusCode::OK
+                };
+                (
+                    status,
+                    [("www-authenticate", "Basic realm=\"ferrite\"")],
+                    if authorization.is_empty() {
+                        "absent".to_string()
+                    } else {
+                        authorization.to_string()
+                    },
+                )
             }),
         )
         .route("/api/digest", axum::routing::get(digest_auth))
@@ -1091,7 +1104,8 @@ async fn locator_addressing() {
     for (kind, browser) in browsers().await {
         let tag = kind.name();
         let (base, shutdown) = serve().await;
-        let page = browser.new_page().await.unwrap();
+        let mut page = browser.new_page().await.unwrap();
+        page.set_timeout(Duration::from_secs(2));
         page.goto(&format!("{base}locate")).await.unwrap();
 
         // get_by_* conveniences.
@@ -1109,7 +1123,8 @@ async fn locator_addressing() {
             .await
             .unwrap();
         page.get_by_label("User name")
-            .expect_text("User name")
+            .expect()
+            .id("user")
             .await
             .unwrap();
         assert_eq!(
@@ -1265,7 +1280,8 @@ async fn locator_micro_actions() {
     for (kind, browser) in browsers().await {
         let tag = kind.name();
         let (base, shutdown) = serve().await;
-        let page = browser.new_page().await.unwrap();
+        let mut page = browser.new_page().await.unwrap();
+        page.set_timeout(Duration::from_secs(2));
         page.goto(&format!("{base}locate")).await.unwrap();
 
         // dispatch_event with detail reaches a listener.
@@ -1816,12 +1832,10 @@ async fn touchscreen_a11y_storage() {
             .unwrap()
             .expect("items html");
         assert!(html.contains("banana"), "{tag}: {html}");
+        let mut missing_page = page.clone();
+        missing_page.set_timeout(Duration::from_millis(100));
         assert!(
-            page.locator("#missing")
-                .inner_html()
-                .await
-                .unwrap()
-                .is_none(),
+            missing_page.locator("#missing").inner_html().await.is_err(),
             "{tag}"
         );
         page.locator("#a11y")
@@ -2588,7 +2602,7 @@ async fn clock_fixed_time() {
         assert_eq!(fixed, 1_000_000, "{tag}");
         page.clock_advance(500).await.unwrap();
         let advanced: i64 = page.evaluate("Date.now()").await.unwrap();
-        assert_eq!(advanced, 1_000_500, "{tag}");
+        assert_eq!(advanced, 1_000_000, "fixed Date does not advance: {tag}");
         page.clock_uninstall().await.unwrap();
 
         page.close().await.unwrap();
@@ -2602,7 +2616,8 @@ async fn locator_tap_and_blur() {
     for (kind, browser) in browsers().await {
         let tag = kind.name();
         let (base, shutdown) = serve().await;
-        let page = browser.new_page().await.unwrap();
+        let mut page = browser.new_page().await.unwrap();
+        page.set_timeout(Duration::from_secs(2));
         page.goto(&base).await.unwrap();
 
         // Touchscreen tap activates the button.
@@ -3131,8 +3146,8 @@ async fn page_events_and_popups() {
         popup.goto(&base).await.unwrap();
         assert_eq!(popup.title().await.unwrap(), "e2e fixture", "{tag}");
         assert!(
-            browser
-                .default_context()
+            page.context()
+                .unwrap()
                 .pages()
                 .iter()
                 .any(|known| known.target_id() == popup.target_id()),
@@ -3803,6 +3818,7 @@ async fn clock_controls() {
             .unwrap();
         assert!(!paused, "{tag}");
 
+        page.clock_pause().await.unwrap();
         page.clock_set_system_time(1_700_000_000_000).await.unwrap();
         assert_eq!(page.clock_now().await.unwrap(), 1_700_000_000_000, "{tag}");
         let date_now: i64 = page.evaluate("Date.now()").await.unwrap();
@@ -4043,7 +4059,7 @@ async fn http_credentials() {
                 .unwrap_err();
             assert!(
                 err.to_string()
-                    .contains("extra HTTP headers are not supported"),
+                    .contains("HTTP auth challenges are not supported"),
                 "{tag}: {err}"
             );
         }
@@ -4942,7 +4958,10 @@ async fn context_storage_state_round_trip() {
 
         // Context getter reads the first page; error paths fail loudly.
         let got = context.storage_state().await.unwrap();
-        assert_eq!(got.origin, origin, "{tag}");
+        assert!(
+            got.origins.iter().any(|entry| entry.origin == origin),
+            "{tag}"
+        );
         let error = match browser
             .new_context(ContextOptions::default().storage_state(dir.join("nope.json")))
             .await
@@ -4958,11 +4977,9 @@ async fn context_storage_state_round_trip() {
             .new_context(ContextOptions::default())
             .await
             .unwrap();
-        let error = empty.storage_state().await.unwrap_err();
-        assert!(
-            error.to_string().contains("needs an open page"),
-            "{tag}: {error}"
-        );
+        let empty_state = empty.storage_state().await.unwrap();
+        assert!(empty_state.cookies.is_empty());
+        assert!(empty_state.origins.is_empty());
 
         replay.close().await.unwrap();
         context.close().await.unwrap();
@@ -4991,6 +5008,7 @@ async fn context_device_emulation() {
         if kind == BrowserKind::Chromium {
             let page = context.new_page().await.unwrap();
             page.goto(&base).await.unwrap();
+            page.evaluate_value("document.head.insertAdjacentHTML('beforeend', '<meta name=viewport content=\"width=device-width\">')").await.unwrap();
             let dpr: f64 = page.evaluate("window.devicePixelRatio").await.unwrap();
             assert_eq!(dpr, 2.0, "{tag}");
             let touch: bool = page.evaluate("'ontouchstart' in window").await.unwrap();
@@ -5023,8 +5041,12 @@ async fn context_no_js_and_bypass_csp() {
         if kind == BrowserKind::Chromium {
             page.set_java_script_enabled(false).await.unwrap();
             page.goto(&base).await.unwrap();
-            let error = page.evaluate_value("1 + 1").await.unwrap_err();
-            assert!(!error.to_string().is_empty(), "{tag}");
+            // Browser-injected evaluation remains available while app scripts are disabled.
+            assert_eq!(page.evaluate::<i64>("1 + 1").await.unwrap(), 2);
+            assert!(page
+                .evaluate::<bool>("typeof window.__fixture === 'undefined'")
+                .await
+                .unwrap());
             page.set_java_script_enabled(true).await.unwrap();
             page.goto(&base).await.unwrap();
             page.locator("#inc").click().await.unwrap();
@@ -5356,8 +5378,10 @@ async fn get_by_role_with_predicates() {
             "{tag}"
         );
 
-        // Hidden matches are kept by default, dropped on request.
-        let secret = GetByRoleOptions::default().name("secret");
+        // Hidden matches are excluded by default, included on request.
+        let secret = GetByRoleOptions::default()
+            .name("secret")
+            .include_hidden(true);
         assert_eq!(
             page.get_by_role_with("button", secret)
                 .count()
@@ -5459,7 +5483,8 @@ async fn select_options_variants() {
     for (kind, browser) in browsers().await {
         let tag = kind.name();
         let (base, shutdown) = serve().await;
-        let page = browser.new_page().await.unwrap();
+        let mut page = browser.new_page().await.unwrap();
+        page.set_timeout(Duration::from_secs(2));
         page.goto(&base).await.unwrap();
 
         let pick = page.locator("#pick");
@@ -5817,5 +5842,625 @@ async fn input_options_mouse_keyboard() {
         page.close().await.unwrap();
         browser.close().await.unwrap();
         shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn practical_parity_locators_and_waits() {
+    for (kind, browser) in browsers().await {
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+        page.set_content(r#"<label for="user">User Name</label><input id="user">
+          <button class="duplicate">one</button><button class="duplicate">two</button>
+          <button id="disabled" disabled>disabled</button><div id="host"></div>
+          <input type="checkbox" id="trusted-check" onclick="window.trustedCheck=event.isTrusted">
+          <section><h3>Selected</h3><button>Save</button></section>
+          <section><h3>Other</h3><button>Save</button></section>
+          <button id="late" style="display:none">later</button>
+          <input id="error" aria-label="Address" aria-invalid="true" aria-errormessage="message"><span id="message">Required</span>
+          <select id="many" multiple><option value="a" selected>A</option><option value="b" selected>B</option></select>"#).await.unwrap();
+        page.get_by_label("User Name")
+            .exact()
+            .fill("Ada")
+            .await
+            .unwrap();
+        page.locator("#user").expect().value("Ada").await.unwrap();
+        page.locator("#trusted-check").check().await.unwrap();
+        assert!(page.evaluate::<bool>("window.trustedCheck").await.unwrap());
+        page.locator("#trusted-check").uncheck().await.unwrap();
+        assert!(!page.locator("#trusted-check").is_checked().await.unwrap());
+        let error = page.locator(".duplicate").click().await.unwrap_err();
+        assert!(
+            error.to_string().contains("strict"),
+            "{}: {error}",
+            kind.name()
+        );
+        assert!(page.locator(".duplicate").bounding_box().await.is_err());
+        assert_eq!(page.locator(".duplicate").first().count().await.unwrap(), 1);
+        page.locator(".duplicate")
+            .expect()
+            .texts(&["one", "two"])
+            .await
+            .unwrap();
+        let inner = page.locator("h3").filter("Selected");
+        page.locator("section")
+            .filter_with(FilterOptions::default().has(inner))
+            .get_by_role("button", "Save")
+            .expect()
+            .count(1)
+            .await
+            .unwrap();
+        page.evaluate_value("document.querySelector('#host').attachShadow({mode:'open'}).innerHTML='<button aria-label=Shadow>inside</button>'").await.unwrap();
+        page.get_by_role("button", "Shadow")
+            .exact()
+            .click()
+            .await
+            .unwrap();
+        page.get_by_role("button", "")
+            .matching("^Shadow$")
+            .expect()
+            .count(1)
+            .await
+            .unwrap();
+        page.locator("#disabled").hover().await.unwrap();
+        assert!(!page
+            .locator("#disabled")
+            .screenshot()
+            .await
+            .unwrap()
+            .is_empty());
+        page.evaluate_value(
+            "setTimeout(() => document.querySelector('#late').style.display='block', 150)",
+        )
+        .await
+        .unwrap();
+        page.locator("#late").click().await.unwrap();
+        page.locator("#error")
+            .expect()
+            .role("textbox")
+            .await
+            .unwrap();
+        page.locator("#error")
+            .expect()
+            .accessible_error_message("Required")
+            .await
+            .unwrap();
+        page.locator("#many")
+            .expect()
+            .values(&["a", "b"])
+            .await
+            .unwrap();
+        let began = std::time::Instant::now();
+        page.evaluate_value("window.ready=false; setTimeout(() => window.ready=true, 150)")
+            .await
+            .unwrap();
+        page.wait_for_function("Promise.resolve(window.ready)", Duration::from_secs(3))
+            .await
+            .unwrap();
+        assert!(began.elapsed() >= Duration::from_millis(100));
+        let tree = page
+            .locator("section")
+            .first()
+            .aria_snapshot()
+            .await
+            .unwrap();
+        assert!(tree.contains("heading \"Selected\" [level=3]"), "{tree}");
+        page.locator("section")
+            .first()
+            .expect()
+            .aria_snapshot(&tree)
+            .await
+            .unwrap();
+        page.expose_function("twice", |args| {
+            serde_json::json!(args[0].as_u64().unwrap() * 2)
+        })
+        .await
+        .unwrap();
+        page.goto(&base).await.unwrap();
+        assert_eq!(page.evaluate::<u64>("window.twice(21)").await.unwrap(), 42);
+        page.clear_exposed_functions().await;
+        page.goto(&base).await.unwrap();
+        assert_eq!(
+            page.evaluate::<String>("typeof window.twice")
+                .await
+                .unwrap(),
+            "undefined"
+        );
+        let owned = page.context().unwrap();
+        page.close().await.unwrap();
+        assert!(owned.pages().is_empty());
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn practical_parity_clock_semantics() {
+    for (_, browser) in browsers().await {
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+        page.clock_install_at(1_000_000, true).await.unwrap();
+        page.evaluate_value("window.fired=0; window.interval=setInterval(() => fired++, 100)")
+            .await
+            .unwrap();
+        page.clock_run_for(500).await.unwrap();
+        assert_eq!(page.evaluate::<u32>("fired").await.unwrap(), 5);
+        page.clock_fast_forward(500).await.unwrap();
+        assert_eq!(page.evaluate::<u32>("fired").await.unwrap(), 6);
+        page.clock_set_fixed_time(42).await.unwrap();
+        page.clock_run_for(100).await.unwrap();
+        assert_eq!(page.evaluate::<i64>("Date.now()").await.unwrap(), 42);
+        assert_eq!(
+            page.evaluate::<String>("typeof Date()").await.unwrap(),
+            "string"
+        );
+        page.clock_set_system_time(2_000_000).await.unwrap();
+        page.clock_run_for(100).await.unwrap();
+        assert_eq!(page.clock_now().await.unwrap(), 2_000_100);
+        page.evaluate_value("window.promiseTimer=false; setTimeout(() => Promise.resolve().then(() => setTimeout(() => promiseTimer=true, 10)), 10)").await.unwrap();
+        page.clock_run_for(20).await.unwrap();
+        assert!(page.evaluate::<bool>("promiseTimer").await.unwrap());
+        page.clock_resume().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        page.clock_pause().await.unwrap();
+        assert!(page.clock_now().await.unwrap() > 2_000_150);
+        page.goto(&base).await.unwrap();
+        assert_eq!(page.clock_now().await.unwrap(), 1_000_000);
+        page.clock_uninstall().await.unwrap();
+        page.goto(&base).await.unwrap();
+        assert!(page
+            .evaluate::<bool>("!window.__ferriteClock")
+            .await
+            .unwrap());
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn practical_parity_runner_isolation_and_locks() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for (_, browser) in browsers().await {
+        let (base, shutdown) = serve().await;
+        let out = tempfile::tempdir().unwrap();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let retry_count = attempts.clone();
+        let retry_base = base.clone();
+        let first_base = base.clone();
+        let report = Runner::default()
+            .workers(1)
+            .list_progress(false)
+            .output_dir(out.path().display().to_string())
+            .run(
+                &browser,
+                vec![
+                    test("a writes storage", move |page| {
+                        let base = first_base.clone();
+                        async move {
+                            page.goto(&base).await?;
+                            page.set_cookie("isolation", "old").await?;
+                            page.evaluate_value("localStorage.setItem('isolation', 'old')")
+                                .await?;
+                            Ok(())
+                        }
+                    }),
+                    test("b retries clean", move |page| {
+                        let base = retry_base.clone();
+                        let count = retry_count.clone();
+                        async move {
+                            page.goto(&base).await?;
+                            assert!(page.cookies().await?.iter().all(|c| c.name != "isolation"));
+                            assert!(
+                                page.evaluate::<bool>("localStorage.getItem('isolation') === null")
+                                    .await?
+                            );
+                            page.set_cookie("isolation", "retry").await?;
+                            if count.fetch_add(1, Ordering::SeqCst) == 0 {
+                                return Err(E2eError::Config("retry".into()));
+                            }
+                            Ok(())
+                        }
+                    })
+                    .retries(1),
+                ],
+            )
+            .await;
+        assert!(report.ok(), "{}", report.to_list());
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert!(browser.contexts().is_empty(), "attempt contexts must close");
+        let active = Arc::new(AtomicUsize::new(0));
+        let tests = (0..4)
+            .map(|i| {
+                let active = active.clone();
+                test(format!("locked {i}"), move |_| {
+                    let active = active.clone();
+                    async move {
+                        assert_eq!(active.fetch_add(1, Ordering::SeqCst), 0);
+                        tokio::time::sleep(Duration::from_millis(40)).await;
+                        assert_eq!(active.fetch_sub(1, Ordering::SeqCst), 1);
+                        Ok(())
+                    }
+                })
+                .lock("database")
+                .lock("database")
+            })
+            .collect();
+        let report = Runner::default()
+            .workers(2)
+            .list_progress(false)
+            .output_dir(out.path().display().to_string())
+            .run(&browser, tests)
+            .await;
+        assert!(report.ok(), "{}", report.to_list());
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn practical_parity_storage_and_linked_api() {
+    for (_, browser) in browsers().await {
+        let app = axum::Router::new()
+            .route(
+                "/",
+                axum::routing::get(|| async {
+                    axum::response::Html(
+                        "<script>window.initialToken=localStorage.getItem('token')</script>",
+                    )
+                }),
+            )
+            .route(
+                "/set",
+                axum::routing::get(|| async {
+                    ([("set-cookie", "api=shared; Path=/; HttpOnly")], "set")
+                }),
+            )
+            .route(
+                "/seen",
+                axum::routing::get(|headers: axum::http::HeaderMap| async move {
+                    headers
+                        .get("cookie")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("")
+                        .to_string()
+                }),
+            );
+        let first = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let second = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin_a = format!("http://{}", first.local_addr().unwrap());
+        let origin_b = format!("http://{}", second.local_addr().unwrap());
+        let app_b = app.clone();
+        let a = tokio::spawn(async move { axum::serve(first, app).await.unwrap() });
+        let b = tokio::spawn(async move { axum::serve(second, app_b).await.unwrap() });
+        let context = browser
+            .new_context(ContextOptions::default())
+            .await
+            .unwrap();
+        let client = context.request();
+        client.get(&format!("{origin_a}/set")).await.unwrap();
+        let page_a = context.new_page().await.unwrap();
+        page_a.goto(&origin_a).await.unwrap();
+        assert!(page_a
+            .cookies()
+            .await
+            .unwrap()
+            .iter()
+            .any(|cookie| cookie.name == "api" && cookie.http_only));
+        page_a.set_cookie("browser", "shared").await.unwrap();
+        let cookies = page_a
+            .request()
+            .unwrap()
+            .get(&format!("{origin_a}/seen"))
+            .await
+            .unwrap()
+            .text();
+        assert!(
+            cookies.contains("browser=shared") && cookies.contains("api=shared"),
+            "{cookies}"
+        );
+        context.clear_cookies().await.unwrap();
+        assert_eq!(
+            client
+                .get(&format!("{origin_a}/seen"))
+                .await
+                .unwrap()
+                .text(),
+            ""
+        );
+        page_a
+            .evaluate_value("localStorage.setItem('token', 'a')")
+            .await
+            .unwrap();
+        let page_b = context.new_page().await.unwrap();
+        page_b.goto(&origin_b).await.unwrap();
+        page_b
+            .evaluate_value("localStorage.setItem('token', 'b')")
+            .await
+            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("auth.json");
+        context.save_storage_state(&path).await.unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["origins"].as_array().unwrap().len(), 2);
+        assert!(saved.get("origin").is_none());
+        let restored = browser
+            .new_context(ContextOptions::default().storage_state(&path))
+            .await
+            .unwrap();
+        restored.set_default_timeout(Duration::from_millis(500));
+        restored.set_default_navigation_timeout(Duration::from_secs(3));
+        restored.set_expect_timeout(Duration::from_millis(350));
+        let page = restored.new_page().await.unwrap();
+        assert_eq!(page.timeout(), Duration::from_millis(500));
+        assert_eq!(page.navigation_timeout(), Duration::from_secs(3));
+        assert_eq!(page.expect_timeout(), Duration::from_millis(350));
+        page.goto(&origin_a).await.unwrap();
+        assert_eq!(page.evaluate::<String>("initialToken").await.unwrap(), "a");
+        page.goto(&origin_b).await.unwrap();
+        assert_eq!(page.evaluate::<String>("initialToken").await.unwrap(), "b");
+        page.expect().url(&format!("{origin_b}/")).await.unwrap();
+        page.expect()
+            .url_matches(r"^http://127\.0\.0\.1:[0-9]+/$")
+            .await
+            .unwrap();
+        restored.close().await.unwrap();
+        context.close().await.unwrap();
+        browser.close().await.unwrap();
+        a.abort();
+        b.abort();
+    }
+}
+
+#[tokio::test]
+async fn practical_parity_persistent_profiles() {
+    let (base, shutdown) = serve().await;
+    for kind in [BrowserKind::Chromium, BrowserKind::Firefox] {
+        let executable = match kind {
+            BrowserKind::Chromium => ferrite_e2e::find_chromium(None),
+            BrowserKind::Firefox => ferrite_e2e::find_firefox(None),
+        };
+        let Some(executable) = executable else {
+            continue;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let options = LaunchOptions::default()
+            .browser(kind)
+            .executable(executable)
+            .user_data_dir(dir.path());
+        let browser = Browser::launch(options.clone()).await.unwrap();
+        let page = browser.default_context().new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+        page.evaluate_value("localStorage.setItem('persistent', 'saved')")
+            .await
+            .unwrap();
+        browser.close().await.unwrap();
+        assert!(dir.path().exists());
+        let browser = Browser::launch(options).await.unwrap();
+        let page = browser.default_context().new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+        assert_eq!(
+            page.evaluate::<String>("localStorage.getItem('persistent')")
+                .await
+                .unwrap(),
+            "saved"
+        );
+        browser.close().await.unwrap();
+    }
+    shutdown.abort();
+}
+
+#[tokio::test]
+async fn practical_parity_lazy_frames_and_handles() {
+    for (_, browser) in browsers().await {
+        let page = browser.new_page().await.unwrap();
+        page.set_content("<iframe id='frame' style='margin-left:70px' srcdoc='<label for=name>Name</label><input id=name><button onclick=\"document.title=42\">Save</button>'></iframe>").await.unwrap();
+        let frame = page.frame_locator("#frame");
+        assert_eq!(
+            frame
+                .locator("#name")
+                .page()
+                .locator("#frame")
+                .count()
+                .await
+                .unwrap(),
+            1
+        );
+        frame.get_by_label("Name").fill("Ada").await.unwrap();
+        frame.locator("#name").expect().value("Ada").await.unwrap();
+        frame.get_by_role("button", "Save").click().await.unwrap();
+        assert_eq!(
+            frame
+                .locator("button")
+                .evaluate::<String>("el => el.ownerDocument.title")
+                .await
+                .unwrap(),
+            "42"
+        );
+        assert_eq!(frame.owner().count().await.unwrap(), 1);
+        page.evaluate_value("document.querySelector('#frame').outerHTML='<iframe id=frame srcdoc=\"<input id=name value=replaced>\"></iframe>'").await.unwrap();
+        frame
+            .locator("#name")
+            .expect()
+            .value("replaced")
+            .await
+            .unwrap();
+        let handle = page
+            .evaluate_handle("({nested:{n:21},name:'Ada'})")
+            .await
+            .unwrap();
+        let properties = handle.get_properties().await.unwrap();
+        assert_eq!(
+            properties["name"].json_value::<String>().await.unwrap(),
+            "Ada"
+        );
+        let nested = handle
+            .evaluate_handle("value => value.nested")
+            .await
+            .unwrap();
+        assert_eq!(
+            nested
+                .evaluate::<u64>("value => value.n * 2")
+                .await
+                .unwrap(),
+            42
+        );
+        assert_eq!(
+            page.evaluate_with_arg::<u64, _>("value => value.n + 1", &serde_json::json!({"n":41}))
+                .await
+                .unwrap(),
+            42
+        );
+        for value in properties.values() {
+            value.dispose().await.unwrap();
+        }
+        nested.dispose().await.unwrap();
+        handle.dispose().await.unwrap();
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn practical_parity_project_browsers_and_cleanup() {
+    if ferrite_e2e::find_chromium(None).is_none() || ferrite_e2e::find_firefox(None).is_none() {
+        return;
+    }
+    let browser = Browser::launch(LaunchOptions::default()).await.unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let report = Runner::default()
+        .list_progress(false)
+        .output_dir(out.path().display().to_string())
+        .project(
+            Project::new("chrome")
+                .browser(BrowserKind::Chromium)
+                .context_options(ContextOptions::default().viewport(400, 300)),
+        )
+        .project(
+            Project::new("firefox")
+                .browser(BrowserKind::Firefox)
+                .context_options(ContextOptions::default().viewport(500, 400)),
+        )
+        .run(
+            &browser,
+            vec![test_with_context("engine", |ctx| async move {
+                let width: u64 = ctx.page.evaluate("innerWidth").await?;
+                let agent: String = ctx.page.evaluate("navigator.userAgent").await?;
+                let project = ctx.info.project.as_deref().unwrap();
+                assert_eq!(width, if project == "chrome" { 400 } else { 500 });
+                assert!(agent.contains(if project == "chrome" {
+                    "Chrome"
+                } else {
+                    "Firefox"
+                }));
+                let file = ctx.info.output_path("nested/value.txt")?;
+                std::fs::write(file, "done")?;
+                Ok(())
+            })],
+        )
+        .await;
+    assert!(report.ok(), "{}", report.to_list());
+    assert_eq!(report.passed(), 2);
+    let teardown = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = teardown.clone();
+    let report = Runner::default()
+        .list_progress(false)
+        .output_dir(out.path().display().to_string())
+        .fixture_with_teardown(
+            || async { Ok::<_, E2eError>(7u32) },
+            move |_| {
+                let count = count.clone();
+                async move {
+                    count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok(())
+                }
+            },
+        )
+        .fixture(|| async { Err::<String, _>(E2eError::Config("setup failed".into())) })
+        .run(
+            &browser,
+            vec![test("setup failure", |_| async { Ok(()) }).fail()],
+        )
+        .await;
+    assert_eq!(report.failed(), 1);
+    assert_eq!(report.expected_failed(), 0);
+    assert_eq!(teardown.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let report = Runner::default()
+        .list_progress(false)
+        .output_dir(out.path().display().to_string())
+        .run(
+            &browser,
+            vec![
+                test("panic", |_| async {
+                    panic!("intentional panic");
+                    #[allow(unreachable_code)]
+                    Ok(())
+                }),
+                test("zero timeout", |_| async {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    Ok(())
+                })
+                .timeout(Duration::ZERO),
+            ],
+        )
+        .await;
+    assert_eq!(report.failed(), 1);
+    assert_eq!(report.passed(), 1);
+    assert!(browser.contexts().is_empty());
+    browser.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn practical_parity_coverage() {
+    for (kind, browser) in browsers().await {
+        let page = browser.new_page().await.unwrap();
+        let coverage = page.coverage();
+        if kind == BrowserKind::Firefox {
+            assert!(coverage
+                .start_js_coverage()
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("Chromium"));
+            assert!(coverage.start_css_coverage().await.is_err());
+        } else {
+            coverage.start_js_coverage().await.unwrap();
+            assert!(coverage.start_js_coverage().await.is_err());
+            page.evaluate_value("window.coverageExample = value => value ? 42 : 0; coverageExample(true); //# sourceURL=ferrite-coverage.js").await.unwrap();
+            let entries = coverage.stop_js_coverage().await.unwrap();
+            let entry = entries
+                .iter()
+                .find(|entry| entry.url == "ferrite-coverage.js")
+                .unwrap();
+            assert!(entry.source.contains("coverageExample"));
+            assert!(entry
+                .functions
+                .iter()
+                .flat_map(|function| &function.ranges)
+                .any(|range| range.count > 0));
+            assert!(entry
+                .functions
+                .iter()
+                .flat_map(|function| &function.ranges)
+                .any(|range| range.count == 0));
+            assert!(coverage.stop_js_coverage().await.is_err());
+            coverage.start_css_coverage().await.unwrap();
+            page.set_content("<style>.used {color: red} .unused {color: blue}</style><div class=used>coverage</div>").await.unwrap();
+            page.evaluate_value("getComputedStyle(document.querySelector('.used')).color")
+                .await
+                .unwrap();
+            let entries = coverage.stop_css_coverage().await.unwrap();
+            assert!(entries.iter().any(|entry| entry.source.contains(".used")
+                && entry
+                    .ranges
+                    .iter()
+                    .any(|range| range.count > 0 && range.end_offset > range.start_offset)));
+            assert!(coverage.stop_css_coverage().await.is_err());
+        }
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
     }
 }

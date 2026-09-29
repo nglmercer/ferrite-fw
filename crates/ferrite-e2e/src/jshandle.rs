@@ -71,6 +71,23 @@ impl JSHandle {
         Ok(serde_json::from_value(value)?)
     }
 
+    /// Evaluate a function and retain its result as another remote reference.
+    pub async fn evaluate_handle(&self, function: &str) -> E2eResult<JSHandle> {
+        self.driver
+            .handle_evaluate_handle(self.remote_id.as_deref(), self.value.clone(), function)
+            .await
+    }
+
+    /// Handles for enumerable own string-keyed properties.
+    pub async fn get_properties(&self) -> E2eResult<std::collections::BTreeMap<String, JSHandle>> {
+        let keys: Vec<String> = self.evaluate("value => Object.keys(Object(value))").await?;
+        let mut result = std::collections::BTreeMap::new();
+        for key in keys {
+            result.insert(key.clone(), self.get_property(&key).await?);
+        }
+        Ok(result)
+    }
+
     /// Release the remote reference (Playwright `dispose()`); a no-op for
     /// inlined primitives.
     pub async fn dispose(&self) -> E2eResult<()> {

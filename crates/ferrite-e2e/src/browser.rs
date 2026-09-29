@@ -1,9 +1,8 @@
 //! Browser discovery, launch, and browser-level management.
 //!
 //! Chromium is driven over CDP, Firefox over WebDriver BiDi. There is no
-//! WebKit backend: Linux ships no stock WebKit browser with an automation
-//! protocol (Playwright's WebKit is a custom download), so `webkit` is a
-//! loud configuration error.
+//! WebKit backend: integrating Playwright's patched WebKit would require a
+//! separate engine driver and managed browser downloads.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
@@ -35,9 +34,7 @@ impl BrowserKind {
             "chromium" | "chrome" => Ok(Self::Chromium),
             "firefox" | "ff" => Ok(Self::Firefox),
             "webkit" | "safari" => Err(E2eError::Config(
-                "webkit is not supported: Linux ships no stock WebKit browser \
-                 with an automation protocol"
-                    .to_string(),
+                "webkit is not supported: Ferrite has no WebKit protocol backend".to_string(),
             )),
             other => Err(E2eError::Config(format!(
                 "unknown browser {other:?}: expected \"chromium\" or \"firefox\""
@@ -56,7 +53,7 @@ impl BrowserKind {
 }
 
 /// Options for launching a browser.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchOptions {
     /// Engine to launch.
     pub browser: BrowserKind,
@@ -68,6 +65,8 @@ pub struct LaunchOptions {
     pub args: Vec<String>,
     /// Keep the profile dir after close (debugging).
     pub keep_profile: bool,
+    /// Reuse a persistent profile directory; never deleted by Ferrite.
+    pub user_data_dir: Option<PathBuf>,
     /// Slow down each action by this long.
     pub slow_mo: Duration,
     /// Launch + protocol timeout.
@@ -90,6 +89,7 @@ impl Default for LaunchOptions {
             executable_path: None,
             args: Vec::new(),
             keep_profile: false,
+            user_data_dir: None,
             slow_mo: Duration::ZERO,
             timeout: Duration::from_secs(30),
             user_agent: None,
@@ -109,6 +109,7 @@ impl LaunchOptions {
             executable_path: config.executable_path.clone().map(PathBuf::from),
             args: config.args.clone(),
             keep_profile: false,
+            user_data_dir: None,
             slow_mo: Duration::from_millis(config.slow_mo_ms),
             timeout: Duration::from_millis(config.timeout_ms.max(1_000)),
             user_agent: config.user_agent.clone(),
@@ -129,6 +130,12 @@ impl LaunchOptions {
     #[must_use]
     pub fn executable(mut self, path: impl Into<PathBuf>) -> Self {
         self.executable_path = Some(path.into());
+        self
+    }
+
+    /// Reuse cookies, localStorage and browser preferences across launches.
+    pub fn user_data_dir(mut self, path: impl Into<PathBuf>) -> Self {
+        self.user_data_dir = Some(path.into());
         self
     }
 
@@ -326,9 +333,31 @@ pub struct Browser {
 }
 
 impl Browser {
-    /// Launch with default options (Chromium).
+    /// Launch using the CLI/environment configuration (Chromium by default).
     pub async fn launch_default() -> E2eResult<Self> {
-        Self::launch(LaunchOptions::default()).await
+        let config = crate::config_from_env()?;
+        let mut browser = Self::launch(LaunchOptions::from_config(&config)?).await?;
+        browser.set_base_url(config.base_url);
+        Ok(browser)
+    }
+
+    /// A non-owning handle used by runner workers while the original owns the process.
+    pub(crate) fn worker_handle(&self) -> Self {
+        Self {
+            child: None,
+            backend: self.backend.clone(),
+            kind: self.kind,
+            _profile: None,
+            debug_port: self.debug_port,
+            slow_mo: self.slow_mo,
+            timeout: self.timeout,
+            base_url: self.base_url.clone(),
+            proxy_server: self.proxy_server.clone(),
+            product: self.product.clone(),
+            contexts: Arc::clone(&self.contexts),
+            default: OnceLock::new(),
+            launch_download_dir: self.launch_download_dir.clone(),
+        }
     }
 
     /// Launch the configured engine and connect over its protocol.
@@ -352,11 +381,11 @@ impl Browser {
                 )
             })?;
         let debug_port = free_port()?;
-        let profile = tempfile::tempdir()?;
+        let (mut profile, profile_path) = create_profile(&options)?;
         if let Some(dir) = &options.download_dir {
-            write_chromium_download_pref(profile.path(), dir)?;
+            write_chromium_download_pref(profile_path.as_path(), dir)?;
         }
-        let profile_arg = format!("--user-data-dir={}", profile.path().display());
+        let profile_arg = format!("--user-data-dir={}", profile_path.as_path().display());
 
         let mut cmd = tokio::process::Command::new(&executable);
         cmd.arg("--no-first-run")
@@ -439,9 +468,12 @@ impl Browser {
             backend: Backend::Cdp(cdp),
             kind: BrowserKind::Chromium,
             _profile: if options.keep_profile {
+                if let Some(profile) = profile.take() {
+                    let _ = profile.keep();
+                }
                 None
             } else {
-                Some(profile)
+                profile
             },
             debug_port,
             slow_mo: options.slow_mo,
@@ -470,9 +502,9 @@ impl Browser {
                 )
             })?;
         let debug_port = free_port()?;
-        let profile = tempfile::tempdir()?;
+        let (mut profile, profile_path) = create_profile(&options)?;
         write_firefox_prefs(
-            profile.path(),
+            profile_path.as_path(),
             options.user_agent.as_deref(),
             options.download_dir.as_deref(),
         )?;
@@ -486,7 +518,7 @@ impl Browser {
         }
         cmd.arg("--no-remote")
             .arg("--profile")
-            .arg(profile.path())
+            .arg(profile_path.as_path())
             .arg("--remote-debugging-port")
             .arg(debug_port.to_string())
             .arg("about:blank");
@@ -590,9 +622,12 @@ impl Browser {
             },
             kind: BrowserKind::Firefox,
             _profile: if options.keep_profile {
+                if let Some(profile) = profile.take() {
+                    let _ = profile.keep();
+                }
                 None
             } else {
-                Some(profile)
+                profile
             },
             debug_port,
             slow_mo: options.slow_mo,
@@ -611,18 +646,35 @@ impl Browser {
     /// Connect to an already-running Chromium (e.g. launched with
     /// `--remote-debugging-port`). The browser is not killed on close.
     pub async fn connect(debug_port: u16, timeout: Duration) -> E2eResult<Self> {
-        let url = format!("http://127.0.0.1:{debug_port}/json/version");
-        let body: Value = reqwest::get(&url)
-            .await
-            .map_err(|error| E2eError::Launch(format!("{url}: {error}")))?
-            .json()
-            .await
-            .map_err(|error| E2eError::Launch(format!("bad /json/version: {error}")))?;
-        let ws_url = body
-            .get("webSocketDebuggerUrl")
-            .and_then(Value::as_str)
-            .ok_or_else(|| E2eError::Launch("no webSocketDebuggerUrl".to_string()))?;
-        let cdp = CdpConnection::connect(ws_url).await?;
+        Self::connect_over_cdp(&format!("http://127.0.0.1:{debug_port}"), timeout).await
+    }
+
+    /// Connect to a Chromium HTTP debugging endpoint or browser WebSocket URL.
+    /// Closing disconnects Ferrite without terminating the remote browser.
+    pub async fn connect_over_cdp(endpoint: &str, timeout: Duration) -> E2eResult<Self> {
+        let ws_url = if endpoint.starts_with("ws://") || endpoint.starts_with("wss://") {
+            endpoint.to_string()
+        } else {
+            let url = format!("{}/json/version", endpoint.trim_end_matches('/'));
+            let body: Value = reqwest::Client::builder()
+                .timeout(timeout)
+                .build()?
+                .get(&url)
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+            body.get("webSocketDebuggerUrl")
+                .and_then(Value::as_str)
+                .ok_or_else(|| E2eError::Launch("no webSocketDebuggerUrl".into()))?
+                .to_string()
+        };
+        let debug_port = reqwest::Url::parse(endpoint)
+            .ok()
+            .and_then(|url| url.port_or_known_default())
+            .unwrap_or(0);
+        let cdp = CdpConnection::connect(&ws_url).await?;
         let browser = Self {
             child: None,
             backend: Backend::Cdp(cdp),
@@ -980,42 +1032,94 @@ impl Browser {
             .collect()
     }
 
-    /// Open a page in the default context.
+    /// Open a page in a fresh context, disposed when that page closes.
+    /// Use `default_context().new_page()` explicitly for shared storage.
     pub async fn new_page(&self) -> E2eResult<Page> {
-        self.default_context().new_page().await
+        let context = self.new_context(ContextOptions::default()).await?;
+        match context.new_page().await {
+            Ok(mut page) => {
+                page.owns_context = true;
+                Ok(page)
+            }
+            Err(error) => {
+                context.close().await.ok();
+                Err(error)
+            }
+        }
     }
 
     /// Close the browser (ends the BiDi session, kills the child when this
     /// instance launched it).
     pub async fn close(mut self) -> E2eResult<()> {
-        match &self.backend {
-            Backend::Cdp(cdp) => cdp.close(),
-            Backend::Bidi { conn, .. } => {
-                let _ = conn
-                    .call("session.end", serde_json::json!({}), Duration::from_secs(5))
-                    .await;
-                conn.close();
+        // Graceful shutdown flushes persistent cookies and storage to disk.
+        if self.child.is_some() {
+            match &self.backend {
+                Backend::Cdp(cdp) => {
+                    cdp.call(
+                        None,
+                        "Browser.close",
+                        serde_json::json!({}),
+                        Duration::from_secs(5),
+                    )
+                    .await
+                    .ok();
+                }
+                Backend::Bidi { conn, .. } => {
+                    conn.call(
+                        "browser.close",
+                        serde_json::json!({}),
+                        Duration::from_secs(5),
+                    )
+                    .await
+                    .ok();
+                }
+            }
+            if let Some(mut child) = self.child.take() {
+                if tokio::time::timeout(Duration::from_secs(5), child.wait())
+                    .await
+                    .is_err()
+                {
+                    child.kill().await.ok();
+                    child.wait().await.ok();
+                }
             }
         }
-        if let Some(mut child) = self.child.take() {
-            let _ = child.kill().await;
-            let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+        match &self.backend {
+            Backend::Cdp(cdp) => cdp.close(),
+            Backend::Bidi { conn, .. } => conn.close(),
         }
         Ok(())
     }
+}
+
+fn create_profile(options: &LaunchOptions) -> E2eResult<(Option<tempfile::TempDir>, PathBuf)> {
+    if let Some(path) = &options.user_data_dir {
+        std::fs::create_dir_all(path)?;
+        return Ok((None, std::fs::canonicalize(path)?));
+    }
+    let profile = tempfile::tempdir()?;
+    let path = profile.path().to_path_buf();
+    Ok((Some(profile), path))
 }
 
 /// Firefox profile prefs (`user.js`): UA override plus automation defaults.
 /// Seed a fresh Chromium profile with a download directory.
 fn write_chromium_download_pref(profile: &Path, dir: &Path) -> E2eResult<()> {
     std::fs::create_dir_all(dir)?;
-    let prefs = serde_json::json!({
+    let download = serde_json::json!({
         "download": {
             "default_directory": dir.to_string_lossy(),
             "prompt_for_download": false,
             "directory_upgrade": true,
         },
     });
+    let preferences = profile.join("Preferences");
+    let mut prefs = if preferences.exists() {
+        serde_json::from_slice(&std::fs::read(&preferences)?)?
+    } else {
+        serde_json::json!({})
+    };
+    prefs["download"] = download["download"].clone();
     std::fs::write(
         profile.join("Preferences"),
         serde_json::to_string(&prefs).map_err(E2eError::Json)?,

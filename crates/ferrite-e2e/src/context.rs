@@ -27,7 +27,7 @@ pub enum ServiceWorkerMode {
 }
 
 /// Options for a new browser context.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ContextOptions {
     /// Default viewport applied to every page in the context.
     pub viewport: Option<Viewport>,
@@ -244,6 +244,9 @@ struct ContextLiveState {
     downloads_allowed: bool,
     downloads_path: Option<PathBuf>,
     service_workers: ServiceWorkerMode,
+    action_timeout: Option<Duration>,
+    navigation_timeout: Option<Duration>,
+    expect_timeout: Option<Duration>,
     init_scripts: Vec<String>,
     storage: Option<StorageState>,
 }
@@ -261,6 +264,9 @@ impl ContextLiveState {
             downloads_allowed: options.accept_downloads,
             downloads_path: options.downloads_path.clone(),
             service_workers: options.service_workers,
+            action_timeout: None,
+            navigation_timeout: None,
+            expect_timeout: None,
             init_scripts: Vec::new(),
             storage: None,
         }
@@ -318,6 +324,7 @@ impl TracingState {
 /// An isolated browser context; pages inside it share cookies and storage.
 #[derive(Clone)]
 pub struct BrowserContext {
+    closed: Arc<std::sync::atomic::AtomicBool>,
     backend: Backend,
     id: Option<String>,
     options: ContextOptions,
@@ -359,6 +366,7 @@ impl BrowserContext {
         let permissions = options.permissions.clone();
         let geolocation = options.geolocation;
         Self {
+            closed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             backend,
             id,
             options,
@@ -385,6 +393,9 @@ impl BrowserContext {
 
     /// Open a new page in this context.
     pub async fn new_page(&self) -> E2eResult<Page> {
+        if self.is_closed() {
+            return Err(E2eError::Config("browser context is closed".into()));
+        }
         let sink = ConsoleSink::new();
         let driver = match &self.backend {
             Backend::Cdp(cdp) => {
@@ -459,7 +470,7 @@ impl BrowserContext {
     /// Wrap a live driver as a context page (shared by `new_page` and popup
     /// adoption): options, stored rules/grants, registration.
     pub(crate) async fn finish_page(&self, driver: Driver, sink: ConsoleSink) -> E2eResult<Page> {
-        let page = Page::new(
+        let mut page = Page::new(
             driver,
             sink,
             self.slow_mo,
@@ -469,6 +480,8 @@ impl BrowserContext {
             Arc::clone(&self.handlers),
             Arc::clone(&self.tracing),
         );
+        page.context_registry = self.registry.clone();
+        page.context_id = self.id.clone();
         if let Some(viewport) = self.options.viewport {
             page.set_viewport(viewport).await?;
         }
@@ -540,6 +553,48 @@ impl BrowserContext {
         self.pages.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
+    /// Set default action timeouts on existing and future pages.
+    pub fn set_default_timeout(&self, timeout: Duration) {
+        for mut page in self.pages() {
+            page.set_timeout(timeout);
+        }
+        self.live
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .action_timeout = Some(timeout);
+    }
+
+    /// Set default navigation timeouts on existing and future pages.
+    pub fn set_default_navigation_timeout(&self, timeout: Duration) {
+        for page in self.pages() {
+            page.set_navigation_timeout(timeout);
+        }
+        self.live
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .navigation_timeout = Some(timeout);
+    }
+
+    /// Set default assertion timeouts on existing and future pages.
+    pub fn set_expect_timeout(&self, timeout: Duration) {
+        for page in self.pages() {
+            page.set_expect_timeout(timeout);
+        }
+        self.live
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .expect_timeout = Some(timeout);
+    }
+
+    /// HTTP request client sharing this context's cookies.
+    pub fn request(&self) -> crate::ApiClient {
+        match &self.base_url {
+            Some(base) => crate::ApiClient::with_base_url(base),
+            None => crate::ApiClient::new(),
+        }
+        .with_context(self.clone())
+    }
+
     /// Read cookies visible to this context.
     pub async fn cookies(&self) -> E2eResult<Vec<Cookie>> {
         let page = self.new_page().await?;
@@ -559,8 +614,7 @@ impl BrowserContext {
     /// Set cookies for `url` (navigates a scratch page there; context-wide).
     pub async fn add_cookies(&self, cookies: &[Cookie], url: &str) -> E2eResult<()> {
         let page = self.new_page().await?;
-        page.goto(url).await?;
-        let result = page.add_cookies(cookies).await;
+        let result = page.add_cookies_for_url(cookies, url).await;
         page.close().await?;
         result
     }
@@ -862,6 +916,16 @@ impl BrowserContext {
             .lock()
             .map(|live| live.clone())
             .unwrap_or_default();
+        let mut page = page.clone();
+        if let Some(timeout) = live.action_timeout {
+            page.set_timeout(timeout);
+        }
+        if let Some(timeout) = live.navigation_timeout {
+            page.set_navigation_timeout(timeout);
+        }
+        if let Some(timeout) = live.expect_timeout {
+            page.set_expect_timeout(timeout);
+        }
         if live.offline {
             page.set_offline(true).await?;
         }
@@ -1066,27 +1130,60 @@ impl BrowserContext {
             page.apply_storage_state(&state).await?;
         }
         self.live.lock().unwrap_or_else(|e| e.into_inner()).storage = Some(state);
+        // Restore cookies even when there are no existing pages.
+        if self.pages().is_empty() {
+            let page = self.new_page().await?;
+            page.close().await?;
+        }
         Ok(())
     }
 
-    /// Capture the first page's storage state (needs an open page).
+    /// Capture cookies and localStorage for all origins with live pages.
+    /// Origins visited and subsequently closed are not inventoried; IndexedDB is deferred.
     pub async fn storage_state(&self) -> E2eResult<StorageState> {
-        let pages = self.pages();
-        let Some(page) = pages.first() else {
-            return Err(E2eError::Config(
-                "storage_state needs an open page in the context".to_string(),
-            ));
-        };
-        page.storage_state().await
+        let mut origins = std::collections::BTreeMap::new();
+        for page in self.pages() {
+            let state = page.storage_state().await?;
+            for origin in state.all_origins() {
+                if origin.origin != "null" {
+                    origins.insert(origin.origin.clone(), origin);
+                }
+            }
+        }
+        Ok(StorageState {
+            origin: String::new(),
+            local_storage: Default::default(),
+            origins: origins.into_values().collect(),
+            cookies: self.cookies().await?,
+        })
+    }
+
+    /// Save context-wide state in Playwright's cookies/origins JSON format.
+    pub async fn save_storage_state(&self, path: impl AsRef<std::path::Path>) -> E2eResult<()> {
+        std::fs::write(
+            path,
+            serde_json::to_string_pretty(&self.storage_state().await?)?,
+        )?;
+        Ok(())
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.closed.load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Close the context and all its pages.
     pub async fn close(self) -> E2eResult<()> {
+        if self.closed.swap(true, std::sync::atomic::Ordering::AcqRel) {
+            return Ok(());
+        }
         if let Some(registry) = self.registry.upgrade() {
             registry
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .retain(|context| context.id != self.id);
+        }
+        for page in self.pages() {
+            page.close_target().await.ok();
         }
         self.pages.lock().unwrap_or_else(|e| e.into_inner()).clear();
         match (&self.backend, self.id) {

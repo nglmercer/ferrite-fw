@@ -118,6 +118,10 @@ where
     }
 }
 
+fn normalize_text(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Description suffix for negated assertions.
 fn not_tag(negated: bool) -> &'static str {
     if negated {
@@ -165,6 +169,22 @@ where
     value.ok_or_else(|| E2eError::Expect("poll finished without a value".to_string()))
 }
 
+/// Retry an arbitrary asynchronous assertion block until it succeeds.
+pub async fn expect_to_pass<F, Fut>(
+    description: impl Into<String>,
+    timeout: impl Into<Timeout>,
+    check: F,
+) -> E2eResult<()>
+where
+    F: Fn() -> Fut,
+    Fut: Future<Output = E2eResult<()>>,
+{
+    poll(timeout.into().duration(), description.into(), || async {
+        Ok(check().await.err().map(|error| error.to_string()))
+    })
+    .await
+}
+
 /// Page-level assertions.
 pub struct PageExpect {
     page: Page,
@@ -175,8 +195,8 @@ pub struct PageExpect {
 impl PageExpect {
     pub(crate) fn new(page: Page) -> Self {
         Self {
+            timeout: page.expect_timeout(),
             page,
-            timeout: Duration::from_millis(DEFAULT_EXPECT_MS),
             negated: false,
         }
     }
@@ -194,6 +214,34 @@ impl PageExpect {
     pub fn not(mut self) -> Self {
         self.negated = !self.negated;
         self
+    }
+
+    /// Assert the title with a Rust regular expression.
+    pub async fn title_matches(&self, pattern: &str) -> E2eResult<()> {
+        let pattern = regex::Regex::new(pattern).map_err(|e| E2eError::Config(e.to_string()))?;
+        poll(self.timeout, "title regex".into(), || async {
+            let actual = self.page.title().await?;
+            Ok(if pattern.is_match(&actual) != self.negated {
+                None
+            } else {
+                Some(actual)
+            })
+        })
+        .await
+    }
+
+    /// Assert the URL with a Rust regular expression.
+    pub async fn url_matches(&self, pattern: &str) -> E2eResult<()> {
+        let pattern = regex::Regex::new(pattern).map_err(|e| E2eError::Config(e.to_string()))?;
+        poll(self.timeout, "URL regex".into(), || async {
+            let actual = self.page.url().await?;
+            Ok(if pattern.is_match(&actual) != self.negated {
+                None
+            } else {
+                Some(actual)
+            })
+        })
+        .await
     }
 
     /// Assert the exact title.
@@ -250,6 +298,21 @@ impl PageExpect {
         .await
     }
 
+    /// Assert the exact URL, resolving relative expectations against base_url.
+    pub async fn url(&self, expected: &str) -> E2eResult<()> {
+        let expected = self.page.resolve_url(expected)?;
+        poll(self.timeout, format!("URL == {expected}"), || async {
+            self.page.run_locator_handlers().await?;
+            let actual = self.page.url().await?;
+            Ok(if (actual == expected) != self.negated {
+                None
+            } else {
+                Some(format!("URL was {actual}"))
+            })
+        })
+        .await
+    }
+
     /// Assert the URL contains a fragment.
     pub async fn url_contains(&self, fragment: &str) -> E2eResult<()> {
         let page = self.page.clone();
@@ -288,6 +351,11 @@ impl PageExpect {
     /// Missing snapshots and `update=all` are one-shot (write once, pass);
     /// otherwise captures are compared until they match or the timeout expires.
     pub async fn screenshot_with(&self, name: &str, opts: &SnapshotOptions) -> E2eResult<()> {
+        let mut effective = opts.clone();
+        if effective.dir.is_none() {
+            effective.dir = self.page.snapshot_dir.clone();
+        }
+        let opts = &effective;
         let path = snap_path_for(name, "png", opts);
         if !path.is_file() || resolve_update(opts.update) == SnapshotUpdate::All {
             let actual = self.page.screenshot(ScreenshotOptions::default()).await?;
@@ -370,10 +438,110 @@ pub struct LocatorExpect {
 impl LocatorExpect {
     pub(crate) fn new(locator: Locator) -> Self {
         Self {
+            timeout: locator.page().expect_timeout(),
             locator,
-            timeout: Duration::from_millis(DEFAULT_EXPECT_MS),
             negated: false,
         }
+    }
+
+    /// Retry a custom element assertion using the configured expectation timeout.
+    pub async fn satisfies<F, Fut>(&self, description: &str, predicate: F) -> E2eResult<()>
+    where
+        F: Fn(Locator) -> Fut,
+        Fut: std::future::Future<Output = E2eResult<bool>>,
+    {
+        poll(self.timeout, description.to_string(), || async {
+            self.locator.page().run_locator_handlers().await?;
+            match predicate(self.locator.clone()).await {
+                Ok(value) if value != self.negated => Ok(None),
+                Ok(_) => Ok(Some(description.to_string())),
+                Err(error) => Ok(Some(error.to_string())),
+            }
+        })
+        .await
+    }
+
+    /// Assert normalized text with a Rust regular expression.
+    pub async fn text_matches(&self, pattern: &str) -> E2eResult<()> {
+        let pattern = regex::Regex::new(pattern).map_err(|e| E2eError::Config(e.to_string()))?;
+        self.satisfies("text regex", |locator| {
+            let pattern = pattern.clone();
+            async move { Ok(pattern.is_match(&locator.text().await?)) }
+        })
+        .await
+    }
+
+    /// Assert an attribute with a Rust regular expression.
+    pub async fn attribute_matches(&self, name: &str, pattern: &str) -> E2eResult<()> {
+        let pattern = regex::Regex::new(pattern).map_err(|e| E2eError::Config(e.to_string()))?;
+        self.satisfies("attribute regex", |locator| {
+            let pattern = pattern.clone();
+            async move {
+                Ok(locator
+                    .attribute(name)
+                    .await?
+                    .is_some_and(|value| pattern.is_match(&value)))
+            }
+        })
+        .await
+    }
+
+    /// Assert the exact class attribute.
+    pub async fn class(&self, expected: &str) -> E2eResult<()> {
+        self.attribute("class", expected).await
+    }
+
+    /// Assert all selected values of a multiple select.
+    pub async fn values(&self, expected: &[&str]) -> E2eResult<()> {
+        self.satisfies("selected values", |locator| async move {
+            Ok(locator.selected_options().await? == expected)
+        })
+        .await
+    }
+
+    /// Assert normalized text contents for the complete ordered element list.
+    pub async fn texts(&self, expected: &[&str]) -> E2eResult<()> {
+        let expected: Vec<String> = expected
+            .iter()
+            .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
+            .collect();
+        self.satisfies("element texts", |locator| {
+            let expected = expected.clone();
+            async move {
+                Ok(locator
+                    .all_text_contents()
+                    .await?
+                    .iter()
+                    .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
+                    .collect::<Vec<_>>()
+                    == expected)
+            }
+        })
+        .await
+    }
+
+    /// Assert the computed ARIA role.
+    pub async fn role(&self, expected: &str) -> E2eResult<()> {
+        self.satisfies("ARIA role", |locator| async move {
+            Ok(locator.role().await?.as_deref() == Some(expected))
+        })
+        .await
+    }
+
+    /// Assert the associated ARIA error message.
+    pub async fn accessible_error_message(&self, expected: &str) -> E2eResult<()> {
+        self.satisfies("accessible error message", |locator| async move {
+            Ok(locator.accessible_error_message().await?.as_deref() == Some(expected))
+        })
+        .await
+    }
+
+    /// Assert the element's indented accessibility tree.
+    pub async fn aria_snapshot(&self, expected: &str) -> E2eResult<()> {
+        self.satisfies("ARIA snapshot", |locator| async move {
+            Ok(locator.aria_snapshot().await? == expected)
+        })
+        .await
     }
 
     /// Override the retry window.
@@ -464,7 +632,7 @@ impl LocatorExpect {
                         Ok(state) => state,
                         Err(error) => return Ok(Some(error.to_string())),
                     };
-                    if (state.text == expected) != negated {
+                    if (normalize_text(&state.text) == normalize_text(&expected)) != negated {
                         Ok(None)
                     } else {
                         Ok(Some(format!("text was {:?}", state.text)))
@@ -495,7 +663,7 @@ impl LocatorExpect {
                         Ok(state) => state,
                         Err(error) => return Ok(Some(error.to_string())),
                     };
-                    if state.text.contains(&fragment) != negated {
+                    if normalize_text(&state.text).contains(&normalize_text(&fragment)) != negated {
                         Ok(None)
                     } else {
                         Ok(Some(format!("text was {:?}", state.text)))
@@ -999,6 +1167,11 @@ impl LocatorExpect {
     /// Missing snapshots and `update=all` are one-shot (write once, pass);
     /// otherwise captures are compared until they match or the timeout expires.
     pub async fn screenshot_with(&self, name: &str, opts: &SnapshotOptions) -> E2eResult<()> {
+        let mut effective = opts.clone();
+        if effective.dir.is_none() {
+            effective.dir = self.locator.page().snapshot_dir.clone();
+        }
+        let opts = &effective;
         let path = snap_path_for(name, "png", opts);
         if !path.is_file() || resolve_update(opts.update) == SnapshotUpdate::All {
             let actual = self.locator.screenshot().await?;

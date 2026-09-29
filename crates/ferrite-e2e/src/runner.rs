@@ -1,5 +1,6 @@
 //! Parallel test runner with retries, timeouts, and artifact capture.
 
+use futures::FutureExt;
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
@@ -9,11 +10,12 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::browser::Browser;
+use crate::browser::{Browser, BrowserKind, LaunchOptions};
 use crate::error::{E2eError, E2eResult};
 use crate::page::{Page, ScreenshotOptions};
 use crate::report::{Attachment, TestReport, TestResult, TestStatus};
 use crate::video::{VideoMode, VideoOptions};
+use crate::ContextOptions;
 
 /// A boxed test future.
 pub type BoxTestFuture = Pin<Box<dyn Future<Output = E2eResult<()>> + Send + 'static>>;
@@ -43,6 +45,8 @@ pub enum TestMode {
 /// One named test.
 #[derive(Clone)]
 pub struct Test {
+    /// Named resources held exclusively while this test runs.
+    pub locks: Vec<String>,
     /// Test name.
     pub name: String,
     /// Test body.
@@ -68,6 +72,12 @@ pub struct Test {
 }
 
 impl Test {
+    /// Prevent concurrent execution of tests sharing this resource name.
+    pub fn lock(mut self, name: impl Into<String>) -> Self {
+        self.locks.push(name.into());
+        self
+    }
+
     /// Add a tag for filtering.
     #[must_use]
     pub fn tag(mut self, tag: impl Into<String>) -> Self {
@@ -141,6 +151,7 @@ where
 {
     let caller = Location::caller();
     Test {
+        locks: Vec::new(),
         name: name.into(),
         func: Arc::new(move |page| Box::pin(func(page))),
         ctx_func: None,
@@ -209,6 +220,26 @@ pub struct TestInfo {
 }
 
 impl TestInfo {
+    /// Build a path inside this attempt's output directory, creating parents.
+    pub fn output_path(&self, name: impl AsRef<std::path::Path>) -> E2eResult<std::path::PathBuf> {
+        let name = name.as_ref();
+        if name.components().any(|part| {
+            !matches!(
+                part,
+                std::path::Component::Normal(_) | std::path::Component::CurDir
+            )
+        }) {
+            return Err(E2eError::Config(
+                "output_path must be relative and stay inside the test output directory".into(),
+            ));
+        }
+        let path = std::path::Path::new(&self.output_dir).join(name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        Ok(path)
+    }
+
     /// Attach bytes as a file under `<output_dir>/attachments/`.
     ///
     /// Returns the written path. The extension is derived from well-known
@@ -320,8 +351,14 @@ struct FixtureDef {
 }
 
 /// A named group of tests with its own settings (Playwright projects).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Project {
+    /// Optional engine override; other projects reuse the supplied browser.
+    pub browser: Option<BrowserKind>,
+    /// Explicit launch settings for a dedicated project browser.
+    pub launch_options: Option<LaunchOptions>,
+    /// Context configuration for every attempt in this project.
+    pub context_options: Option<ContextOptions>,
     /// Project name (prefixes result names as `"name > test"`).
     pub name: String,
     /// Extra name-or-tag filter applied within this project.
@@ -333,6 +370,25 @@ pub struct Project {
 }
 
 impl Project {
+    /// Select the engine for this project.
+    pub fn browser(mut self, browser: BrowserKind) -> Self {
+        self.browser = Some(browser);
+        self
+    }
+
+    /// Launch a dedicated browser using these settings.
+    pub fn launch_options(mut self, options: LaunchOptions) -> Self {
+        self.browser = Some(options.browser);
+        self.launch_options = Some(options);
+        self
+    }
+
+    /// Configure contexts for this project.
+    pub fn context_options(mut self, options: ContextOptions) -> Self {
+        self.context_options = Some(options);
+        self
+    }
+
     /// A project with defaults (name only).
     #[must_use]
     pub fn new(name: impl Into<String>) -> Self {
@@ -441,6 +497,7 @@ fn display_name(project: Option<&str>, test: &str) -> String {
 /// One runnable test with resolved settings.
 #[derive(Clone)]
 pub(crate) struct WorkItem {
+    context_options: Option<ContextOptions>,
     test: Test,
     project: Option<String>,
     retries: u32,
@@ -513,6 +570,9 @@ pub(crate) fn build_work_items(
                 _ => {
                     for repeat in 0..repeat_each.max(1) {
                         runnable.push(WorkItem {
+                            context_options: project
+                                .as_ref()
+                                .and_then(|p| p.context_options.clone()),
                             test: (*test).clone(),
                             project: name.clone(),
                             retries: test
@@ -578,6 +638,10 @@ pub type GlobalHook = Arc<dyn Fn() -> BoxTestFuture + Send + Sync>;
 
 #[derive(Clone)]
 pub struct Runner {
+    context_options: ContextOptions,
+    expect_timeout: Duration,
+    reporter: String,
+    resource_locks: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
     workers: usize,
     retries: u32,
     test_timeout: Duration,
@@ -606,43 +670,45 @@ pub struct Runner {
 
 impl Default for Runner {
     fn default() -> Self {
-        Self {
-            workers: 4,
-            retries: 0,
-            test_timeout: Duration::from_secs(30),
-            filter: None,
-            grep: None,
-            grep_invert: None,
-            shard: None,
-            before_each: Vec::new(),
-            after_each: Vec::new(),
-            before_all: Vec::new(),
-            after_all: Vec::new(),
-            global_setup: Vec::new(),
-            global_teardown: Vec::new(),
-            output_dir: "test-results".to_string(),
-            screenshot_on_failure: true,
-            screenshot_always: false,
-            write_trace: true,
-            list_progress: true,
-            video: VideoMode::Off,
-            video_fps: 10,
-            projects: Vec::new(),
-            repeat_each: 1,
-            forbid_only: false,
-            fixtures: Vec::new(),
-        }
+        Self::from_env().expect("invalid Ferrite E2E environment configuration")
     }
 }
 
 impl Runner {
+    /// Read configuration exported by the Ferrite CLI.
+    pub fn from_env() -> E2eResult<Self> {
+        Ok(Self::from_config(&crate::config_from_env()?))
+    }
+
+    /// Configure the fresh context created for each attempt.
+    pub fn context_options(mut self, options: ContextOptions) -> Self {
+        self.context_options = options;
+        self
+    }
+
+    /// Configure default assertion retries on every test page.
+    pub fn expect_timeout(mut self, timeout: Duration) -> Self {
+        self.expect_timeout = timeout;
+        self
+    }
+
     /// Build from resolved e2e config.
     #[must_use]
     pub fn from_config(config: &ferrite_config::E2eConfig) -> Self {
         Self {
+            context_options: ContextOptions {
+                viewport: config.viewport.as_ref().map(|v| crate::Viewport {
+                    width: v.width,
+                    height: v.height,
+                }),
+                ..ContextOptions::default()
+            },
+            expect_timeout: Duration::from_millis(config.expect_timeout_ms),
+            reporter: config.reporter.clone(),
+            resource_locks: Arc::new(Mutex::new(HashMap::new())),
             workers: config.workers.max(1),
             retries: config.retries,
-            test_timeout: Duration::from_millis(config.timeout_ms.max(1)),
+            test_timeout: Duration::from_millis(config.timeout_ms),
             filter: None,
             grep: None,
             grep_invert: None,
@@ -929,17 +995,11 @@ impl Runner {
     /// Unset builder filters fall back to `FERRITE_E2E_FILTER`,
     /// `FERRITE_E2E_GREP`, `FERRITE_E2E_GREP_INVERT`, and `FERRITE_E2E_SHARD`
     /// (set by the CLI flags); `FERRITE_E2E_PROJECT` (comma-separated, from
-    /// `--project`) selects which projects run. Snapshot assertions resolve
-    /// their directory from `FERRITE_SNAPSHOT_DIR`, which this run seeds from
-    /// the output dir unless already set. Tests run on a worker pool
+    /// `--project`) selects which projects run. Snapshot assertions default to
+    /// this runner's output directory without mutating process environment.
+    /// Tests run on a worker pool
     /// (`worker_index` in [`TestInfo`]); progress prints in completion order.
     pub async fn run(&self, browser: &Browser, tests: Vec<Test>) -> TestReport {
-        if std::env::var("FERRITE_SNAPSHOT_DIR").is_err() {
-            std::env::set_var(
-                "FERRITE_SNAPSHOT_DIR",
-                format!("{}/snapshots", self.output_dir),
-            );
-        }
         let mut report = TestReport::default();
         for setup in &self.global_setup {
             if let Err(error) = setup().await {
@@ -1022,21 +1082,64 @@ impl Runner {
                 return report;
             }
         }
-        // Worker pool: stable `worker_index` per task, completion-order results.
+        let mut project_browsers = HashMap::new();
+        let mut owned_browsers = Vec::new();
+        let mut rejected_projects = Vec::new();
+        for project in projects.iter().flatten() {
+            let kind = project.browser.unwrap_or(browser.kind());
+            if project.launch_options.is_some() || kind != browser.kind() {
+                let options = project
+                    .launch_options
+                    .clone()
+                    .unwrap_or_else(|| LaunchOptions::default().browser(kind));
+                match Browser::launch(options).await {
+                    Ok(mut launched) => {
+                        launched.set_base_url(browser.base_url().map(str::to_string));
+                        let launched = Arc::new(launched);
+                        owned_browsers.push(launched.clone());
+                        project_browsers.insert(project.name.clone(), launched);
+                    }
+                    Err(error) => {
+                        rejected_projects.push(project.name.clone());
+                        report.results.push(failed_result(
+                            &format!("{} > <browser launch>", project.name),
+                            error.to_string(),
+                        ));
+                    }
+                }
+            }
+        }
+        let runnable = runnable
+            .into_iter()
+            .filter(|item| {
+                !item
+                    .project
+                    .as_ref()
+                    .is_some_and(|name| rejected_projects.contains(name))
+            })
+            .collect::<Vec<_>>();
+        let project_browsers = Arc::new(project_browsers);
+        // Worker pool: stable worker index; isolated context per attempt.
         let queue = Arc::new(Mutex::new(VecDeque::from(runnable)));
-        let context = browser.default_context();
+        let browser = Arc::new(browser.worker_handle());
         let mut workers = tokio::task::JoinSet::new();
         for worker_index in 0..self.workers {
             let queue = Arc::clone(&queue);
             let runner = self.clone();
-            let context = context.clone();
+            let browser = Arc::clone(&browser);
+            let project_browsers = project_browsers.clone();
             workers.spawn(async move {
                 let mut results = Vec::new();
                 loop {
                     let item = queue.lock().map(|mut q| q.pop_front()).unwrap_or(None);
                     match item {
                         Some(item) => {
-                            results.push(run_one(&runner, &context, &item, worker_index).await);
+                            let selected = item
+                                .project
+                                .as_ref()
+                                .and_then(|name| project_browsers.get(name))
+                                .unwrap_or(&browser);
+                            results.push(run_one(&runner, selected, &item, worker_index).await);
                         }
                         None => break,
                     }
@@ -1068,6 +1171,12 @@ impl Runner {
                     .push(failed_result("<join>", error.to_string())),
             }
         }
+        drop(project_browsers);
+        for browser in owned_browsers {
+            if let Ok(browser) = Arc::try_unwrap(browser) {
+                browser.close().await.ok();
+            }
+        }
         for hook in &self.after_all {
             if let Err(error) = hook().await {
                 report
@@ -1083,6 +1192,7 @@ impl Runner {
             }
         }
         report.results.sort_by(|a, b| a.name.cmp(&b.name));
+        self.write_artifacts(&report, &self.reporter);
         report
     }
 
@@ -1122,11 +1232,34 @@ impl Runner {
 
 async fn run_one(
     runner: &Runner,
-    context: &crate::context::BrowserContext,
+    browser: &Browser,
     item: &WorkItem,
     worker_index: usize,
 ) -> TestResult {
     let test = &item.test;
+    let mut names = test.locks.clone();
+    names.sort();
+    names.dedup();
+    let locks: Vec<_> = {
+        let mut registry = runner
+            .resource_locks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        names
+            .iter()
+            .map(|name| {
+                Arc::clone(
+                    registry
+                        .entry(name.clone())
+                        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
+                )
+            })
+            .collect()
+    };
+    let mut guards = Vec::new();
+    for lock in locks {
+        guards.push(lock.lock_owned().await);
+    }
     let started = Instant::now();
     let mut attempts = 0;
     let mut last_error = String::new();
@@ -1145,16 +1278,38 @@ async fn run_one(
         timeout = timeout.saturating_mul(3);
     }
     let expected_fail = test.mode == TestMode::Fail;
+    let mut expected_failure_observed = false;
 
     for _ in 0..=item.retries {
         attempts += 1;
-        let page = match context.new_page().await {
+        let context = match browser
+            .new_context(
+                item.context_options
+                    .clone()
+                    .unwrap_or_else(|| runner.context_options.clone()),
+            )
+            .await
+        {
+            Ok(context) => context,
+            Err(error) => {
+                last_error = error.to_string();
+                break;
+            }
+        };
+        let mut page = match context.new_page().await {
             Ok(page) => page,
             Err(error) => {
                 last_error = error.to_string();
+                context.close().await.ok();
                 continue;
             }
         };
+        page.set_expect_timeout(runner.expect_timeout);
+        page.snapshot_dir = Some(
+            std::env::var("FERRITE_SNAPSHOT_DIR")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| std::path::Path::new(&runner.output_dir).join("snapshots")),
+        );
         let mut hooked = None;
         for hook in &runner.before_each {
             if let Err(error) = hook(page.clone()).await {
@@ -1165,6 +1320,7 @@ async fn run_one(
         if let Some(error) = hooked {
             last_error = error;
             page.close().await.ok();
+            context.clone().close().await.ok();
             continue;
         }
         // Fixtures build fresh per attempt; teardown runs in reverse below.
@@ -1185,7 +1341,9 @@ async fn run_one(
         }
         if let Some(error) = fixture_error {
             last_error = error;
+            teardown_fixtures(runner, &built).await;
             page.close().await.ok();
+            context.clone().close().await.ok();
             continue;
         }
         let recording = if runner.video.records() {
@@ -1200,7 +1358,9 @@ async fn run_one(
                 Ok(()) => true,
                 Err(error) => {
                     last_error = format!("start video: {error}");
+                    teardown_fixtures(runner, &built).await;
                     page.close().await.ok();
+                    context.clone().close().await.ok();
                     continue;
                 }
             }
@@ -1216,7 +1376,10 @@ async fn run_one(
             worker_index,
             repeat_each_index: item.repeat_each_index,
             timeout,
-            output_dir: runner.output_dir.clone(),
+            output_dir: std::path::Path::new(&runner.output_dir)
+                .join(format!("{slug}-attempt{attempts}"))
+                .display()
+                .to_string(),
             project: item.project.clone(),
             attachments: Arc::clone(&attachments),
         };
@@ -1228,12 +1391,26 @@ async fn run_one(
             }),
             None => (test.func)(page.clone()),
         };
-        let outcome = tokio::time::timeout(timeout, body).await;
+        let body = std::panic::AssertUnwindSafe(body).catch_unwind();
+        let outcome = if timeout.is_zero() {
+            Ok(body.await)
+        } else {
+            tokio::time::timeout(timeout, body).await
+        };
         let mut failed = match outcome {
-            Ok(Ok(())) => None,
-            Ok(Err(error)) => Some(error.to_string()),
+            Ok(Ok(Ok(()))) => None,
+            Ok(Ok(Err(error))) => Some(error.to_string()),
+            Ok(Err(panic)) => Some(format!(
+                "test panicked: {}",
+                panic
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+                    .or_else(|| panic.downcast_ref::<&str>().copied())
+                    .unwrap_or("non-string panic")
+            )),
             Err(_) => Some(format!("test timed out after {}ms", timeout.as_millis())),
         };
+        expected_failure_observed = expected_fail && failed.is_some();
         for hook in &runner.after_each {
             if let Err(error) = hook(page.clone()).await {
                 let note = format!("after_each: {error}");
@@ -1243,17 +1420,11 @@ async fn run_one(
                 });
             }
         }
-        // Fixture teardown in reverse (all run; failures fail the attempt).
-        for (def, value) in runner.fixtures.iter().zip(built.iter()).rev() {
-            if let Some(teardown) = &def.teardown {
-                if let Err(error) = teardown(Arc::clone(value)).await {
-                    let note = format!("fixture teardown: {error}");
-                    failed = Some(match failed {
-                        Some(prior) => format!("{prior} ({note})"),
-                        None => note,
-                    });
-                }
-            }
+        if let Some(note) = teardown_fixtures(runner, &built).await {
+            failed = Some(match failed {
+                Some(prior) => format!("{prior} ({note})"),
+                None => note,
+            });
         }
         let unexpected_pass = failed.is_none() && expected_fail;
         if unexpected_pass {
@@ -1315,6 +1486,7 @@ async fn run_one(
             }
         }
         page.close().await.ok();
+        context.clone().close().await.ok();
         // Unexpected passes fail immediately (no retry can redeem a pass).
         if unexpected_pass {
             return TestResult {
@@ -1354,7 +1526,7 @@ async fn run_one(
     }
     TestResult {
         name: name.clone(),
-        status: if expected_fail {
+        status: if expected_failure_observed {
             TestStatus::FailedExpected
         } else {
             TestStatus::Failed
@@ -1370,6 +1542,21 @@ async fn run_one(
         annotations: test.annotations.clone(),
         attachments: attachments.lock().map(|a| a.clone()).unwrap_or_default(),
     }
+}
+
+async fn teardown_fixtures(
+    runner: &Runner,
+    built: &[Arc<dyn Any + Send + Sync>],
+) -> Option<String> {
+    let mut errors = Vec::new();
+    for (def, value) in runner.fixtures.iter().zip(built.iter()).rev() {
+        if let Some(teardown) = &def.teardown {
+            if let Err(error) = teardown(Arc::clone(value)).await {
+                errors.push(format!("fixture teardown: {error}"));
+            }
+        }
+    }
+    (!errors.is_empty()).then(|| errors.join("; "))
 }
 
 pub(crate) fn slug(name: &str) -> String {

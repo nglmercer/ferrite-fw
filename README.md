@@ -232,7 +232,9 @@ ferrite compat            # live self-checks against the real pipeline
 Playwright-style e2e in pure Rust, no Node required: Chromium over
 CDP plus Firefox over WebDriver BiDi behind one `Page` API.
 `ferrite e2e` boots the web server (in-process dev server by default),
-sets `FERRITE_E2E_BASE_URL` / `FERRITE_E2E_BROWSER`, and runs your Rust suite:
+forwards its resolved configuration through `FERRITE_E2E_CONFIG` (with legacy
+environment overrides), and runs your Rust suite. Use `Browser::launch_default()`
+and `Runner::from_env()` to consume those settings:
 
 ```bash
 ferrite e2e --check                 # verify Chromium launches
@@ -282,7 +284,15 @@ projects, `repeat_each`, fixtures, `TestInfo` attachments/annotations,
 expected failures, `forbid_only`, dot/list/json/junit/html reporters,
 and `before_all`/`after_all` hooks). Chromium recordings assemble via `ffmpeg`
 (fail-fast hint when missing; `FERRITE_FFMPEG_PATH` override); Firefox
-records natively. See
+records natively. Tests and retries receive fresh contexts; use
+`default_context().new_page()` when explicitly sharing storage between pages.
+Locators are strict by default and wait for actionable elements. The API also
+includes same-origin lazy `FrameLocator`s, independent clock controls,
+Chromium JS/CSS coverage, persistent profiles, context-linked API cookies,
+per-project browser/context options, and named test locks. See the
+[Playwright comparison](PLAYWRIGHT-PARITY.md) and
+[complete member matrix](PLAYWRIGHT-API-MATRIX.md) for remaining differences,
+plus
 `examples/e2e/` for a runnable project and
 `crates/ferrite-e2e/tests/browser.rs` for coverage (per-engine tests
 skip when that browser is missing; point `FERRITE_CHROMIUM_PATH` at any
@@ -298,8 +308,8 @@ blocking, per-origin storage clear, and response modification are
 Chromium-only and fail loudly on Firefox; response bodies and HAR-embedded
 content are Chromium-only and empty on Firefox (BiDi exposes no body
 channel). Client certificates have no automation hook in stock CDP/BiDi and
-are unsupported. WebKit is intentionally unsupported — Linux
-ships no stock WebKit browser with an automation protocol.
+are unsupported. Ferrite has no WebKit backend; adding one and managed browser
+distribution are deferred. Playwright itself supports WebKit on Linux.
 
 ## License
 

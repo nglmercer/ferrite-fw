@@ -11,7 +11,9 @@ base64 = { workspace = true }
 futures = { workspace = true }
 globset = { workspace = true }
 image = { workspace = true }
-reqwest = { workspace = true }
+regex = { workspace = true }
+reqwest = { workspace = true, features = ["cookies", "multipart"] }
+cookie = "0.18"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }

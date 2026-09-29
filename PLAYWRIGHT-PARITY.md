@@ -1,335 +1,162 @@
 # Ferrite E2E compared with Playwright
 
-Ferrite does **not** provide equivalents for every Playwright API or feature.
-It implements a substantial browser-testing subset in Rust, but several
-similarly named APIs have different behavior. It is not a drop-in Playwright
-replacement, and its Chromium and Firefox backends do not have equal coverage.
+Ferrite now covers more of Playwright's everyday Chromium/Firefox testing
+workflow, with fresh contexts, strict locators, shared API cookies and a larger
+assertion/runner API. **It does not provide full Playwright API or behavioral
+parity.** The implementation deliberately defers substantial backend,
+distribution, debugger and orchestration work.
 
-Audit date: **2026-09-29**. Upstream baseline: the latest stable release at audit
-time, [Playwright 1.63.0](https://github.com/microsoft/playwright/releases/tag/v1.63.0),
-released September 4, 2026. Local baseline: working tree based on
-`0d34463b291ccd71e4a12f74aae9f23ded7c50f5`, including pre-existing local changes
-in `ferrite-e2e`. These findings describe the inspected implementation, not just
-the capabilities advertised in the README.
+Audit date: **2026-09-29**. Upstream baseline:
+[Playwright v1.63.0](https://github.com/microsoft/playwright/releases/tag/v1.63.0).
+The initial inventory and existing changes were committed in `d93365a`; this
+report describes the subsequent practical parity implementation. The original
+findings remain available in that commit's history.
 
-The complete [API member matrix](PLAYWRIGHT-API-MATRIX.md) inventories **73
-classes and 1,018 distinct documented JavaScript-applicable members**:
+The [complete API matrix](PLAYWRIGHT-API-MATRIX.md) covers **73 classes and
+1,018 documented JavaScript-applicable members**, including browser, test,
+reporter, Android and Electron APIs:
 
 | Classification | Members | Meaning |
 |---|---:|---|
-| Equivalent | 15 | Counterpart for the basic operation or value; not full options/class/engine compatibility |
-| Partial | 458 | Related operation, field or manual composition with material differences |
-| Idiomatic | 42 | Comparable operation expressed through Rust facilities instead of a Playwright API object |
-| Missing | 503 | No dedicated public counterpart found |
+| Equivalent | 15 | Counterpart for the basic operation/value, without full options or engine compatibility |
+| Partial | 508 | Related exposed operation with material semantic, option or engine differences |
+| Idiomatic | 42 | Comparable operation through Rust language/library facilities |
+| Missing | 453 | No dedicated public counterpart |
 
-These are inventory counts, **not a behavioral-parity percentage**. Repeated
-configuration properties count separately, overloads are collapsed, inherited
-members appear on their declaring class, and deprecated/experimental members
-are included. Browser APIs, assertions, test APIs, reporter APIs, Android and
-Electron are covered. Other language-specific wrappers are excluded. Argument
-options are compared by feature below rather than enumerated individually.
-Runtime checks here exercise Ferrite's own tests; this is not a differential
-execution of the same suite against both frameworks.
+These counts describe an inventory, **not a behavioral compatibility
+percentage**. The earlier inventory had 458 Partial and 503 Missing members.
+Overloads are collapsed by member kind, inherited APIs appear on the declaring
+class, and deprecated/experimental members remain visible. Argument options
+are discussed below rather than counted individually. Runtime checks exercise
+Ferrite's tests; they are not a differential Playwright conformance suite.
+The [generator](scripts/playwright-parity/README.md) pins official sources,
+requires a complete inventory and validates local evidence links.
 
-## Feature comparison
+## Practical parity implemented
 
-| Feature | Ferrite counterpart | Assessment |
+| Area | Implemented behavior | Remaining limit |
 |---|---|---|
-| Chromium and Firefox automation | `Browser`, CDP/BiDi drivers | Present; backend capabilities differ |
-| WebKit | None | Missing |
-| Browser installation, managed versions and named channels | System discovery, executable override | Partial; no bundled browser/dependency installer |
-| Launch and remote connections | `LaunchOptions`, `Browser::connect` | Partial; connection accepts a loopback Chromium CDP port, no Playwright-protocol remote connection |
-| Persistent contexts and browser servers | Temporary profiles; `keep_profile` | Missing persistent-profile API and `launchServer`; retaining a temporary profile is not profile reuse |
-| Isolated contexts | `Browser::new_context` | Available manually; automatic runner isolation is absent |
-| Navigation and readiness | `goto_with_options`, load states, history, URL waits | Partial; unit return, narrower options and substring URL matching |
-| CSS/text/XPath/role selectors | `Locator`, `get_by_*`, filters and combinations | Partial; semantic differences detailed below |
-| Frame automation | `Frame`, `document_frames`, name/URL lookup | Partial; no `FrameLocator` or lazy cross-frame selection |
-| Actions and input | Click/hover/tap/drag, fill, select, checkbox, files, keyboard/mouse | Partial; actionability and event semantics differ |
-| JS evaluation and references | `evaluate`, `evaluate_handle`, `JSHandle` | Partial; JSON/string bridge and smaller handle API |
-| Exposed callbacks and init scripts | Page callbacks; page/context init scripts | Partial; exposed callbacks reset on navigation; no context bindings |
-| Auto-retrying assertions | `PageExpect`, `LocatorExpect`, `expect_poll` | Present subset; regex/array/options and several matchers absent |
-| Soft assertions | `SoftAsserts` collector | Partial; explicit result collection, not integrated `expect.soft`/test error tracking |
-| Custom assertion extension and `toPass` | Custom Rust checks | No corresponding matcher registration or `toPass` API |
-| Screenshot and text snapshots | Snapshot helpers, assertion builders | Partial; different comparison/update/path algorithms |
-| ARIA snapshots/assertions | Page snapshot helpers and exact text assertion | Partial approximation; no locator snapshot API/full ARIA tree matcher |
-| Fake clock | Page `clock_*` methods | Partial; several controls do not match Playwright semantics |
-| Request routing and mocking | Rules/handlers, fulfillment, fallback, limits, abort reasons | Present subset; engine and option restrictions |
-| Network observation | `RecordedRequest`, event subscription, URL waits | Partial; no rich live Request/Response object graph |
-| HAR recording/replay | `save_har_with`, `route_from_har` | Partial; body/format/timing/update limitations |
-| WebSocket observation | Chromium `PageEvent::WebSocket` | Partial; no live socket abstraction or Firefox socket events |
-| WebSocket interception/mocking | None | Missing `routeWebSocket` and `WebSocketRoute` |
-| API testing | `ApiClient`, `ApiResponse` | Partial; independent HTTP client, no browser cookie sharing |
-| Dialogs, downloads and popups | Handler decisions, download files, adopted pages | Present subset; reduced lifecycle/event/value interfaces |
-| Storage/auth reuse | Cookies and one origin's localStorage | Partial; incompatible Playwright state format, no IndexedDB/OPFS persistence |
-| Device and environment emulation | `ContextOptions`, seven device metrics presets, setters | Partial; fewer descriptors/options and many Chromium-only controls |
-| Tracing | Context and runner JSON traces | Partial; no Trace Viewer-compatible archive or DOM/source snapshots |
-| Video/live frame streams | Page recording/frames, runner video policies | Present; Chromium uses ffmpeg, Firefox native recording and screenshot-polled live frames |
-| Parallel execution/retries | Tokio worker tasks and per-test retry/timeout builders | Present subset; shared context and different worker/retry lifecycle |
-| Grouping/hooks/fixtures | Name-prefix `describe`, runner hooks, typed fixtures | Partial; no suite-scoped hooks, dependency graph or worker fixture scope |
-| Projects/repetition/filtering/shards | `Project`, `repeat_each`, name/tag filtering, shards | Present subset; projects do not select independent browsers or context configurations |
-| Test annotations/attachments | Test builders and `TestInfo::attach` | Present subset; fewer runtime mutators and metadata fields |
-| Expected failures, focus and skip | `fail`, `only`, `skip`, `fixme`, `forbid_only` | Present subset; validation issue noted below |
-| Named test locks | None | Missing Playwright 1.63 lock scheduling |
-| Reports | Dot/list/JSON/JUnit/HTML serializers | Partial; no live custom Reporter/Suite/TestCase/TestStep API |
-| Advanced reporting | None | Missing blob/merge/GitHub/Perfetto reporters and structured step timeline |
-| Dev server lifecycle | `ferrite e2e`, `WebServer` | Present subset; one server configuration rather than full Playwright webServer options |
-| CLI configuration forwarding | Environment variables to user cargo tests | Partial; several settings require explicit consumer code |
-| Inspector/UI mode/code generation | None | Missing interactive debugging/recording/test explorer |
-| Workers/service-worker automation | Worker blocking in Chromium | No Worker evaluation/events or service-worker enumeration API |
-| JS/CSS coverage | Raw CDP possible | No dedicated Coverage API |
-| File chooser interception | Input-file assignment | Missing FileChooser object/event; existing input uploads are available |
-| Virtual credentials/WebAuthn | None | Missing Credentials API |
-| Electron/Android/WebView automation | None | Missing experimental upstream backends |
-| Component/story mounting | None | Missing `mount` fixture/integration |
+| Test isolation | Fresh context/page for every test attempt and retry; teardown on errors, timeouts and body panics | Fixtures remain per-attempt, without dependency graphs or worker scope |
+| Page ownership | `Browser::new_page()` owns a fresh context and closes its popups on disposal | Use `default_context().new_page()` for intentional shared storage |
+| Browser lifecycle | Persistent Chromium/Firefox profiles, graceful close, Chromium HTTP/WebSocket CDP connections | No Playwright remote protocol, browser server, channels or managed browser installer |
+| Configuration | Complete resolved CLI configuration forwarded as JSON; browser launch/runner consume it, with legacy overrides | Custom suites must use the consuming constructors; no suite-scoped fixture options |
+| Projects and scheduling | Independent project browsers/launch/context settings; parallel Tokio tasks, retries, repetition, filters and named resource locks | No process workers, project dependency graph or distributed locks |
+| Artifacts | Per-attempt output directories, validated `TestInfo::output_path()`, attachments, screenshots and video policies | No Playwright snapshot templates or full reporter object model |
+| Locator selection | Strict single-target operations, genuine first/last/nth slicing, relative has/hasNot filters, exact/regex/visibility builders | No complete Playwright selector extension/custom-engine surface |
+| Semantic locators | Associated labels target controls; roles and accessible names use shared DOM helpers; open shadow-root traversal | Full accessible-name specification and closed shadow roots remain outside this implementation |
+| Actions | Retry readiness, visibility/stability/hit testing, trusted forced clicks, trusted checkbox/key input; delayed fill/select and contenteditable support | Some actions use DOM setters/events; full native input/event/layout semantics remain narrower |
+| DOM access | Separate textContent/innerText, arrays, evaluate-all/JSON arguments, highlight removal; single-target getters wait and enforce strictness | JSON values only, without arbitrary JS/JSHandle argument serialization |
+| Frames and handles | Same-origin lazy/nested/replacement `FrameLocator`, frame ownership conversion, remote handle evaluation/properties | Cross-origin/OOPIF lazy selection and ElementHandle are deferred |
+| Assertions | Exact/regex page title/URL, normalized ordered texts, classes, values, role/error message, custom predicates, `expect_to_pass` | No custom matcher registry/asymmetric matchers or full options parity |
+| Accessibility snapshots | Structured DOM role/name/state tree and locator/page exact snapshot assertions | Approximation, without complete ARIA/YAML matching or all upstream modes |
+| Clock | Separate fixed Date/system time, run-for/fast-forward, promise/timer ordering, pause-at/resume and installation time | Page-local; navigation reinstalls initial state; idle callbacks approximate browser behavior |
+| API testing | Query/headers/JSON/form/raw/multipart, cookies, TLS/proxy/auth, timeout, redirects, status checks and connect retries | No full APIRequest lifecycle/storage-state API or all redirect/retry semantics |
+| Browser/API storage | Context-linked cookies in both directions; isolated protocol cookie partitions; Playwright cookies/origins localStorage JSON | API transport options configured separately; redirect/partition/SameSite details remain narrower; no IndexedDB/OPFS snapshots |
+| HTTP credentials | Browser challenge authentication on Chromium, preserving extra headers; explicit preemptive Basic helper | Firefox challenge credentials unsupported; cached-auth clearing is approximate |
+| Callbacks and buffers | Page-exposed functions survive navigation; console/error retrieval and clearing | No context-wide bindings, async Rust callbacks or complete frame/worker dispatch |
+| Downloads | Chromium download behavior/cancellation scoped to the owning context; completed-file deduplication | File-based lifecycle, limited Firefox URL/failure/cancellation metadata |
+| Coverage | Dedicated Chromium JS/CSS coverage controller with sources and usage ranges | Native V8/CSS ranges, without Playwright flattening/navigation options; Firefox unsupported |
 
-Evidence: exported types in [lib.rs](crates/ferrite-e2e/src/lib.rs), browser
-launching in [browser.rs](crates/ferrite-e2e/src/browser.rs), and the individually
-linked implementations in the [member matrix](PLAYWRIGHT-API-MATRIX.md).
+Evidence is linked per member in the matrix. The main implementation is in
+[browser.rs](crates/ferrite-e2e/src/browser.rs),
+[context.rs](crates/ferrite-e2e/src/context.rs),
+[locator.rs](crates/ferrite-e2e/src/locator.rs),
+[runner.rs](crates/ferrite-e2e/src/runner.rs),
+[api.rs](crates/ferrite-e2e/src/api.rs),
+[expect.rs](crates/ferrite-e2e/src/expect.rs), and the new
+[frame locator](crates/ferrite-e2e/src/frame_locator.rs),
+[clock](crates/ferrite-e2e/src/clock.js),
+[DOM helpers](crates/ferrite-e2e/src/dom.js),
+[coverage](crates/ferrite-e2e/src/coverage.rs) and
+[configuration bridge](crates/ferrite-e2e/src/config.rs).
 
-## Differences that affect correctness
+## Existing features with narrower equivalents
 
-### Test and page isolation
+Routing/fulfillment/fallback/HAR, dialogs, popups, request capture, device and
+permission controls, screenshots/PDF, video/live frames, JSON traces, soft
+assertion collection and fixed report serializers remain available. Their
+presence does not establish full Playwright behavior:
 
-Playwright Test creates a fresh browser context for each test. Ferrite's
-`Runner::run` obtains `browser.default_context()` once, then `run_one` creates
-pages in that same context for tests and retries. Cookies, localStorage and
-other context state can leak between tests, including parallel tests. Manual
-`Browser::new_context` isolation exists, but the runner does not use it.
-`Browser::new_page` also uses the shared default context; Playwright's convenience
-`browser.newPage` creates a separate context.
+- Captured requests/responses are records rather than a rich live object
+  graph. Chromium response bodies are capped; Firefox has no body capture.
+  WebSocket observation is Chromium-only; interception/mocking is absent.
+- HAR recording/replay has narrower timing, body, update and archive support.
+  Routes do not reproduce every response/redirect/header transformation option.
+- Traces are Ferrite JSON rather than Trace Viewer archives with DOM/source
+  snapshots. Reporter output is aggregate, without the live Suite/TestCase/
+  TestStep plugin graph, blob merging or all upstream report formats.
+- Screenshot comparison, update modes and paths differ. PDF options, device
+  descriptors, emulation and permissions have smaller surfaces.
+- URL/event/network waits retain narrower matching/result options. Timeout
+  defaults can be shared across pages, but protocol calls also retain backend
+  timeouts; zero-timeout behavior is not uniformly Playwright-compatible.
+- Hooks are runner-wide rather than describe-suite scoped. Fixture dependency
+  resolution, worker lifecycle and runtime test metadata mutation remain partial.
 
-Evidence: [runner.rs](crates/ferrite-e2e/src/runner.rs), `Runner::run` and
-`run_one`; [browser.rs](crates/ferrite-e2e/src/browser.rs), `Browser::new_page`.
-Upstream behavior: [test isolation](https://playwright.dev/docs/browser-contexts).
+## Deliberately deferred substantial work
 
-### Locator strictness and waiting
+These are exclusions from the practical implementation, not implemented APIs:
 
-Ferrite actions select the first match unless `.strict()` is requested.
-Playwright single-target locator operations reject ambiguous matches.
-Ferrite's `first()` uses the same `Pick::First` as an un-narrowed locator;
-its resolved set is not sliced, so `first().count()` or `first().all()` can still
-include multiple matches.
+- WebKit backend, browser/dependency distribution, named channels and
+  Playwright-protocol remote/browser-server operation. Ferrite has no WebKit
+  driver; this is an implementation limit, not a claim that WebKit cannot run
+  on Linux. [Playwright supports WebKit on Linux](https://playwright.dev/docs/browsers).
+- Cross-origin/OOPIF lazy frame traversal, selector-free frame search and full
+  ElementHandle identity/lifetime support.
+- Worker/service-worker evaluation and event graph, WebSocket routing,
+  file-chooser interception and virtual credentials/WebAuthn.
+- Inspector/UI mode, code generation, component mounting, Android/ADB/WebView
+  and Electron backends.
+- Process-based workers, project dependencies, suite execution scopes, fixture
+  dependency/worker graphs, global timeout/max-failure orchestration, live
+  custom reporters, Trace Viewer archives and advanced report merging.
+- Full accessibility/selector algorithms, YAML ARIA matchers, all JS value
+  serialization, IndexedDB/OPFS state persistence and complete backend parity.
 
-The trusted click/hover/tap/drag paths check existence and visibility after
-scrolling, but do not implement Playwright's full stability, enabled,
-hit-target and retry behavior. The initial scroll can fail immediately before
-the target exists. `fill`, `check` and several other actions execute DOM code
-immediately. Consequently, a page that renders an input later can fail
-`fill` rather than waiting for it.
+The matrix preserves each missing member so future work can be selected
+without treating raw CDP, arbitrary evaluation or Rust assertions as evidence
+that a dedicated feature was implemented.
 
-`ClickOptions::force` invokes synthetic `el.click()`; Playwright's force option
-changes actionability checks while retaining its input-action semantics.
-Ferrite's overlay handlers check match count, rather than visibility, before
-DOM actions; they do not run on every assertion retry or wait for the overlay
-to disappear.
+## Engine and validation evidence
 
-Evidence: [locator.rs](crates/ferrite-e2e/src/locator.rs), `Selector::resolve_with`,
-`Locator::first`, `ready_state`, `click_with_options` and `fill`;
-[page.rs](crates/ferrite-e2e/src/page.rs), `action` and
-`run_locator_handlers_inner`. Upstream behavior:
-[actionability checks](https://playwright.dev/docs/actionability) and
-[locator API](https://playwright.dev/docs/api/class-locator).
+Chromium uses CDP and Firefox uses stock WebDriver BiDi. Firefox accepts user
+agent/proxy/TLS settings at launch; offline, extra headers, HTTP challenge
+credentials, locale/timezone/media/device/JS/CSP emulation, download policy and
+response modification remain Chromium-only and fail explicitly on Firefox.
+Coverage is Chromium-only. Firefox recordings are native; Chromium recordings
+require ffmpeg. Individual tests contain explicit unsupported-engine branches;
+a passing two-engine suite therefore does not imply that every operation runs
+on both engines.
 
-### Selector, text and accessibility semantics
+The final validation run uses Firefox from `/usr/bin/firefox` and official
+Chrome-for-Testing headless shell 153.0.8010.12. `FERRITE_CHROMIUM_PATH` points
+to that binary so Chromium tests actually execute, rather than being skipped.
+`TMPDIR` points at a disk-backed directory because this environment's `/tmp`
+is full.
 
-CSS selectors use `querySelectorAll` without shadow-root traversal or
-Playwright-specific selector extensions. Text matching is a case-insensitive
-substring search sorted by text length, capped at 20 matches. The helpers
-do not expose regex or exact-match options.
+```bash
+FERRITE_CHROMIUM_PATH=/path/to/chrome-headless-shell \
+TMPDIR=/path/to/disk-backed-temp cargo test -p ferrite-e2e -- --test-threads=2
+cargo clippy -p ferrite-e2e -p ferrite-cli --all-targets -- -D warnings
+```
 
-`get_by_label` selects the `<label>` element itself, not its associated form
-control. Role/name matching uses a limited role table and DOM text/attributes;
-it does not implement the complete accessible-name computation. Hidden roles
-are only filtered when the explicit include-hidden predicate is false.
-Accessible name/description assertions are also approximations.
+Validation completed successfully:
 
-`Locator::text` returns trimmed `textContent`; it is used as the counterpart
-for both `textContent` and `innerText` despite their different DOM behavior.
-ARIA snapshots are a flat list of selected elements, capped at 200 nodes and
-80-character names, with no full tree or depth/mode/boxes options. Locator
-ARIA snapshots and the locator `toMatchAriaSnapshot` matcher are absent.
+- `ferrite-e2e`: **100 unit tests, 3 API tests, 93 browser tests and 2 doctests**.
+  Chromium and Firefox were both installed and exercised. Unsupported-engine
+  branches remain explicit; these are not full cross-engine conformance claims.
+- CLI/configuration: **4 CLI tests, 17 configuration tests and 1 doctest**.
+- A repeat run of all **8 practical parity regressions** passed;
+  the strict bounding-box getter and shorter missing-element waits also passed
+  their targeted two-engine tests.
+- `cargo clippy -p ferrite-e2e -p ferrite-cli --all-targets -- -D warnings`
+  passed, as did formatting checks for both changed packages and diff checks.
+- Matrix regeneration was deterministic, and incomplete source sets were
+  rejected explicitly.
 
-Evidence: [locator.rs](crates/ferrite-e2e/src/locator.rs), `resolve_leaf`,
-`by_label`, `state_expression` and accessibility getters;
-[page.rs](crates/ferrite-e2e/src/page.rs), `aria_snapshot` and
-`aria_snapshot_json`. Upstream references: the pinned
-[Locator definition](https://github.com/microsoft/playwright/blob/v1.63.0/docs/src/api/class-locator.md)
-and [LocatorAssertions definition](https://github.com/microsoft/playwright/blob/v1.63.0/docs/src/api/class-locatorassertions.md).
-
-### Clock, evaluation and frames
-
-The fake clock applies only to the current document and is lost on navigation.
-`clock_fast_forward` and `clock_run_for` are both aliases for advancing all
-due timers. Playwright `fastForward` fires each overdue timer at most once.
-Ferrite `resume` only flips a flag and does not restart wall-time progression.
-`pause` has no target-time argument; fixed time and system time modify the
-same internal timer clock, whereas Playwright provides separate semantics.
-
-Evaluation uses strings and JSON deserialization, with no separate argument,
-function or JSHandle argument bridge. `expose_function` must be installed
-again after navigation; Playwright exposed functions survive navigation.
-JSHandle has basic evaluation/property/disposal support, but no
-`asElement`, `evaluateHandle` or `getProperties` methods.
-
-Frame evaluation and locators exist, but frame names are empty on Firefox.
-The implementation documents that coordinate actions may miss elements in
-offset iframes. There is no lazy `FrameLocator`, `contentFrame` locator
-conversion, or the selector-free cross-frame search introduced in 1.63.
-
-Evidence: [page.rs](crates/ferrite-e2e/src/page.rs), `CLOCK_SCRIPT`, `clock_*`,
-`expose_function` and `Frame`; [jshandle.rs](crates/ferrite-e2e/src/jshandle.rs).
-Upstream: [clock semantics](https://playwright.dev/docs/api/class-clock), pinned
-[Page definition](https://github.com/microsoft/playwright/blob/v1.63.0/docs/src/api/class-page.md),
-and [1.63 release notes](https://github.com/microsoft/playwright/releases/tag/v1.63.0).
-
-### Network, HTTP clients and persisted state
-
-`RecordedRequest` merges captured request and response data. It does not expose
-the full live Request/Response relationship, redirect chain, resource type,
-failure/timing breakdown, security details or server address. Captured response
-bodies are Chromium-only and capped at 1 MiB. Request/response waits match URL
-substrings rather than general Playwright URL predicates.
-
-`ApiClient` and `RouteInfo::fetch` use independent HTTP clients, without the
-browser's cookie jar. There is no context/page request client with shared
-cookies, API storage state, multipart builder, or full per-call timeout,
-proxy/auth/redirect/retry configuration. API response JSON can be deserialized
-into Rust types, but response URL/status text/security/timing metadata are
-not retained by `ApiResponse`.
-
-`StorageState` saves one origin and its localStorage. Context capture uses the
-first open page, so it is not an aggregate multi-origin context snapshot.
-Playwright's cookies/origins state format is not supported. IndexedDB can be
-cleared on Chromium, but is not captured/restored; OPFS persistence is absent.
-Permissions and HTTP credentials have fewer origin-scoping options.
-
-Evidence: [api.rs](crates/ferrite-e2e/src/api.rs),
-[page.rs](crates/ferrite-e2e/src/page.rs), `RecordedRequest`, `RouteInfo::fetch`,
-`StorageState` and `storage_state`; [context.rs](crates/ferrite-e2e/src/context.rs),
-`storage_state`. Upstream: pinned
-[APIRequestContext definition](https://github.com/microsoft/playwright/blob/v1.63.0/docs/src/api/class-apirequestcontext.md)
-and [BrowserContext definition](https://github.com/microsoft/playwright/blob/v1.63.0/docs/src/api/class-browsercontext.md).
-
-### Runner, configuration and artifacts
-
-Ferrite workers are concurrent Tokio tasks sharing one browser context.
-`describe` prefixes names rather than defining suite execution scope. Hooks
-run at runner scope, and typed fixtures are constructed per attempt without
-fixture dependencies, worker scope, automatic fixtures or lazy resolution.
-Projects only override name/filter/retries/timeout; all use the same Browser.
-Filters match substrings instead of Playwright regular expressions.
-
-`E2eConfig::expect_timeout_ms` exists but is not consumed by the assertion
-implementation, which initializes its retry window to 5,000 ms. Explicit
-assertion `.timeout(...)` is available. Distinct context/page navigation
-timeout APIs and full test/suite timeout policies are absent.
-
-The CLI passes some settings through environment variables to an arbitrary
-user test command. `Runner::default` consumes filter/grep/shard/project variables,
-but does not automatically consume the CLI's workers/retries/reporter values.
-`Browser::launch_default` does not consume the browser variable. The bundled
-example manually consumes browser, base URL and video; it does not consume
-workers/retries/reporters. `--headed` and executable/config overrides are not
-serialized into a complete test-process configuration. Explicit configuration
-loading/builders are therefore needed for several advertised knobs.
-
-Traces are custom JSON. They cannot be opened as Playwright Trace Viewer
-archives and do not capture the same DOM/source/action snapshot data. Named
-steps are page logs rather than a structured report tree. Screenshot
-comparison uses an 8-bit per-channel threshold rather than Playwright's
-perceptual threshold, and supports only missing/all/none update modes. The
-available HTML report is not an equivalent interactive report/trace UI.
-
-Evidence: [runner.rs](crates/ferrite-e2e/src/runner.rs),
-[expect.rs](crates/ferrite-e2e/src/expect.rs),
-[config](crates/ferrite-config/src/lib.rs),
-[e2e command](crates/ferrite-cli/src/cmds/e2e.rs),
-[example suite](examples/e2e/tests/e2e.rs),
-[context tracing](crates/ferrite-e2e/src/context.rs), and
-[snapshot.rs](crates/ferrite-e2e/src/snapshot.rs).
-Upstream: [fixture model](https://playwright.dev/docs/test-fixtures),
-[Trace Viewer](https://playwright.dev/docs/trace-viewer), and pinned
-[snapshot configuration](https://github.com/microsoft/playwright/blob/v1.63.0/docs/src/test-api/class-testconfig.md).
-
-## Engine restrictions
-
-The table describes implementation support; Chromium was not installed for
-this audit, so its entries were verified from source rather than runtime.
-
-| Capability | Chromium | Firefox |
-|---|---|---|
-| Core navigation, locators, contexts, screenshots | Implemented | Implemented, with unresolved popup validation failure |
-| User agent, proxy, insecure certificates | Launch and some context/page controls | Launch-wide; per-context overrides restricted |
-| Locale/timezone/offline/global extra headers | Implemented | Unsupported |
-| Basic/digest HTTP challenge credentials | Implemented | Unsupported |
-| Device metrics/mobile/touch emulation | Implemented | Unsupported |
-| JS disable, CSP bypass, service-worker blocking | Implemented | Unsupported |
-| Color scheme/reduced motion | Implemented | Unsupported |
-| Download policy and per-context directory | Implemented | Restricted to launch-wide directory; policy setters unsupported |
-| Download cancellation and URL/failure metadata | Implemented | Unsupported / unavailable |
-| Request body capture and response bodies | Implemented; response capture cap applies | Unavailable |
-| Response modification and route URL replacement | Implemented | Unsupported; other routing actions have a subset |
-| WebSocket frame observation | Implemented | Unavailable |
-| Per-origin data clearing/IndexedDB clearing | Implemented | Unsupported |
-| Request garbage collection | Implemented | Unsupported |
-| Video | Frame capture assembled with ffmpeg | Native BiDi screencast |
-| Live frame stream | CDP screencast frames | Screenshot polling |
-| WebKit, client-certificate configuration | No public support | No public support |
-
-These describe Ferrite's driver choices, not claims that the browser protocols
-can never gain such capabilities. Evidence:
-[driver.rs](crates/ferrite-e2e/src/driver.rs),
-[context options](crates/ferrite-e2e/src/context.rs), and
-[browser options](crates/ferrite-e2e/src/browser.rs).
-
-## Validation
-
-Existing tests were run without changing implementation or tests.
-
-| Check | Result |
-|---|---|
-| Unit tests in `cargo test -p ferrite-e2e` | 98 passed |
-| HTTP/download API integration tests | 2 passed |
-| Initial browser suite | 84 passed, 1 failed (`runner_context_fixtures`) |
-| Browser suite rerun using a larger `TMPDIR` | 83 passed, 2 failed |
-| `runner_context_fixtures` alone with the larger `TMPDIR` | Passed |
-| `page_wait_helpers_and_close` alone with the larger `TMPDIR` | Failed on Firefox |
-
-The `/tmp` filesystem filled during the initial run; the rerun used
-`TMPDIR=/home/meme/.cache/ferrite-playwright-audit`. The two failures in the
-rerun were:
-
-- `page_wait_helpers_and_close`: Firefox popup title was empty instead of
-  `assert me`, despite waiting for a nonempty title. The isolated rerun also
-  failed. See [browser tests](crates/ferrite-e2e/tests/browser.rs).
-- `runner_context_fixtures`: expected-failure count was 2 instead of 1.
-  This failed in the complete suite but passed alone. The cause is unresolved;
-  the successful isolated run does not establish suite reliability.
-
-Firefox was available; Chromium was missing. Browser tests return early or
-skip individual engine/capability branches when unavailable, so a passing
-test count does **not** mean every browser scenario ran. Doc tests were not
-reached by the failed full commands. No runtime result establishes Playwright
-behavioral equivalence.
-
-## Priorities for closing the gaps
-
-| Priority | Work | Why it matters |
-|---|---|---|
-| P0 | Fresh context per test and retry, complete cleanup | Prevent shared-state leakage and parallel interference |
-| P0 | Consistent CLI/config propagation, wire assertion timeout | Ensure requested browser/runner settings affect the consumer suite |
-| P0 | Investigate popup-title and suite expected-failure regressions | Existing validation currently fails |
-| P0 | Strict locator defaults and complete action waiting | Prevent ambiguous actions and failures on delayed rendering |
-| P1 | Correct label targeting, shadow DOM, role/name/text semantics | Match common Playwright locator behavior |
-| P1 | Correct clock controls and callback navigation lifetime | Avoid misleading equivalents in timing/page lifecycle tests |
-| P1 | Rich request/response objects and browser-linked API client | Support reliable API/auth/network test migration |
-| P1 | Multi-origin Playwright-compatible state, IndexedDB/OPFS options | Support authentication and persisted application state |
-| P1 | FrameLocator and accurate iframe coordinates | Support nested/cross-origin frame workflows |
-| P1 | Suite/fixture/project scheduling and named test locks | Match isolation/configuration/lifecycle expectations |
-| P2 | WebSocket routing, workers, coverage, file chooser, credentials | Close advanced automation API gaps |
-| P2 | Structured reports/traces, UI mode, inspector, code generation | Close developer-tooling gaps |
-| Scope decision | WebKit and managed browser distributions | Requires an additional browser/backend strategy |
-| Scope decision | Experimental Electron, Android and component testing | Separate integrations rather than small API wrappers |
-
-The priorities are an engineering judgment based on common test behavior and
-the inspected gaps. They are not changes implemented by this audit.
+New regressions cover isolation/retries/locks, project engines and cleanup,
+persistent profiles,
+strict/shadow/semantic locators and delayed actions, callback navigation,
+clock semantics, frame replacements/handles, storage/API cookie sharing,
+HTTP payload/options, configuration forwarding and coverage. Existing tests
+also exercise downloads, credentials, routing, snapshots, input and reports.

@@ -196,14 +196,14 @@ struct FetchAuthState {
 
 /// Merged `Fetch.enable` params (`None` = `Fetch.disable`).
 ///
-/// Auth-only mode passes empty patterns so no request pauses for
-/// `requestPaused`; challenges still arrive as `Fetch.authRequired`.
+/// Auth-only mode intercepts requests as required by CDP; the auth pump
+/// continues those requests when no routing pump is active.
 fn fetch_enable_params(patterns: Option<&[Value]>, handle_auth: bool) -> Option<Value> {
     if patterns.is_none() && !handle_auth {
         return None;
     }
     Some(serde_json::json!({
-        "patterns": patterns.unwrap_or(&[]),
+        "patterns": patterns.map(|patterns| patterns.to_vec()).unwrap_or_else(|| vec![serde_json::json!({"urlPattern":"*"})]),
         "handleAuthRequests": handle_auth,
     }))
 }
@@ -237,6 +237,15 @@ impl Driver {
         match self {
             Self::Cdp(driver) => &driver.target,
             Self::Bidi(driver) => &driver.context,
+        }
+    }
+
+    pub(crate) fn cdp_events(
+        &self,
+    ) -> E2eResult<(String, tokio::sync::broadcast::Receiver<CdpEvent>)> {
+        match self {
+            Self::Cdp(driver) => Ok((driver.session.clone(), driver.cdp.subscribe())),
+            Self::Bidi(_) => Err(E2eError::Config("CDP events require Chromium".into())),
         }
     }
 
@@ -428,6 +437,26 @@ impl Driver {
         match self {
             Self::Cdp(driver) => driver.handle_evaluate(remote_id, value, function).await,
             Self::Bidi(driver) => driver.handle_evaluate(remote_id, value, function).await,
+        }
+    }
+
+    pub async fn handle_evaluate_handle(
+        &self,
+        remote_id: Option<&str>,
+        value: Option<Value>,
+        function: &str,
+    ) -> E2eResult<JSHandle> {
+        match self {
+            Self::Cdp(driver) => {
+                driver
+                    .handle_evaluate_handle(remote_id, value, function)
+                    .await
+            }
+            Self::Bidi(driver) => {
+                driver
+                    .handle_evaluate_handle(remote_id, value, function)
+                    .await
+            }
         }
     }
 
@@ -1109,15 +1138,16 @@ impl CdpDriver {
         }
         let result = self.call("Runtime.evaluate", params).await?;
         if let Some(exception) = result.get("exceptionDetails") {
-            let text = exception
-                .get("text")
-                .and_then(Value::as_str)
-                .unwrap_or("js exception");
+            let message = exception["exception"]["description"]
+                .as_str()
+                .or_else(|| exception["text"].as_str())
+                .unwrap_or("JavaScript exception");
             return Err(E2eError::Cdp {
-                method: "Runtime.evaluate".to_string(),
-                message: format!("{text}: {expression}"),
+                method: "Runtime.evaluate".into(),
+                message: message.into(),
             });
         }
+
         Ok(result
             .get("result")
             .and_then(|r| r.get("value"))
@@ -1251,6 +1281,28 @@ impl CdpDriver {
             .and_then(|r| r.get("value"))
             .cloned()
             .unwrap_or(Value::Null))
+    }
+
+    async fn handle_evaluate_handle(
+        &self,
+        remote_id: Option<&str>,
+        value: Option<Value>,
+        function: &str,
+    ) -> E2eResult<JSHandle> {
+        if let Some(value) = value {
+            return self
+                .evaluate_handle(&format!("({function})({})", serde_json::to_string(&value)?))
+                .await;
+        }
+        let id = remote_id.ok_or_else(|| E2eError::Config("remote handle is missing".into()))?;
+        let result = self.call("Runtime.callFunctionOn", serde_json::json!({"functionDeclaration":format!("function() {{ return ({function})(this); }}"),"objectId":id,"returnByValue":false,"awaitPromise":true})).await?;
+        check_cdp_exception("Runtime.callFunctionOn", &result, function)?;
+        let remote = &result["result"];
+        Ok(JSHandle::new(
+            Driver::Cdp(self.clone()),
+            remote["objectId"].as_str().map(str::to_string),
+            remote.get("value").cloned(),
+        ))
     }
 
     async fn handle_dispose(&self, remote_id: Option<&str>) -> E2eResult<()> {
@@ -1420,17 +1472,12 @@ impl CdpDriver {
 
     async fn set_download_dir(&self, dir: &Path) -> E2eResult<()> {
         std::fs::create_dir_all(dir)?;
+        let mut params = serde_json::json!({"behavior":"allow", "downloadPath":dir.to_string_lossy(), "eventsEnabled":true});
+        if let Some(context) = &self.browser_context {
+            params["browserContextId"] = Value::String(context.clone());
+        }
         self.cdp
-            .call(
-                None,
-                "Browser.setDownloadBehavior",
-                serde_json::json!({
-                    "behavior": "allow",
-                    "downloadPath": dir.to_string_lossy(),
-                    "eventsEnabled": true,
-                }),
-                self.timeout,
-            )
+            .call(None, "Browser.setDownloadBehavior", params, self.timeout)
             .await?;
         Ok(())
     }
@@ -1442,14 +1489,13 @@ impl CdpDriver {
             if record.state != "inProgress" {
                 continue;
             }
+            let mut params = serde_json::json!({"guid":record.guid});
+            if let Some(context) = &self.browser_context {
+                params["browserContextId"] = Value::String(context.clone());
+            }
             let done = self
                 .cdp
-                .call(
-                    None,
-                    "Browser.cancelDownload",
-                    serde_json::json!({ "guid": record.guid }),
-                    self.timeout,
-                )
+                .call(None, "Browser.cancelDownload", params, self.timeout)
                 .await;
             if done.is_ok() {
                 canceled += 1;
@@ -1477,7 +1523,14 @@ impl CdpDriver {
     }
 
     async fn cookies(&self) -> E2eResult<Vec<Cookie>> {
-        let cookies = self.call("Network.getCookies", Value::Null).await?;
+        let mut params = serde_json::json!({});
+        if let Some(id) = &self.browser_context {
+            params["browserContextId"] = Value::String(id.clone());
+        }
+        let cookies = self
+            .cdp
+            .call(None, "Storage.getCookies", params, self.timeout)
+            .await?;
         let list = cookies
             .get("cookies")
             .and_then(Value::as_array)
@@ -1487,38 +1540,46 @@ impl CdpDriver {
     }
 
     async fn set_cookie(&self, name: &str, value: &str, url: &str) -> E2eResult<()> {
-        self.call(
-            "Network.setCookie",
-            serde_json::json!({ "name": name, "value": value, "url": url }),
+        self.add_cookies(
+            &[Cookie {
+                name: name.into(),
+                value: value.into(),
+                domain: None,
+                path: None,
+                http_only: false,
+                secure: false,
+                expires: None,
+            }],
+            url,
         )
-        .await?;
-        Ok(())
+        .await
     }
 
     async fn add_cookies(&self, cookies: &[Cookie], url: &str) -> E2eResult<()> {
-        for cookie in cookies {
-            let mut params = serde_json::json!({
-                "name": cookie.name, "value": cookie.value, "url": url,
-            });
-            if let Some(path) = &cookie.path {
-                params["path"] = Value::String(path.clone());
-            }
-            if cookie.secure {
-                params["secure"] = Value::Bool(true);
-            }
-            if cookie.http_only {
-                params["httpOnly"] = Value::Bool(true);
-            }
-            if let Some(expires) = cookie.expires.filter(|expires| *expires >= 0) {
-                params["expires"] = Value::from(expires);
-            }
-            self.call("Network.setCookie", params).await?;
+        let cookies: Vec<Value> = cookies.iter().map(|cookie| {
+            let mut params = serde_json::json!({"name":cookie.name,"value":cookie.value,"url":url,"httpOnly":cookie.http_only,"secure":cookie.secure});
+            if let Some(domain) = &cookie.domain { params["domain"] = Value::String(domain.clone()); }
+            if let Some(path) = &cookie.path { params["path"] = Value::String(path.clone()); }
+            if let Some(expires) = cookie.expires.filter(|expires| *expires >= 0) { params["expires"] = Value::from(expires); }
+            params
+        }).collect();
+        let mut params = serde_json::json!({"cookies":cookies});
+        if let Some(id) = &self.browser_context {
+            params["browserContextId"] = Value::String(id.clone());
         }
+        self.cdp
+            .call(None, "Storage.setCookies", params, self.timeout)
+            .await?;
         Ok(())
     }
 
     async fn clear_cookies(&self) -> E2eResult<()> {
-        self.call("Network.clearBrowserCookies", Value::Null)
+        let mut params = serde_json::json!({});
+        if let Some(id) = &self.browser_context {
+            params["browserContextId"] = Value::String(id.clone());
+        }
+        self.cdp
+            .call(None, "Storage.clearCookies", params, self.timeout)
             .await?;
         Ok(())
     }
@@ -1561,25 +1622,27 @@ impl CdpDriver {
         self.mouse_move(x, y).await?;
         let modifiers = self.held_modifiers();
         let button = options.button.as_cdp();
-        self.call(
-            "Input.dispatchMouseEvent",
-            serde_json::json!({
-                "type": "mousePressed", "x": x, "y": y, "modifiers": modifiers,
-                "button": button, "clickCount": options.click_count.max(1),
-            }),
-        )
-        .await?;
-        if !options.delay.is_zero() {
-            tokio::time::sleep(options.delay).await;
+        for click_count in 1..=options.click_count.max(1) {
+            self.call(
+                "Input.dispatchMouseEvent",
+                serde_json::json!({
+                    "type": "mousePressed", "x": x, "y": y, "modifiers": modifiers,
+                    "button": button, "clickCount": click_count,
+                }),
+            )
+            .await?;
+            if !options.delay.is_zero() {
+                tokio::time::sleep(options.delay).await;
+            }
+            self.call(
+                "Input.dispatchMouseEvent",
+                serde_json::json!({
+                    "type": "mouseReleased", "x": x, "y": y, "modifiers": modifiers,
+                    "button": button, "clickCount": click_count,
+                }),
+            )
+            .await?;
         }
-        self.call(
-            "Input.dispatchMouseEvent",
-            serde_json::json!({
-                "type": "mouseReleased", "x": x, "y": y, "modifiers": modifiers,
-                "button": button, "clickCount": options.click_count.max(1),
-            }),
-        )
-        .await?;
         Ok(())
     }
 
@@ -1618,6 +1681,9 @@ impl CdpDriver {
             if kind == "rawKeyDown" {
                 if key.chars().count() == 1 {
                     params["text"] = Value::String(key.to_string());
+                }
+                if key.chars().count() == 1 {
+                    params["type"] = Value::String("keyDown".into());
                 }
                 self.call("Input.dispatchKeyEvent", params).await?;
                 if !options.delay.is_zero() {
@@ -1857,14 +1923,13 @@ impl CdpDriver {
     }
 
     async fn set_downloads_allowed(&self, allowed: bool) -> E2eResult<()> {
-        let behavior = if allowed { "allow" } else { "deny" };
+        let behavior = if allowed { "default" } else { "deny" };
+        let mut params = serde_json::json!({"behavior":behavior});
+        if let Some(context) = &self.browser_context {
+            params["browserContextId"] = Value::String(context.clone());
+        }
         self.cdp
-            .call(
-                None,
-                "Browser.setDownloadBehavior",
-                serde_json::json!({ "behavior": behavior }),
-                self.timeout,
-            )
+            .call(None, "Browser.setDownloadBehavior", params, self.timeout)
             .await?;
         Ok(())
     }
@@ -2200,9 +2265,32 @@ impl CdpDriver {
                     Ok(event) => event,
                     Err(_) => break,
                 };
-                if event.session.as_deref() != Some(&session)
-                    || event.method != "Fetch.authRequired"
-                {
+                if event.session.as_deref() != Some(&session) {
+                    continue;
+                }
+                if event.method == "Fetch.requestPaused" {
+                    let auth_only = shared
+                        .lock()
+                        .map(|state| state.routing_patterns.is_none())
+                        .unwrap_or(false);
+                    if auth_only {
+                        let method = if event.params.get("responseStatusCode").is_some() {
+                            "Fetch.continueResponse"
+                        } else {
+                            "Fetch.continueRequest"
+                        };
+                        cdp.call(
+                            Some(&session),
+                            method,
+                            serde_json::json!({"requestId":event.params["requestId"]}),
+                            timeout,
+                        )
+                        .await
+                        .ok();
+                    }
+                    continue;
+                }
+                if event.method != "Fetch.authRequired" {
                     continue;
                 }
                 let creds = shared
@@ -3087,6 +3175,23 @@ impl BidiDriver {
             .unwrap_or(Value::Null))
     }
 
+    async fn handle_evaluate_handle(
+        &self,
+        remote_id: Option<&str>,
+        value: Option<Value>,
+        function: &str,
+    ) -> E2eResult<JSHandle> {
+        if let Some(value) = value {
+            return self
+                .evaluate_handle(&format!("({function})({})", serde_json::to_string(&value)?))
+                .await;
+        }
+        let id = remote_id.ok_or_else(|| E2eError::Config("remote handle is missing".into()))?;
+        let result = self.bidi.call("script.callFunction", serde_json::json!({"functionDeclaration":function,"target":{"context":self.context},"arguments":[{"handle":id}],"awaitPromise":true,"resultOwnership":"root"}), self.timeout).await?;
+        check_script_exception("script.callFunction", &result, function)?;
+        Ok(self.bidi_handle(&result["result"]))
+    }
+
     async fn handle_dispose(&self, remote_id: Option<&str>) -> E2eResult<()> {
         let Some(id) = remote_id else {
             return Ok(());
@@ -3214,7 +3319,7 @@ impl BidiDriver {
             .call(
                 "storage.getCookies",
                 serde_json::json!({
-                    "partition": { "type": "context", "context": self.context },
+                    "partition": { "type": "storageKey", "userContext": self.user_context.as_deref().unwrap_or("default") },
                 }),
                 self.timeout,
             )
@@ -3252,7 +3357,7 @@ impl BidiDriver {
                 "storage.setCookie",
                 serde_json::json!({
                     "cookie": cookie,
-                    "partition": { "type": "context", "context": self.context },
+                    "partition": { "type": "storageKey", "userContext": self.user_context.as_deref().unwrap_or("default") },
                 }),
                 self.timeout,
             )
@@ -3285,7 +3390,7 @@ impl BidiDriver {
                     "storage.setCookie",
                     serde_json::json!({
                         "cookie": params,
-                        "partition": { "type": "context", "context": self.context },
+                        "partition": { "type": "storageKey", "userContext": self.user_context.as_deref().unwrap_or("default") },
                     }),
                     self.timeout,
                 )
@@ -3299,7 +3404,7 @@ impl BidiDriver {
             .call(
                 "storage.deleteCookies",
                 serde_json::json!({
-                    "partition": { "type": "context", "context": self.context },
+                    "partition": { "type": "storageKey", "userContext": self.user_context.as_deref().unwrap_or("default") },
                 }),
                 self.timeout,
             )
@@ -5033,7 +5138,7 @@ mod tests {
         assert_eq!(
             fetch_enable_params(None, true),
             Some(serde_json::json!({
-                "patterns": [],
+                "patterns": [{"urlPattern":"*"}],
                 "handleAuthRequests": true,
             }))
         );

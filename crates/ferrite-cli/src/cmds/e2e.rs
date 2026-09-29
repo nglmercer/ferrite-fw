@@ -55,6 +55,9 @@ pub(crate) async fn e2e(
 
     // Server lifecycle: explicit --url wins, then config, else boot.
     let booted = ensure_server(&root, &resolved, args.url.clone()).await?;
+    if resolved.e2e.base_url.is_none() {
+        resolved.e2e.base_url = Some(booted.url.clone());
+    }
     println!("e2e server: {}", booted.url);
 
     let command = test_command(&root, &args.command)?;
@@ -62,7 +65,11 @@ pub(crate) async fn e2e(
     let status = std::process::Command::new(&command[0])
         .args(&command[1..])
         .current_dir(&root)
-        .env("FERRITE_E2E_BASE_URL", &booted.url)
+        .env(
+            "FERRITE_E2E_BASE_URL",
+            resolved.e2e.base_url.as_deref().unwrap_or(&booted.url),
+        )
+        .env("FERRITE_E2E_CONFIG", serde_json::to_string(&resolved.e2e)?)
         .env("FERRITE_E2E_BROWSER", kind.name())
         .env("FERRITE_E2E_VIDEO", &resolved.e2e.video)
         .env("FERRITE_E2E_REPORTER", &resolved.e2e.reporter)

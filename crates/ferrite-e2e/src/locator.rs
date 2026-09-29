@@ -45,10 +45,15 @@ pub struct Selector {
     has: Vec<Selector>,
     has_not: Vec<Selector>,
     strict: bool,
+    exact: bool,
+    regex: Option<String>,
+    visible: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Engine {
+    Label,
+    Attribute(String),
     Css,
     Text,
     XPath,
@@ -60,6 +65,7 @@ enum Engine {
 /// Which matches a narrowed selector keeps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Pick {
+    All,
     /// All matches (actions use the first).
     First,
     /// The last match only.
@@ -92,13 +98,16 @@ impl Selector {
             raw,
             engine,
             body,
-            pick: Pick::First,
+            pick: Pick::All,
             scope: None,
             has_text: Vec::new(),
             has_not_text: Vec::new(),
             has: Vec::new(),
             has_not: Vec::new(),
             strict: false,
+            exact: false,
+            regex: None,
+            visible: None,
         }
     }
 
@@ -145,20 +154,17 @@ impl Selector {
 
     /// Match a `<label>` by its text (case-insensitive substring).
     pub(crate) fn by_label(text: &str) -> Self {
-        Self::parse(format!(
-            "xpath=//label[contains(normalize-space(.), {})]",
-            xpath_string(text)
-        ))
+        let mut selector = Self::leaf(format!("label={text}"), Engine::Label, text.into());
+        selector.body = text.into();
+        selector
     }
 
-    /// Match an attribute by case-insensitive substring.
-    fn by_attribute_contains(tag: &str, attribute: &str, text: &str) -> Self {
-        const UPPER: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-        const LOWER: &str = "abcdefghijklmnopqrstuvwxyz";
-        Self::parse(format!(
-            "xpath=//{tag}[contains(translate(@{attribute},'{UPPER}','{LOWER}'), {})]",
-            xpath_string(&text.to_lowercase())
-        ))
+    fn by_attribute_contains(_tag: &str, attribute: &str, text: &str) -> Self {
+        Self::leaf(
+            format!("{attribute}={text}"),
+            Engine::Attribute(attribute.into()),
+            text.into(),
+        )
     }
 
     /// Match `[placeholder]` by case-insensitive substring.
@@ -176,6 +182,10 @@ impl Selector {
         Self::by_attribute_contains("*", "title", text)
     }
 
+    pub(crate) fn is_strict(&self) -> bool {
+        self.strict
+    }
+
     /// Original selector text.
     #[must_use]
     pub fn raw(&self) -> &str {
@@ -183,8 +193,12 @@ impl Selector {
     }
 
     /// JS that resolves to `Element[]` for this selector.
-    fn resolve_js(&self) -> String {
-        self.resolve_with(None)
+    pub(crate) fn resolve_js(&self) -> String {
+        format!(
+            "(() => {{ const f = {}; return {}; }})()",
+            include_str!("dom.js"),
+            self.resolve_with(None)
+        )
     }
 
     /// Resolve against `roots` (`None` = whole document).
@@ -196,7 +210,7 @@ impl Selector {
         let scoped;
         let effective = match &self.scope {
             Some(parent) => {
-                scoped = parent.resolve_js();
+                scoped = parent.resolve_with(roots);
                 Some(scoped.as_str())
             }
             None => roots,
@@ -236,30 +250,20 @@ impl Selector {
                  !(el.textContent || '').toLowerCase().includes(q)); }})()"
             );
         }
-        // Inner locators resolve document-wide; containment makes the match
-        // relative to each candidate (this also honors chained inners).
         for inner in &self.has {
-            let resolve = inner.resolve_js();
-            expression = format!(
-                "(() => {{ const els = ({expression}); \
-                 const inner = new Set(({resolve})); \
-                 return els.filter(el => {{ for (const n of inner) {{ \
-                 if (n !== el && el.contains(n)) return true; }} \
-                 return false; }}); }})()"
-            );
+            let resolve = inner.resolve_with(Some("[el]"));
+            expression = format!("({expression}).filter(el => ({resolve}).length > 0)");
         }
         for inner in &self.has_not {
-            let resolve = inner.resolve_js();
-            expression = format!(
-                "(() => {{ const els = ({expression}); \
-                 const inner = new Set(({resolve})); \
-                 return els.filter(el => {{ for (const n of inner) {{ \
-                 if (n !== el && el.contains(n)) return false; }} \
-                 return true; }}); }})()"
-            );
+            let resolve = inner.resolve_with(Some("[el]"));
+            expression = format!("({expression}).filter(el => ({resolve}).length === 0)");
+        }
+        if let Some(visible) = self.visible {
+            expression = format!("({expression}).filter(el => f.hidden(el) !== {visible})");
         }
         match self.pick {
-            Pick::First => expression,
+            Pick::All => expression,
+            Pick::First => format!("({expression}).slice(0, 1)"),
             Pick::Last => format!("({expression}).slice(-1)"),
             Pick::Nth(index) => {
                 format!("({expression}).slice({index}, {})", index.saturating_add(1))
@@ -269,113 +273,36 @@ impl Selector {
 
     /// JS that resolves a leaf engine to `Element[]` against `roots`.
     fn resolve_leaf(&self, engine: &Engine, roots: Option<&str>) -> String {
-        let body = serde_json::to_string(&self.body).unwrap_or_default();
+        let body = serde_json::to_string(&self.body).unwrap();
+        let roots = roots.unwrap_or("[document]");
+        let regex = serde_json::to_string(&self.regex).unwrap();
+        let all = format!("[...new Set(({roots}).flatMap(root => f.query(root, '*')))]");
+        let exact = self.exact;
         match engine {
-            Engine::Css => match roots {
-                None => format!("[...document.querySelectorAll({body})]"),
-                Some(r) => {
-                    format!("[...({r}).flatMap(root => [...root.querySelectorAll({body})])]")
-                }
-            },
-            Engine::XPath => match roots {
-                None => format!(
-                    "(() => {{ const out = []; const it = document.evaluate({body}, \
-                     document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null); \
-                     for (let i = 0; i < it.snapshotLength; i++) {{ \
-                     const n = it.snapshotItem(i); \
-                     if (n instanceof Element) out.push(n); }} return out; }})()"
-                ),
-                Some(r) => format!(
-                    "(() => {{ const out = []; for (const root of ({r})) {{ \
-                     const it = document.evaluate({body}, root, null, \
-                     XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null); \
-                     for (let i = 0; i < it.snapshotLength; i++) {{ \
-                     const n = it.snapshotItem(i); \
-                     if (n instanceof Element) out.push(n); }} }} return out; }})()"
-                ),
-            },
-            Engine::Text => {
-                let candidates = match roots {
-                    None => "document.querySelectorAll('body *')".to_string(),
-                    Some(r) => format!("({r}).flatMap(root => [...root.querySelectorAll('*')])"),
-                };
-                format!(
-                    "(() => {{ const needle = {body}.toLowerCase(); \
-                     const els = [...{candidates}]; \
-                     const hits = els.filter(el => \
-                     (el.textContent || '').toLowerCase().includes(needle)); \
-                     hits.sort((a, b) => \
-                     (a.textContent || '').length - (b.textContent || '').length); \
-                     return hits.slice(0, 20); }})()"
-                )
+            Engine::Css => format!("[...new Set(({roots}).flatMap(root => f.query(root, {body})))]"),
+            Engine::XPath => format!("(() => {{ const out = []; for (const root of ({roots})) {{ const it = document.evaluate({body}, root, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null); for (let i = 0; i < it.snapshotLength; i++) {{ const n = it.snapshotItem(i); if (n instanceof Element) out.push(n); }} }} return [...new Set(out)]; }})()"),
+            Engine::Text => format!("(() => {{ const hits = ({all}).filter(el => !el.matches('script,style,noscript') && f.matches(el.matches('input[type=button],input[type=submit]') ? el.value : el.textContent || el.shadowRoot?.textContent, {body}, {exact}, {regex})); return hits.filter(el => !hits.some(child => child !== el && el.contains(child))); }})()"),
+            Engine::Label => format!("({all}).filter(el => el.matches('input,textarea,select,button,meter,progress,output') && (f.matches(f.name(el), {body}, {exact}, {regex}) || [...(el.labels || [])].some(label => f.matches(label.textContent, {body}, {exact}, {regex}))))"),
+            Engine::Attribute(attribute) => {
+                let attribute = serde_json::to_string(attribute).unwrap();
+                format!("({all}).filter(el => el.hasAttribute({attribute}) && f.matches(el.getAttribute({attribute}), {body}, {exact}, {regex}))")
             }
             Engine::Role => {
                 let query = parse_role_full(&self.body);
-                let role_json = serde_json::to_string(&query.role).unwrap_or_default();
-                let name_json = serde_json::to_string(&query.name).unwrap_or_default();
-                let source = match roots {
-                    None => "document.querySelectorAll(sel)".to_string(),
-                    Some(r) => format!("({r}).flatMap(root => [...root.querySelectorAll(sel)])"),
-                };
-                let mut filters = format!(
-                    "const want = {name_json}.toLowerCase(); \
-                     if (want) els = els.filter(el => \
-                     ((el.getAttribute('aria-label') || el.textContent || '')\
-                     .toLowerCase().includes(want))); ",
-                );
-                // Each predicate compares a resolved boolean to `want`.
-                for (attribute, want) in [
-                    ("checked", query.checked),
-                    ("disabled", query.disabled),
-                    ("expanded", query.expanded),
-                    ("pressed", query.pressed),
-                    ("selected", query.selected),
-                ] {
-                    let Some(want) = want else { continue };
-                    let resolved = match attribute {
-                        "checked" => {
-                            "(el.checked === true \
-                             || el.getAttribute('aria-checked') === 'true')"
-                        }
-                        "disabled" => "(el.disabled === true)",
-                        "expanded" => "(el.getAttribute('aria-expanded') === 'true')",
-                        "pressed" => "(el.getAttribute('aria-pressed') === 'true')",
-                        _ => {
-                            "(el.selected === true \
-                             || el.getAttribute('aria-selected') === 'true')"
-                        }
-                    };
-                    filters.push_str(&format!(
-                        "els = els.filter(el => ({resolved}) === {want}); "
-                    ));
+                let role = serde_json::to_string(&query.role).unwrap();
+                let name = serde_json::to_string(&query.name).unwrap();
+                let mut filters = format!("({all}).filter(el => f.role(el) === {role})");
+                if !query.name.is_empty() || self.regex.is_some() { filters.push_str(&format!(".filter(el => f.matches(f.name(el), {name}, {exact}, {regex}))")); }
+                if query.include_hidden != Some(true) { filters.push_str(".filter(el => !f.ariaHidden(el))"); }
+                for (attribute, flag) in [("checked",query.checked),("disabled",query.disabled),("expanded",query.expanded),("pressed",query.pressed),("selected",query.selected)] {
+                    if let Some(flag) = flag {
+                        let value = match attribute { "disabled" => "f.disabled(el)".to_string(), "checked" => "(el.checked === true || el.getAttribute('aria-checked') === 'true')".into(), "selected" => "(el.selected === true || el.getAttribute('aria-selected') === 'true')".into(), _ => format!("(el.getAttribute('aria-{attribute}') === 'true')") };
+                        filters.push_str(&format!(".filter(el => {value} === {flag})"));
+                    }
                 }
-                if query.include_hidden == Some(false) {
-                    filters.push_str(
-                        "els = els.filter(el => { const s = getComputedStyle(el); \
-                         const r = el.getBoundingClientRect(); \
-                         return s.display !== 'none' && s.visibility !== 'hidden' \
-                         && r.width > 0 && r.height > 0; }); ",
-                    );
-                }
-                format!(
-                    "(() => {{ const byRole = {{ button: 'button,[role=\"button\"],\
-                     input[type=\"button\"],input[type=\"submit\"]', \
-                     link: 'a[href],[role=\"link\"]', \
-                     textbox: 'input[type=\"text\"],input:not([type]),textarea,\
-                     [role=\"textbox\"]', checkbox: 'input[type=\"checkbox\"],\
-                     [role=\"checkbox\"]', radio: 'input[type=\"radio\"],\
-                     [role=\"radio\"]', heading: 'h1,h2,h3,h4,h5,h6,\
-                     [role=\"heading\"]', img: 'img,[role=\"img\"]', \
-                     listbox: 'select,[role=\"listbox\"]', \
-                     option: 'option,[role=\"option\"]' }}; \
-                     const sel = byRole[{role_json}] || ('[role=' + {role_json} + ']'); \
-                     let els = [...{source}]; \
-                     {filters}return els; }})()"
-                )
+                filters
             }
-            Engine::Union(..) | Engine::Intersect(..) => {
-                unreachable!("combinators resolve in resolve_with")
-            }
+            Engine::Union(_, _) | Engine::Intersect(_, _) => unreachable!(),
         }
     }
 
@@ -384,7 +311,7 @@ impl Selector {
     pub fn state_expression(&self) -> String {
         let resolve = self.resolve_js();
         format!(
-            "(() => {{ const els = {resolve}; const first = els[0]; \
+            "(() => {{ const f = {}; const els = {resolve}; const first = els[0]; \
              const visible = el => {{ if (!el) return false; \
              const s = getComputedStyle(el); const r = el.getBoundingClientRect(); \
              return s.display !== 'none' && s.visibility !== 'hidden' \
@@ -399,17 +326,19 @@ impl Selector {
              if (tag === 'TEXTAREA' || tag === 'SELECT') return !el.readOnly; \
              return Boolean(el.isContentEditable); }}; \
              const rects = els.slice(0, 20).map(el => {{ \
-             const r = el.getBoundingClientRect(); \
-             return {{ x: r.x, y: r.y, width: r.width, height: r.height }}; }}); \
+             const r = f.box(el); \
+             return r; }}); \
              return {{ count: els.length, \
              visible: visible(first), \
-             enabled: first ? !first.disabled : false, \
+             enabled: first ? !f.disabled(first) : false, \
+             receives_events: first ? f.receives(first) : false, \
              checked: first ? Boolean(first.checked) : false, \
              editable: editable(first), \
              focused: first ? document.activeElement === first : false, \
              text: first ? (first.textContent || '').trim() : '', \
              value: first && 'value' in first ? String(first.value) : '', \
-             rects }}; }})()"
+             rects }}; }})()",
+            include_str!("dom.js")
         )
     }
 
@@ -427,17 +356,13 @@ impl Selector {
             "click" => "el.scrollIntoView({ block: 'center' }); el.click(); return { ok: true };",
             "focus" => "el.focus(); return { ok: true };",
             "blur" => "el.blur(); return { ok: true };",
-            "fill" => &format!(
-                "el.focus(); \
-                 if ('value' in el) {{ el.value = {arg}; {fire} \
-                 return {{ ok: true }}; }} \
+            "fill" | "clear" => &format!(
+                "el.focus(); const text = {arg}; \
+                 if (el.isContentEditable) {{ el.textContent = text; {fire} return {{ ok: true }}; }} \
+                 if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {{ \
+                 const proto = el instanceof HTMLInputElement ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype; \
+                 Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, text); {fire} return {{ ok: true }}; }} \
                  return {{ ok: false, error: 'not fillable' }};"
-            ),
-            "clear" => &format!(
-                "el.focus(); \
-                 if ('value' in el) {{ el.value = ''; {fire} \
-                 return {{ ok: true }}; }} \
-                 return {{ ok: false, error: 'not clearable' }};"
             ),
             "check" => &format!(
                 "const want = {arg} === 'true'; \
@@ -526,6 +451,7 @@ fn css_string(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+#[cfg(test)]
 /// An XPath string literal, using `concat()` when both quote types appear.
 fn xpath_string(value: &str) -> String {
     if !value.contains('"') {
@@ -684,8 +610,8 @@ pub struct GetByRoleOptions {
     pub pressed: Option<bool>,
     /// Filter by selected state.
     pub selected: Option<bool>,
-    /// `Some(false)` drops hidden matches (default keeps them, matching
-    /// the existing `get_by_role` behavior).
+    /// Include hidden matches when `Some(true)`; hidden matches are excluded
+    /// by default.
     pub include_hidden: Option<bool>,
 }
 
@@ -803,8 +729,144 @@ impl std::fmt::Debug for Locator {
 }
 
 impl Locator {
-    pub(crate) fn new(page: Page, selector: Selector) -> Self {
+    pub(crate) fn new(page: Page, mut selector: Selector) -> Self {
+        selector.strict = true;
         Self { page, selector }
+    }
+
+    pub(crate) fn selector_value(&self) -> Selector {
+        self.selector.clone()
+    }
+
+    /// Convert this iframe locator to a lazy frame locator.
+    pub fn content_frame(&self) -> crate::FrameLocator {
+        crate::FrameLocator::new(self.page.clone(), self.selector.clone())
+    }
+
+    /// Locate an iframe inside this locator's matches.
+    pub fn frame_locator(&self, selector: &str) -> crate::FrameLocator {
+        self.locator(selector).content_frame()
+    }
+
+    /// Page owning this locator.
+    pub fn page(&self) -> Page {
+        self.page.owning_page()
+    }
+
+    /// Restrict matching to visible elements.
+    pub fn visible(&self) -> Self {
+        let mut out = self.clone();
+        out.selector.visible = Some(true);
+        out
+    }
+
+    /// Match normalized text exactly (applies to text/label/attribute/role locators).
+    pub fn exact(&self) -> Self {
+        let mut out = self.clone();
+        out.selector.exact = true;
+        out
+    }
+
+    /// Match text using a JavaScript regular expression.
+    pub fn matching(&self, pattern: &str) -> Self {
+        let mut out = self.clone();
+        out.selector.regex = Some(pattern.into());
+        out
+    }
+
+    /// Evaluate with the element and a JSON-serializable argument.
+    pub async fn evaluate_with_arg<T: serde::de::DeserializeOwned, A: serde::Serialize>(
+        &self,
+        function: &str,
+        argument: &A,
+    ) -> E2eResult<T> {
+        self.evaluate(&format!(
+            "el => ({function})(el, {})",
+            serde_json::to_string(argument)?
+        ))
+        .await
+    }
+
+    /// Evaluate a function against every matched element.
+    pub async fn evaluate_all<T: serde::de::DeserializeOwned>(
+        &self,
+        function: &str,
+    ) -> E2eResult<T> {
+        self.page
+            .evaluate(&format!("({function})({})", self.selector.resolve_js()))
+            .await
+    }
+
+    /// Raw textContent values, without trimming.
+    pub async fn all_text_contents(&self) -> E2eResult<Vec<String>> {
+        self.evaluate_all("els => els.map(el => el.textContent || '')")
+            .await
+    }
+
+    /// Rendered innerText values.
+    pub async fn all_inner_texts(&self) -> E2eResult<Vec<String>> {
+        self.evaluate_all("els => els.map(el => el.innerText)")
+            .await
+    }
+
+    /// Read raw textContent of the unique element.
+    pub async fn text_content(&self) -> E2eResult<Option<String>> {
+        Ok(self
+            .eval_first("el.textContent")
+            .await?
+            .as_str()
+            .map(str::to_string))
+    }
+
+    /// Read rendered innerText of the unique element.
+    pub async fn inner_text(&self) -> E2eResult<Option<String>> {
+        Ok(self
+            .eval_first("el.innerText")
+            .await?
+            .as_str()
+            .map(str::to_string))
+    }
+
+    /// Remove outlines created by highlight().
+    pub async fn hide_highlight(&self) -> E2eResult<()> {
+        self.evaluate_all::<Value>("els => { els.forEach(el => {el.style.outline = ''; el.style.outlineOffset = '';}); return true; }").await?;
+        Ok(())
+    }
+
+    /// Capture the structured ARIA tree rooted at this element.
+    pub async fn aria_snapshot_json(&self) -> E2eResult<Value> {
+        self.eval_first(&format!("({}).aria(el)", include_str!("dom.js")))
+            .await
+    }
+
+    /// Capture indented ARIA snapshot text.
+    pub async fn aria_snapshot(&self) -> E2eResult<String> {
+        self.evaluate(&format!(
+            "el => {{ const f = {}; return f.render(f.aria(el)).join('\\n'); }}",
+            include_str!("dom.js")
+        ))
+        .await
+    }
+
+    /// Wait for an element-scoped function to become truthy.
+    pub async fn wait_for_function(&self, function: &str, timeout: Duration) -> E2eResult<()> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if self
+                .evaluate::<bool>(&format!("async el => Boolean(await ({function})(el))"))
+                .await
+                .unwrap_or(false)
+            {
+                return Ok(());
+            }
+            if !timeout.is_zero() && tokio::time::Instant::now() > deadline {
+                return Err(E2eError::Timeout(
+                    timeout.as_millis() as u64,
+                    format!("locator function: {}", self.selector()),
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     /// Underlying selector text.
@@ -817,6 +879,7 @@ impl Locator {
     fn scoped(&self, mut sub: Selector) -> Self {
         sub.raw = format!("{} >> {}", self.selector.raw(), sub.raw);
         sub.scope = Some(Box::new(self.selector.clone()));
+        sub.strict = true;
         Self {
             page: self.page.clone(),
             selector: sub,
@@ -956,13 +1019,16 @@ impl Locator {
             raw: format!("({} {op} {})", self.selector.raw(), other.selector.raw()),
             engine,
             body: String::new(),
-            pick: Pick::First,
+            pick: Pick::All,
             scope: None,
             has_text: Vec::new(),
             has_not_text: Vec::new(),
             has: Vec::new(),
             has_not: Vec::new(),
-            strict: false,
+            strict: true,
+            exact: false,
+            regex: None,
+            visible: None,
         };
         Ok(Self {
             page: self.page.clone(),
@@ -1029,8 +1095,20 @@ impl Locator {
         Ok(self.page.query_state(&self.selector).await?.count)
     }
 
+    async fn single_state(&self) -> E2eResult<ElementState> {
+        let state = self.page.query_state(&self.selector).await?;
+        if self.selector.strict && state.count > 1 {
+            return Err(E2eError::Locator {
+                selector: self.selector().into(),
+                message: "strict mode violation: multiple elements match".into(),
+            });
+        }
+        Ok(state)
+    }
+
     /// Current state snapshot.
     pub async fn state(&self) -> E2eResult<ElementState> {
+        self.page.run_locator_handlers().await?;
         self.page.query_state(&self.selector).await
     }
 
@@ -1054,7 +1132,7 @@ impl Locator {
                     return Ok(());
                 }
             }
-            if tokio::time::Instant::now() > deadline {
+            if !timeout.is_zero() && tokio::time::Instant::now() > deadline {
                 return Err(E2eError::Timeout(
                     timeout.as_millis().min(u128::from(u64::MAX)) as u64,
                     format!(
@@ -1068,23 +1146,42 @@ impl Locator {
         }
     }
 
-    async fn ready_state(&self, options: &LocatorOptions) -> E2eResult<ElementState> {
+    async fn ready_state(
+        &self,
+        options: &LocatorOptions,
+        enabled: bool,
+        receives: bool,
+    ) -> E2eResult<ElementState> {
         let timeout = options.timeout.unwrap_or_else(|| self.page.timeout());
         let deadline = tokio::time::Instant::now() + timeout;
+        let mut previous = None;
         loop {
+            self.page.run_locator_handlers().await?;
             let state = self.page.query_state(&self.selector).await?;
-            if state.count > 0 && state.visible {
-                return Ok(state);
-            }
-            if tokio::time::Instant::now() > deadline {
-                let why = if state.count == 0 {
-                    "no matching element"
-                } else {
-                    "element not visible"
-                };
+            if self.selector.strict && state.count > 1 {
                 return Err(E2eError::Locator {
-                    selector: self.selector.raw().to_string(),
-                    message: format!("{why} within {}ms", timeout.as_millis()),
+                    selector: self.selector.raw().into(),
+                    message: "strict mode violation: multiple elements match".into(),
+                });
+            }
+            if state.count == 1
+                && state.visible
+                && (!enabled || state.enabled)
+                && (!receives || state.receives_events)
+            {
+                let rect = state.rects.first().cloned();
+                if previous == rect {
+                    return Ok(state);
+                }
+                previous = rect;
+            } else {
+                previous = None;
+            }
+            if !timeout.is_zero() && tokio::time::Instant::now() > deadline {
+                return Err(E2eError::Locator {
+                    selector: self.selector.raw().into(),
+                    message: "element not actionable: missing, hidden, disabled, moving or covered"
+                        .into(),
                 });
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -1106,12 +1203,12 @@ impl Locator {
     /// Click with explicit options.
     pub async fn click_with_options(&self, options: ClickOptions) -> E2eResult<()> {
         let locator_options = LocatorOptions { timeout: None };
-        if options.force {
-            self.page.action(&self.selector, "click", None).await?;
-            return Ok(());
-        }
         self.page.action(&self.selector, "scroll", None).await?;
-        let state = self.ready_state(&locator_options).await?;
+        let state = if options.force {
+            self.page.query_state(&self.selector).await?
+        } else {
+            self.ready_state(&locator_options, true, true).await?
+        };
         match Self::center(&state) {
             Some((x, y)) => {
                 self.page
@@ -1148,7 +1245,9 @@ impl Locator {
     /// Hover the element.
     pub async fn hover(&self) -> E2eResult<()> {
         self.page.action(&self.selector, "scroll", None).await?;
-        let state = self.ready_state(&LocatorOptions { timeout: None }).await?;
+        let state = self
+            .ready_state(&LocatorOptions { timeout: None }, false, true)
+            .await?;
         match Self::center(&state) {
             Some((x, y)) => self.page.mouse_move(x, y).await,
             None => Err(E2eError::Locator {
@@ -1173,7 +1272,9 @@ impl Locator {
     /// Tap the element's center via the touchscreen.
     pub async fn tap(&self) -> E2eResult<()> {
         self.page.action(&self.selector, "scroll", None).await?;
-        let state = self.ready_state(&LocatorOptions { timeout: None }).await?;
+        let state = self
+            .ready_state(&LocatorOptions { timeout: None }, true, true)
+            .await?;
         match Self::center(&state) {
             Some((x, y)) => self.page.touchscreen_tap(x, y).await,
             None => Err(E2eError::Locator {
@@ -1198,9 +1299,11 @@ impl Locator {
             ));
         }
         self.page.action(&self.selector, "scroll", None).await?;
-        let from = self.ready_state(&LocatorOptions { timeout: None }).await?;
+        let from = self
+            .ready_state(&LocatorOptions { timeout: None }, false, true)
+            .await?;
         let to = target
-            .ready_state(&LocatorOptions { timeout: None })
+            .ready_state(&LocatorOptions { timeout: None }, false, true)
             .await?;
         let (Some((x0, y0)), Some((x1, y1))) = (Self::center(&from), Self::center(&to)) else {
             return Err(E2eError::Locator {
@@ -1257,7 +1360,9 @@ impl Locator {
     /// Screenshot just this element (PNG bytes).
     pub async fn screenshot(&self) -> E2eResult<Vec<u8>> {
         self.page.action(&self.selector, "scroll", None).await?;
-        let state = self.ready_state(&LocatorOptions { timeout: None }).await?;
+        let state = self
+            .ready_state(&LocatorOptions { timeout: None }, false, false)
+            .await?;
         match state.rects.first() {
             Some(rect) => self.page.screenshot_clip(rect, None).await,
             None => Err(E2eError::Locator {
@@ -1275,29 +1380,19 @@ impl Locator {
 
     /// Type text char-by-char with trusted input (keeps existing value).
     pub async fn press_sequentially(&self, text: &str) -> E2eResult<()> {
-        self.click().await?;
-        self.page.insert_text(text).await?;
-        // Notify frameworks that poll for input events.
-        self.page
-            .evaluate_value(
-                "(() => { const el = document.activeElement; if (!el) return false; \
-                 el.dispatchEvent(new Event('input', { bubbles: true })); \
-                 el.dispatchEvent(new Event('change', { bubbles: true })); \
-                 return true; })()",
-            )
-            .await?;
-        Ok(())
+        self.press_sequentially_with(text, KeyPressOptions::default())
+            .await
     }
 
     /// Press a key while the element is focused.
     pub async fn press(&self, key: &str) -> E2eResult<()> {
-        self.click().await?;
+        self.focus().await?;
         self.page.press_key(key).await
     }
 
     /// Press a key with explicit options (down/up delay).
     pub async fn press_with(&self, key: &str, options: KeyPressOptions) -> E2eResult<()> {
-        self.click().await?;
+        self.focus().await?;
         self.page.press_key_with(key, options).await
     }
 
@@ -1307,7 +1402,7 @@ impl Locator {
         text: &str,
         options: KeyPressOptions,
     ) -> E2eResult<()> {
-        self.click().await?;
+        self.focus().await?;
         for ch in text.chars() {
             self.page
                 .press_key_with(&ch.to_string(), options.clone())
@@ -1367,17 +1462,26 @@ impl Locator {
 
     /// Check a checkbox/radio.
     pub async fn check(&self) -> E2eResult<()> {
-        self.page
-            .action(&self.selector, "check", Some("true"))
-            .await?;
-        Ok(())
+        self.change_checked(true).await
     }
 
     /// Uncheck a checkbox.
     pub async fn uncheck(&self) -> E2eResult<()> {
-        self.page
-            .action(&self.selector, "check", Some("false"))
-            .await?;
+        self.change_checked(false).await
+    }
+
+    async fn change_checked(&self, checked: bool) -> E2eResult<()> {
+        let current = self.eval_first("(() => { if (!(el instanceof HTMLInputElement) || !['checkbox', 'radio'].includes(el.type)) throw new Error('element is not a checkbox or radio'); return el.checked; })()").await?;
+        if current.as_bool() == Some(checked) {
+            return Ok(());
+        }
+        self.click().await?;
+        if self.is_checked().await? != checked {
+            return Err(E2eError::Config(format!(
+                "click did not set {} to checked={checked}",
+                self.selector()
+            )));
+        }
         Ok(())
     }
 
@@ -1419,18 +1523,34 @@ impl Locator {
 
     /// Read trimmed text content.
     pub async fn text(&self) -> E2eResult<String> {
-        Ok(self.page.query_state(&self.selector).await?.text)
+        self.evaluate("el => (el.textContent || '').trim()").await
     }
 
-    /// Read the form value.
+    /// Read the form value of the unique input.
     pub async fn input_value(&self) -> E2eResult<String> {
-        Ok(self.page.query_state(&self.selector).await?.value)
+        self.evaluate("el => { if (!el.matches('input,textarea,select')) throw new Error('not an input element'); return el.value; }").await
     }
 
     /// Evaluate `projection` (an expression over `el`) on the first match.
     ///
     /// Returns [`Value::Null`] when nothing matches.
     async fn eval_first(&self, projection: &str) -> E2eResult<Value> {
+        let timeout = self.page.timeout();
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            self.page.run_locator_handlers().await?;
+            let state = self.single_state().await?;
+            if state.count > 0 {
+                break;
+            }
+            if !timeout.is_zero() && tokio::time::Instant::now() >= deadline {
+                return Err(E2eError::Timeout(
+                    timeout.as_millis().min(u64::MAX as u128) as u64,
+                    format!("waiting for {}", self.selector()),
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
         let resolve = self.selector.resolve_js();
         let guard = if self.selector.strict {
             "if (els.length !== 1) throw new Error('strict mode violation: \
@@ -1445,7 +1565,7 @@ impl Locator {
         self.page.evaluate_value(&expression).await
     }
 
-    /// Read an attribute (`None` when the element or attribute is missing).
+    /// Wait for one element and read an attribute (`None` if the attribute is absent).
     pub async fn attribute(&self, name: &str) -> E2eResult<Option<String>> {
         let name_json = serde_json::to_string(name).unwrap_or_default();
         let value = self
@@ -1454,7 +1574,7 @@ impl Locator {
         Ok(value.as_str().map(str::to_string))
     }
 
-    /// Read a computed CSS property (`None` when the element is missing).
+    /// Wait for one element and read a computed CSS property.
     pub async fn css_value(&self, property: &str) -> E2eResult<Option<String>> {
         let property_json = serde_json::to_string(property).unwrap_or_default();
         let value = self
@@ -1465,8 +1585,8 @@ impl Locator {
         Ok(value.as_str().map(str::to_string))
     }
 
-    /// Read a DOM property as JSON (`None` when the element is missing or
-    /// the property is `null`/`undefined`).
+    /// Wait for one element and read a DOM property as JSON (`None` when the
+    /// property is `null`/`undefined`).
     pub async fn js_property(&self, name: &str) -> E2eResult<Option<Value>> {
         let name_json = serde_json::to_string(name).unwrap_or_default();
         let value = self.eval_first(&format!("el[{name_json}]")).await?;
@@ -1477,7 +1597,7 @@ impl Locator {
         }
     }
 
-    /// Read innerHTML (`None` when the element is missing).
+    /// Wait for one element and read its innerHTML.
     pub async fn inner_html(&self) -> E2eResult<Option<String>> {
         let value = self.eval_first("el.innerHTML").await?;
         Ok(value.as_str().map(str::to_string))
@@ -1500,82 +1620,77 @@ impl Locator {
     /// An approximation of the full accessible-name computation.
     pub async fn accessible_name(&self) -> E2eResult<Option<String>> {
         let value = self
-            .eval_first(
-                "(el.getAttribute('aria-label') \
-                 || el.getAttribute('alt') \
-                 || (el.textContent || '').trim() || null)",
-            )
+            .eval_first(&format!("({}).name(el)", include_str!("dom.js")))
             .await?;
         Ok(value.as_str().map(str::to_string))
     }
 
-    /// Accessible description (`aria-describedby` targets, then `title`).
-    ///
-    /// An approximation of the full accessible-description computation.
+    /// Accessible description from referenced elements, aria-description or title.
     pub async fn accessible_description(&self) -> E2eResult<Option<String>> {
         let value = self
-            .eval_first(
-                "(() => { const ids = (el.getAttribute('aria-describedby') || '') \
-                 .split(/\\s+/).filter(Boolean); \
-                 const text = ids.map(id => document.getElementById(id)) \
-                 .filter(Boolean).map(target => target.textContent.trim()) \
-                 .join(' '); \
-                 return text || el.getAttribute('title') || null; })()",
-            )
+            .eval_first(&format!("({}).description(el)", include_str!("dom.js")))
             .await?;
+        Ok(value.as_str().map(str::to_string))
+    }
+
+    /// Implicit or explicit ARIA role.
+    pub async fn role(&self) -> E2eResult<Option<String>> {
+        let value = self
+            .eval_first(&format!("({}).role(el)", include_str!("dom.js")))
+            .await?;
+        Ok(value.as_str().map(str::to_string))
+    }
+
+    /// Accessible error message referenced by aria-errormessage.
+    pub async fn accessible_error_message(&self) -> E2eResult<Option<String>> {
+        let value = self.eval_first("(el.getAttribute('aria-errormessage') || '').split(/\\s+/).map(id => document.getElementById(id)?.textContent || '').join(' ').trim()").await?;
         Ok(value.as_str().map(str::to_string))
     }
 
     /// Whether the first match is visible (immediate, no retry).
     pub async fn is_visible(&self) -> E2eResult<bool> {
-        Ok(self.page.query_state(&self.selector).await?.visible)
+        Ok(self.single_state().await?.visible)
     }
 
     /// Whether the first match is hidden or absent (immediate, no retry).
     pub async fn is_hidden(&self) -> E2eResult<bool> {
-        let state = self.page.query_state(&self.selector).await?;
+        let state = self.single_state().await?;
         Ok(state.count == 0 || !state.visible)
     }
 
     /// Whether the first match is enabled (immediate, no retry).
     pub async fn is_enabled(&self) -> E2eResult<bool> {
-        Ok(self.page.query_state(&self.selector).await?.enabled)
+        Ok(self.single_state().await?.enabled)
     }
 
     /// Whether the first match is disabled (immediate, no retry).
     pub async fn is_disabled(&self) -> E2eResult<bool> {
-        Ok(!self.page.query_state(&self.selector).await?.enabled)
+        Ok(!self.single_state().await?.enabled)
     }
 
     /// Whether the first match is checked (immediate, no retry).
     pub async fn is_checked(&self) -> E2eResult<bool> {
-        Ok(self.page.query_state(&self.selector).await?.checked)
+        Ok(self.single_state().await?.checked)
     }
 
     /// Whether the first match is editable (immediate, no retry).
     pub async fn is_editable(&self) -> E2eResult<bool> {
-        Ok(self.page.query_state(&self.selector).await?.editable)
+        Ok(self.single_state().await?.editable)
     }
 
     /// Whether the first match is focused (immediate, no retry).
     pub async fn is_focused(&self) -> E2eResult<bool> {
-        Ok(self.page.query_state(&self.selector).await?.focused)
+        Ok(self.single_state().await?.focused)
     }
 
     /// Whether at least one element matches (immediate, no retry).
     pub async fn is_attached(&self) -> E2eResult<bool> {
-        Ok(self.page.query_state(&self.selector).await?.count > 0)
+        Ok(self.single_state().await?.count > 0)
     }
 
     /// Bounding box of the first match (`None` when nothing matches).
     pub async fn bounding_box(&self) -> E2eResult<Option<crate::page::ElementRect>> {
-        Ok(self
-            .page
-            .query_state(&self.selector)
-            .await?
-            .rects
-            .into_iter()
-            .next())
+        Ok(self.single_state().await?.rects.into_iter().next())
     }
 
     /// Outline the first match with a red box for a moment (debugging).
@@ -1701,9 +1816,9 @@ mod tests {
             .push(Selector::parse("css=.gone".to_string()));
         let expression = selector.resolve_js();
         assert!(expression.contains("!(el.textContent"), "{expression}");
-        assert!(expression.contains("el.contains(n)"), "{expression}");
+        assert!(expression.contains("([el]).flatMap"), "{expression}");
         assert!(
-            expression.contains("querySelectorAll(\"button\")"),
+            expression.contains("f.query(root, \"button\")"),
             "{expression}"
         );
         assert!(expression.contains(".gone"), "{expression}");
@@ -1722,12 +1837,10 @@ mod tests {
     fn expressions_embed_escaped_selector() {
         let selector = Selector::parse("text=he\"llo".to_string());
         let expression = selector.state_expression();
-        assert!(expression.contains("querySelectorAll('body *')"));
+        assert!(expression.contains("f.query(root, '*')"));
         assert!(expression.contains("he\\\"llo"));
         let css = Selector::parse(".a".to_string());
-        assert!(css
-            .state_expression()
-            .contains("document.querySelectorAll(\".a\")"));
+        assert!(css.state_expression().contains("f.query(root, \".a\")"));
     }
 
     #[test]
@@ -1769,17 +1882,16 @@ mod tests {
             Selector::by_role("button", "save").raw(),
             "role=button[name=\"save\"]"
         );
-        assert!(Selector::by_label("Name")
-            .raw()
-            .starts_with("xpath=//label["));
-        assert!(Selector::by_placeholder("ENTER")
-            .raw()
-            .contains("@placeholder"));
-        assert!(Selector::by_placeholder("ENTER")
-            .raw()
-            .contains("\"enter\""));
-        assert!(Selector::by_alt("logo").raw().contains("@alt"));
-        assert!(Selector::by_title("docs").raw().contains("@title"));
+        assert!(matches!(Selector::by_label("Name").engine, Engine::Label));
+        assert!(
+            matches!(Selector::by_placeholder("ENTER").engine, Engine::Attribute(ref name) if name == "placeholder")
+        );
+        assert!(
+            matches!(Selector::by_alt("logo").engine, Engine::Attribute(ref name) if name == "alt")
+        );
+        assert!(
+            matches!(Selector::by_title("docs").engine, Engine::Attribute(ref name) if name == "title")
+        );
     }
 
     #[test]
@@ -1787,10 +1899,10 @@ mod tests {
         let base = Selector::parse(".a".to_string());
         let mut nth = base.clone();
         nth.pick = Pick::Nth(2);
-        assert!(nth.resolve_js().ends_with(".slice(2, 3)"));
+        assert!(nth.resolve_js().contains(".slice(2, 3)"));
         let mut last = base.clone();
         last.pick = Pick::Last;
-        assert!(last.resolve_js().ends_with(".slice(-1)"));
+        assert!(last.resolve_js().contains(".slice(-1)"));
         assert!(!base.resolve_js().contains(".slice("));
     }
 
@@ -1804,7 +1916,7 @@ mod tests {
         scoped.scope = Some(Box::new(Selector::parse("form".to_string())));
         let expression = scoped.resolve_js();
         assert!(expression.contains("flatMap"));
-        assert!(expression.contains("querySelectorAll(\"form\")"));
+        assert!(expression.contains("f.query(root, \"form\")"));
     }
 
     #[test]
@@ -1829,13 +1941,16 @@ mod tests {
                 Box::new(Selector::parse("#b".to_string())),
             ),
             body: String::new(),
-            pick: Pick::First,
+            pick: Pick::All,
             scope: None,
             has_text: Vec::new(),
             has_not_text: Vec::new(),
             has: Vec::new(),
             has_not: Vec::new(),
             strict: false,
+            exact: false,
+            regex: None,
+            visible: None,
         };
         let expression = combo.resolve_js();
         assert!(expression.contains("new Set"));
@@ -1848,13 +1963,16 @@ mod tests {
                 Box::new(Selector::parse("#b".to_string())),
             ),
             body: String::new(),
-            pick: Pick::First,
+            pick: Pick::All,
             scope: None,
             has_text: Vec::new(),
             has_not_text: Vec::new(),
             has: Vec::new(),
             has_not: Vec::new(),
             strict: false,
+            exact: false,
+            regex: None,
+            visible: None,
         };
         let expression = both.resolve_js();
         assert!(expression.contains("keep.has(el)"));

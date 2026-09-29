@@ -41,10 +41,13 @@ mod api;
 mod bidi;
 mod browser;
 mod cdp;
+mod config;
 mod context;
+mod coverage;
 mod driver;
 mod error;
 mod expect;
+mod frame_locator;
 mod har;
 mod jshandle;
 mod locator;
@@ -55,14 +58,17 @@ mod snapshot;
 mod video;
 mod webserver;
 
-pub use api::{ApiClient, ApiResponse};
+pub use api::{ApiClient, ApiClientOptions, ApiRequestOptions, ApiResponse, MultipartField};
 pub use bidi::BidiConnection;
 pub use browser::{find_chromium, find_firefox, Browser, BrowserKind, LaunchOptions};
 pub use cdp::CdpConnection;
+pub use config::config_from_env;
 pub use context::{BrowserContext, ContextOptions, ServiceWorkerMode, TracingOptions};
+pub use coverage::{Coverage, CoverageFunction, CoverageRange, CssCoverageEntry, JsCoverageEntry};
 pub use driver::FrameStream;
 pub use error::{E2eError, E2eResult};
-pub use expect::{expect_poll, PageExpect, SoftAsserts, Timeout};
+pub use expect::{expect_poll, expect_to_pass, LocatorExpect, PageExpect, SoftAsserts, Timeout};
+pub use frame_locator::FrameLocator;
 pub use har::{HarContentMode, HarFile, HarReplayEntry};
 pub use jshandle::JSHandle;
 pub use locator::{
@@ -75,7 +81,8 @@ pub use page::{
     KeyPress, KeyPressOptions, LoadState, LocatorHandlerFn, LocatorHandlerOptions, MouseButton,
     MouseClickOptions, NavigationOptions, Page, PageEvent, PageEventKind, RecordedRequest,
     ReducedMotion, RouteAction, RouteFromHarOptions, RouteHandler, RouteHandlerEntry, RouteInfo,
-    RouteRule, ScreenshotOptions, StorageState, Viewport, WebSocketDirection, WebSocketEvent,
+    RouteRule, ScreenshotOptions, StorageEntry, StorageOrigin, StorageState, Viewport,
+    WebSocketDirection, WebSocketEvent,
 };
 pub use report::{Attachment, TestReport, TestResult, TestStatus};
 pub use runner::{
