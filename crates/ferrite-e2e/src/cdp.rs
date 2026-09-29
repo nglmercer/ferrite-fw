@@ -5,7 +5,7 @@
 //! Commands carry an incrementing id; responses resolve pending oneshots
 //! while method-only frames fan out as broadcast events.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -28,6 +28,23 @@ pub struct CdpEvent {
     pub params: Value,
 }
 
+/// One browser download tracked from `Browser.download*` events.
+#[derive(Debug, Clone)]
+pub struct DownloadRecord {
+    /// Download GUID (for `Browser.cancelDownload`).
+    pub guid: String,
+    /// Source URL.
+    pub url: String,
+    /// Suggested file name.
+    pub filename: String,
+    /// Latest progress state (`inProgress`, `completed`, `canceled`,
+    /// `interrupted`).
+    pub state: String,
+}
+
+/// Tracked downloads kept per connection (oldest dropped first).
+const MAX_DOWNLOAD_RECORDS: usize = 64;
+
 enum Outbound {
     Text(String),
     Close,
@@ -37,6 +54,7 @@ struct Inner {
     tx: mpsc::UnboundedSender<Outbound>,
     pending: Mutex<HashMap<u64, oneshot::Sender<E2eResult<Value>>>>,
     events: broadcast::Sender<CdpEvent>,
+    downloads: Mutex<VecDeque<DownloadRecord>>,
     next_id: AtomicU64,
 }
 
@@ -59,6 +77,7 @@ impl CdpConnection {
             tx,
             pending: Mutex::new(HashMap::new()),
             events,
+            downloads: Mutex::new(VecDeque::new()),
             next_id: AtomicU64::new(1),
         });
 
@@ -104,6 +123,17 @@ impl CdpConnection {
     #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<CdpEvent> {
         self.inner.events.subscribe()
+    }
+
+    /// Tracked browser downloads, oldest first (flows only while download
+    /// events are enabled via [`crate::page::Page::set_download_dir`]).
+    #[must_use]
+    pub fn download_records(&self) -> Vec<DownloadRecord> {
+        self.inner
+            .downloads
+            .lock()
+            .map(|records| records.iter().cloned().collect())
+            .unwrap_or_default()
     }
 
     /// Send a command on an optional session and await its `result`.
@@ -192,6 +222,9 @@ fn handle_frame(inner: &Arc<Inner>, text: &str) {
         return;
     }
     if let Some(method) = frame.get("method").and_then(Value::as_str) {
+        if method == "Browser.downloadWillBegin" || method == "Browser.downloadProgress" {
+            track_download(inner, method, &frame);
+        }
         let event = CdpEvent {
             session: frame
                 .get("sessionId")
@@ -201,6 +234,46 @@ fn handle_frame(inner: &Arc<Inner>, text: &str) {
             params: frame.get("params").cloned().unwrap_or(Value::Null),
         };
         let _ = inner.events.send(event);
+    }
+}
+
+/// Fold a download event into the connection's tracker (bounded).
+fn track_download(inner: &Arc<Inner>, method: &str, frame: &Value) {
+    let params = &frame["params"];
+    let guid = params["guid"].as_str().unwrap_or_default();
+    if guid.is_empty() {
+        return;
+    }
+    let Ok(mut records) = inner.downloads.lock() else {
+        return;
+    };
+    if method.ends_with("downloadWillBegin") {
+        if records.iter().any(|record| record.guid == guid) {
+            return;
+        }
+        records.push_back(DownloadRecord {
+            guid: guid.to_string(),
+            url: params["url"].as_str().unwrap_or_default().to_string(),
+            filename: params["suggestedFilename"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            state: "inProgress".to_string(),
+        });
+    } else if let Some(record) = records.iter_mut().find(|record| record.guid == guid) {
+        if let Some(state) = params["state"].as_str() {
+            record.state = state.to_string();
+        }
+        if record.filename.is_empty() {
+            record.filename = params["filePath"]
+                .as_str()
+                .and_then(|path| path.rsplit(['/', '\\']).next())
+                .unwrap_or_default()
+                .to_string();
+        }
+    }
+    while records.len() > MAX_DOWNLOAD_RECORDS {
+        records.pop_front();
     }
 }
 
@@ -225,5 +298,45 @@ mod tests {
         let frame: Value = serde_json::from_str(text).unwrap();
         assert_eq!(frame["method"], "Page.loadEventFired");
         assert_eq!(frame["sessionId"], "ABC");
+    }
+
+    #[test]
+    fn download_tracker_folds_events() {
+        let (events, _) = broadcast::channel::<CdpEvent>(4);
+        let (tx, _) = mpsc::unbounded_channel();
+        let inner = Arc::new(Inner {
+            tx,
+            pending: Mutex::new(HashMap::new()),
+            events,
+            downloads: Mutex::new(VecDeque::new()),
+            next_id: AtomicU64::new(1),
+        });
+        let begin = serde_json::json!({
+            "method": "Browser.downloadWillBegin",
+            "params": {
+                "guid": "g1",
+                "url": "http://x.test/f.bin",
+                "suggestedFilename": "f.bin",
+            },
+        });
+        track_download(&inner, "Browser.downloadWillBegin", &begin);
+        // Duplicate begins do not duplicate records.
+        track_download(&inner, "Browser.downloadWillBegin", &begin);
+        let progress = serde_json::json!({
+            "method": "Browser.downloadProgress",
+            "params": { "guid": "g1", "state": "completed" },
+        });
+        track_download(&inner, "Browser.downloadProgress", &progress);
+        // Progress for unknown GUIDs is ignored.
+        let stray = serde_json::json!({
+            "method": "Browser.downloadProgress",
+            "params": { "guid": "nope", "state": "completed" },
+        });
+        track_download(&inner, "Browser.downloadProgress", &stray);
+        let records = inner.downloads.lock().unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].url, "http://x.test/f.bin");
+        assert_eq!(records[0].filename, "f.bin");
+        assert_eq!(records[0].state, "completed");
     }
 }

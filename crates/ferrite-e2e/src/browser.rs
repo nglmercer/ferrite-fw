@@ -744,6 +744,7 @@ impl Browser {
                         .await;
                         let Ok(driver) = spawned else { continue };
                         if let Ok(page) = owner.finish_page(Driver::Cdp(driver), sink).await {
+                            page.set_opener_target(opener.target_id());
                             opener.emit(PageEvent::Popup(Box::new(page)));
                         }
                     }
@@ -803,6 +804,7 @@ impl Browser {
                             owner.id().map(str::to_string),
                         ));
                         if let Ok(page) = owner.finish_page(driver, sink).await {
+                            page.set_opener_target(opener.target_id());
                             opener.emit(PageEvent::Popup(Box::new(page)));
                         }
                     }

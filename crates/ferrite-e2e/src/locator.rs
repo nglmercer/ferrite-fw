@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::driver::base64_encode;
 use crate::error::{E2eError, E2eResult};
-use crate::page::{ClickOptions, ElementState, Page};
+use crate::page::{ClickOptions, ElementState, KeyPressOptions, Page};
 
 /// Attribute `get_by_test_id` matches (default `data-testid`).
 static TEST_ID_ATTRIBUTE: OnceLock<Mutex<String>> = OnceLock::new();
@@ -41,6 +41,9 @@ pub struct Selector {
     pick: Pick,
     scope: Option<Box<Selector>>,
     has_text: Vec<String>,
+    has_not_text: Vec<String>,
+    has: Vec<Selector>,
+    has_not: Vec<Selector>,
     strict: bool,
 }
 
@@ -92,6 +95,9 @@ impl Selector {
             pick: Pick::First,
             scope: None,
             has_text: Vec::new(),
+            has_not_text: Vec::new(),
+            has: Vec::new(),
+            has_not: Vec::new(),
             strict: false,
         }
     }
@@ -114,6 +120,27 @@ impl Selector {
         } else {
             Self::parse(format!("role={role}[name=\"{name}\"]"))
         }
+    }
+
+    /// Match an ARIA role with full predicates.
+    pub(crate) fn by_role_with(role: &str, options: &GetByRoleOptions) -> Self {
+        let mut body = format!("role={role}");
+        if let Some(name) = &options.name {
+            body.push_str(&format!("[name=\"{name}\"]"));
+        }
+        for (key, flag) in [
+            ("checked", options.checked),
+            ("disabled", options.disabled),
+            ("expanded", options.expanded),
+            ("pressed", options.pressed),
+            ("selected", options.selected),
+            ("include-hidden", options.include_hidden),
+        ] {
+            if let Some(want) = flag {
+                body.push_str(&format!("[{key}={want}]"));
+            }
+        }
+        Self::parse(body)
     }
 
     /// Match a `<label>` by its text (case-insensitive substring).
@@ -200,6 +227,37 @@ impl Selector {
                  (el.textContent || '').toLowerCase().includes(q)); }})()"
             );
         }
+        for needle in &self.has_not_text {
+            let query = serde_json::to_string(needle).unwrap_or_default();
+            expression = format!(
+                "(() => {{ const els = ({expression}); \
+                 const q = {query}.toLowerCase(); \
+                 return els.filter(el => \
+                 !(el.textContent || '').toLowerCase().includes(q)); }})()"
+            );
+        }
+        // Inner locators resolve document-wide; containment makes the match
+        // relative to each candidate (this also honors chained inners).
+        for inner in &self.has {
+            let resolve = inner.resolve_js();
+            expression = format!(
+                "(() => {{ const els = ({expression}); \
+                 const inner = new Set(({resolve})); \
+                 return els.filter(el => {{ for (const n of inner) {{ \
+                 if (n !== el && el.contains(n)) return true; }} \
+                 return false; }}); }})()"
+            );
+        }
+        for inner in &self.has_not {
+            let resolve = inner.resolve_js();
+            expression = format!(
+                "(() => {{ const els = ({expression}); \
+                 const inner = new Set(({resolve})); \
+                 return els.filter(el => {{ for (const n of inner) {{ \
+                 if (n !== el && el.contains(n)) return false; }} \
+                 return true; }}); }})()"
+            );
+        }
         match self.pick {
             Pick::First => expression,
             Pick::Last => format!("({expression}).slice(-1)"),
@@ -252,13 +310,53 @@ impl Selector {
                 )
             }
             Engine::Role => {
-                let (role, name) = parse_role(&self.body);
-                let role_json = serde_json::to_string(&role).unwrap_or_default();
-                let name_json = serde_json::to_string(&name).unwrap_or_default();
+                let query = parse_role_full(&self.body);
+                let role_json = serde_json::to_string(&query.role).unwrap_or_default();
+                let name_json = serde_json::to_string(&query.name).unwrap_or_default();
                 let source = match roots {
                     None => "document.querySelectorAll(sel)".to_string(),
                     Some(r) => format!("({r}).flatMap(root => [...root.querySelectorAll(sel)])"),
                 };
+                let mut filters = format!(
+                    "const want = {name_json}.toLowerCase(); \
+                     if (want) els = els.filter(el => \
+                     ((el.getAttribute('aria-label') || el.textContent || '')\
+                     .toLowerCase().includes(want))); ",
+                );
+                // Each predicate compares a resolved boolean to `want`.
+                for (attribute, want) in [
+                    ("checked", query.checked),
+                    ("disabled", query.disabled),
+                    ("expanded", query.expanded),
+                    ("pressed", query.pressed),
+                    ("selected", query.selected),
+                ] {
+                    let Some(want) = want else { continue };
+                    let resolved = match attribute {
+                        "checked" => {
+                            "(el.checked === true \
+                             || el.getAttribute('aria-checked') === 'true')"
+                        }
+                        "disabled" => "(el.disabled === true)",
+                        "expanded" => "(el.getAttribute('aria-expanded') === 'true')",
+                        "pressed" => "(el.getAttribute('aria-pressed') === 'true')",
+                        _ => {
+                            "(el.selected === true \
+                             || el.getAttribute('aria-selected') === 'true')"
+                        }
+                    };
+                    filters.push_str(&format!(
+                        "els = els.filter(el => ({resolved}) === {want}); "
+                    ));
+                }
+                if query.include_hidden == Some(false) {
+                    filters.push_str(
+                        "els = els.filter(el => { const s = getComputedStyle(el); \
+                         const r = el.getBoundingClientRect(); \
+                         return s.display !== 'none' && s.visibility !== 'hidden' \
+                         && r.width > 0 && r.height > 0; }); ",
+                    );
+                }
                 format!(
                     "(() => {{ const byRole = {{ button: 'button,[role=\"button\"],\
                      input[type=\"button\"],input[type=\"submit\"]', \
@@ -272,11 +370,7 @@ impl Selector {
                      option: 'option,[role=\"option\"]' }}; \
                      const sel = byRole[{role_json}] || ('[role=' + {role_json} + ']'); \
                      let els = [...{source}]; \
-                     const want = {name_json}.toLowerCase(); \
-                     if (want) els = els.filter(el => \
-                     ((el.getAttribute('aria-label') || el.textContent || '')\
-                     .toLowerCase().includes(want))); \
-                     return els; }})()"
+                     {filters}return els; }})()"
                 )
             }
             Engine::Union(..) | Engine::Intersect(..) => {
@@ -355,6 +449,25 @@ impl Selector {
                  return {{ ok: false, error: 'not a select' }}; \
                  el.value = {arg}; {fire} \
                  return {{ ok: el.value === {arg} }};"
+            ),
+            "select_many" => &format!(
+                "if (!(el instanceof HTMLSelectElement)) \
+                 return {{ ok: false, error: 'not a select' }}; \
+                 const wants = JSON.parse({arg}); \
+                 const opts = [...el.options]; \
+                 if (!el.multiple) opts.forEach(o => o.selected = false); \
+                 let matched = 0; \
+                 for (const w of wants) {{ \
+                 const hit = w.value !== undefined \
+                   ? opts.find(o => o.value === w.value) \
+                   : w.label !== undefined \
+                     ? opts.find(o => (o.label || o.text) === w.label) \
+                     : opts[w.index]; \
+                 if (hit) {{ hit.selected = true; matched++; }} }} \
+                 {fire} \
+                 return matched === wants.length \
+                   ? {{ ok: true }} \
+                   : {{ ok: false, error: 'option not found' }};"
             ),
             "set_input_files" => &format!(
                 "if (!(el instanceof HTMLInputElement) || el.type !== 'file') \
@@ -449,18 +562,61 @@ fn xpath_string(value: &str) -> String {
 }
 
 /// Parse `role[name="x"]` into (role, name).
+#[cfg(test)]
 fn parse_role(body: &str) -> (String, String) {
+    let query = parse_role_full(body);
+    (query.role, query.name)
+}
+
+/// A parsed `role=` body with ARIA predicates.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct RoleQuery {
+    role: String,
+    name: String,
+    checked: Option<bool>,
+    disabled: Option<bool>,
+    expanded: Option<bool>,
+    pressed: Option<bool>,
+    selected: Option<bool>,
+    include_hidden: Option<bool>,
+}
+
+/// Parse `role[name="x"][checked=true]...` bodies.
+fn parse_role_full(body: &str) -> RoleQuery {
+    let mut query = RoleQuery::default();
     let Some(bracket) = body.find('[') else {
-        return (body.trim().to_string(), String::new());
+        query.role = body.trim().to_string();
+        return query;
     };
-    let role = body[..bracket].trim().to_string();
-    let rest = &body[bracket..];
-    let name = rest
-        .strip_prefix("[name=")
-        .and_then(|s| s.strip_suffix(']'))
-        .map(|s| s.trim_matches('"').trim_matches('\'').to_string())
-        .unwrap_or_default();
-    (role, name)
+    query.role = body[..bracket].trim().to_string();
+    let mut rest = &body[bracket..];
+    while let Some(after_open) = rest.strip_prefix('[') {
+        let Some((inner, after)) = after_open.split_once(']') else {
+            break;
+        };
+        let (key, value) = inner.split_once('=').unwrap_or((inner, ""));
+        let value = value.trim().trim_matches('"').trim_matches('\'');
+        let flag = match value {
+            "true" => Some(true),
+            "false" => Some(false),
+            _ => None,
+        };
+        match key.trim() {
+            "name" => query.name = value.to_string(),
+            "checked" => query.checked = flag,
+            "disabled" => query.disabled = flag,
+            "expanded" => query.expanded = flag,
+            "pressed" => query.pressed = flag,
+            "selected" => query.selected = flag,
+            "include-hidden" => query.include_hidden = flag,
+            _ => {}
+        }
+        rest = after.trim_start();
+        if !rest.starts_with('[') {
+            break;
+        }
+    }
+    query
 }
 
 /// Options for locator actions.
@@ -468,6 +624,167 @@ fn parse_role(body: &str) -> (String, String) {
 pub struct LocatorOptions {
     /// Action timeout (defaults to the page timeout).
     pub timeout: Option<Duration>,
+}
+
+/// Options for [`Locator::filter_with`].
+#[derive(Debug, Clone, Default)]
+pub struct FilterOptions {
+    /// Keep matches containing this text (case-insensitive substring).
+    pub has_text: Option<String>,
+    /// Drop matches containing this text.
+    pub has_not_text: Option<String>,
+    /// Keep matches containing a match of this locator.
+    pub has: Option<Locator>,
+    /// Drop matches containing a match of this locator.
+    pub has_not: Option<Locator>,
+}
+
+impl FilterOptions {
+    /// Keep matches containing `text`.
+    #[must_use]
+    pub fn has_text(mut self, text: impl Into<String>) -> Self {
+        self.has_text = Some(text.into());
+        self
+    }
+
+    /// Drop matches containing `text`.
+    #[must_use]
+    pub fn has_not_text(mut self, text: impl Into<String>) -> Self {
+        self.has_not_text = Some(text.into());
+        self
+    }
+
+    /// Keep matches containing a match of `inner`.
+    #[must_use]
+    pub fn has(mut self, inner: Locator) -> Self {
+        self.has = Some(inner);
+        self
+    }
+
+    /// Drop matches containing a match of `inner`.
+    #[must_use]
+    pub fn has_not(mut self, inner: Locator) -> Self {
+        self.has_not = Some(inner);
+        self
+    }
+}
+
+/// Options for `get_by_role_with`.
+#[derive(Debug, Clone, Default)]
+pub struct GetByRoleOptions {
+    /// Filter by accessible name (case-insensitive substring).
+    pub name: Option<String>,
+    /// Filter by checked state.
+    pub checked: Option<bool>,
+    /// Filter by disabled state.
+    pub disabled: Option<bool>,
+    /// Filter by expanded state (`aria-expanded`).
+    pub expanded: Option<bool>,
+    /// Filter by pressed state (`aria-pressed`).
+    pub pressed: Option<bool>,
+    /// Filter by selected state.
+    pub selected: Option<bool>,
+    /// `Some(false)` drops hidden matches (default keeps them, matching
+    /// the existing `get_by_role` behavior).
+    pub include_hidden: Option<bool>,
+}
+
+impl GetByRoleOptions {
+    /// Filter by accessible name.
+    #[must_use]
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// Filter by checked state.
+    #[must_use]
+    pub fn checked(mut self, checked: bool) -> Self {
+        self.checked = Some(checked);
+        self
+    }
+
+    /// Filter by disabled state.
+    #[must_use]
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = Some(disabled);
+        self
+    }
+
+    /// Filter by expanded state.
+    #[must_use]
+    pub fn expanded(mut self, expanded: bool) -> Self {
+        self.expanded = Some(expanded);
+        self
+    }
+
+    /// Filter by pressed state.
+    #[must_use]
+    pub fn pressed(mut self, pressed: bool) -> Self {
+        self.pressed = Some(pressed);
+        self
+    }
+
+    /// Filter by selected state.
+    #[must_use]
+    pub fn selected(mut self, selected: bool) -> Self {
+        self.selected = Some(selected);
+        self
+    }
+
+    /// Drop hidden matches when `false`.
+    #[must_use]
+    pub fn include_hidden(mut self, include: bool) -> Self {
+        self.include_hidden = Some(include);
+        self
+    }
+}
+
+/// States for [`Locator::wait_for_state`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitForState {
+    /// At least one match exists.
+    Attached,
+    /// No match exists.
+    Detached,
+    /// A match exists and the first is visible.
+    Visible,
+    /// No match exists or the first is hidden.
+    Hidden,
+}
+
+impl WaitForState {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Attached => "attached",
+            Self::Detached => "detached",
+            Self::Visible => "visible",
+            Self::Hidden => "hidden",
+        }
+    }
+}
+
+/// One `<option>` selection for [`Locator::select_options`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelectOption {
+    /// Match by option value.
+    Value(String),
+    /// Match by option label (or text).
+    Label(String),
+    /// Match by option index.
+    Index(usize),
+}
+
+impl SelectOption {
+    /// Match by option value.
+    pub fn value(value: impl Into<String>) -> Self {
+        Self::Value(value.into())
+    }
+
+    /// Match by option label.
+    pub fn label(label: impl Into<String>) -> Self {
+        Self::Label(label.into())
+    }
 }
 
 /// A lazy handle to DOM element(s): actions auto-wait for the target.
@@ -567,6 +884,39 @@ impl Locator {
         }
     }
 
+    /// Narrow matches with full options (chainable with [`Locator::filter`]).
+    #[must_use]
+    pub fn filter_with(&self, options: FilterOptions) -> Self {
+        let mut selector = self.selector.clone();
+        let mut raw = selector.raw;
+        if let Some(text) = options.has_text {
+            selector.has_text.push(text.clone());
+            raw = format!("{raw} >> has-text={text:?}");
+        }
+        if let Some(text) = options.has_not_text {
+            selector.has_not_text.push(text.clone());
+            raw = format!("{raw} >> has-not-text={text:?}");
+        }
+        if let Some(inner) = options.has {
+            raw = format!("{raw} >> has=({})", inner.selector.raw());
+            selector.has.push(inner.selector);
+        }
+        if let Some(inner) = options.has_not {
+            raw = format!("{raw} >> has-not=({})", inner.selector.raw());
+            selector.has_not.push(inner.selector);
+        }
+        selector.raw = raw;
+        Self {
+            page: self.page.clone(),
+            selector,
+        }
+    }
+
+    /// This locator's selector text (debugging, handler matching).
+    pub(crate) fn selector_raw(&self) -> &str {
+        self.selector.raw()
+    }
+
     /// Matches of either locator (same page required).
     pub fn or_(&self, other: &Locator) -> E2eResult<Self> {
         self.combine(other, true)
@@ -609,6 +959,9 @@ impl Locator {
             pick: Pick::First,
             scope: None,
             has_text: Vec::new(),
+            has_not_text: Vec::new(),
+            has: Vec::new(),
+            has_not: Vec::new(),
             strict: false,
         };
         Ok(Self {
@@ -639,6 +992,12 @@ impl Locator {
     #[must_use]
     pub fn get_by_role(&self, role: &str, name: &str) -> Self {
         self.scoped(Selector::by_role(role, name))
+    }
+
+    /// Locate an ARIA role with full predicates within this locator.
+    #[must_use]
+    pub fn get_by_role_with(&self, role: &str, options: GetByRoleOptions) -> Self {
+        self.scoped(Selector::by_role_with(role, &options))
     }
 
     /// Locate a `<label>` by text within this locator's matches.
@@ -677,17 +1036,32 @@ impl Locator {
 
     /// Wait until at least one match exists.
     pub async fn wait_for(&self, timeout: Duration) -> E2eResult<()> {
+        self.wait_for_state(WaitForState::Attached, timeout).await
+    }
+
+    /// Wait until the locator reaches `state`.
+    pub async fn wait_for_state(&self, state: WaitForState, timeout: Duration) -> E2eResult<()> {
         let deadline = tokio::time::Instant::now() + timeout;
         loop {
-            if let Ok(state) = self.page.query_state(&self.selector).await {
-                if state.count > 0 {
+            if let Ok(current) = self.page.query_state(&self.selector).await {
+                let done = match state {
+                    WaitForState::Attached => current.count > 0,
+                    WaitForState::Detached => current.count == 0,
+                    WaitForState::Visible => current.count > 0 && current.visible,
+                    WaitForState::Hidden => current.count == 0 || !current.visible,
+                };
+                if done {
                     return Ok(());
                 }
             }
             if tokio::time::Instant::now() > deadline {
                 return Err(E2eError::Timeout(
                     timeout.as_millis().min(u128::from(u64::MAX)) as u64,
-                    format!("wait for `{}`", self.selector.raw()),
+                    format!(
+                        "wait for `{}` to be {}",
+                        self.selector.raw(),
+                        state.as_str()
+                    ),
                 ));
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -741,7 +1115,15 @@ impl Locator {
         match Self::center(&state) {
             Some((x, y)) => {
                 self.page
-                    .mouse_click(x, y, options.click_count.max(1))
+                    .mouse_click_with(
+                        x,
+                        y,
+                        crate::page::MouseClickOptions {
+                            button: options.button,
+                            click_count: options.click_count.max(1),
+                            delay: options.delay,
+                        },
+                    )
                     .await?;
                 Ok(())
             }
@@ -757,6 +1139,8 @@ impl Locator {
         self.click_with_options(ClickOptions {
             force: false,
             click_count: 2,
+            button: crate::page::MouseButton::Left,
+            delay: Duration::ZERO,
         })
         .await
     }
@@ -911,6 +1295,36 @@ impl Locator {
         self.page.press_key(key).await
     }
 
+    /// Press a key with explicit options (down/up delay).
+    pub async fn press_with(&self, key: &str, options: KeyPressOptions) -> E2eResult<()> {
+        self.click().await?;
+        self.page.press_key_with(key, options).await
+    }
+
+    /// Type text with a delay between keystrokes.
+    pub async fn press_sequentially_with(
+        &self,
+        text: &str,
+        options: KeyPressOptions,
+    ) -> E2eResult<()> {
+        self.click().await?;
+        for ch in text.chars() {
+            self.page
+                .press_key_with(&ch.to_string(), options.clone())
+                .await?;
+        }
+        // Notify frameworks that poll for input events.
+        self.page
+            .evaluate_value(
+                "(() => { const el = document.activeElement; if (!el) return false; \
+                 el.dispatchEvent(new Event('input', { bubbles: true })); \
+                 el.dispatchEvent(new Event('change', { bubbles: true })); \
+                 return true; })()",
+            )
+            .await?;
+        Ok(())
+    }
+
     /// Clear an input/textarea.
     pub async fn clear(&self) -> E2eResult<()> {
         self.page.action(&self.selector, "clear", None).await?;
@@ -973,6 +1387,34 @@ impl Locator {
             .action(&self.selector, "select", Some(value))
             .await?;
         Ok(())
+    }
+
+    /// Select `<option>`s by value, label, or index (every entry must match;
+    /// single-selects keep the last match).
+    pub async fn select_options(&self, options: &[SelectOption]) -> E2eResult<()> {
+        let wants: Vec<Value> = options
+            .iter()
+            .map(|option| match option {
+                SelectOption::Value(value) => serde_json::json!({ "value": value }),
+                SelectOption::Label(label) => serde_json::json!({ "label": label }),
+                SelectOption::Index(index) => serde_json::json!({ "index": index }),
+            })
+            .collect();
+        let argument = serde_json::to_string(&wants).unwrap_or_default();
+        self.page
+            .action(&self.selector, "select_many", Some(&argument))
+            .await?;
+        Ok(())
+    }
+
+    /// Values of the selected `<option>`s (empty when not a select).
+    pub async fn selected_options(&self) -> E2eResult<Vec<String>> {
+        let value = self
+            .eval_first(
+                "el instanceof HTMLSelectElement ? [...el.selectedOptions].map(o => o.value) : []",
+            )
+            .await?;
+        serde_json::from_value(value).map_err(E2eError::Json)
     }
 
     /// Read trimmed text content.
@@ -1213,6 +1655,70 @@ mod tests {
     }
 
     #[test]
+    fn role_predicates_parse() {
+        let query = parse_role_full(
+            "checkbox[name=\"agree\"][checked=true][disabled=false][include-hidden=true]",
+        );
+        assert_eq!(query.role, "checkbox");
+        assert_eq!(query.name, "agree");
+        assert_eq!(query.checked, Some(true));
+        assert_eq!(query.disabled, Some(false));
+        assert_eq!(query.include_hidden, Some(true));
+        assert_eq!(query.expanded, None);
+        // Malformed bodies degrade instead of panicking.
+        let query = parse_role_full("button[name=\"oops");
+        assert_eq!(query.role, "button");
+        assert_eq!(query.name, "");
+        let query = parse_role_full("link[wat=1][pressed=nope]");
+        assert_eq!(query.role, "link");
+        assert_eq!(query.pressed, None);
+    }
+
+    #[test]
+    fn role_with_resolves_predicates() {
+        let selector = Selector::by_role_with(
+            "checkbox",
+            &GetByRoleOptions::default()
+                .checked(true)
+                .include_hidden(false),
+        );
+        assert!(selector.raw.contains("[checked=true]"), "{}", selector.raw);
+        let expression = selector.resolve_js();
+        assert!(expression.contains("aria-checked"), "{expression}");
+        assert!(expression.contains("getComputedStyle"), "{expression}");
+        // Plain roles keep the old shape (no predicate filters).
+        let plain = Selector::by_role("button", "");
+        assert!(!plain.resolve_js().contains("aria-pressed"));
+    }
+
+    #[test]
+    fn filter_with_resolves() {
+        let mut selector = Selector::parse("li".to_string());
+        selector.has_not_text.push("gone".to_string());
+        selector.has.push(Selector::parse("button".to_string()));
+        selector
+            .has_not
+            .push(Selector::parse("css=.gone".to_string()));
+        let expression = selector.resolve_js();
+        assert!(expression.contains("!(el.textContent"), "{expression}");
+        assert!(expression.contains("el.contains(n)"), "{expression}");
+        assert!(
+            expression.contains("querySelectorAll(\"button\")"),
+            "{expression}"
+        );
+        assert!(expression.contains(".gone"), "{expression}");
+    }
+
+    #[test]
+    fn select_many_action_matches_variants() {
+        let selector = Selector::parse("css=select".to_string());
+        let expression = selector.action_expression("select_many", Some("[{\"label\":\"B\"}]"));
+        assert!(expression.contains("JSON.parse"), "{expression}");
+        assert!(expression.contains("o.label"), "{expression}");
+        assert!(expression.contains("option not found"), "{expression}");
+    }
+
+    #[test]
     fn expressions_embed_escaped_selector() {
         let selector = Selector::parse("text=he\"llo".to_string());
         let expression = selector.state_expression();
@@ -1326,6 +1832,9 @@ mod tests {
             pick: Pick::First,
             scope: None,
             has_text: Vec::new(),
+            has_not_text: Vec::new(),
+            has: Vec::new(),
+            has_not: Vec::new(),
             strict: false,
         };
         let expression = combo.resolve_js();
@@ -1342,6 +1851,9 @@ mod tests {
             pick: Pick::First,
             scope: None,
             has_text: Vec::new(),
+            has_not_text: Vec::new(),
+            has: Vec::new(),
+            has_not: Vec::new(),
             strict: false,
         };
         let expression = both.resolve_js();

@@ -332,6 +332,8 @@ const PREEXISTING_DOWNLOAD_GRACE: Duration = Duration::from_secs(30);
 pub(crate) struct FrameInfo {
     /// Opaque frame id for driver-level frame evaluation.
     pub id: String,
+    /// Parent frame id (`None` for the main frame).
+    pub parent_id: Option<String>,
     /// Frame name (`<iframe name>`; empty on Firefox).
     pub name: String,
     /// Frame document URL.
@@ -346,6 +348,7 @@ pub(crate) struct FrameInfo {
 pub struct Frame {
     page: Page,
     id: String,
+    parent_id: Option<String>,
     name: String,
     url: String,
 }
@@ -370,6 +373,63 @@ impl Frame {
     #[must_use]
     pub fn url(&self) -> &str {
         &self.url
+    }
+
+    /// Navigate this frame to a URL.
+    pub async fn goto(&self, url: &str) -> E2eResult<()> {
+        self.page.driver.frame_navigate(&self.id, url).await
+    }
+
+    /// Parent frame (`None` for the main frame).
+    pub async fn parent(&self) -> E2eResult<Option<Frame>> {
+        let Some(parent_id) = &self.parent_id else {
+            return Ok(None);
+        };
+        Ok(self
+            .page
+            .document_frames()
+            .await?
+            .into_iter()
+            .find(|frame| frame.id == *parent_id))
+    }
+
+    /// Direct child frames.
+    pub async fn child_frames(&self) -> E2eResult<Vec<Frame>> {
+        Ok(self
+            .page
+            .document_frames()
+            .await?
+            .into_iter()
+            .filter(|frame| frame.parent_id.as_deref() == Some(self.id.as_str()))
+            .collect())
+    }
+
+    /// Whether the frame is detached from the document.
+    pub async fn is_detached(&self) -> E2eResult<bool> {
+        Ok(!self
+            .page
+            .document_frames()
+            .await?
+            .iter()
+            .any(|frame| frame.id == self.id))
+    }
+
+    /// Frame document title.
+    pub async fn title(&self) -> E2eResult<String> {
+        self.evaluate_value("document.title")
+            .await?
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| E2eError::Config("frame has no title".to_string()))
+    }
+
+    /// Frame document HTML.
+    pub async fn content(&self) -> E2eResult<String> {
+        self.evaluate_value("document.documentElement.outerHTML")
+            .await?
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| E2eError::Config("frame has no document".to_string()))
     }
 
     /// Evaluate an expression in this frame, deserializing the result.
@@ -409,6 +469,15 @@ impl Frame {
     /// Locate an ARIA role inside this frame.
     pub fn get_by_role(&self, role: &str, name: &str) -> Locator {
         Locator::new(self.scoped_page(), Selector::by_role(role, name))
+    }
+
+    /// Locate an ARIA role with full predicates inside this frame.
+    pub fn get_by_role_with(
+        &self,
+        role: &str,
+        options: crate::locator::GetByRoleOptions,
+    ) -> Locator {
+        Locator::new(self.scoped_page(), Selector::by_role_with(role, &options))
     }
 
     /// Locate a `<label>` by its text inside this frame.
@@ -547,6 +616,92 @@ pub struct ClickOptions {
     pub force: bool,
     /// Number of clicks (2 = double-click).
     pub click_count: u32,
+    /// Mouse button (trusted clicks only).
+    pub button: MouseButton,
+    /// Delay between button down and up.
+    pub delay: Duration,
+}
+
+/// Mouse button for clicks.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MouseButton {
+    /// Primary button.
+    #[default]
+    Left,
+    /// Middle button (wheel press).
+    Middle,
+    /// Secondary button (right-click).
+    Right,
+}
+
+impl MouseButton {
+    /// CDP button name.
+    pub(crate) fn as_cdp(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Middle => "middle",
+            Self::Right => "right",
+        }
+    }
+
+    /// BiDi pointer button index.
+    pub(crate) fn as_bidi(self) -> u8 {
+        match self {
+            Self::Left => 0,
+            Self::Middle => 1,
+            Self::Right => 2,
+        }
+    }
+}
+
+/// Options for [`Page::mouse_click_with`].
+#[derive(Debug, Clone, Default)]
+pub struct MouseClickOptions {
+    /// Mouse button.
+    pub button: MouseButton,
+    /// Number of clicks.
+    pub click_count: u32,
+    /// Delay between button down and up.
+    pub delay: Duration,
+}
+
+impl MouseClickOptions {
+    /// Set the mouse button.
+    #[must_use]
+    pub fn button(mut self, button: MouseButton) -> Self {
+        self.button = button;
+        self
+    }
+
+    /// Set the click count.
+    #[must_use]
+    pub fn click_count(mut self, count: u32) -> Self {
+        self.click_count = count;
+        self
+    }
+
+    /// Set the down/up delay.
+    #[must_use]
+    pub fn delay(mut self, delay: Duration) -> Self {
+        self.delay = delay;
+        self
+    }
+}
+
+/// Options for [`Page::press_key_with`].
+#[derive(Debug, Clone, Default)]
+pub struct KeyPressOptions {
+    /// Delay between key down and up.
+    pub delay: Duration,
+}
+
+impl KeyPressOptions {
+    /// Set the down/up delay.
+    #[must_use]
+    pub fn delay(mut self, delay: Duration) -> Self {
+        self.delay = delay;
+        self
+    }
 }
 
 /// Preferred color scheme for media emulation.
@@ -1048,6 +1203,14 @@ pub struct Download {
     pub path: PathBuf,
     /// Suggested file name (final path's file name).
     pub suggested_filename: String,
+    /// Source URL (Chromium, matched from download events; `None` on
+    /// Firefox and for hand-built downloads).
+    pub url: Option<String>,
+    /// Terminal failure state (`canceled`, `interrupted`; `None` when the
+    /// download completed).
+    pub failure: Option<String>,
+    /// CDP download GUID (Chromium only).
+    pub(crate) guid: Option<String>,
 }
 
 impl Download {
@@ -1061,6 +1224,9 @@ impl Download {
         Self {
             path,
             suggested_filename,
+            url: None,
+            failure: None,
+            guid: None,
         }
     }
 
@@ -1119,6 +1285,42 @@ pub struct Page {
     /// Tracing session shared with the owning context (screenshots on steps).
     tracing: Arc<Mutex<Option<TracingState>>>,
     closed: Arc<Mutex<bool>>,
+    /// Opener page's target id (`None` unless opened as a popup).
+    opener_target: Arc<Mutex<Option<String>>>,
+    /// Locator handlers, run before element actions.
+    locator_handlers: Arc<Mutex<Vec<LocatorHandlerEntry>>>,
+    /// Re-entrancy guard for handler runs (handlers act, which acts...).
+    handlers_running: Arc<Mutex<bool>>,
+}
+
+/// A locator handler: run `handler` before element actions while `locator`
+/// matches (overlay dismissal, cookie banners).
+pub type LocatorHandlerFn =
+    Arc<dyn Fn(Locator) -> futures::future::BoxFuture<'static, E2eResult<()>> + Send + Sync>;
+
+/// Options for [`Page::add_locator_handler_with`].
+#[derive(Debug, Clone, Default)]
+pub struct LocatorHandlerOptions {
+    /// Run at most this many times (`None` = unlimited).
+    pub times: Option<u32>,
+}
+
+impl LocatorHandlerOptions {
+    /// Run at most `n` times.
+    #[must_use]
+    pub fn times(mut self, n: u32) -> Self {
+        self.times = Some(n);
+        self
+    }
+}
+
+/// One registered locator handler.
+#[derive(Clone)]
+struct LocatorHandlerEntry {
+    locator: Locator,
+    handler: LocatorHandlerFn,
+    times: Option<u32>,
+    hits: u32,
 }
 
 impl fmt::Debug for Page {
@@ -1264,6 +1466,9 @@ impl Page {
             download_dir: Arc::new(Mutex::new(None)),
             tracing,
             closed: Arc::new(Mutex::new(false)),
+            opener_target: Arc::new(Mutex::new(None)),
+            locator_handlers: Arc::new(Mutex::new(Vec::new())),
+            handlers_running: Arc::new(Mutex::new(false)),
         }
     }
 
@@ -1372,12 +1577,53 @@ impl Page {
         Ok(locator)
     }
 
+    /// Wait until `selector` reaches `state`, returning the locator.
+    pub async fn wait_for_selector_with(
+        &self,
+        selector: &str,
+        state: crate::locator::WaitForState,
+        timeout: Duration,
+    ) -> E2eResult<Locator> {
+        let locator = self.locator(selector.to_string());
+        locator.wait_for_state(state, timeout).await?;
+        Ok(locator)
+    }
+
     /// Wait for a popup opened from this page (already adopted and usable).
     pub async fn wait_for_popup(&self, timeout: Duration) -> E2eResult<Page> {
         match self.wait_for_event(PageEventKind::Popup, timeout).await? {
             PageEvent::Popup(page) => Ok(*page),
             _ => unreachable!("filtered by kind"),
         }
+    }
+
+    /// The page that opened this popup (`None` for tabs and closed openers).
+    #[must_use]
+    pub fn opener(&self) -> Option<Page> {
+        let target = self
+            .opener_target
+            .lock()
+            .map(|guard| guard.clone())
+            .unwrap_or(None)?;
+        self.registry
+            .upgrade()
+            .and_then(|pages| {
+                pages
+                    .lock()
+                    .map(|pages| {
+                        pages
+                            .iter()
+                            .find(|page| page.target_id() == target)
+                            .cloned()
+                    })
+                    .unwrap_or(None)
+            })
+            .filter(|page| !page.is_closed())
+    }
+
+    /// Record the opener's target id (popup adoption).
+    pub(crate) fn set_opener_target(&self, target: &str) {
+        *self.opener_target.lock().unwrap_or_else(|e| e.into_inner()) = Some(target.to_string());
     }
 
     /// Wait for the next JavaScript dialog.
@@ -1743,6 +1989,16 @@ impl Page {
         Locator::new(self.clone(), Selector::by_role(role, name))
     }
 
+    /// Locate an ARIA role with full predicates.
+    #[must_use]
+    pub fn get_by_role_with(
+        &self,
+        role: &str,
+        options: crate::locator::GetByRoleOptions,
+    ) -> Locator {
+        Locator::new(self.clone(), Selector::by_role_with(role, &options))
+    }
+
     /// Locate a `<label>` by its text.
     ///
     /// Matches the label element itself (not the labeled control).
@@ -1776,12 +2032,106 @@ impl Page {
         serde_json::from_value(value).map_err(E2eError::Json)
     }
 
+    /// Register a locator handler, run before element actions while
+    /// `locator` matches (overlay dismissal, cookie banners). Handler
+    /// errors fail the action. Direct coordinate/keyboard calls
+    /// (`mouse_click`, `press_key`) do not trigger handlers.
+    pub async fn add_locator_handler<F, Fut>(&self, locator: &Locator, handler: F)
+    where
+        F: Fn(Locator) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = E2eResult<()>> + Send + 'static,
+    {
+        self.add_locator_handler_with(locator, LocatorHandlerOptions::default(), handler)
+            .await;
+    }
+
+    /// [`Page::add_locator_handler`] with a run limit.
+    pub async fn add_locator_handler_with<F, Fut>(
+        &self,
+        locator: &Locator,
+        options: LocatorHandlerOptions,
+        handler: F,
+    ) where
+        F: Fn(Locator) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = E2eResult<()>> + Send + 'static,
+    {
+        let entry = LocatorHandlerEntry {
+            locator: locator.clone(),
+            handler: Arc::new(move |found| Box::pin(handler(found))),
+            times: options.times,
+            hits: 0,
+        };
+        self.locator_handlers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(entry);
+    }
+
+    /// Remove the handler registered for `locator` (matched by selector).
+    pub fn remove_locator_handler(&self, locator: &Locator) {
+        if let Ok(mut handlers) = self.locator_handlers.lock() {
+            let raw = locator.selector_raw();
+            handlers.retain(|entry| entry.locator.selector_raw() != raw);
+        }
+    }
+
+    /// Run due handlers (each matching locator, within budget).
+    async fn run_locator_handlers(&self) -> E2eResult<()> {
+        {
+            let mut running = self
+                .handlers_running
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if *running {
+                return Ok(());
+            }
+            *running = true;
+        }
+        let result = self.run_locator_handlers_inner().await;
+        *self
+            .handlers_running
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = false;
+        result
+    }
+
+    /// Handler pass: match, invoke, count hits.
+    async fn run_locator_handlers_inner(&self) -> E2eResult<()> {
+        let pending: Vec<(Locator, LocatorHandlerFn)> = self
+            .locator_handlers
+            .lock()
+            .map(|handlers| {
+                handlers
+                    .iter()
+                    .filter(|entry| entry.times.is_none_or(|limit| entry.hits < limit))
+                    .map(|entry| (entry.locator.clone(), Arc::clone(&entry.handler)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for (locator, handler) in pending {
+            if locator.count().await.unwrap_or(0) == 0 {
+                continue;
+            }
+            handler(locator.clone()).await?;
+            if let Ok(mut handlers) = self.locator_handlers.lock() {
+                if let Some(entry) = handlers
+                    .iter_mut()
+                    .find(|entry| entry.locator.selector_raw() == locator.selector_raw())
+                {
+                    entry.hits += 1;
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) async fn action(
         &self,
         selector: &Selector,
         action: &str,
         argument: Option<&str>,
     ) -> E2eResult<Value> {
+        self.run_locator_handlers().await?;
         let expression = selector.action_expression(action, argument);
         let value = self.evaluate_value(&expression).await?;
         if value.get("ok").and_then(Value::as_bool) == Some(false) {
@@ -1800,9 +2150,37 @@ impl Page {
         Ok(value)
     }
 
+    /// Current viewport size in CSS pixels.
+    pub async fn viewport_size(&self) -> E2eResult<Viewport> {
+        let value = self
+            .evaluate_value("({ w: window.innerWidth, h: window.innerHeight })")
+            .await?;
+        Ok(Viewport {
+            width: value["w"].as_u64().unwrap_or(0) as u32,
+            height: value["h"].as_u64().unwrap_or(0) as u32,
+        })
+    }
+
+    /// Request a garbage collection (Chromium only; BiDi fails loudly).
+    pub async fn request_gc(&self) -> E2eResult<()> {
+        self.driver.request_gc().await
+    }
+
     /// Trusted mouse click at CSS-pixel coordinates.
     pub async fn mouse_click(&self, x: f64, y: f64, click_count: u32) -> E2eResult<()> {
         self.driver.mouse_click(x, y, click_count).await?;
+        self.slow_mo().await;
+        Ok(())
+    }
+
+    /// Trusted mouse click with button/count/delay options.
+    pub async fn mouse_click_with(
+        &self,
+        x: f64,
+        y: f64,
+        options: MouseClickOptions,
+    ) -> E2eResult<()> {
+        self.driver.mouse_click_with(x, y, &options).await?;
         self.slow_mo().await;
         Ok(())
     }
@@ -1824,6 +2202,13 @@ impl Page {
     /// Dispatch a key press (name like `Enter` or a single char).
     pub async fn press_key(&self, key: &str) -> E2eResult<()> {
         self.driver.press_key(key).await?;
+        self.slow_mo().await;
+        Ok(())
+    }
+
+    /// Dispatch a key press with down/up delay.
+    pub async fn press_key_with(&self, key: &str, options: KeyPressOptions) -> E2eResult<()> {
+        self.driver.press_key_with(key, &options).await?;
         self.slow_mo().await;
         Ok(())
     }
@@ -2742,6 +3127,7 @@ impl Page {
             .map(|info| Frame {
                 page: self.clone(),
                 id: info.id,
+                parent_id: info.parent_id,
                 name: info.name,
                 url: info.url,
             })
@@ -2933,7 +3319,31 @@ impl Page {
     ) -> E2eResult<Download> {
         let path = self.wait_for_download_in(dir.as_ref(), timeout).await?;
         self.emit(PageEvent::Download(path.clone()));
-        Ok(Download::from_path(path))
+        let mut download = Download::from_path(path);
+        // Chromium fills URL/failure from download events (newest match wins).
+        let name = download.suggested_filename.clone();
+        if let Some(record) = self
+            .driver
+            .download_records()
+            .into_iter()
+            .rev()
+            .find(|record| record.filename == name)
+        {
+            if !record.url.is_empty() {
+                download.url = Some(record.url.clone());
+            }
+            if record.state == "canceled" || record.state == "interrupted" {
+                download.failure = Some(record.state.clone());
+            }
+            download.guid = Some(record.guid.clone());
+        }
+        Ok(download)
+    }
+
+    /// Cancel in-flight downloads (Chromium only); returns how many were
+    /// canceled. Firefox has no download-cancel command and fails loudly.
+    pub async fn cancel_downloads(&self) -> E2eResult<usize> {
+        self.driver.cancel_downloads().await
     }
 
     /// Fetch `url` from inside the page (cookies included) and return the
@@ -2960,6 +3370,30 @@ impl Page {
         base64::engine::general_purpose::STANDARD
             .decode(b64)
             .map_err(|_| E2eError::Config(format!("response_body({url}) returned invalid base64")))
+    }
+
+    /// Accessibility snapshot as JSON: `[{ role, name }]` for interactive
+    /// elements (same query as [`Page::aria_snapshot`).
+    pub async fn aria_snapshot_json(&self) -> E2eResult<Value> {
+        self.evaluate_value(
+            "(() => { \
+             const out = []; \
+             const els = document.querySelectorAll( \
+               'a,button,input,select,textarea,[role],[aria-label],h1,h2,h3'); \
+             for (const el of els) { \
+               const role = el.getAttribute('role') \
+                 || el.tagName.toLowerCase(); \
+               const name = (el.getAttribute('aria-label') \
+                 || el.getAttribute('alt') \
+                 || (el.textContent || '').trim().slice(0, 80) \
+                 || el.value || '').trim(); \
+               if (!name && !['input','select','textarea'].includes(role)) continue; \
+               out.push({ role, name }); \
+               if (out.length >= 200) break; \
+             } \
+             return out; })()",
+        )
+        .await
     }
 
     /// Accessibility snapshot: indented `role "name"` lines for interactive
@@ -3382,8 +3816,32 @@ mod tests {
     fn download_suggested_name() {
         let download = Download::from_path(PathBuf::from("/tmp/report.txt"));
         assert_eq!(download.suggested_filename, "report.txt");
+        assert!(download.url.is_none());
+        assert!(download.failure.is_none());
         let download = Download::from_path(PathBuf::from("bare.bin"));
         assert_eq!(download.suggested_filename, "bare.bin");
+    }
+
+    #[test]
+    fn mouse_button_mappings() {
+        assert_eq!(MouseButton::default(), MouseButton::Left);
+        assert_eq!(MouseButton::Left.as_cdp(), "left");
+        assert_eq!(MouseButton::Middle.as_cdp(), "middle");
+        assert_eq!(MouseButton::Right.as_cdp(), "right");
+        assert_eq!(MouseButton::Left.as_bidi(), 0);
+        assert_eq!(MouseButton::Middle.as_bidi(), 1);
+        assert_eq!(MouseButton::Right.as_bidi(), 2);
+        let options = MouseClickOptions::default()
+            .button(MouseButton::Right)
+            .click_count(2);
+        assert_eq!(options.button, MouseButton::Right);
+        assert_eq!(options.click_count, 2);
+        assert!(options.delay.is_zero());
+        let press = KeyPressOptions::default().delay(Duration::from_millis(50));
+        assert_eq!(press.delay, Duration::from_millis(50));
+        let clicks = ClickOptions::default();
+        assert_eq!(clicks.button, MouseButton::Left);
+        assert!(clicks.delay.is_zero());
     }
 
     #[test]

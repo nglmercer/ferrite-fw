@@ -65,11 +65,15 @@ pub use error::{E2eError, E2eResult};
 pub use expect::{expect_poll, PageExpect, SoftAsserts, Timeout};
 pub use har::{HarContentMode, HarFile, HarReplayEntry};
 pub use jshandle::JSHandle;
-pub use locator::{set_test_id_attribute, test_id_attribute, Locator, LocatorOptions, Selector};
+pub use locator::{
+    set_test_id_attribute, test_id_attribute, FilterOptions, GetByRoleOptions, Locator,
+    LocatorOptions, SelectOption, Selector, WaitForState,
+};
 pub use page::{
     AbortReason, ClickOptions, ColorScheme, ConsoleMessage, Cookie, DeviceDescriptor,
     DialogDecision, DialogInfo, Download, ElementRect, ElementState, Frame, HttpCredentials,
-    KeyPress, LoadState, NavigationOptions, Page, PageEvent, PageEventKind, RecordedRequest,
+    KeyPress, KeyPressOptions, LoadState, LocatorHandlerFn, LocatorHandlerOptions, MouseButton,
+    MouseClickOptions, NavigationOptions, Page, PageEvent, PageEventKind, RecordedRequest,
     ReducedMotion, RouteAction, RouteFromHarOptions, RouteHandler, RouteHandlerEntry, RouteInfo,
     RouteRule, ScreenshotOptions, StorageState, Viewport, WebSocketDirection, WebSocketEvent,
 };

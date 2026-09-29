@@ -13,12 +13,13 @@ use std::time::Duration;
 
 use ferrite_e2e::{
     describe, match_text_snapshot_with, set_test_id_attribute, test, test_with_context,
-    AbortReason, Browser, BrowserKind, ColorScheme, ContextOptions, Cookie, DeviceDescriptor,
-    DialogDecision, E2eError, HarContentMode, HarFile, HttpCredentials, LaunchOptions, LoadState,
-    NavigationOptions, Page, PageEvent, PageEventKind, Project, RecordedRequest, ReducedMotion,
-    RouteAction, RouteFromHarOptions, RouteInfo, RouteRule, Runner, ScreenshotOptions,
-    ServiceWorkerMode, SnapshotOptions, SnapshotUpdate, TestStatus, Timeout, TracingOptions,
-    VideoMode, VideoOptions, WebSocketDirection,
+    AbortReason, Browser, BrowserKind, ClickOptions, ColorScheme, ContextOptions, Cookie,
+    DeviceDescriptor, DialogDecision, E2eError, FilterOptions, GetByRoleOptions, HarContentMode,
+    HarFile, HttpCredentials, KeyPressOptions, LaunchOptions, LoadState, LocatorHandlerOptions,
+    MouseButton, MouseClickOptions, NavigationOptions, Page, PageEvent, PageEventKind, Project,
+    RecordedRequest, ReducedMotion, RouteAction, RouteFromHarOptions, RouteInfo, RouteRule, Runner,
+    ScreenshotOptions, SelectOption, ServiceWorkerMode, SnapshotOptions, SnapshotUpdate,
+    TestStatus, Timeout, TracingOptions, VideoMode, VideoOptions, WaitForState, WebSocketDirection,
 };
 
 const FIXTURE: &str = r#"<!doctype html><html><head><title>e2e fixture</title></head><body>
@@ -276,6 +277,28 @@ async fn serve() -> (String, tokio::task::AbortHandle) {
                 (
                     [(axum::http::header::CONTENT_TYPE, "application/javascript")],
                     "window.__csp = 'yes';",
+                )
+            }),
+        )
+        .route(
+            "/download/slow.bin",
+            axum::routing::get(|| async {
+                // Headers flush at once; the body drips so cancel tests can
+                // catch the download in flight.
+                let stream = futures::stream::unfold(0u32, |chunk| async move {
+                    if chunk >= 20 {
+                        return None;
+                    }
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    let item = Ok::<Vec<u8>, std::convert::Infallible>(vec![chunk as u8; 1024]);
+                    Some((item, chunk + 1))
+                });
+                (
+                    [(
+                        axum::http::header::CONTENT_DISPOSITION,
+                        "attachment; filename=\"slow.bin\"",
+                    )],
+                    axum::body::Body::from_stream(stream),
                 )
             }),
         );
@@ -5207,6 +5230,589 @@ async fn test_id_attribute_global() {
             0,
             "{tag}"
         );
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn locator_filter_with() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (_base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.set_content(
+            r#"<div class="card"><span id="ada" class="who">ada</span></div>
+               <div class="card"><span id="bob" class="who">bob</span></div>"#,
+        )
+        .await
+        .unwrap();
+
+        let cards = page.locator(".card");
+        let ada = cards.filter_with(FilterOptions::default().has_text("ada"));
+        assert_eq!(ada.count().await.unwrap(), 1, "{tag}");
+        assert_eq!(ada.first().text().await.unwrap(), "ada", "{tag}");
+
+        let not_ada = cards.filter_with(FilterOptions::default().has_not_text("ada"));
+        assert_eq!(not_ada.count().await.unwrap(), 1, "{tag}");
+        assert_eq!(not_ada.first().text().await.unwrap(), "bob", "{tag}");
+
+        let has_ada = cards.filter_with(FilterOptions::default().has(page.locator("#ada")));
+        assert_eq!(has_ada.count().await.unwrap(), 1, "{tag}");
+        assert_eq!(has_ada.first().text().await.unwrap(), "ada", "{tag}");
+
+        let has_not_ada = cards.filter_with(FilterOptions::default().has_not(page.locator("#ada")));
+        assert_eq!(has_not_ada.count().await.unwrap(), 1, "{tag}");
+        assert_eq!(has_not_ada.first().text().await.unwrap(), "bob", "{tag}");
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn get_by_role_with_predicates() {
+    const ROLES: &str = r#"<!doctype html><html><body>
+<input type="checkbox" id="c1" aria-label="agree" checked />
+<input type="checkbox" id="c2" aria-label="news" />
+<button id="go">go</button>
+<button id="stop" disabled>stop</button>
+<button id="tg" aria-pressed="true">toggle</button>
+<div role="switch" aria-checked="true" aria-label="wifi">wifi</div>
+<div role="treeitem" aria-expanded="true" aria-label="node">node</div>
+<div role="button" aria-label="secret" style="display:none">secret</div>
+<select id="pick"><option value="a">A</option><option value="b" selected>B</option></select>
+</body></html>"#;
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (_base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.set_content(ROLES).await.unwrap();
+
+        let checked = GetByRoleOptions::default().checked(true);
+        assert_eq!(
+            page.get_by_role_with("checkbox", checked)
+                .count()
+                .await
+                .unwrap(),
+            1,
+            "{tag}"
+        );
+        let unchecked = GetByRoleOptions::default().checked(false).name("news");
+        assert_eq!(
+            page.get_by_role_with("checkbox", unchecked)
+                .count()
+                .await
+                .unwrap(),
+            1,
+            "{tag}"
+        );
+
+        let disabled = GetByRoleOptions::default().disabled(true);
+        assert_eq!(
+            page.get_by_role_with("button", disabled)
+                .count()
+                .await
+                .unwrap(),
+            1,
+            "{tag}"
+        );
+        let pressed = GetByRoleOptions::default().pressed(true).name("toggle");
+        assert_eq!(
+            page.get_by_role_with("button", pressed)
+                .count()
+                .await
+                .unwrap(),
+            1,
+            "{tag}"
+        );
+
+        // Unmapped roles fall back to [role=...] matching.
+        let on = GetByRoleOptions::default().checked(true).name("wifi");
+        assert_eq!(
+            page.get_by_role_with("switch", on).count().await.unwrap(),
+            1,
+            "{tag}"
+        );
+        let open = GetByRoleOptions::default().expanded(true);
+        assert_eq!(
+            page.get_by_role_with("treeitem", open)
+                .count()
+                .await
+                .unwrap(),
+            1,
+            "{tag}"
+        );
+        let picked = GetByRoleOptions::default().selected(true);
+        assert_eq!(
+            page.get_by_role_with("option", picked)
+                .count()
+                .await
+                .unwrap(),
+            1,
+            "{tag}"
+        );
+
+        // Hidden matches are kept by default, dropped on request.
+        let secret = GetByRoleOptions::default().name("secret");
+        assert_eq!(
+            page.get_by_role_with("button", secret)
+                .count()
+                .await
+                .unwrap(),
+            1,
+            "{tag}"
+        );
+        let visible_only = GetByRoleOptions::default()
+            .name("secret")
+            .include_hidden(false);
+        assert_eq!(
+            page.get_by_role_with("button", visible_only)
+                .count()
+                .await
+                .unwrap(),
+            0,
+            "{tag}"
+        );
+
+        // The scoped locator variant filters within its matches.
+        let scoped = page
+            .locator("body")
+            .get_by_role_with("button", GetByRoleOptions::default().name("go"));
+        assert_eq!(scoped.count().await.unwrap(), 1, "{tag}");
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn locator_wait_for_state() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (_base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.set_content(
+            r#"<div id="late"></div><div id="gone">x</div>
+               <div id="shy" style="display:none">s</div><div id="fade">f</div>
+               <script>
+               setTimeout(() => { document.getElementById('late').innerHTML = '<b id="born">hi</b>'; }, 300);
+               setTimeout(() => { document.getElementById('gone').remove(); }, 300);
+               setTimeout(() => { document.getElementById('shy').style.display = 'block'; }, 300);
+               setTimeout(() => { document.getElementById('fade').style.display = 'none'; }, 300);
+               </script>"#,
+        )
+        .await
+        .unwrap();
+
+        page.locator("#born")
+            .wait_for_state(WaitForState::Attached, Duration::from_secs(5))
+            .await
+            .unwrap();
+        page.locator("#gone")
+            .wait_for_state(WaitForState::Detached, Duration::from_secs(5))
+            .await
+            .unwrap();
+        page.locator("#shy")
+            .wait_for_state(WaitForState::Visible, Duration::from_secs(5))
+            .await
+            .unwrap();
+        page.locator("#fade")
+            .wait_for_state(WaitForState::Hidden, Duration::from_secs(5))
+            .await
+            .unwrap();
+
+        // Absent elements are already hidden/detached.
+        page.locator("#never")
+            .wait_for_state(WaitForState::Hidden, Duration::from_secs(2))
+            .await
+            .unwrap();
+        page.locator("#never")
+            .wait_for_state(WaitForState::Detached, Duration::from_secs(2))
+            .await
+            .unwrap();
+        let err = page
+            .locator("#never")
+            .wait_for_state(WaitForState::Attached, Duration::from_millis(300))
+            .await
+            .unwrap_err();
+        assert!(!err.to_string().is_empty(), "{tag}");
+
+        let found = page
+            .wait_for_selector_with("#born", WaitForState::Visible, Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(found.text().await.unwrap(), "hi", "{tag}");
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn select_options_variants() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+
+        let pick = page.locator("#pick");
+        pick.select_options(&[SelectOption::Value("b".to_string())])
+            .await
+            .unwrap();
+        assert_eq!(pick.selected_options().await.unwrap(), ["b"], "{tag}");
+        pick.select_options(&[SelectOption::Label("A".to_string())])
+            .await
+            .unwrap();
+        assert_eq!(pick.selected_options().await.unwrap(), ["a"], "{tag}");
+        pick.select_options(&[SelectOption::Index(1)])
+            .await
+            .unwrap();
+        assert_eq!(pick.selected_options().await.unwrap(), ["b"], "{tag}");
+
+        let err = pick
+            .select_options(&[SelectOption::Value("nope".to_string())])
+            .await
+            .unwrap_err();
+        assert!(!err.to_string().is_empty(), "{tag}");
+
+        page.set_content(
+            r#"<select id="m" multiple>
+               <option value="x">X</option><option value="y">Y</option><option value="z">Z</option>
+               </select>"#,
+        )
+        .await
+        .unwrap();
+        let multi = page.locator("#m");
+        multi
+            .select_options(&[SelectOption::Value("x".to_string()), SelectOption::Index(2)])
+            .await
+            .unwrap();
+        assert_eq!(multi.selected_options().await.unwrap(), ["x", "z"], "{tag}");
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn frame_tree_goto_viewport_gc() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&format!("{base}frames")).await.unwrap();
+
+        let frames = page.document_frames().await.unwrap();
+        assert!(frames.len() >= 2, "{tag}: {}", frames.len());
+        let mut main = None;
+        for frame in &frames {
+            if frame.parent().await.unwrap().is_none() {
+                main = Some(frame.clone());
+            }
+        }
+        let main = main.expect("main frame");
+        assert_eq!(main.title().await.unwrap(), "frames host", "{tag}");
+
+        let children = main.child_frames().await.unwrap();
+        assert_eq!(children.len(), 1, "{tag}");
+        let child = &children[0];
+        let back = child.parent().await.unwrap().expect("child parent");
+        assert_eq!(back.title().await.unwrap(), "frames host", "{tag}");
+        assert_eq!(child.title().await.unwrap(), "assert me", "{tag}");
+        assert!(child.content().await.unwrap().contains("Save"), "{tag}");
+        assert!(!child.is_detached().await.unwrap(), "{tag}");
+        let save = child.get_by_role_with("button", GetByRoleOptions::default().name("Save"));
+        assert_eq!(save.count().await.unwrap(), 1, "{tag}");
+
+        child.goto(&format!("{base}locate")).await.unwrap();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            if child.title().await.unwrap() == "locate me" {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "{tag}: frame goto timed out"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        page.evaluate_value("document.querySelector('iframe').remove(); true")
+            .await
+            .unwrap();
+        assert!(child.is_detached().await.unwrap(), "{tag}");
+
+        let viewport = page.viewport_size().await.unwrap();
+        assert!(viewport.width > 0 && viewport.height > 0, "{tag}");
+
+        match kind {
+            BrowserKind::Chromium => page.request_gc().await.unwrap(),
+            BrowserKind::Firefox => {
+                let err = page.request_gc().await.unwrap_err();
+                assert!(err.to_string().contains("not supported"), "{tag}: {err}");
+            }
+        }
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn page_opener_and_locator_handlers() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+        assert!(page.opener().is_none(), "{tag}");
+
+        // Popups know their opener.
+        let popup_url = format!("{base}assert");
+        let open = format!("window.open('{popup_url}'); true");
+        let (popup, done) = tokio::join!(
+            page.wait_for_popup(Duration::from_secs(15)),
+            page.evaluate_value(&open)
+        );
+        done.unwrap();
+        let popup = popup.unwrap();
+        popup
+            .wait_for_function("document.title.length > 0", Duration::from_secs(5))
+            .await
+            .unwrap();
+        let opener = popup.opener().expect("popup opener");
+        assert_eq!(
+            opener.url().await.unwrap(),
+            page.url().await.unwrap(),
+            "{tag}"
+        );
+        popup.close().await.unwrap();
+
+        // Handlers run before actions and can dismiss overlays.
+        page.set_content(
+            r#"<div id="overlay" onclick="this.remove()" style="padding:20px">
+               <button id="dismiss">dismiss</button></div>
+               <button id="go">go</button><span id="hits">0</span>
+               <script>document.getElementById('go').addEventListener('click', () => {
+                 const s = document.getElementById('hits');
+                 s.textContent = String(Number(s.textContent) + 1);
+               });</script>"#,
+        )
+        .await
+        .unwrap();
+        let overlay_hits = Arc::new(Mutex::new(0u32));
+        let probe = Arc::clone(&overlay_hits);
+        let overlay = page.locator("#overlay");
+        page.add_locator_handler(&overlay, move |found| {
+            let probe = Arc::clone(&probe);
+            async move {
+                *probe.lock().unwrap() += 1;
+                found.first().click().await
+            }
+        })
+        .await;
+        page.locator("#go").click().await.unwrap();
+        assert_eq!(*overlay_hits.lock().unwrap(), 1, "{tag}");
+        assert_eq!(page.locator("#overlay").count().await.unwrap(), 0, "{tag}");
+        assert_eq!(page.locator("#hits").text().await.unwrap(), "1", "{tag}");
+
+        // `times` caps handler runs; removal stops them.
+        let go_hits = Arc::new(Mutex::new(0u32));
+        let probe = Arc::clone(&go_hits);
+        let go = page.locator("#go");
+        page.add_locator_handler_with(&go, LocatorHandlerOptions::default().times(1), move |_| {
+            let probe = Arc::clone(&probe);
+            async move {
+                *probe.lock().unwrap() += 1;
+                Ok(())
+            }
+        })
+        .await;
+        page.locator("#go").click().await.unwrap();
+        page.locator("#go").click().await.unwrap();
+        assert_eq!(*go_hits.lock().unwrap(), 1, "{tag}");
+        assert_eq!(page.locator("#hits").text().await.unwrap(), "3", "{tag}");
+        page.remove_locator_handler(&go);
+        page.locator("#go").click().await.unwrap();
+        assert_eq!(*go_hits.lock().unwrap(), 1, "{tag}");
+        assert_eq!(page.locator("#hits").text().await.unwrap(), "4", "{tag}");
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn aria_snapshot_json_shape() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&format!("{base}locate")).await.unwrap();
+
+        let snapshot = page.aria_snapshot_json().await.unwrap();
+        let entries = snapshot.as_array().expect("snapshot array");
+        assert!(!entries.is_empty(), "{tag}");
+        assert!(
+            entries.iter().any(|entry| {
+                entry.get("role").and_then(|role| role.as_str()) == Some("button")
+                    && entry.get("name").and_then(|name| name.as_str()) == Some("Sign in")
+            }),
+            "{tag}: {snapshot}"
+        );
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn download_url_failure_and_cancel() {
+    for kind in [BrowserKind::Chromium, BrowserKind::Firefox] {
+        let tag = kind.name();
+        let exe = match kind {
+            BrowserKind::Chromium => ferrite_e2e::find_chromium(None),
+            BrowserKind::Firefox => ferrite_e2e::find_firefox(None),
+        };
+        let Some(exe) = exe else {
+            eprintln!("skipping {tag}: no executable found");
+            continue;
+        };
+        let dir =
+            std::env::temp_dir().join(format!("ferrite-e2e-dlcancel-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let browser = match Browser::launch(
+            LaunchOptions::default()
+                .browser(kind)
+                .executable(exe)
+                .download_dir(dir.clone()),
+        )
+        .await
+        {
+            Ok(browser) => browser,
+            Err(error) => {
+                eprintln!("skipping {tag}: {error}");
+                continue;
+            }
+        };
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+        if kind == BrowserKind::Chromium {
+            page.set_download_dir(&dir).await.unwrap();
+        }
+
+        page.evaluate_value("window.location = 'download/report.txt'; true")
+            .await
+            .unwrap();
+        let download = page
+            .wait_for_download_file(&dir, Duration::from_secs(15))
+            .await
+            .unwrap();
+        assert_eq!(download.suggested_filename, "report.txt", "{tag}");
+        assert_eq!(download.failure, None, "{tag}");
+        match kind {
+            BrowserKind::Chromium => {
+                let url = download.url.as_deref().unwrap_or_default();
+                assert!(url.contains("report.txt"), "{tag}: {url}");
+            }
+            BrowserKind::Firefox => assert_eq!(download.url, None, "{tag}"),
+        }
+
+        // A dripping download is in flight long enough to cancel.
+        page.evaluate_value("window.location = 'download/slow.bin'; true")
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        match kind {
+            BrowserKind::Chromium => {
+                let canceled = page.cancel_downloads().await.unwrap();
+                assert!(canceled >= 1, "{tag}: {canceled}");
+            }
+            BrowserKind::Firefox => {
+                let err = page.cancel_downloads().await.unwrap_err();
+                assert!(err.to_string().contains("not supported"), "{tag}: {err}");
+            }
+        }
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn input_options_mouse_keyboard() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+
+        let bounds = page.locator("#inc").bounding_box().await.unwrap().unwrap();
+        let x = bounds.x + bounds.width / 2.0;
+        let y = bounds.y + bounds.height / 2.0;
+        page.mouse_click_with(
+            x,
+            y,
+            MouseClickOptions::default()
+                .click_count(1)
+                .delay(Duration::from_millis(50)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(page.locator("#count").text().await.unwrap(), "1", "{tag}");
+
+        // Right-click dispatches without activating the button.
+        page.mouse_click_with(
+            x,
+            y,
+            MouseClickOptions::default().button(MouseButton::Right),
+        )
+        .await
+        .unwrap();
+        assert_eq!(page.locator("#count").text().await.unwrap(), "1", "{tag}");
+
+        page.locator("#inc")
+            .click_with_options(ClickOptions {
+                button: MouseButton::Left,
+                delay: Duration::from_millis(20),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(page.locator("#count").text().await.unwrap(), "2", "{tag}");
+        page.locator("#inc").dblclick().await.unwrap();
+        assert_eq!(page.locator("#count").text().await.unwrap(), "4", "{tag}");
+
+        let name = page.locator("#name");
+        name.press_with(
+            "a",
+            KeyPressOptions::default().delay(Duration::from_millis(10)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(name.input_value().await.unwrap(), "a", "{tag}");
+        name.press_sequentially_with("bc", KeyPressOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(name.input_value().await.unwrap(), "abc", "{tag}");
+        page.press_key_with("d", KeyPressOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(name.input_value().await.unwrap(), "abcd", "{tag}");
 
         page.close().await.unwrap();
         browser.close().await.unwrap();

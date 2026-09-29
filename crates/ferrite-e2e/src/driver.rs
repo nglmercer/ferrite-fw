@@ -503,6 +503,22 @@ impl Driver {
         }
     }
 
+    /// Cancel in-flight downloads (Chromium only).
+    pub async fn cancel_downloads(&self) -> E2eResult<usize> {
+        match self {
+            Self::Cdp(driver) => driver.cancel_downloads().await,
+            Self::Bidi(driver) => driver.cancel_downloads().await,
+        }
+    }
+
+    /// Tracked downloads for URL/failure matching (Chromium only).
+    pub fn download_records(&self) -> Vec<crate::cdp::DownloadRecord> {
+        match self {
+            Self::Cdp(driver) => driver.cdp.download_records(),
+            Self::Bidi(_) => Vec::new(),
+        }
+    }
+
     /// Run `source` before page scripts in every future document.
     pub async fn add_init_script(&self, source: &str) -> E2eResult<()> {
         match self {
@@ -524,6 +540,22 @@ impl Driver {
         match self {
             Self::Cdp(driver) => driver.frame_evaluate(frame_id, expression).await,
             Self::Bidi(driver) => driver.frame_evaluate(frame_id, expression).await,
+        }
+    }
+
+    /// Navigate one frame (subframe ids from [`Driver::frames`]).
+    pub async fn frame_navigate(&self, frame_id: &str, url: &str) -> E2eResult<()> {
+        match self {
+            Self::Cdp(driver) => driver.frame_navigate(frame_id, url).await,
+            Self::Bidi(driver) => driver.frame_navigate(frame_id, url).await,
+        }
+    }
+
+    /// Request a garbage collection (Chromium only).
+    pub async fn request_gc(&self) -> E2eResult<()> {
+        match self {
+            Self::Cdp(driver) => driver.request_gc().await,
+            Self::Bidi(driver) => driver.request_gc().await,
         }
     }
 
@@ -577,9 +609,23 @@ impl Driver {
 
     /// Trusted click at coordinates.
     pub async fn mouse_click(&self, x: f64, y: f64, click_count: u32) -> E2eResult<()> {
+        let options = crate::page::MouseClickOptions {
+            click_count,
+            ..crate::page::MouseClickOptions::default()
+        };
+        self.mouse_click_with(x, y, &options).await
+    }
+
+    /// Trusted click with button/count/delay options.
+    pub async fn mouse_click_with(
+        &self,
+        x: f64,
+        y: f64,
+        options: &crate::page::MouseClickOptions,
+    ) -> E2eResult<()> {
         match self {
-            Self::Cdp(driver) => driver.mouse_click(x, y, click_count).await,
-            Self::Bidi(driver) => driver.mouse_click(x, y, click_count).await,
+            Self::Cdp(driver) => driver.mouse_click_with(x, y, options).await,
+            Self::Bidi(driver) => driver.mouse_click_with(x, y, options).await,
         }
     }
 
@@ -593,9 +639,19 @@ impl Driver {
 
     /// Dispatch a key press.
     pub async fn press_key(&self, key: &str) -> E2eResult<()> {
+        self.press_key_with(key, &crate::page::KeyPressOptions::default())
+            .await
+    }
+
+    /// Dispatch a key press with down/up delay.
+    pub async fn press_key_with(
+        &self,
+        key: &str,
+        options: &crate::page::KeyPressOptions,
+    ) -> E2eResult<()> {
         match self {
-            Self::Cdp(driver) => driver.press_key(key).await,
-            Self::Bidi(driver) => driver.press_key(key).await,
+            Self::Cdp(driver) => driver.press_key_with(key, options).await,
+            Self::Bidi(driver) => driver.press_key_with(key, options).await,
         }
     }
 
@@ -1227,6 +1283,33 @@ impl CdpDriver {
         self.evaluate_with_context(expression, context_id).await
     }
 
+    async fn frame_navigate(&self, frame_id: &str, url: &str) -> E2eResult<()> {
+        let result = self
+            .call(
+                "Page.navigate",
+                serde_json::json!({ "url": url, "frameId": frame_id }),
+            )
+            .await
+            .map_err(|error| E2eError::Navigation {
+                url: url.to_string(),
+                message: error.to_string(),
+            })?;
+        if let Some(error) = result.get("errorText").and_then(Value::as_str) {
+            return Err(E2eError::Navigation {
+                url: url.to_string(),
+                message: error.to_string(),
+            });
+        }
+        self.sink.record("navigation", format!("frame goto {url}"));
+        Ok(())
+    }
+
+    async fn request_gc(&self) -> E2eResult<()> {
+        self.call("HeapProfiler.collectGarbage", Value::Null)
+            .await?;
+        Ok(())
+    }
+
     async fn evaluate_string(&self, expression: &str) -> E2eResult<String> {
         Ok(self
             .evaluate(expression)
@@ -1344,11 +1427,35 @@ impl CdpDriver {
                 serde_json::json!({
                     "behavior": "allow",
                     "downloadPath": dir.to_string_lossy(),
+                    "eventsEnabled": true,
                 }),
                 self.timeout,
             )
             .await?;
         Ok(())
+    }
+
+    /// Cancel in-flight downloads tracked on this connection.
+    async fn cancel_downloads(&self) -> E2eResult<usize> {
+        let mut canceled = 0;
+        for record in self.cdp.download_records() {
+            if record.state != "inProgress" {
+                continue;
+            }
+            let done = self
+                .cdp
+                .call(
+                    None,
+                    "Browser.cancelDownload",
+                    serde_json::json!({ "guid": record.guid }),
+                    self.timeout,
+                )
+                .await;
+            if done.is_ok() {
+                canceled += 1;
+            }
+        }
+        Ok(canceled)
     }
 
     async fn add_init_script(&self, source: &str) -> E2eResult<()> {
@@ -1444,20 +1551,35 @@ impl CdpDriver {
         Ok(())
     }
 
-    async fn mouse_click(&self, x: f64, y: f64, click_count: u32) -> E2eResult<()> {
+    async fn mouse_click_with(
+        &self,
+        x: f64,
+        y: f64,
+        options: &crate::page::MouseClickOptions,
+    ) -> E2eResult<()> {
         self.bring_to_front().await?;
         self.mouse_move(x, y).await?;
         let modifiers = self.held_modifiers();
-        for kind in ["mousePressed", "mouseReleased"] {
-            self.call(
-                "Input.dispatchMouseEvent",
-                serde_json::json!({
-                    "type": kind, "x": x, "y": y, "modifiers": modifiers,
-                    "button": "left", "clickCount": click_count.max(1),
-                }),
-            )
-            .await?;
+        let button = options.button.as_cdp();
+        self.call(
+            "Input.dispatchMouseEvent",
+            serde_json::json!({
+                "type": "mousePressed", "x": x, "y": y, "modifiers": modifiers,
+                "button": button, "clickCount": options.click_count.max(1),
+            }),
+        )
+        .await?;
+        if !options.delay.is_zero() {
+            tokio::time::sleep(options.delay).await;
         }
+        self.call(
+            "Input.dispatchMouseEvent",
+            serde_json::json!({
+                "type": "mouseReleased", "x": x, "y": y, "modifiers": modifiers,
+                "button": button, "clickCount": options.click_count.max(1),
+            }),
+        )
+        .await?;
         Ok(())
     }
 
@@ -1467,9 +1589,14 @@ impl CdpDriver {
         Ok(())
     }
 
-    async fn press_key(&self, key: &str) -> E2eResult<()> {
+    async fn press_key_with(
+        &self,
+        key: &str,
+        options: &crate::page::KeyPressOptions,
+    ) -> E2eResult<()> {
         let (windows_code, key_name, code) = key_definition(key);
         if key.chars().count() == 1 && windows_code == 0 {
+            // Single-char input has no down/up pair; the delay is a no-op.
             self.call(
                 "Input.dispatchKeyEvent",
                 serde_json::json!({ "type": "char", "text": key }),
@@ -1488,10 +1615,17 @@ impl CdpDriver {
                 "code": code,
                 "modifiers": modifiers,
             });
-            if kind == "rawKeyDown" && key.chars().count() == 1 {
-                params["text"] = Value::String(key.to_string());
+            if kind == "rawKeyDown" {
+                if key.chars().count() == 1 {
+                    params["text"] = Value::String(key.to_string());
+                }
+                self.call("Input.dispatchKeyEvent", params).await?;
+                if !options.delay.is_zero() {
+                    tokio::time::sleep(options.delay).await;
+                }
+            } else {
+                self.call("Input.dispatchKeyEvent", params).await?;
             }
-            self.call("Input.dispatchKeyEvent", params).await?;
         }
         Ok(())
     }
@@ -2760,6 +2894,34 @@ impl BidiDriver {
         self.evaluate_in_context(expression, frame_id).await
     }
 
+    async fn frame_navigate(&self, frame_id: &str, url: &str) -> E2eResult<()> {
+        self.bidi
+            .call(
+                "browsingContext.navigate",
+                serde_json::json!({
+                    "context": frame_id,
+                    "url": url,
+                    "wait": "complete",
+                }),
+                self.timeout,
+            )
+            .await
+            .map_err(|error| E2eError::Navigation {
+                url: url.to_string(),
+                message: error.to_string(),
+            })?;
+        self.sink.record("navigation", format!("frame goto {url}"));
+        Ok(())
+    }
+
+    async fn request_gc(&self) -> E2eResult<()> {
+        Err(E2eError::Config(
+            "firefox garbage collection is not supported \
+             (BiDi has no heap-profiler command)"
+                .to_string(),
+        ))
+    }
+
     async fn evaluate_in_context(&self, expression: &str, context: &str) -> E2eResult<Value> {
         let result = self
             .bidi
@@ -3002,6 +3164,14 @@ impl BidiDriver {
         ))
     }
 
+    async fn cancel_downloads(&self) -> E2eResult<usize> {
+        Err(E2eError::Config(
+            "firefox download cancel is not supported \
+             (BiDi has no download-cancel command)"
+                .to_string(),
+        ))
+    }
+
     async fn add_init_script(&self, source: &str) -> E2eResult<()> {
         // BiDi preload scripts must be function declarations.
         let function = format!("() => {{ {source} }}");
@@ -3157,12 +3327,24 @@ impl BidiDriver {
         .await
     }
 
-    async fn mouse_click(&self, x: f64, y: f64, click_count: u32) -> E2eResult<()> {
+    async fn mouse_click_with(
+        &self,
+        x: f64,
+        y: f64,
+        options: &crate::page::MouseClickOptions,
+    ) -> E2eResult<()> {
         self.bring_to_front().await?;
+        let button = options.button.as_bidi();
         let mut actions = vec![serde_json::json!({ "type": "pointerMove", "x": x, "y": y })];
-        for _ in 0..click_count.max(1) {
-            actions.push(serde_json::json!({ "type": "pointerDown", "button": 0 }));
-            actions.push(serde_json::json!({ "type": "pointerUp", "button": 0 }));
+        for _ in 0..options.click_count.max(1) {
+            actions.push(serde_json::json!({ "type": "pointerDown", "button": button }));
+            if !options.delay.is_zero() {
+                actions.push(serde_json::json!({
+                    "type": "pause",
+                    "duration": options.delay.as_millis().min(u128::from(u64::MAX)) as u64,
+                }));
+            }
+            actions.push(serde_json::json!({ "type": "pointerUp", "button": button }));
         }
         self.perform(serde_json::json!([{
             "type": "pointer", "id": "ferrite-mouse",
@@ -3193,14 +3375,23 @@ impl BidiDriver {
         .await
     }
 
-    async fn press_key(&self, key: &str) -> E2eResult<()> {
+    async fn press_key_with(
+        &self,
+        key: &str,
+        options: &crate::page::KeyPressOptions,
+    ) -> E2eResult<()> {
         let value = bidi_key_value(key);
+        let mut actions = vec![serde_json::json!({ "type": "keyDown", "value": value.clone() })];
+        if !options.delay.is_zero() {
+            actions.push(serde_json::json!({
+                "type": "pause",
+                "duration": options.delay.as_millis().min(u128::from(u64::MAX)) as u64,
+            }));
+        }
+        actions.push(serde_json::json!({ "type": "keyUp", "value": value }));
         self.perform(serde_json::json!([{
             "type": "key", "id": "ferrite-keyboard",
-            "actions": [
-                { "type": "keyDown", "value": value },
-                { "type": "keyUp", "value": value },
-            ],
+            "actions": actions,
         }]))
         .await
     }
@@ -4376,29 +4567,41 @@ fn script_call_error(method: &str, error: E2eError) -> E2eError {
 }
 
 fn collect_cdp_frames(tree: &Value, out: &mut Vec<FrameInfo>) {
+    collect_cdp_frames_inner(tree, None, out);
+}
+
+fn collect_cdp_frames_inner(tree: &Value, parent: Option<String>, out: &mut Vec<FrameInfo>) {
     let frame = &tree["frame"];
+    let id = frame["id"].as_str().unwrap_or_default().to_string();
     out.push(FrameInfo {
-        id: frame["id"].as_str().unwrap_or_default().to_string(),
+        id: id.clone(),
+        parent_id: parent,
         name: frame["name"].as_str().unwrap_or_default().to_string(),
         url: frame["url"].as_str().unwrap_or_default().to_string(),
     });
     if let Some(children) = tree.get("childFrames").and_then(Value::as_array) {
         for child in children {
-            collect_cdp_frames(child, out);
+            collect_cdp_frames_inner(child, Some(id.clone()), out);
         }
     }
 }
 
 /// Collect frames from a BiDi context tree (names are not reported).
 fn collect_bidi_frames(node: &Value, out: &mut Vec<FrameInfo>) {
+    collect_bidi_frames_inner(node, None, out);
+}
+
+fn collect_bidi_frames_inner(node: &Value, parent: Option<String>, out: &mut Vec<FrameInfo>) {
+    let id = node["context"].as_str().unwrap_or_default().to_string();
     out.push(FrameInfo {
-        id: node["context"].as_str().unwrap_or_default().to_string(),
+        id: id.clone(),
+        parent_id: parent,
         name: String::new(),
         url: node["url"].as_str().unwrap_or_default().to_string(),
     });
     if let Some(children) = node.get("children").and_then(Value::as_array) {
         for child in children {
-            collect_bidi_frames(child, out);
+            collect_bidi_frames_inner(child, Some(id.clone()), out);
         }
     }
 }
