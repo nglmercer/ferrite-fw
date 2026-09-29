@@ -138,5 +138,43 @@ async fn api_client_round_trip() {
         serde_json::json!({"n": 2})
     );
 
+    // fetch() covers arbitrary verbs; post_bytes sets the content type.
+    let fetched = client.fetch("GET", "json").await.unwrap();
+    assert!(fetched.ok());
+    assert_eq!(
+        fetched.json::<serde_json::Value>().unwrap(),
+        serde_json::json!({"hello": "api"})
+    );
+    let raw = client
+        .post_bytes("echo", b"bytes-here", "application/octet-stream")
+        .await
+        .unwrap();
+    assert_eq!(raw.bytes(), b"bytes-here");
+
     shutdown.abort();
+}
+
+#[tokio::test]
+async fn download_save_and_delete() {
+    use ferrite_e2e::Download;
+
+    let dir = std::env::temp_dir().join(format!("ferrite-dl-unit-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("orig.bin");
+    std::fs::write(&src, [1u8, 2, 3]).unwrap();
+
+    let download = Download::from_path(src.clone());
+    assert_eq!(download.suggested_filename, "orig.bin");
+    let saved = download
+        .save_as(dir.join("nested").join("copy.bin"))
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read(&saved).unwrap(), vec![1u8, 2, 3]);
+    download.delete().await.unwrap();
+    assert!(!src.exists());
+    // Deleting twice stays quiet.
+    download.delete().await.unwrap();
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

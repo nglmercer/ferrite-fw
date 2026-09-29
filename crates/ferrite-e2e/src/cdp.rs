@@ -155,6 +155,12 @@ impl CdpConnection {
     pub fn close(&self) {
         let _ = self.inner.tx.send(Outbound::Close);
     }
+
+    /// Whether the writer end is still open.
+    #[must_use]
+    pub fn is_open(&self) -> bool {
+        !self.inner.tx.is_closed()
+    }
 }
 
 fn handle_frame(inner: &Arc<Inner>, text: &str) {

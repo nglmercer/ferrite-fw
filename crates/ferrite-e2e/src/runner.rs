@@ -209,6 +209,8 @@ pub struct Runner {
     shard: Option<(usize, usize)>,
     before_each: Vec<HookFn>,
     after_each: Vec<HookFn>,
+    before_all: Vec<GlobalHook>,
+    after_all: Vec<GlobalHook>,
     global_setup: Vec<GlobalHook>,
     global_teardown: Vec<GlobalHook>,
     output_dir: String,
@@ -232,6 +234,8 @@ impl Default for Runner {
             shard: None,
             before_each: Vec::new(),
             after_each: Vec::new(),
+            before_all: Vec::new(),
+            after_all: Vec::new(),
             global_setup: Vec::new(),
             global_teardown: Vec::new(),
             output_dir: "test-results".to_string(),
@@ -259,6 +263,8 @@ impl Runner {
             shard: None,
             before_each: Vec::new(),
             after_each: Vec::new(),
+            before_all: Vec::new(),
+            after_all: Vec::new(),
             global_setup: Vec::new(),
             global_teardown: Vec::new(),
             output_dir: config.output_dir.clone(),
@@ -340,6 +346,33 @@ impl Runner {
     {
         self.after_each
             .push(Arc::new(move |page| Box::pin(hook(page))));
+        self
+    }
+
+    /// Run `hook` once after test selection, before any test runs.
+    ///
+    /// Runs after [`Runner::global_setup`]; failures abort with one failed
+    /// result (unlike `before_each`, there is no page yet).
+    #[must_use]
+    pub fn before_all<F, Fut>(mut self, hook: F) -> Self
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = E2eResult<()>> + Send + 'static,
+    {
+        self.before_all.push(Arc::new(move || Box::pin(hook())));
+        self
+    }
+
+    /// Run `hook` once after all tests complete (failures append one result).
+    ///
+    /// Runs before [`Runner::global_teardown`].
+    #[must_use]
+    pub fn after_all<F, Fut>(mut self, hook: F) -> Self
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = E2eResult<()>> + Send + 'static,
+    {
+        self.after_all.push(Arc::new(move || Box::pin(hook())));
         self
     }
 
@@ -474,6 +507,21 @@ impl Runner {
                 TestMode::Run | TestMode::Only => runnable.push(test),
             }
         }
+        for hook in &self.before_all {
+            if let Err(error) = hook().await {
+                report.results.push(TestResult {
+                    name: "<before_all>".to_string(),
+                    status: TestStatus::Failed,
+                    attempts: 1,
+                    duration_ms: 0,
+                    error: Some(error.to_string()),
+                    screenshots: vec![],
+                    trace: None,
+                    video: None,
+                });
+                return report;
+            }
+        }
         let semaphore = Arc::new(tokio::sync::Semaphore::new(self.workers));
         let mut handles = Vec::new();
         for test in runnable {
@@ -511,6 +559,20 @@ impl Runner {
                     trace: None,
                     video: None,
                 }),
+            }
+        }
+        for hook in &self.after_all {
+            if let Err(error) = hook().await {
+                report.results.push(TestResult {
+                    name: "<after_all>".to_string(),
+                    status: TestStatus::Failed,
+                    attempts: 1,
+                    duration_ms: 0,
+                    error: Some(error.to_string()),
+                    screenshots: vec![],
+                    trace: None,
+                    video: None,
+                });
             }
         }
         for teardown in &self.global_teardown {

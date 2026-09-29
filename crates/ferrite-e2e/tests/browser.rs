@@ -8,12 +8,14 @@
 //!   cargo test -p ferrite-e2e --test browser
 //! ```
 
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ferrite_e2e::{
-    describe, test, Browser, BrowserKind, ColorScheme, Cookie, DeviceDescriptor, E2eError,
-    LaunchOptions, LoadState, NavigationOptions, Page, RecordedRequest, ReducedMotion, RouteRule,
-    Runner, ScreenshotOptions, TestStatus, Timeout, VideoMode, VideoOptions,
+    describe, test, Browser, BrowserKind, ColorScheme, Cookie, DeviceDescriptor, DialogDecision,
+    E2eError, LaunchOptions, LoadState, NavigationOptions, Page, PageEvent, PageEventKind,
+    RecordedRequest, ReducedMotion, RouteAction, RouteInfo, RouteRule, Runner, ScreenshotOptions,
+    TestStatus, Timeout, TracingOptions, VideoMode, VideoOptions, WebSocketDirection,
 };
 
 const FIXTURE: &str = r#"<!doctype html><html><head><title>e2e fixture</title></head><body>
@@ -169,6 +171,16 @@ async fn serve() -> (String, tokio::task::AbortHandle) {
                     .and_then(|value| value.to_str().ok())
                     .unwrap_or("absent");
                 format!("probe={probe} lang={lang}")
+            }),
+        )
+        .route(
+            "/api/auth",
+            axum::routing::get(|headers: axum::http::HeaderMap| async move {
+                headers
+                    .get(axum::http::header::AUTHORIZATION)
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("absent")
+                    .to_string()
             }),
         );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2931,5 +2943,1066 @@ async fn route_modify_response() {
         page.close().await.unwrap();
         browser.close().await.unwrap();
         shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn page_events_and_popups() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+
+        // Console events.
+        let (event, done) = tokio::join!(
+            page.wait_for_event(PageEventKind::Console, Duration::from_secs(10)),
+            page.evaluate_value("console.log('event-probe-1'); true")
+        );
+        done.unwrap();
+        assert!(
+            matches!(&event, Ok(PageEvent::Console(message)) if message.text.contains("event-probe-1")),
+            "{tag}: {event:?}"
+        );
+
+        // Request + response events.
+        let (event, done) = tokio::join!(
+            page.wait_for_event(PageEventKind::Request, Duration::from_secs(10)),
+            page.evaluate("fetch('api/hi').then(r => r.text())")
+        );
+        let _: String = done.unwrap();
+        assert!(
+            matches!(&event, Ok(PageEvent::Request { url, .. }) if url.ends_with("api/hi")),
+            "{tag}: {event:?}"
+        );
+        let (event, done) = tokio::join!(
+            page.wait_for_event(PageEventKind::Response, Duration::from_secs(10)),
+            page.evaluate("fetch('api/hi').then(r => r.text())")
+        );
+        let _: String = done.unwrap();
+        assert!(
+            matches!(&event, Ok(PageEvent::Response { url, status: 200 })
+                if url.ends_with("api/hi")),
+            "{tag}: {event:?}"
+        );
+
+        // Dialog events (handling must be armed).
+        page.handle_dialogs(true).await.unwrap();
+        let (event, done) = tokio::join!(
+            page.wait_for_event(PageEventKind::Dialog, Duration::from_secs(10)),
+            page.evaluate("alert('hi-event'); 'done'")
+        );
+        let done: String = done.unwrap();
+        assert_eq!(done, "done", "{tag}");
+        assert!(
+            matches!(&event, Ok(PageEvent::Dialog(dialog)) if dialog.message == "hi-event"),
+            "{tag}: {event:?}"
+        );
+        page.stop_dialog_handling().await;
+
+        // Popup adoption: the event carries a usable, registered page.
+        let (event, done) = tokio::join!(
+            page.wait_for_event(PageEventKind::Popup, Duration::from_secs(15)),
+            page.evaluate_value("window.open('about:blank'); true")
+        );
+        done.unwrap();
+        let PageEvent::Popup(popup) = event.unwrap() else {
+            panic!("{tag}: expected popup");
+        };
+        popup.goto(&base).await.unwrap();
+        assert_eq!(popup.title().await.unwrap(), "e2e fixture", "{tag}");
+        assert!(
+            browser
+                .default_context()
+                .pages()
+                .iter()
+                .any(|known| known.target_id() == popup.target_id()),
+            "{tag}: popup not registered"
+        );
+        let (event, done) = tokio::join!(
+            popup.wait_for_event(PageEventKind::Closed, Duration::from_secs(10)),
+            popup.close()
+        );
+        done.unwrap();
+        assert!(matches!(event, Ok(PageEvent::Closed)), "{tag}: {event:?}");
+
+        // Download events (Firefox download dirs are launch-wide).
+        let dir =
+            std::env::temp_dir().join(format!("ferrite-e2e-evdl-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        if kind == BrowserKind::Chromium {
+            page.set_download_dir(&dir).await.unwrap();
+            let (event, done) = tokio::join!(
+                page.wait_for_event(PageEventKind::Download, Duration::from_secs(15)),
+                page.evaluate_value("window.location = 'download/report.txt'; true")
+            );
+            done.unwrap();
+            assert!(
+                matches!(&event, Ok(PageEvent::Download(path)) if path.is_file()),
+                "{tag}: {event:?}"
+            );
+        } else {
+            let exe = ferrite_e2e::find_firefox(None).unwrap();
+            let dl_browser = Browser::launch(
+                LaunchOptions::default()
+                    .browser(kind)
+                    .executable(exe)
+                    .download_dir(dir.clone()),
+            )
+            .await
+            .unwrap();
+            let dl_page = dl_browser.new_page().await.unwrap();
+            dl_page.goto(&base).await.unwrap();
+            let (event, done) = tokio::join!(
+                dl_page.wait_for_event(PageEventKind::Download, Duration::from_secs(15)),
+                dl_page.evaluate_value("window.location = 'download/report.txt'; true")
+            );
+            done.unwrap();
+            assert!(
+                matches!(&event, Ok(PageEvent::Download(path)) if path.is_file()),
+                "{tag}: {event:?}"
+            );
+            dl_page.close().await.unwrap();
+            dl_browser.close().await.unwrap();
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn route_and_dialog_handlers() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+
+        // Handler-style route: the handler sees method/URL/headers and
+        // answers dynamically (Playwright `page.route(url, handler)`).
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&seen);
+        page.route_with_handler("**/api/hi", move |info| {
+            let record = Arc::clone(&record);
+            async move {
+                record.lock().unwrap().push((
+                    info.method.clone(),
+                    info.url.clone(),
+                    info.headers.len(),
+                ));
+                Ok(RouteAction::fulfill(
+                    200,
+                    format!("handled:{}", info.method),
+                    "text/plain",
+                ))
+            }
+        })
+        .await
+        .unwrap();
+        let body: String = page
+            .evaluate("fetch('/api/hi').then(r => r.text())")
+            .await
+            .unwrap();
+        assert_eq!(body, "handled:GET", "{tag}");
+        {
+            let seen = seen.lock().unwrap();
+            assert_eq!(seen.len(), 1, "{tag}");
+            assert_eq!(seen[0].0, "GET", "{tag}");
+            assert!(seen[0].1.ends_with("/api/hi"), "{tag}: {}", seen[0].1);
+            assert!(seen[0].2 > 0, "{tag}: no headers captured");
+        }
+
+        // `unroute` removes handlers too; traffic passes through again.
+        assert_eq!(page.unroute("**/api/hi").await.unwrap(), 1, "{tag}");
+        let real: serde_json::Value = page
+            .evaluate("fetch('/api/hi').then(r => r.json())")
+            .await
+            .unwrap();
+        assert_eq!(real, serde_json::json!({"real": true}), "{tag}");
+
+        // Dialog handler: per-dialog decisions with prompt text
+        // (Playwright `page.on('dialog', ...)` + `dialog.accept(text)`).
+        let dialogs = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&dialogs);
+        page.handle_dialogs_with_handler(move |info| {
+            record
+                .lock()
+                .unwrap()
+                .push((info.dialog_type.clone(), info.message.clone()));
+            DialogDecision::accept_with("typed")
+        })
+        .await
+        .unwrap();
+        let answer: String = page.evaluate("prompt('your name?')").await.unwrap();
+        assert_eq!(answer, "typed", "{tag}");
+        {
+            let dialogs = dialogs.lock().unwrap();
+            assert_eq!(
+                dialogs.as_slice(),
+                [("prompt".to_string(), "your name?".to_string())],
+                "{tag}"
+            );
+        }
+        page.stop_dialog_handling().await;
+
+        // `RouteInfo::fetch` replays the request over plain HTTP
+        // (Playwright `route.fetch`).
+        let info = RouteInfo {
+            url: format!("{base}api/method"),
+            method: "GET".to_string(),
+            headers: Vec::new(),
+            post_data: None,
+        };
+        let response = info.fetch().await.unwrap();
+        assert_eq!(response.status(), 200, "{tag}");
+        assert_eq!(response.text(), "GET", "{tag}");
+
+        // Handler-decided response edits: Chromium applies them, Firefox
+        // loud-aborts (BiDi is request-phase-only).
+        page.route_with_handler("**/api/echo", |_info| async {
+            Ok(RouteAction::ModifyResponse {
+                status: Some(418),
+                headers: None,
+                body: None,
+            })
+        })
+        .await
+        .unwrap();
+        let probe: String = page
+            .evaluate(
+                "fetch('/api/echo', { method: 'POST', body: 'x' }) \
+                 .then(r => String(r.status)).catch(() => 'failed')",
+            )
+            .await
+            .unwrap();
+        if kind == BrowserKind::Chromium {
+            assert_eq!(probe, "418", "{tag}");
+        } else {
+            assert_eq!(probe, "failed", "{tag}");
+        }
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn jshandle_roundtrip() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+
+        // Remote object: serialize, drill into properties, run functions.
+        let handle = page
+            .evaluate_handle("({ a: 1, nested: { b: 'x' }, list: [1, 2, 3] })")
+            .await
+            .unwrap();
+        assert!(!handle.is_primitive(), "{tag}");
+        let root: serde_json::Value = handle.json_value().await.unwrap();
+        assert_eq!(
+            root,
+            serde_json::json!({ "a": 1, "nested": { "b": "x" }, "list": [1, 2, 3] }),
+            "{tag}"
+        );
+        let nested = handle.get_property("nested").await.unwrap();
+        let nested_json: serde_json::Value = nested.json_value().await.unwrap();
+        assert_eq!(nested_json, serde_json::json!({ "b": "x" }), "{tag}");
+        let sum: i64 = handle
+            .evaluate("(o) => o.list.reduce((x, y) => x + y, 0)")
+            .await
+            .unwrap();
+        assert_eq!(sum, 6, "{tag}");
+        nested.dispose().await.unwrap();
+        handle.dispose().await.unwrap();
+
+        // Primitives inline (no remote reference) but keep the same API.
+        let number = page.evaluate_handle("40 + 2").await.unwrap();
+        assert!(number.is_primitive(), "{tag}");
+        assert_eq!(number.json_value::<i64>().await.unwrap(), 42, "{tag}");
+        assert_eq!(
+            number.evaluate::<i64>("(n) => n * 2").await.unwrap(),
+            84,
+            "{tag}"
+        );
+        number.dispose().await.unwrap();
+
+        // DOM nodes are remote values too.
+        let node = page
+            .evaluate_handle("document.getElementById('title')")
+            .await
+            .unwrap();
+        assert!(!node.is_primitive(), "{tag}");
+        let text: String = node.evaluate("(el) => el.textContent").await.unwrap();
+        assert_eq!(text, "hello ferrite", "{tag}");
+        node.dispose().await.unwrap();
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+/// Echo WebSocket server (`ws://127.0.0.1:<port>/socket`).
+async fn serve_ws() -> (String, tokio::task::AbortHandle) {
+    use futures::{SinkExt, StreamExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/socket", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let Ok(ws) = tokio_tungstenite::accept_async(stream).await else {
+                    return;
+                };
+                let (mut write, mut read) = ws.split();
+                while let Some(Ok(msg)) = read.next().await {
+                    if msg.is_text() {
+                        if write.send(msg).await.is_err() {
+                            break;
+                        }
+                    } else if msg.is_close() {
+                        let _ = write.send(msg).await;
+                        break;
+                    }
+                }
+            });
+        }
+    });
+    (url, task.abort_handle())
+}
+
+#[tokio::test]
+async fn har_export() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+        page.start_request_capture();
+        page.evaluate_value("fetch('api/hi').then(r => r.json())")
+            .await
+            .unwrap();
+        page.evaluate_value("fetch('api/echo', { method: 'POST', body: 'x' }).then(r => r.text())")
+            .await
+            .unwrap();
+
+        let path =
+            std::env::temp_dir().join(format!("ferrite-har-{}-{tag}.har", std::process::id()));
+        page.save_har(&path).unwrap();
+        let har: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(har["log"]["version"], serde_json::json!("1.2"), "{tag}");
+        assert_eq!(
+            har["log"]["creator"]["name"],
+            serde_json::json!("ferrite"),
+            "{tag}"
+        );
+        let entries = har["log"]["entries"].as_array().unwrap();
+        let hi = entries
+            .iter()
+            .find(|e| {
+                e["request"]["url"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .ends_with("/api/hi")
+            })
+            .unwrap_or_else(|| panic!("{tag}: no /api/hi entry in {entries:?}"));
+        assert_eq!(hi["request"]["method"], serde_json::json!("GET"), "{tag}");
+        assert_eq!(hi["response"]["status"], serde_json::json!(200), "{tag}");
+        assert!(
+            hi["response"]["content"]["mimeType"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("application/json"),
+            "{tag}: {hi}"
+        );
+        assert!(
+            !hi["response"]["headers"].as_array().unwrap().is_empty(),
+            "{tag}: no response headers"
+        );
+        assert!(
+            hi["startedDateTime"]
+                .as_str()
+                .unwrap_or_default()
+                .ends_with('Z'),
+            "{tag}: {}",
+            hi["startedDateTime"]
+        );
+        assert_eq!(hi["timings"]["wait"], hi["time"], "{tag}");
+
+        // POST body metadata survives the round trip.
+        let echo = entries
+            .iter()
+            .find(|e| {
+                e["request"]["url"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .ends_with("/api/echo")
+            })
+            .unwrap_or_else(|| panic!("{tag}: no /api/echo entry"));
+        assert_eq!(
+            echo["request"]["method"],
+            serde_json::json!("POST"),
+            "{tag}"
+        );
+        if kind == BrowserKind::Chromium {
+            assert_eq!(
+                echo["request"]["postData"]["text"],
+                serde_json::json!("x"),
+                "{tag}"
+            );
+        }
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn websocket_events() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let (ws_url, ws_shutdown) = serve_ws().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+
+        // BiDi has no socket-frame events: waiting fails loudly.
+        if kind != BrowserKind::Chromium {
+            let err = page
+                .wait_for_event(PageEventKind::WebSocket, Duration::from_secs(1))
+                .await
+                .unwrap_err();
+            assert!(
+                err.to_string().contains("not supported on Firefox"),
+                "{tag}: {err}"
+            );
+            page.close().await.unwrap();
+            browser.close().await.unwrap();
+            shutdown.abort();
+            ws_shutdown.abort();
+            continue;
+        }
+
+        let mut events = page.subscribe();
+        let script = format!(
+            "(() => new Promise((resolve, reject) => {{ \
+               const ws = new WebSocket('{ws_url}'); \
+               ws.onopen = () => ws.send('ping-1'); \
+               ws.onmessage = (e) => {{ ws.close(); resolve(e.data); }}; \
+               ws.onerror = () => reject(new Error('ws failed')); \
+             }}))()"
+        );
+        let echo = page.evaluate::<String>(&script).await;
+        assert_eq!(echo.unwrap(), "ping-1", "{tag}");
+
+        // Drain socket events until close (or timeout).
+        let mut seen: Vec<(WebSocketDirection, String)> = Vec::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while tokio::time::Instant::now() < deadline {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            match tokio::time::timeout(remaining, events.recv()).await {
+                Ok(Ok(PageEvent::WebSocket(event))) => {
+                    assert!(event.url.ends_with("/socket"), "{tag}: {}", event.url);
+                    let closed = event.direction == WebSocketDirection::Closed;
+                    seen.push((event.direction, event.payload));
+                    if closed {
+                        break;
+                    }
+                }
+                Ok(Ok(_)) => {}
+                _ => break,
+            }
+        }
+        assert!(
+            seen.iter().any(|(d, _)| *d == WebSocketDirection::Created),
+            "{tag}: {seen:?}"
+        );
+        assert!(
+            seen.contains(&(WebSocketDirection::Sent, "ping-1".to_string())),
+            "{tag}: {seen:?}"
+        );
+        assert!(
+            seen.contains(&(WebSocketDirection::Received, "ping-1".to_string())),
+            "{tag}: {seen:?}"
+        );
+        assert_eq!(
+            seen.last().map(|(d, _)| *d),
+            Some(WebSocketDirection::Closed),
+            "{tag}: {seen:?}"
+        );
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+        ws_shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn tracing_capture() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let context = browser
+            .new_context(ferrite_e2e::ContextOptions::default())
+            .await
+            .unwrap();
+
+        // Stopping without starting is a loud error.
+        let err = context
+            .stop_tracing(std::env::temp_dir().join("ferrite-trace-unused.json"))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("not started"), "{tag}: {err}");
+
+        context.start_tracing(TracingOptions::default().screenshots(true));
+        let page = context.new_page().await.unwrap();
+        page.start_request_capture();
+        page.step("open fixture", page.goto(&base)).await.unwrap();
+        page.step(
+            "probe api",
+            page.evaluate_value("fetch('api/hi').then(r => r.json())"),
+        )
+        .await
+        .unwrap();
+        page.step("log line", page.evaluate_value("console.log('traced'); 1"))
+            .await
+            .unwrap();
+
+        let path =
+            std::env::temp_dir().join(format!("ferrite-trace-{}-{tag}.json", std::process::id()));
+        context.stop_tracing(&path).await.unwrap();
+        let trace: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(trace["tool"], serde_json::json!("ferrite"), "{tag}");
+        assert_eq!(
+            trace["screenshots_enabled"],
+            serde_json::json!(true),
+            "{tag}"
+        );
+        let pages = trace["pages"].as_array().unwrap();
+        assert_eq!(pages.len(), 1, "{tag}");
+        let actions = pages[0]["actions"].as_array().unwrap();
+        for name in ["open fixture", "probe api", "log line"] {
+            assert!(
+                actions
+                    .iter()
+                    .any(|a| a["detail"].as_str().unwrap_or_default().starts_with(name)),
+                "{tag}: missing step {name} in {actions:?}"
+            );
+        }
+        let console = pages[0]["console"].as_array().unwrap();
+        assert!(
+            console
+                .iter()
+                .any(|m| m["text"].as_str().unwrap_or_default().contains("traced")),
+            "{tag}: {console:?}"
+        );
+        let requests = pages[0]["requests"].as_array().unwrap();
+        assert!(
+            requests
+                .iter()
+                .any(|r| r["url"].as_str().unwrap_or_default().ends_with("/api/hi")),
+            "{tag}: {requests:?}"
+        );
+        let shots = trace["screenshots"].as_array().unwrap();
+        assert_eq!(shots.len(), 3, "{tag}");
+        assert_eq!(shots[0]["step"], serde_json::json!("open fixture"), "{tag}");
+        for shot in shots {
+            let png = shot["png_base64"].as_str().unwrap_or_default();
+            assert!(png.starts_with("iVBOR"), "{tag}: not a PNG shot");
+        }
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn locator_state_checks() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&format!("{base}assert")).await.unwrap();
+
+        assert!(page.locator("#btn").is_visible().await.unwrap(), "{tag}");
+        assert!(!page.locator("#btn").is_hidden().await.unwrap(), "{tag}");
+        assert!(page.locator("#nope").is_hidden().await.unwrap(), "{tag}");
+        assert!(!page.locator("#nope").is_attached().await.unwrap(), "{tag}");
+        assert!(page.locator("#btn").is_attached().await.unwrap(), "{tag}");
+        assert!(page.locator("#txt").is_enabled().await.unwrap(), "{tag}");
+        assert!(!page.locator("#txt").is_disabled().await.unwrap(), "{tag}");
+        assert!(page.locator("#off").is_disabled().await.unwrap(), "{tag}");
+        assert!(page.locator("#ed").is_editable().await.unwrap(), "{tag}");
+        assert!(!page.locator("#btn").is_editable().await.unwrap(), "{tag}");
+
+        page.locator("#txt").focus().await.unwrap();
+        assert!(page.locator("#txt").is_focused().await.unwrap(), "{tag}");
+
+        let bounds = page.locator("#btn").bounding_box().await.unwrap();
+        assert!(bounds.is_some(), "{tag}");
+        let bounds = bounds.unwrap();
+        assert!(
+            bounds.width > 0.0 && bounds.height > 0.0,
+            "{tag}: {bounds:?}"
+        );
+        assert!(
+            page.locator("#nope")
+                .bounding_box()
+                .await
+                .unwrap()
+                .is_none(),
+            "{tag}"
+        );
+
+        page.locator("#btn").highlight().await.unwrap();
+        let outline: String = page
+            .locator("#btn")
+            .evaluate("(el) => el.style.outline")
+            .await
+            .unwrap();
+        assert!(outline.contains("solid"), "{tag}: {outline}");
+        let id: String = page
+            .locator("#btn")
+            .evaluate("(el) => el.id")
+            .await
+            .unwrap();
+        assert_eq!(id, "btn", "{tag}");
+
+        page.goto(&base).await.unwrap();
+        assert!(!page.locator("#agree").is_checked().await.unwrap(), "{tag}");
+        page.locator("#agree").set_checked(true).await.unwrap();
+        assert!(page.locator("#agree").is_checked().await.unwrap(), "{tag}");
+        page.locator("#agree").set_checked(false).await.unwrap();
+        assert!(!page.locator("#agree").is_checked().await.unwrap(), "{tag}");
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn page_wait_helpers_and_close() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        assert!(browser.is_connected(), "{tag}");
+        let page = browser.new_page().await.unwrap();
+        assert!(!page.is_closed(), "{tag}");
+        page.goto(&base).await.unwrap();
+
+        let found = page
+            .wait_for_selector("#title", Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(found.text().await.unwrap(), "hello ferrite", "{tag}");
+        let err = page
+            .wait_for_selector("#never-here", Duration::from_millis(300))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("wait for"), "{tag}: {err}");
+
+        // Dialogs: arm-on-wait answers and reports the dialog.
+        page.evaluate_value("setTimeout(() => alert('w4-hi'), 100); true")
+            .await
+            .unwrap();
+        let dialog = page
+            .wait_for_dialog(true, Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(dialog.dialog_type, "alert", "{tag}");
+        assert_eq!(dialog.message, "w4-hi", "{tag}");
+
+        // Popups resolve to an adopted, usable page.
+        let popup_url = format!("{base}assert");
+        let open = format!("window.open('{popup_url}'); true");
+        let (popup, done) = tokio::join!(
+            page.wait_for_popup(Duration::from_secs(15)),
+            page.evaluate_value(&open)
+        );
+        done.unwrap();
+        let popup = popup.unwrap();
+        popup
+            .wait_for_function("document.title.length > 0", Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(popup.title().await.unwrap(), "assert me", "{tag}");
+        popup.close().await.unwrap();
+        assert!(popup.is_closed(), "{tag}");
+
+        page.close().await.unwrap();
+        assert!(page.is_closed(), "{tag}");
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn clock_controls() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+
+        let err = page.clock_now().await.unwrap_err();
+        assert!(err.to_string().contains("clock_install"), "{tag}: {err}");
+        page.clock_install().await.unwrap();
+        let t0 = page.clock_now().await.unwrap();
+        assert!(t0 > 0, "{tag}");
+
+        page.clock_fast_forward(1_000).await.unwrap();
+        assert_eq!(page.clock_now().await.unwrap(), t0 + 1_000, "{tag}");
+        page.clock_run_for(500).await.unwrap();
+        assert_eq!(page.clock_now().await.unwrap(), t0 + 1_500, "{tag}");
+
+        page.clock_pause().await.unwrap();
+        let paused: bool = page
+            .evaluate("window.__ferriteClock.isPaused()")
+            .await
+            .unwrap();
+        assert!(paused, "{tag}");
+        page.clock_resume().await.unwrap();
+        let paused: bool = page
+            .evaluate("window.__ferriteClock.isPaused()")
+            .await
+            .unwrap();
+        assert!(!paused, "{tag}");
+
+        page.clock_set_system_time(1_700_000_000_000).await.unwrap();
+        assert_eq!(page.clock_now().await.unwrap(), 1_700_000_000_000, "{tag}");
+        let date_now: i64 = page.evaluate("Date.now()").await.unwrap();
+        assert_eq!(date_now, 1_700_000_000_000, "{tag}");
+
+        page.clock_uninstall().await.unwrap();
+        let err = page.clock_pause().await.unwrap_err();
+        assert!(err.to_string().contains("clock_install"), "{tag}: {err}");
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn permissions_geo_clear() {
+    for (kind, browser) in browsers().await {
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+
+        page.grant_permissions(&["notifications"]).await.unwrap();
+        page.clear_permissions().await.unwrap();
+        // Clearing twice is idempotent.
+        page.clear_permissions().await.unwrap();
+
+        if kind == BrowserKind::Chromium {
+            page.set_geolocation(48.0, 2.0).await.unwrap();
+            page.clear_geolocation().await.unwrap();
+            page.clear_geolocation().await.unwrap();
+        } else {
+            // Firefox geo needs a recent build; clear is always safe.
+            let _ = page.set_geolocation(48.0, 2.0).await;
+            page.clear_geolocation().await.unwrap();
+        }
+
+        let context = browser
+            .new_context(ferrite_e2e::ContextOptions::default())
+            .await
+            .unwrap();
+        let cpage = context.new_page().await.unwrap();
+        cpage.goto(&base).await.unwrap();
+        context.grant_permissions(&["notifications"]).await.unwrap();
+        context.clear_permissions().await.unwrap();
+        if kind == BrowserKind::Chromium {
+            context.set_geolocation(48.0, 2.0).await.unwrap();
+            context.clear_geolocation().await.unwrap();
+        } else {
+            context.clear_geolocation().await.unwrap();
+        }
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn download_object() {
+    for kind in [BrowserKind::Chromium, BrowserKind::Firefox] {
+        let tag = kind.name();
+        let exe = match kind {
+            BrowserKind::Chromium => ferrite_e2e::find_chromium(None),
+            BrowserKind::Firefox => ferrite_e2e::find_firefox(None),
+        };
+        let Some(exe) = exe else {
+            eprintln!("skipping {tag}: no executable found");
+            continue;
+        };
+        let dir =
+            std::env::temp_dir().join(format!("ferrite-e2e-dlobj-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let browser = match Browser::launch(
+            LaunchOptions::default()
+                .browser(kind)
+                .executable(exe)
+                .download_dir(dir.clone()),
+        )
+        .await
+        {
+            Ok(browser) => browser,
+            Err(error) => {
+                eprintln!("skipping {tag}: {error}");
+                continue;
+            }
+        };
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+        if kind == BrowserKind::Chromium {
+            page.set_download_dir(&dir).await.unwrap();
+        }
+
+        page.evaluate_value("window.location = 'download/report.txt'; true")
+            .await
+            .unwrap();
+        let download = page
+            .wait_for_download_file(&dir, Duration::from_secs(15))
+            .await
+            .unwrap();
+        assert_eq!(download.suggested_filename, "report.txt", "{tag}");
+        assert!(download.path.is_file(), "{tag}");
+
+        let saved = download
+            .save_as(dir.join("nested").join("copy.txt"))
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&saved).unwrap(),
+            "ferrite download contents",
+            "{tag}"
+        );
+        download.delete().await.unwrap();
+        assert!(!download.path.exists(), "{tag}");
+        download.delete().await.unwrap();
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[tokio::test]
+async fn response_body_and_aria() {
+    for (_kind, browser) in browsers().await {
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+
+        let body = page.response_body(&format!("{base}api/hi")).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json, serde_json::json!({"real": true}));
+        let err = page
+            .response_body(&format!("{base}api/missing"))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("fetch"), "{err}");
+
+        page.goto(&format!("{base}locate")).await.unwrap();
+        let snapshot = page.aria_snapshot().await.unwrap();
+        assert!(snapshot.contains("button"), "{snapshot}");
+        assert!(snapshot.contains("Sign in"), "{snapshot}");
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn unroute_all_clears() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+
+        page.route(vec![
+            RouteRule::fulfill("**/api/hi", 200, r#"{"mock":1}"#, "application/json"),
+            RouteRule::abort("**/api/echo"),
+        ])
+        .await
+        .unwrap();
+        page.route_with_handler("**/api/method", |info| async move {
+            Ok(RouteAction::fulfill(
+                200,
+                format!("saw {}", info.method),
+                "text/plain",
+            ))
+        })
+        .await
+        .unwrap();
+        let removed = page.unroute_all().await.unwrap();
+        assert_eq!(removed, 3, "{tag}");
+        assert_eq!(page.unroute_all().await.unwrap(), 0, "{tag}");
+        let text: String = page
+            .evaluate("fetch('api/hi').then(r => r.text())")
+            .await
+            .unwrap();
+        assert!(text.contains("\"real\":true"), "{tag}: {text}");
+
+        let context = browser
+            .new_context(ferrite_e2e::ContextOptions::default())
+            .await
+            .unwrap();
+        context
+            .route(vec![RouteRule::fulfill(
+                "**/api/hi",
+                200,
+                r#"{"ctx":1}"#,
+                "application/json",
+            )])
+            .await
+            .unwrap();
+        assert_eq!(context.unroute_all().await.unwrap(), 1, "{tag}");
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn http_credentials() {
+    for (kind, browser) in browsers().await {
+        let tag = kind.name();
+        let (base, shutdown) = serve().await;
+        let page = browser.new_page().await.unwrap();
+        page.goto(&base).await.unwrap();
+
+        if kind == BrowserKind::Chromium {
+            page.set_http_credentials(Some("ada"), Some("s3cret"))
+                .await
+                .unwrap();
+            let auth: String = page
+                .evaluate("fetch('api/auth').then(r => r.text())")
+                .await
+                .unwrap();
+            assert!(auth.starts_with("Basic "), "{tag}: {auth}");
+            page.set_http_credentials(None, None).await.unwrap();
+            let auth: String = page
+                .evaluate("fetch('api/auth').then(r => r.text())")
+                .await
+                .unwrap();
+            assert_eq!(auth, "absent", "{tag}");
+            let err = page
+                .set_http_credentials(Some("ada"), None)
+                .await
+                .unwrap_err();
+            assert!(err.to_string().contains("both username"), "{tag}: {err}");
+        } else {
+            let err = page
+                .set_http_credentials(Some("ada"), Some("s3cret"))
+                .await
+                .unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("extra HTTP headers are not supported"),
+                "{tag}: {err}"
+            );
+        }
+
+        page.close().await.unwrap();
+        browser.close().await.unwrap();
+        shutdown.abort();
+    }
+}
+
+#[tokio::test]
+async fn runner_before_all_after_all() {
+    let browsers = browsers().await;
+    if browsers.is_empty() {
+        eprintln!("skipping runner_before_all_after_all: no browser");
+        return;
+    }
+    let order = Arc::new(Mutex::new(Vec::<String>::new()));
+    let mark = order.clone();
+    let runner = Runner::default()
+        .workers(1)
+        .list_progress(false)
+        .before_all(move || {
+            let mark = mark.clone();
+            async move {
+                mark.lock().unwrap().push("before_all".to_string());
+                Ok(())
+            }
+        });
+    let mark = order.clone();
+    let runner = runner.after_all(move || {
+        let mark = mark.clone();
+        async move {
+            mark.lock().unwrap().push("after_all".to_string());
+            Ok(())
+        }
+    });
+    let mark = order.clone();
+    let runner = runner.before_each(move |_page| {
+        let mark = mark.clone();
+        async move {
+            mark.lock().unwrap().push("before_each".to_string());
+            Ok(())
+        }
+    });
+    let (_kind, browser) = &browsers[0];
+    let report = runner
+        .run(
+            browser,
+            vec![test("w4 hooks", |page| async move {
+                assert!(!page.is_closed());
+                Ok(())
+            })],
+        )
+        .await;
+    assert_eq!(report.passed(), 1);
+    assert_eq!(
+        order.lock().unwrap().clone(),
+        vec!["before_all", "before_each", "after_all"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    );
+
+    // Failing before_all aborts with one failed result.
+    let failing = Runner::default()
+        .list_progress(false)
+        .before_all(|| async { Err(E2eError::Config("boom".to_string())) });
+    let report = failing
+        .run(
+            browser,
+            vec![test("never runs", |_page| async move { Ok(()) })],
+        )
+        .await;
+    assert_eq!(report.failed(), 1);
+    assert_eq!(report.results[0].name, "<before_all>");
+
+    for (_kind, browser) in browsers {
+        browser.close().await.unwrap();
     }
 }

@@ -45,6 +45,8 @@ mod context;
 mod driver;
 mod error;
 mod expect;
+mod har;
+mod jshandle;
 mod locator;
 mod page;
 mod report;
@@ -56,15 +58,18 @@ pub use api::{ApiClient, ApiResponse};
 pub use bidi::BidiConnection;
 pub use browser::{find_chromium, find_firefox, Browser, BrowserKind, LaunchOptions};
 pub use cdp::CdpConnection;
-pub use context::{BrowserContext, ContextOptions};
+pub use context::{BrowserContext, ContextOptions, TracingOptions};
 pub use driver::FrameStream;
 pub use error::{E2eError, E2eResult};
 pub use expect::{expect_poll, PageExpect, SoftAsserts, Timeout};
+pub use jshandle::JSHandle;
 pub use locator::{Locator, LocatorOptions, Selector};
 pub use page::{
-    ClickOptions, ColorScheme, ConsoleMessage, Cookie, DeviceDescriptor, DialogInfo, ElementState,
-    Frame, KeyPress, LoadState, NavigationOptions, Page, RecordedRequest, ReducedMotion,
-    RouteAction, RouteRule, ScreenshotOptions, StorageState, Viewport,
+    ClickOptions, ColorScheme, ConsoleMessage, Cookie, DeviceDescriptor, DialogDecision,
+    DialogInfo, Download, ElementRect, ElementState, Frame, KeyPress, LoadState, NavigationOptions,
+    Page, PageEvent, PageEventKind, RecordedRequest, ReducedMotion, RouteAction, RouteHandler,
+    RouteHandlerEntry, RouteInfo, RouteRule, ScreenshotOptions, StorageState, Viewport,
+    WebSocketDirection, WebSocketEvent,
 };
 pub use report::{TestReport, TestResult, TestStatus};
 pub use runner::{describe, test, GlobalHook, HookFn, Runner, Test, TestMode};

@@ -4,6 +4,7 @@
 //! (CDP for Chromium, WebDriver BiDi for Firefox).
 
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
@@ -12,8 +13,12 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::driver::{ConsoleSink, Driver, FrameStream, RecordingState};
+use crate::api::{ApiClient, ApiResponse};
+use crate::context::{TraceScreenshot, TracingState};
+use crate::driver::now_ms;
+use crate::driver::{base64_encode, ConsoleSink, Driver, FrameStream, RecordingState};
 use crate::error::{E2eError, E2eResult};
+use crate::jshandle::JSHandle;
 use crate::locator::{Locator, Selector};
 use crate::video::VideoOptions;
 
@@ -98,6 +103,18 @@ pub struct RecordedRequest {
     /// Request-to-response wall time in ms (`None` when the start was missed).
     #[serde(default)]
     pub duration_ms: Option<u64>,
+    /// Response status text (`""` when unknown or the request failed).
+    #[serde(default)]
+    pub status_text: String,
+    /// Response MIME type (`""` when unknown).
+    #[serde(default)]
+    pub mime_type: String,
+    /// Response headers as received.
+    #[serde(default)]
+    pub response_headers: Vec<(String, String)>,
+    /// Request start, milliseconds since the Unix epoch.
+    #[serde(default)]
+    pub started_ms: Option<u64>,
 }
 
 /// A JavaScript dialog observed while auto-handling.
@@ -107,6 +124,100 @@ pub struct DialogInfo {
     pub dialog_type: String,
     /// Dialog message text.
     pub message: String,
+}
+
+/// Kinds of observable page events (see [`Page::wait_for_event`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageEventKind {
+    /// Console message or page exception.
+    Console,
+    /// JavaScript dialog (observed while handling is armed).
+    Dialog,
+    /// Network request started.
+    Request,
+    /// Network response finished (status 0 when failed).
+    Response,
+    /// File download completed in the download dir.
+    Download,
+    /// Popup page opened from this page.
+    Popup,
+    /// The page was closed in the browser.
+    Closed,
+    /// WebSocket lifecycle or frame (Chromium only).
+    WebSocket,
+}
+
+/// Direction of a [`WebSocketEvent`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WebSocketDirection {
+    /// Socket opened.
+    Created,
+    /// Frame sent by the page.
+    Sent,
+    /// Frame received from the server.
+    Received,
+    /// Socket closed.
+    Closed,
+}
+
+/// A WebSocket lifecycle or frame observation (Chromium only; BiDi has no
+/// socket-frame events).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebSocketEvent {
+    /// Socket URL.
+    pub url: String,
+    /// What happened.
+    pub direction: WebSocketDirection,
+    /// Frame payload text (`""` for created/closed).
+    pub payload: String,
+}
+
+/// An observed page event.
+#[derive(Debug, Clone)]
+pub enum PageEvent {
+    /// Console message or page exception.
+    Console(ConsoleMessage),
+    /// JavaScript dialog.
+    Dialog(DialogInfo),
+    /// Network request started.
+    Request {
+        /// HTTP method.
+        method: String,
+        /// Request URL.
+        url: String,
+    },
+    /// Network response finished.
+    Response {
+        /// Request URL.
+        url: String,
+        /// Response status (0 when failed).
+        status: u16,
+    },
+    /// File download completed.
+    Download(PathBuf),
+    /// Popup page opened from this page (already adopted and usable).
+    Popup(Box<Page>),
+    /// The page was closed in the browser.
+    Closed,
+    /// WebSocket lifecycle or frame (Chromium only).
+    WebSocket(WebSocketEvent),
+}
+
+impl PageEvent {
+    /// The event's kind (for filtering).
+    #[must_use]
+    pub fn kind(&self) -> PageEventKind {
+        match self {
+            Self::Console(_) => PageEventKind::Console,
+            Self::Dialog(_) => PageEventKind::Dialog,
+            Self::Request { .. } => PageEventKind::Request,
+            Self::Response { .. } => PageEventKind::Response,
+            Self::Download(_) => PageEventKind::Download,
+            Self::Popup(_) => PageEventKind::Popup,
+            Self::Closed => PageEventKind::Closed,
+            Self::WebSocket(_) => PageEventKind::WebSocket,
+        }
+    }
 }
 
 /// A browser cookie.
@@ -458,6 +569,101 @@ pub enum RouteAction {
     },
 }
 
+/// An intercepted request handed to a route handler.
+#[derive(Debug, Clone)]
+pub struct RouteInfo {
+    /// Request URL.
+    pub url: String,
+    /// HTTP method.
+    pub method: String,
+    /// Request headers as sent.
+    pub headers: Vec<(String, String)>,
+    /// Request body bytes (`None` when absent; Firefox never captures it).
+    pub post_data: Option<Vec<u8>>,
+}
+
+impl RouteInfo {
+    /// Fetch the real response over plain HTTP (no browser state, like
+    /// Playwright's `route.fetch`): inspect or rework it, then `Fulfill`.
+    pub async fn fetch(&self) -> E2eResult<ApiResponse> {
+        ApiClient::new()
+            .request(
+                &self.method,
+                &self.url,
+                &self.headers,
+                self.post_data.as_deref(),
+            )
+            .await
+    }
+}
+
+/// A route handler: inspect the request, decide the action.
+///
+/// Handler errors abort the request (and are recorded on the trace) instead
+/// of hanging the page.
+pub type RouteHandler = Arc<
+    dyn Fn(RouteInfo) -> futures::future::BoxFuture<'static, E2eResult<RouteAction>> + Send + Sync,
+>;
+
+/// A glob pattern paired with its route handler.
+#[derive(Clone)]
+pub struct RouteHandlerEntry {
+    /// Glob pattern (`**/api/*`).
+    pub pattern: String,
+    /// Handler deciding matching requests.
+    pub handler: RouteHandler,
+}
+
+/// A dialog answer decided by a handler.
+#[derive(Debug, Clone)]
+pub enum DialogDecision {
+    /// Accept (answer prompts with the optional text).
+    Accept(Option<String>),
+    /// Dismiss.
+    Dismiss,
+}
+
+/// A dialog handler: inspect the dialog, decide the answer.
+pub type DialogHandler = Arc<dyn Fn(DialogInfo) -> DialogDecision + Send + Sync>;
+
+impl DialogDecision {
+    /// Accept the dialog (confirm/OK).
+    pub fn accept() -> Self {
+        Self::Accept(None)
+    }
+
+    /// Accept a prompt with `text`.
+    pub fn accept_with(text: impl Into<String>) -> Self {
+        Self::Accept(Some(text.into()))
+    }
+
+    /// Dismiss the dialog (cancel/close).
+    pub fn dismiss() -> Self {
+        Self::Dismiss
+    }
+}
+
+impl RouteAction {
+    /// Fail the request.
+    pub fn abort() -> Self {
+        Self::Abort
+    }
+
+    /// Respond with a synthetic body.
+    pub fn fulfill(status: u16, body: impl Into<String>, content_type: impl Into<String>) -> Self {
+        Self::Fulfill {
+            status,
+            body: body.into(),
+            content_type: content_type.into(),
+        }
+    }
+
+    /// Let the request through unchanged.
+    pub fn continue_unchanged() -> Self {
+        Self::Continue
+    }
+}
+
 /// A request-routing rule (glob pattern over the URL).
 #[derive(Debug, Clone)]
 pub struct RouteRule {
@@ -595,6 +801,52 @@ pub struct ElementRect {
     pub height: f64,
 }
 
+/// A completed file download (Playwright `Download`).
+#[derive(Debug, Clone)]
+pub struct Download {
+    /// Final file path in the download dir.
+    pub path: PathBuf,
+    /// Suggested file name (final path's file name).
+    pub suggested_filename: String,
+}
+
+impl Download {
+    /// Wrap a completed download path.
+    #[must_use]
+    pub fn from_path(path: PathBuf) -> Self {
+        let suggested_filename = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        Self {
+            path,
+            suggested_filename,
+        }
+    }
+
+    /// Copy the download to `path` (creates parent dirs).
+    pub async fn save_as(&self, path: impl AsRef<Path>) -> E2eResult<PathBuf> {
+        let path = path.as_ref().to_path_buf();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        tokio::fs::copy(&self.path, &path).await.map_err(|error| {
+            E2eError::Config(format!(
+                "cannot save download {}: {error}",
+                self.path.display()
+            ))
+        })?;
+        Ok(path)
+    }
+
+    /// Delete the downloaded file (idempotent).
+    pub async fn delete(&self) -> E2eResult<()> {
+        match tokio::fs::remove_file(&self.path).await {
+            Ok(()) | Err(_) => Ok(()),
+        }
+    }
+}
+
 /// An automated page (one browser tab).
 #[derive(Clone)]
 pub struct Page {
@@ -608,6 +860,10 @@ pub struct Page {
     routes: Arc<Mutex<Vec<RouteRule>>>,
     /// Rules inherited from the owning context (shared; page rules win).
     context_routes: Arc<Mutex<Vec<RouteRule>>>,
+    /// Page-level route handlers (checked before rules, first match wins).
+    handlers: Arc<Mutex<Vec<RouteHandlerEntry>>>,
+    /// Handlers inherited from the owning context (shared).
+    context_handlers: Arc<Mutex<Vec<RouteHandlerEntry>>>,
     /// Context grants waiting for the first http(s) navigation (Firefox
     /// grants need an origin, so fresh pages cannot take them yet).
     pending_grants: Arc<Mutex<Vec<String>>>,
@@ -615,6 +871,19 @@ pub struct Page {
     exposed: ExposedState,
     registry: Weak<Mutex<Vec<Page>>>,
     frame_id: Option<String>,
+    download_dir: Arc<Mutex<Option<PathBuf>>>,
+    /// Tracing session shared with the owning context (screenshots on steps).
+    tracing: Arc<Mutex<Option<TracingState>>>,
+    closed: Arc<Mutex<bool>>,
+}
+
+impl fmt::Debug for Page {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Page")
+            .field("target_id", &self.target_id())
+            .field("base_url", &self.base_url)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Rust handlers exposed to page JS ([`Page::expose_function`]).
@@ -664,11 +933,16 @@ const CLOCK_SCRIPT: &str = r#"(() => {
   window.requestAnimationFrame = (cb) => window.setTimeout(() => cb(now), 16);
   window.cancelAnimationFrame = (id) => { timers.delete(id); };
   performance.now = () => now - origin;
+  let paused = false;
   window.__ferriteClock = {
     setFixed(ms) {
       now = +ms || 0;
       return now;
     },
+    now() { return now; },
+    pause() { paused = true; return now; },
+    resume() { paused = false; return now; },
+    isPaused() { return paused; },
     tick(ms) {
       const end = now + Math.max(0, +ms || 0);
       let fired = 0;
@@ -714,6 +988,7 @@ enum CaptureState {
 }
 
 impl Page {
+    #[allow(clippy::too_many_arguments)] // Internal constructor; called from one context site.
     pub(crate) fn new(
         driver: Driver,
         sink: ConsoleSink,
@@ -721,6 +996,8 @@ impl Page {
         base_url: Option<String>,
         registry: Weak<Mutex<Vec<Page>>>,
         context_routes: Arc<Mutex<Vec<RouteRule>>>,
+        context_handlers: Arc<Mutex<Vec<RouteHandlerEntry>>>,
+        tracing: Arc<Mutex<Option<TracingState>>>,
     ) -> Self {
         Self {
             driver,
@@ -732,11 +1009,16 @@ impl Page {
             capture: Arc::new(Mutex::new(None)),
             routes: Arc::new(Mutex::new(Vec::new())),
             context_routes,
+            handlers: Arc::new(Mutex::new(Vec::new())),
+            context_handlers,
             pending_grants: Arc::new(Mutex::new(Vec::new())),
             net_capture: Arc::new(Mutex::new(None)),
             exposed: ExposedState::default(),
             registry,
             frame_id: None,
+            download_dir: Arc::new(Mutex::new(None)),
+            tracing,
+            closed: Arc::new(Mutex::new(false)),
         }
     }
 
@@ -750,6 +1032,122 @@ impl Page {
     #[must_use]
     pub fn target_id(&self) -> &str {
         self.driver.target_id()
+    }
+
+    /// Subscribe to page events (console, dialogs, network, downloads, popups).
+    ///
+    /// The receiver only sees events emitted after subscribing; lagged
+    /// readers skip to the newest buffered event.
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<PageEvent> {
+        self.sink.subscribe()
+    }
+
+    /// Wait for the next event of `kind` (relative `timeout`).
+    ///
+    /// Dialog events only flow while handling is armed
+    /// ([`Page::handle_dialogs`]); download waits need
+    /// [`Page::set_download_dir`] first.
+    pub async fn wait_for_event(
+        &self,
+        kind: PageEventKind,
+        timeout: Duration,
+    ) -> E2eResult<PageEvent> {
+        if kind == PageEventKind::WebSocket && matches!(self.driver, Driver::Bidi(_)) {
+            return Err(E2eError::Config(
+                "websocket events are not supported on Firefox \
+                 (BiDi has no socket-frame events)"
+                    .to_string(),
+            ));
+        }
+        if kind == PageEventKind::Download {
+            let dir = self
+                .download_dir
+                .lock()
+                .map(|dir| dir.clone())
+                .unwrap_or(None)
+                .ok_or_else(|| {
+                    E2eError::Config(
+                        "download events need a download dir (call set_download_dir first)"
+                            .to_string(),
+                    )
+                })?;
+            let path = self.wait_for_download_in(&dir, timeout).await?;
+            return Ok(PageEvent::Download(path));
+        }
+        let mut events = self.subscribe();
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(E2eError::Timeout(
+                    timeout.as_millis().min(u128::from(u64::MAX)) as u64,
+                    format!("wait for {kind:?} event"),
+                ));
+            }
+            match tokio::time::timeout(remaining, events.recv()).await {
+                Ok(Ok(event)) if event.kind() == kind => return Ok(event),
+                Ok(Ok(_)) | Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {}
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                    return Err(E2eError::Timeout(
+                        timeout.as_millis().min(u128::from(u64::MAX)) as u64,
+                        format!("wait for {kind:?} event (bus closed)"),
+                    ));
+                }
+                Err(_) => {
+                    return Err(E2eError::Timeout(
+                        timeout.as_millis().min(u128::from(u64::MAX)) as u64,
+                        format!("wait for {kind:?} event"),
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Push an event to this page's subscribers.
+    pub(crate) fn emit(&self, event: PageEvent) {
+        self.sink.emit(event);
+    }
+
+    /// Mark the page closed and emit [`PageEvent::Closed`] once.
+    pub(crate) fn mark_closed(&self) {
+        *self.closed.lock().unwrap_or_else(|e| e.into_inner()) = true;
+        self.emit(PageEvent::Closed);
+    }
+
+    /// Whether the page was closed (explicitly or by the browser).
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.closed.lock().map(|c| *c).unwrap_or(false)
+    }
+
+    /// Wait until `selector` matches, then return the [`Locator`].
+    pub async fn wait_for_selector(&self, selector: &str, timeout: Duration) -> E2eResult<Locator> {
+        let locator = self.locator(selector.to_string());
+        locator.wait_for(timeout).await?;
+        Ok(locator)
+    }
+
+    /// Wait for a popup opened from this page (already adopted and usable).
+    pub async fn wait_for_popup(&self, timeout: Duration) -> E2eResult<Page> {
+        match self.wait_for_event(PageEventKind::Popup, timeout).await? {
+            PageEvent::Popup(page) => Ok(*page),
+            _ => unreachable!("filtered by kind"),
+        }
+    }
+
+    /// Wait for the next JavaScript dialog.
+    ///
+    /// Auto-handling is armed with `accept` when it is not already running,
+    /// so the dialog is both observed and answered.
+    pub async fn wait_for_dialog(&self, accept: bool, timeout: Duration) -> E2eResult<DialogInfo> {
+        let armed = self.dialogs.lock().map(|d| d.is_some()).unwrap_or(false);
+        if !armed {
+            self.handle_dialogs(accept).await?;
+        }
+        match self.wait_for_event(PageEventKind::Dialog, timeout).await? {
+            PageEvent::Dialog(info) => Ok(info),
+            _ => unreachable!("filtered by kind"),
+        }
     }
 
     /// Default timeout for protocol calls.
@@ -947,6 +1345,20 @@ impl Page {
             Some(id) => self.driver.frame_evaluate(id, expression).await,
             None => self.driver.evaluate(expression).await,
         }
+    }
+
+    /// Evaluate JavaScript and keep the result alive as a [`JSHandle`]
+    /// (Playwright `page.evaluateHandle()`).
+    ///
+    /// Frame-scoped pages are not supported: handles need the top-level
+    /// execution context.
+    pub async fn evaluate_handle(&self, expression: &str) -> E2eResult<JSHandle> {
+        if self.frame_id.is_some() {
+            return Err(E2eError::Config(
+                "evaluate_handle on a frame-scoped page is not supported".to_string(),
+            ));
+        }
+        self.driver.evaluate_handle(expression).await
     }
 
     async fn evaluate_string(&self, expression: &str) -> E2eResult<String> {
@@ -1178,7 +1590,41 @@ impl Page {
             "step",
             format!("{name} ({}ms)", started.elapsed().as_millis()),
         );
+        self.trace_screenshot(name).await;
         out
+    }
+
+    /// Capture a tracing screenshot when the context traces with screenshots.
+    /// Best-effort: failures are recorded, never raised.
+    async fn trace_screenshot(&self, name: &str) {
+        let armed = self
+            .tracing
+            .lock()
+            .map(|tracing| tracing.as_ref().is_some_and(TracingState::screenshots))
+            .unwrap_or(false);
+        if !armed {
+            return;
+        }
+        match self.screenshot(ScreenshotOptions::default()).await {
+            Ok(png) => {
+                self.tracing
+                    .lock()
+                    .map(|mut tracing| {
+                        if let Some(state) = tracing.as_mut() {
+                            state.push(TraceScreenshot {
+                                ts_ms: now_ms(),
+                                step: name.to_string(),
+                                png,
+                            });
+                        }
+                    })
+                    .ok();
+            }
+            Err(error) => {
+                self.sink
+                    .record("trace-screenshot-failed", error.to_string());
+            }
+        }
     }
 
     /// Read a localStorage entry (`None` when missing).
@@ -1398,6 +1844,57 @@ impl Page {
         Ok(())
     }
 
+    /// Advance the fake clock by `ms` (alias for [`Page::clock_advance`]).
+    pub async fn clock_fast_forward(&self, ms: u64) -> E2eResult<()> {
+        self.clock_advance(ms).await
+    }
+
+    /// Run the fake clock forward by `ms` (alias for [`Page::clock_advance`]).
+    pub async fn clock_run_for(&self, ms: u64) -> E2eResult<()> {
+        self.clock_advance(ms).await
+    }
+
+    /// Set the fake clock to an exact epoch-millisecond time
+    /// (alias for [`Page::clock_set_fixed_time`]).
+    pub async fn clock_set_system_time(&self, ms: i64) -> E2eResult<()> {
+        self.clock_set_fixed_time(ms).await
+    }
+
+    /// Current fake-clock time in epoch milliseconds.
+    pub async fn clock_now(&self) -> E2eResult<i64> {
+        let now: Option<i64> = self
+            .evaluate("window.__ferriteClock ? window.__ferriteClock.now() : null")
+            .await?;
+        now.ok_or_else(|| E2eError::Config("clock_now needs clock_install first".to_string()))
+    }
+
+    /// Pause the fake clock (records the paused flag; timers only fire via
+    /// explicit advances while paused).
+    pub async fn clock_pause(&self) -> E2eResult<()> {
+        let now: Option<i64> = self
+            .evaluate("window.__ferriteClock ? window.__ferriteClock.pause() : null")
+            .await?;
+        match now {
+            Some(_) => Ok(()),
+            None => Err(E2eError::Config(
+                "clock_pause needs clock_install first".to_string(),
+            )),
+        }
+    }
+
+    /// Resume a paused fake clock.
+    pub async fn clock_resume(&self) -> E2eResult<()> {
+        let now: Option<i64> = self
+            .evaluate("window.__ferriteClock ? window.__ferriteClock.resume() : null")
+            .await?;
+        match now {
+            Some(_) => Ok(()),
+            None => Err(E2eError::Config(
+                "clock_resume needs clock_install first".to_string(),
+            )),
+        }
+    }
+
     /// Override the user agent.
     pub async fn set_user_agent(&self, user_agent: &str) -> E2eResult<()> {
         self.driver.set_user_agent(user_agent).await
@@ -1478,12 +1975,47 @@ impl Page {
         self.driver.grant_permissions(permissions).await
     }
 
+    /// Reset granted permissions to the browser default.
+    pub async fn clear_permissions(&self) -> E2eResult<()> {
+        self.driver.clear_permissions().await
+    }
+
     /// Override the geolocation coordinates.
     ///
     /// Pair with [`Page::grant_permissions`]; Firefox supports this only on
     /// recent builds and otherwise fails loudly.
     pub async fn set_geolocation(&self, latitude: f64, longitude: f64) -> E2eResult<()> {
         self.driver.set_geolocation(latitude, longitude).await
+    }
+
+    /// Clear the geolocation override.
+    pub async fn clear_geolocation(&self) -> E2eResult<()> {
+        self.driver.clear_geolocation().await
+    }
+
+    /// Send HTTP basic credentials with subsequent requests (Chromium only).
+    ///
+    /// Implemented as an `Authorization` extra header; pass `None` to clear.
+    /// Firefox has no header override, so this fails loudly there.
+    pub async fn set_http_credentials(
+        &self,
+        username: Option<&str>,
+        password: Option<&str>,
+    ) -> E2eResult<()> {
+        match (username, password) {
+            (Some(user), Some(pass)) => {
+                let token = base64_encode(format!("{user}:{pass}").as_bytes());
+                let value = format!("Basic {token}");
+                self.driver
+                    .set_extra_http_headers(&[("Authorization", value.as_str())])
+                    .await
+            }
+            (None, None) => self.driver.set_extra_http_headers(&[]).await,
+            _ => Err(E2eError::Config(
+                "set_http_credentials needs both username and password (or neither to clear)"
+                    .to_string(),
+            )),
+        }
     }
 
     /// Emulate offline mode (Chromium only).
@@ -1530,18 +2062,42 @@ impl Page {
 
     /// Start intercepting requests with glob rules (replaces page rules;
     /// context rules still apply as fallback, page rules win on overlap).
+    /// Route handlers (see [`Page::route_with_handler`]) run before rules.
     pub async fn route(&self, rules: Vec<RouteRule>) -> E2eResult<()> {
         *self.routes.lock().unwrap_or_else(|e| e.into_inner()) = rules;
         self.restart_routing().await
     }
 
-    /// Stop page-level interception (context rules still apply).
+    /// Intercept matching requests with an async handler (Playwright
+    /// `page.route(handler)` equivalent): inspect the [`RouteInfo`], fetch
+    /// the real response when needed, and return the [`RouteAction`].
+    /// Handlers run before rules; first match wins.
+    pub async fn route_with_handler<F, Fut>(&self, pattern: &str, handler: F) -> E2eResult<()>
+    where
+        F: Fn(RouteInfo) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = E2eResult<RouteAction>> + Send + 'static,
+    {
+        let handler: RouteHandler = Arc::new(move |info| Box::pin(handler(info)));
+        self.handlers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(RouteHandlerEntry {
+                pattern: pattern.to_string(),
+                handler,
+            });
+        self.restart_routing().await
+    }
+
+    /// Stop page-level interception (rules and handlers; context entries
+    /// still apply).
     pub async fn stop_routing(&self) {
         *self.routes.lock().unwrap_or_else(|e| e.into_inner()) = Vec::new();
+        *self.handlers.lock().unwrap_or_else(|e| e.into_inner()) = Vec::new();
         let _ = self.restart_routing().await;
     }
 
-    /// Remove rules with `pattern`; returns how many were removed.
+    /// Remove rules and handlers with `pattern`; returns how many were
+    /// removed (both kinds counted).
     pub async fn unroute(&self, pattern: &str) -> E2eResult<usize> {
         let removed = self
             .routes
@@ -1552,11 +2108,39 @@ impl Page {
                 before - routes.len()
             })
             .unwrap_or(0);
+        let removed_handlers = self
+            .handlers
+            .lock()
+            .map(|mut handlers| {
+                let before = handlers.len();
+                handlers.retain(|entry| entry.pattern != pattern);
+                before - handlers.len()
+            })
+            .unwrap_or(0);
         self.restart_routing().await?;
-        Ok(removed)
+        Ok(removed + removed_handlers)
     }
 
-    /// Apply the stored rules (page first, context fallback; no pump when empty).
+    /// Remove all page-level rules and handlers (context entries still apply).
+    ///
+    /// Returns how many entries were removed (both kinds counted).
+    pub async fn unroute_all(&self) -> E2eResult<usize> {
+        let removed = self
+            .routes
+            .lock()
+            .map(|mut routes| std::mem::take(&mut *routes).len())
+            .unwrap_or(0);
+        let removed_handlers = self
+            .handlers
+            .lock()
+            .map(|mut handlers| std::mem::take(&mut *handlers).len())
+            .unwrap_or(0);
+        self.restart_routing().await?;
+        Ok(removed + removed_handlers)
+    }
+
+    /// Apply the stored rules and handlers (page first, context fallback;
+    /// no pump when both are empty).
     pub(crate) async fn restart_routing(&self) -> E2eResult<()> {
         let handle = self.routing.lock().map(|mut r| r.take()).unwrap_or(None);
         if let Some(handle) = handle {
@@ -1574,10 +2158,24 @@ impl Page {
                 .map(|routes| routes.clone())
                 .unwrap_or_default(),
         );
-        if rules.is_empty() {
+        let mut handlers = self
+            .handlers
+            .lock()
+            .map(|handlers| handlers.clone())
+            .unwrap_or_default();
+        handlers.extend(
+            self.context_handlers
+                .lock()
+                .map(|handlers| handlers.clone())
+                .unwrap_or_default(),
+        );
+        if rules.is_empty() && handlers.is_empty() {
             return Ok(());
         }
-        let handle = self.driver.start_routing(Arc::new(rules)).await?;
+        let handle = self
+            .driver
+            .start_routing(Arc::new(rules), Arc::new(handlers))
+            .await?;
         *self.routing.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
         Ok(())
     }
@@ -1608,6 +2206,17 @@ impl Page {
         self.sink.requests()
     }
 
+    /// Export recorded traffic as a HAR 1.2 file (Playwright `recordHar`).
+    ///
+    /// Bodies are omitted (content-`omit` mode): only URLs, methods,
+    /// headers, MIME types and timings are written.
+    pub fn save_har(&self, path: impl AsRef<Path>) -> E2eResult<()> {
+        let har = crate::har::har_json(&self.requests());
+        let text = serde_json::to_string_pretty(&har)?;
+        std::fs::write(path.as_ref(), text)?;
+        Ok(())
+    }
+
     /// Set files on the file input matching `selector` (empty list clears).
     pub async fn set_input_files<P: AsRef<Path>>(
         &self,
@@ -1621,7 +2230,15 @@ impl Page {
     /// Firefox configures the download dir at launch
     /// ([`LaunchOptions::download_dir`](crate::LaunchOptions::download_dir)).
     pub async fn set_download_dir(&self, dir: impl AsRef<Path>) -> E2eResult<()> {
-        self.driver.set_download_dir(dir.as_ref()).await
+        self.driver.set_download_dir(dir.as_ref()).await?;
+        self.remember_download_dir(dir.as_ref());
+        Ok(())
+    }
+
+    /// Record the download dir without touching the engine (launch-wide dirs
+    /// are already in force via profile prefs).
+    pub(crate) fn remember_download_dir(&self, dir: &Path) {
+        *self.download_dir.lock().unwrap_or_else(|e| e.into_inner()) = Some(dir.to_path_buf());
     }
 
     /// Run `source` before page scripts in every future document of this
@@ -1872,7 +2489,73 @@ impl Page {
         dir: impl AsRef<Path>,
         timeout: Duration,
     ) -> E2eResult<PathBuf> {
-        let dir = dir.as_ref();
+        Ok(self.wait_for_download_file(dir, timeout).await?.path)
+    }
+
+    /// Wait for a download and wrap it as a [`Download`] (save/delete helpers).
+    pub async fn wait_for_download_file(
+        &self,
+        dir: impl AsRef<Path>,
+        timeout: Duration,
+    ) -> E2eResult<Download> {
+        let path = self.wait_for_download_in(dir.as_ref(), timeout).await?;
+        self.emit(PageEvent::Download(path.clone()));
+        Ok(Download::from_path(path))
+    }
+
+    /// Fetch `url` from inside the page (cookies included) and return the
+    /// raw bytes (Playwright `response.body()` equivalent for re-fetchable
+    /// resources; same-origin or CORS-open URLs only).
+    pub async fn response_body(&self, url: &str) -> E2eResult<Vec<u8>> {
+        let url_json = serde_json::to_string(url).unwrap_or_default();
+        let value: Value = self
+            .evaluate(&format!(
+                "fetch({url_json}).then(async r => {{ \
+                 if (!r.ok) throw new Error('fetch ' + r.status); \
+                 const buf = await r.arrayBuffer(); \
+                 const bytes = new Uint8Array(buf); \
+                 let bin = ''; \
+                 for (let i = 0; i < bytes.length; i++) \
+                   bin += String.fromCharCode(bytes[i]); \
+                 return btoa(bin); }})"
+            ))
+            .await?;
+        let b64 = value
+            .as_str()
+            .ok_or_else(|| E2eError::Config(format!("response_body({url}) returned no body")))?;
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .map_err(|_| E2eError::Config(format!("response_body({url}) returned invalid base64")))
+    }
+
+    /// Accessibility snapshot: indented `role "name"` lines for interactive
+    /// elements (approximation of Playwright `aria_snapshot`, same shape on
+    /// both engines).
+    pub async fn aria_snapshot(&self) -> E2eResult<String> {
+        self.evaluate_string(
+            "(() => { \
+             const out = []; \
+             const els = document.querySelectorAll( \
+               'a,button,input,select,textarea,[role],[aria-label],h1,h2,h3'); \
+             for (const el of els) { \
+               const role = el.getAttribute('role') \
+                 || el.tagName.toLowerCase(); \
+               const name = (el.getAttribute('aria-label') \
+                 || el.getAttribute('alt') \
+                 || (el.textContent || '').trim().slice(0, 80) \
+                 || el.value || '').trim(); \
+               if (!name && !['input','select','textarea'].includes(role)) continue; \
+               out.push('- ' + role + (name ? ' \"' + name + '\"' : '')); \
+               if (out.length >= 200) break; \
+             } \
+             return out.join('\\n'); })()",
+        )
+        .await
+    }
+
+    /// Download watcher without the event emission (shared implementation).
+    async fn wait_for_download_in(&self, dir: &Path, timeout: Duration) -> E2eResult<PathBuf> {
         let before = dir_names(dir)?;
         let deadline = tokio::time::Instant::now() + timeout;
         let mut stable: Option<(PathBuf, u64)> = None;
@@ -1985,7 +2668,7 @@ impl Page {
     /// Auto-handle JavaScript dialogs (`accept` = OK vs dismiss).
     pub async fn handle_dialogs(&self, accept: bool) -> E2eResult<()> {
         self.stop_dialog_handling().await;
-        let handle = self.driver.start_dialogs(accept, None).await?;
+        let handle = self.driver.start_dialogs(accept, None, None).await?;
         *self.dialogs.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
         Ok(())
     }
@@ -1999,7 +2682,22 @@ impl Page {
         self.stop_dialog_handling().await;
         let handle = self
             .driver
-            .start_dialogs(accept, Some(prompt_text.to_string()))
+            .start_dialogs(accept, Some(prompt_text.to_string()), None)
+            .await?;
+        *self.dialogs.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
+        Ok(())
+    }
+
+    /// Answer each dialog with a handler (Playwright `page.on("dialog")`
+    /// equivalent): inspect the [`DialogInfo`], return the [`DialogDecision`].
+    pub async fn handle_dialogs_with_handler(
+        &self,
+        handler: impl Fn(DialogInfo) -> DialogDecision + Send + Sync + 'static,
+    ) -> E2eResult<()> {
+        self.stop_dialog_handling().await;
+        let handle = self
+            .driver
+            .start_dialogs(true, None, Some(Arc::new(handler)))
             .await?;
         *self.dialogs.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
         Ok(())
@@ -2142,6 +2840,9 @@ impl Page {
                 .unwrap_or_else(|e| e.into_inner())
                 .retain(|page| page.target_id() != target);
         }
+        // Explicit closes emit directly (deregistration already happened, so
+        // the browser-side destroy watcher stays quiet: exactly one event).
+        self.mark_closed();
         self.stop_routing().await;
         self.stop_dialog_handling().await;
         self.stop_request_capture();
@@ -2207,5 +2908,27 @@ mod tests {
         assert_eq!(back.origin, state.origin);
         assert_eq!(back.cookies.len(), 1);
         assert_eq!(back.local_storage.get("k").unwrap(), "v");
+    }
+
+    #[test]
+    fn clock_script_exposes_pause_and_now() {
+        for method in [
+            "now()",
+            "pause()",
+            "resume()",
+            "isPaused()",
+            "tick(",
+            "setFixed(",
+        ] {
+            assert!(CLOCK_SCRIPT.contains(method), "missing {method}");
+        }
+    }
+
+    #[test]
+    fn download_suggested_name() {
+        let download = Download::from_path(PathBuf::from("/tmp/report.txt"));
+        assert_eq!(download.suggested_filename, "report.txt");
+        let download = Download::from_path(PathBuf::from("bare.bin"));
+        assert_eq!(download.suggested_filename, "bare.bin");
     }
 }

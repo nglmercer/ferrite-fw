@@ -263,9 +263,13 @@ url = "http://127.0.0.1:5190/"
 Suites use the `ferrite_e2e` library (`Browser`, `Page`, locators with
 `css`/`text=`/`xpath=`/`role=` engines plus `get_by_*`, `nth`/`first`/`last`,
 chaining, filters, and `and_`/`or_`, auto-retrying `expect_*` with `not()`,
-dialog info, permissions and geolocation, storage state, request routing and
-observation, screenshots, video recording, live frame streams, traces,
-parallel `Runner` with tags and sharding). Chromium recordings assemble via `ffmpeg`
+immediate `is_*` checks, `bounding_box`/`highlight`/`evaluate`, dialog info
+and `wait_for_dialog`, `wait_for_selector`/`wait_for_popup`, permissions and
+geolocation (plus clears), HTTP credentials, storage state, request routing
+(`unroute_all`) and observation, response bodies, aria snapshots, `Download`
+objects with save/delete, screenshots, video recording, live frame streams,
+traces, `ApiClient` verbs with `fetch`, parallel `Runner` with tags, sharding,
+and `before_all`/`after_all` hooks). Chromium recordings assemble via `ffmpeg`
 (fail-fast hint when missing; `FERRITE_FFMPEG_PATH` override); Firefox
 records natively. See
 `examples/e2e/` for a runnable project and
@@ -276,7 +280,9 @@ Chromium/Chrome/headless-shell binary, `FERRITE_FIREFOX_PATH` at Firefox).
 Engine notes: stock Firefox exposes BiDi only (one session per
 process); user agent, proxy, and certificate acceptance are
 launch-wide there (`[e2e] user_agent` / `proxy_server` /
-`ignore_https_errors`). WebKit is intentionally unsupported — Linux
+`ignore_https_errors`). Offline, extra headers, locale, timezone, media,
+HTTP credentials, and response modification are Chromium-only and fail
+loudly on Firefox. WebKit is intentionally unsupported — Linux
 ships no stock WebKit browser with an automation protocol.
 
 ## License

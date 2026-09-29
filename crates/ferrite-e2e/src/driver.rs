@@ -15,9 +15,11 @@ use serde_json::Value;
 use crate::bidi::{bytes_to_string, remote_to_json, BidiConnection, BidiEvent};
 use crate::cdp::{CdpConnection, CdpEvent};
 use crate::error::{E2eError, E2eResult};
+use crate::jshandle::JSHandle;
 use crate::page::{
-    ColorScheme, ConsoleMessage, Cookie, DialogInfo, ElementRect, FrameInfo, LoadState,
-    RecordedRequest, ReducedMotion, RouteAction, RouteRule, TraceEntry,
+    ColorScheme, ConsoleMessage, Cookie, DialogDecision, DialogHandler, DialogInfo, ElementRect,
+    FrameInfo, LoadState, PageEvent, RecordedRequest, ReducedMotion, RouteAction,
+    RouteHandlerEntry, RouteInfo, RouteRule, TraceEntry, WebSocketDirection, WebSocketEvent,
 };
 use crate::video::{assemble_webm, SpooledFrame, VideoFrame, VideoOptions};
 
@@ -34,10 +36,17 @@ pub struct ConsoleSink {
     pub dialogs: Arc<Mutex<Vec<DialogInfo>>>,
     /// Recorded network requests (oldest first, capped).
     requests: Arc<Mutex<VecDeque<RecordedRequest>>>,
+    /// WebSocket request id to URL (resolves frame events to sockets).
+    sockets: Arc<Mutex<HashMap<String, String>>>,
+    /// Page event broadcast (console, dialogs, network, downloads, popups).
+    events: tokio::sync::broadcast::Sender<PageEvent>,
 }
 
 /// Maximum recorded requests per page (oldest dropped first).
 const MAX_RECORDED_REQUESTS: usize = 4096;
+
+/// Buffered page events per page (lagged readers skip ahead).
+const MAX_EVENT_BUFFER: usize = 256;
 
 impl ConsoleSink {
     /// Empty sinks.
@@ -49,7 +58,19 @@ impl ConsoleSink {
             inflight: Arc::new(AtomicUsize::new(0)),
             dialogs: Arc::new(Mutex::new(Vec::new())),
             requests: Arc::new(Mutex::new(VecDeque::new())),
+            sockets: Arc::new(Mutex::new(HashMap::new())),
+            events: tokio::sync::broadcast::channel(MAX_EVENT_BUFFER).0,
         }
+    }
+
+    /// Subscribe to page events.
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<PageEvent> {
+        self.events.subscribe()
+    }
+
+    /// Emit a page event (dropped when nobody listens).
+    pub(crate) fn emit(&self, event: PageEvent) {
+        let _ = self.events.send(event);
     }
 
     /// Record a console message (also appended to the trace).
@@ -61,6 +82,7 @@ impl ConsoleSink {
             });
         }
         self.record("console", format!("{kind}: {text}"));
+        self.emit(PageEvent::Console(ConsoleMessage { kind, text }));
     }
 
     /// Record an observed dialog (also appended to the trace).
@@ -72,6 +94,7 @@ impl ConsoleSink {
             "dialog",
             format!("{}: {}", dialog.dialog_type, dialog.message),
         );
+        self.emit(PageEvent::Dialog(dialog));
     }
 
     /// Record an observed request (drops the oldest past the cap).
@@ -314,6 +337,60 @@ impl Driver {
         }
     }
 
+    /// Evaluate `expression` and keep the result alive as a [`JSHandle`].
+    pub async fn evaluate_handle(&self, expression: &str) -> E2eResult<JSHandle> {
+        match self {
+            Self::Cdp(driver) => driver.evaluate_handle(expression).await,
+            Self::Bidi(driver) => driver.evaluate_handle(expression).await,
+        }
+    }
+
+    /// Serialize a handle's value to JSON.
+    pub async fn handle_json_value(
+        &self,
+        remote_id: Option<&str>,
+        value: Option<Value>,
+    ) -> E2eResult<Value> {
+        match self {
+            Self::Cdp(driver) => driver.handle_json_value(remote_id, value).await,
+            Self::Bidi(driver) => driver.handle_json_value(remote_id, value).await,
+        }
+    }
+
+    /// A handle to the named property of a handle's value.
+    pub async fn handle_get_property(
+        &self,
+        remote_id: Option<&str>,
+        value: Option<Value>,
+        name: &str,
+    ) -> E2eResult<JSHandle> {
+        match self {
+            Self::Cdp(driver) => driver.handle_get_property(remote_id, value, name).await,
+            Self::Bidi(driver) => driver.handle_get_property(remote_id, value, name).await,
+        }
+    }
+
+    /// Run `function` with a handle's value as its first argument.
+    pub async fn handle_evaluate(
+        &self,
+        remote_id: Option<&str>,
+        value: Option<Value>,
+        function: &str,
+    ) -> E2eResult<Value> {
+        match self {
+            Self::Cdp(driver) => driver.handle_evaluate(remote_id, value, function).await,
+            Self::Bidi(driver) => driver.handle_evaluate(remote_id, value, function).await,
+        }
+    }
+
+    /// Release a handle's remote reference.
+    pub async fn handle_dispose(&self, remote_id: Option<&str>) -> E2eResult<()> {
+        match self {
+            Self::Cdp(driver) => driver.handle_dispose(remote_id).await,
+            Self::Bidi(driver) => driver.handle_dispose(remote_id).await,
+        }
+    }
+
     /// Bring the page to front.
     pub async fn bring_to_front(&self) -> E2eResult<()> {
         match self {
@@ -538,11 +615,27 @@ impl Driver {
         }
     }
 
+    /// Reset granted permissions.
+    pub async fn clear_permissions(&self) -> E2eResult<()> {
+        match self {
+            Self::Cdp(driver) => driver.clear_permissions().await,
+            Self::Bidi(driver) => driver.clear_permissions().await,
+        }
+    }
+
     /// Override the geolocation coordinates.
     pub async fn set_geolocation(&self, latitude: f64, longitude: f64) -> E2eResult<()> {
         match self {
             Self::Cdp(driver) => driver.set_geolocation(latitude, longitude).await,
             Self::Bidi(driver) => driver.set_geolocation(latitude, longitude).await,
+        }
+    }
+
+    /// Clear the geolocation override.
+    pub async fn clear_geolocation(&self) -> E2eResult<()> {
+        match self {
+            Self::Cdp(driver) => driver.clear_geolocation().await,
+            Self::Bidi(driver) => driver.clear_geolocation().await,
         }
     }
 
@@ -594,10 +687,11 @@ impl Driver {
     pub async fn start_routing(
         &self,
         rules: Arc<Vec<RouteRule>>,
+        handlers: Arc<Vec<RouteHandlerEntry>>,
     ) -> E2eResult<tokio::task::AbortHandle> {
         match self {
-            Self::Cdp(driver) => driver.start_routing(rules).await,
-            Self::Bidi(driver) => driver.start_routing(rules).await,
+            Self::Cdp(driver) => driver.start_routing(rules, handlers).await,
+            Self::Bidi(driver) => driver.start_routing(rules, handlers).await,
         }
     }
 
@@ -622,10 +716,11 @@ impl Driver {
         &self,
         accept: bool,
         prompt_text: Option<String>,
+        handler: Option<DialogHandler>,
     ) -> E2eResult<tokio::task::AbortHandle> {
         match self {
-            Self::Cdp(driver) => Ok(driver.start_dialogs(accept, prompt_text)),
-            Self::Bidi(driver) => Ok(driver.start_dialogs(accept, prompt_text)),
+            Self::Cdp(driver) => Ok(driver.start_dialogs(accept, prompt_text, handler)),
+            Self::Bidi(driver) => Ok(driver.start_dialogs(accept, prompt_text, handler)),
         }
     }
 
@@ -862,6 +957,146 @@ impl CdpDriver {
             .and_then(|r| r.get("value"))
             .cloned()
             .unwrap_or(Value::Null))
+    }
+
+    async fn evaluate_handle(&self, expression: &str) -> E2eResult<JSHandle> {
+        let result = self
+            .call(
+                "Runtime.evaluate",
+                serde_json::json!({
+                    "expression": expression,
+                    "returnByValue": false,
+                    "awaitPromise": true,
+                }),
+            )
+            .await?;
+        check_cdp_exception("Runtime.evaluate", &result, expression)?;
+        Ok(self.cdp_handle(&result["result"]))
+    }
+
+    /// Wrap a CDP remote object: `objectId` stays remote, plain values inline.
+    fn cdp_handle(&self, remote: &Value) -> JSHandle {
+        let remote_id = remote
+            .get("objectId")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let value = if remote_id.is_none() {
+            remote.get("value").cloned()
+        } else {
+            None
+        };
+        JSHandle::new(Driver::Cdp(self.clone()), remote_id, value)
+    }
+
+    async fn handle_json_value(
+        &self,
+        remote_id: Option<&str>,
+        value: Option<Value>,
+    ) -> E2eResult<Value> {
+        if let Some(value) = value {
+            return Ok(value);
+        }
+        let Some(id) = remote_id else {
+            return Ok(Value::Null);
+        };
+        let result = self
+            .call(
+                "Runtime.callFunctionOn",
+                serde_json::json!({
+                    "functionDeclaration": "function() { return this; }",
+                    "objectId": id,
+                    "returnByValue": true,
+                    "awaitPromise": true,
+                }),
+            )
+            .await?;
+        check_cdp_exception("Runtime.callFunctionOn", &result, "json_value")?;
+        Ok(result
+            .get("result")
+            .and_then(|r| r.get("value"))
+            .cloned()
+            .unwrap_or(Value::Null))
+    }
+
+    async fn handle_get_property(
+        &self,
+        remote_id: Option<&str>,
+        value: Option<Value>,
+        name: &str,
+    ) -> E2eResult<JSHandle> {
+        // Inlined primitives resolve locally (JSON indexing).
+        if let Some(value) = value {
+            let prop = value.get(name).cloned().unwrap_or(Value::Null);
+            return Ok(JSHandle::new(Driver::Cdp(self.clone()), None, Some(prop)));
+        }
+        let Some(id) = remote_id else {
+            return Err(E2eError::Cdp {
+                method: "Runtime.callFunctionOn".to_string(),
+                message: "get_property needs a remote handle or a value".to_string(),
+            });
+        };
+        let result = self
+            .call(
+                "Runtime.callFunctionOn",
+                serde_json::json!({
+                    "functionDeclaration": "function(name) { return this[name]; }",
+                    "objectId": id,
+                    "arguments": [{ "value": name }],
+                    "returnByValue": false,
+                    "awaitPromise": true,
+                }),
+            )
+            .await?;
+        check_cdp_exception("Runtime.callFunctionOn", &result, name)?;
+        Ok(self.cdp_handle(&result["result"]))
+    }
+
+    async fn handle_evaluate(
+        &self,
+        remote_id: Option<&str>,
+        value: Option<Value>,
+        function: &str,
+    ) -> E2eResult<Value> {
+        // Inlined primitives apply the function to a JSON literal in-page.
+        if let Some(value) = value {
+            let literal = serde_json::to_string(&value)?;
+            return self.evaluate(&format!("({function})({literal})")).await;
+        }
+        let Some(id) = remote_id else {
+            return Err(E2eError::Cdp {
+                method: "Runtime.callFunctionOn".to_string(),
+                message: "handle evaluate needs a remote handle or a value".to_string(),
+            });
+        };
+        let result = self
+            .call(
+                "Runtime.callFunctionOn",
+                serde_json::json!({
+                    "functionDeclaration": format!("function() {{ return ({function})(this); }}"),
+                    "objectId": id,
+                    "returnByValue": true,
+                    "awaitPromise": true,
+                }),
+            )
+            .await?;
+        check_cdp_exception("Runtime.callFunctionOn", &result, function)?;
+        Ok(result
+            .get("result")
+            .and_then(|r| r.get("value"))
+            .cloned()
+            .unwrap_or(Value::Null))
+    }
+
+    async fn handle_dispose(&self, remote_id: Option<&str>) -> E2eResult<()> {
+        let Some(id) = remote_id else {
+            return Ok(());
+        };
+        self.call(
+            "Runtime.releaseObject",
+            serde_json::json!({ "objectId": id }),
+        )
+        .await?;
+        Ok(())
     }
 
     async fn frames(&self) -> E2eResult<Vec<FrameInfo>> {
@@ -1289,6 +1524,15 @@ impl CdpDriver {
         Ok(())
     }
 
+    async fn clear_permissions(&self) -> E2eResult<()> {
+        let mut params = serde_json::json!({});
+        if let Some(context) = &self.browser_context {
+            params["browserContextId"] = Value::String(context.clone());
+        }
+        self.call("Browser.resetPermissions", params).await?;
+        Ok(())
+    }
+
     async fn set_geolocation(&self, latitude: f64, longitude: f64) -> E2eResult<()> {
         self.call(
             "Emulation.setGeolocationOverride",
@@ -1297,6 +1541,12 @@ impl CdpDriver {
             }),
         )
         .await?;
+        Ok(())
+    }
+
+    async fn clear_geolocation(&self) -> E2eResult<()> {
+        self.call("Emulation.clearGeolocationOverride", Value::Null)
+            .await?;
         Ok(())
     }
 
@@ -1378,22 +1628,18 @@ impl CdpDriver {
     async fn start_routing(
         &self,
         rules: Arc<Vec<RouteRule>>,
+        handlers: Arc<Vec<RouteHandlerEntry>>,
     ) -> E2eResult<tokio::task::AbortHandle> {
-        use globset::{Glob, GlobSetBuilder};
-        let mut builder = GlobSetBuilder::new();
-        for rule in rules.iter() {
-            let glob =
-                Glob::new(&rule.pattern).map_err(|error| E2eError::Config(error.to_string()))?;
-            builder.add(glob);
-        }
-        let set = builder
-            .build()
-            .map_err(|error| E2eError::Config(error.to_string()))?;
+        let set = routing_glob_set(rules.iter().map(|rule| rule.pattern.as_str()))?;
+        let handler_set = routing_glob_set(handlers.iter().map(|entry| entry.pattern.as_str()))?;
+        // Handler decisions may modify responses, so handlers imply the
+        // response stage (rules alone only need it for ModifyResponse).
+        let wants_response = !handlers.is_empty()
+            || rules
+                .iter()
+                .any(|rule| matches!(rule.action, RouteAction::ModifyResponse { .. }));
         let mut patterns = vec![serde_json::json!({ "urlPattern": "*" })];
-        if rules
-            .iter()
-            .any(|rule| matches!(rule.action, RouteAction::ModifyResponse { .. }))
-        {
+        if wants_response {
             patterns.push(serde_json::json!({ "urlPattern": "*", "requestStage": "Response" }));
         }
         self.call("Fetch.enable", serde_json::json!({ "patterns": patterns }))
@@ -1401,8 +1647,12 @@ impl CdpDriver {
         let mut events = self.cdp.subscribe();
         let session = self.session.clone();
         let cdp = self.cdp.clone();
+        let sink = self.sink.clone();
         let timeout = self.timeout;
         let handle = tokio::spawn(async move {
+            // Handler decisions cached for response-stage replay (handlers
+            // run once per request, at the request stage).
+            let mut decided: HashMap<String, RouteAction> = HashMap::new();
             loop {
                 let event = match events.recv().await {
                     Ok(event) => event,
@@ -1418,10 +1668,47 @@ impl CdpDriver {
                     .as_str()
                     .unwrap_or_default()
                     .to_string();
-                let action = set.matches(&url).first().map(|i| &rules[*i].action);
-                if event.params.get("responseStatusCode").is_some()
-                    || event.params.get("responseHeaders").is_some()
-                {
+                let response_stage = event.params.get("responseStatusCode").is_some()
+                    || event.params.get("responseHeaders").is_some();
+                let decided_action: Option<RouteAction> = if response_stage {
+                    request_id
+                        .as_str()
+                        .and_then(|id| decided.remove(id))
+                        .or_else(|| set.matches(&url).first().map(|i| rules[*i].action.clone()))
+                } else if let Some(hit) = handler_set.matches(&url).first().map(|i| &handlers[*i]) {
+                    let info = RouteInfo {
+                        url: url.clone(),
+                        method: event.params["request"]["method"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_string(),
+                        headers: cdp_header_pairs(&event.params["request"]["headers"]),
+                        post_data: event.params["request"]
+                            .get("postData")
+                            .and_then(Value::as_str)
+                            .map(|data| data.as_bytes().to_vec()),
+                    };
+                    let decision = match (hit.handler)(info).await {
+                        Ok(decision) => decision,
+                        Err(error) => {
+                            sink.record("route", format!("handler failed, aborting: {error}"));
+                            RouteAction::Abort
+                        }
+                    };
+                    if matches!(decision, RouteAction::ModifyResponse { .. }) {
+                        if decided.len() > 4096 {
+                            decided.clear();
+                        }
+                        if let Some(id) = request_id.as_str() {
+                            decided.insert(id.to_string(), decision.clone());
+                        }
+                    }
+                    Some(decision)
+                } else {
+                    set.matches(&url).first().map(|i| rules[*i].action.clone())
+                };
+                let action = decided_action.as_ref();
+                if response_stage {
                     answer_response_pause(
                         &cdp,
                         &session,
@@ -1556,6 +1843,7 @@ impl CdpDriver {
                                     headers,
                                     post_data,
                                     started: tokio::time::Instant::now(),
+                                    started_ms: now_ms(),
                                 },
                             );
                         }
@@ -1568,12 +1856,23 @@ impl CdpDriver {
                                 .unwrap_or(0)
                                 .min(u64::from(u16::MAX))
                                 as u16;
+                            let response = &event.params["response"];
                             sink.push_request(RecordedRequest {
                                 method: request.method,
                                 url: request.url,
                                 status,
                                 headers: request.headers,
                                 post_data: request.post_data,
+                                status_text: response["statusText"]
+                                    .as_str()
+                                    .unwrap_or_default()
+                                    .to_string(),
+                                mime_type: response["mimeType"]
+                                    .as_str()
+                                    .unwrap_or_default()
+                                    .to_string(),
+                                response_headers: cdp_header_pairs(&response["headers"]),
+                                started_ms: Some(request.started_ms),
                                 duration_ms: Some(
                                     request
                                         .started
@@ -1594,6 +1893,10 @@ impl CdpDriver {
                                 status: 0,
                                 headers: request.headers,
                                 post_data: request.post_data,
+                                status_text: String::new(),
+                                mime_type: String::new(),
+                                response_headers: Vec::new(),
+                                started_ms: Some(request.started_ms),
                                 duration_ms: Some(
                                     request
                                         .started
@@ -1612,7 +1915,12 @@ impl CdpDriver {
         .abort_handle()
     }
 
-    fn start_dialogs(&self, accept: bool, prompt_text: Option<String>) -> tokio::task::AbortHandle {
+    fn start_dialogs(
+        &self,
+        accept: bool,
+        prompt_text: Option<String>,
+        handler: Option<DialogHandler>,
+    ) -> tokio::task::AbortHandle {
         let mut events = self.cdp.subscribe();
         let session = self.session.clone();
         let cdp = self.cdp.clone();
@@ -1629,7 +1937,7 @@ impl CdpDriver {
                 {
                     continue;
                 }
-                sink.push_dialog(DialogInfo {
+                let info = DialogInfo {
                     dialog_type: event.params["type"]
                         .as_str()
                         .unwrap_or_default()
@@ -1638,7 +1946,10 @@ impl CdpDriver {
                         .as_str()
                         .unwrap_or_default()
                         .to_string(),
-                });
+                };
+                let (accept, prompt_text) =
+                    decide_dialog(handler.as_ref(), &info, accept, &prompt_text);
+                sink.push_dialog(info);
                 let mut params = serde_json::json!({ "accept": accept });
                 if let Some(text) = &prompt_text {
                     params["promptText"] = Value::String(text.clone());
@@ -2151,6 +2462,154 @@ impl BidiDriver {
             .unwrap_or(Value::Null))
     }
 
+    async fn evaluate_handle(&self, expression: &str) -> E2eResult<JSHandle> {
+        let result = self
+            .bidi
+            .call(
+                "script.evaluate",
+                serde_json::json!({
+                    "expression": expression,
+                    "target": { "context": self.context },
+                    "awaitPromise": true,
+                    "resultOwnership": "root",
+                }),
+                self.timeout,
+            )
+            .await
+            .map_err(|error| script_call_error("script.evaluate", error))?;
+        check_script_exception("script.evaluate", &result, expression)?;
+        Ok(self.bidi_handle(&result["result"]))
+    }
+
+    /// Wrap a BiDi remote value: `handle` stays remote, plain values inline.
+    fn bidi_handle(&self, remote: &Value) -> JSHandle {
+        let remote_id = remote
+            .get("handle")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let value = if remote_id.is_none() {
+            Some(remote_to_json(remote))
+        } else {
+            None
+        };
+        JSHandle::new(Driver::Bidi(self.clone()), remote_id, value)
+    }
+
+    async fn call_script_function(&self, params: Value) -> E2eResult<Value> {
+        self.bidi
+            .call("script.callFunction", params, self.timeout)
+            .await
+            .map_err(|error| script_call_error("script.callFunction", error))
+    }
+
+    async fn handle_json_value(
+        &self,
+        remote_id: Option<&str>,
+        value: Option<Value>,
+    ) -> E2eResult<Value> {
+        if let Some(value) = value {
+            return Ok(value);
+        }
+        let Some(id) = remote_id else {
+            return Ok(Value::Null);
+        };
+        // No `resultOwnership`: the value comes back serialized by value.
+        let result = self
+            .call_script_function(serde_json::json!({
+                "functionDeclaration": "(value) => value",
+                "arguments": [{ "handle": id }],
+                "target": { "context": self.context },
+                "awaitPromise": true,
+            }))
+            .await?;
+        check_script_exception("script.callFunction", &result, "json_value")?;
+        Ok(result
+            .get("result")
+            .map(remote_to_json)
+            .unwrap_or(Value::Null))
+    }
+
+    async fn handle_get_property(
+        &self,
+        remote_id: Option<&str>,
+        value: Option<Value>,
+        name: &str,
+    ) -> E2eResult<JSHandle> {
+        // Inlined primitives resolve locally (JSON indexing).
+        if let Some(value) = value {
+            let prop = value.get(name).cloned().unwrap_or(Value::Null);
+            return Ok(JSHandle::new(Driver::Bidi(self.clone()), None, Some(prop)));
+        }
+        let Some(id) = remote_id else {
+            return Err(E2eError::Cdp {
+                method: "script.callFunction".to_string(),
+                message: "get_property needs a remote handle or a value".to_string(),
+            });
+        };
+        let result = self
+            .call_script_function(serde_json::json!({
+                "functionDeclaration": "function(name) { return this[name]; }",
+                "this": { "handle": id },
+                "arguments": [{ "type": "string", "value": name }],
+                "target": { "context": self.context },
+                "awaitPromise": true,
+                "resultOwnership": "root",
+            }))
+            .await?;
+        check_script_exception("script.callFunction", &result, name)?;
+        Ok(self.bidi_handle(&result["result"]))
+    }
+
+    async fn handle_evaluate(
+        &self,
+        remote_id: Option<&str>,
+        value: Option<Value>,
+        function: &str,
+    ) -> E2eResult<Value> {
+        // Inlined primitives apply the function to a JSON literal in-page.
+        if let Some(value) = value {
+            let literal = serde_json::to_string(&value)?;
+            return self.evaluate(&format!("({function})({literal})")).await;
+        }
+        let Some(id) = remote_id else {
+            return Err(E2eError::Cdp {
+                method: "script.callFunction".to_string(),
+                message: "handle evaluate needs a remote handle or a value".to_string(),
+            });
+        };
+        let result = self
+            .call_script_function(serde_json::json!({
+                "functionDeclaration": function,
+                "arguments": [{ "handle": id }],
+                "target": { "context": self.context },
+                "awaitPromise": true,
+            }))
+            .await?;
+        check_script_exception("script.callFunction", &result, function)?;
+        Ok(result
+            .get("result")
+            .map(remote_to_json)
+            .unwrap_or(Value::Null))
+    }
+
+    async fn handle_dispose(&self, remote_id: Option<&str>) -> E2eResult<()> {
+        let Some(id) = remote_id else {
+            return Ok(());
+        };
+        self.bidi
+            .call(
+                "script.disown",
+                serde_json::json!({
+                    "target": { "context": self.context },
+                    "handles": [id],
+                }),
+                self.timeout,
+            )
+            .await
+            .map_err(|error| script_call_error("script.disown", error))?;
+        Ok(())
+    }
+
     async fn bring_to_front(&self) -> E2eResult<()> {
         self.call("browsingContext.activate", Value::Null).await?;
         Ok(())
@@ -2540,6 +2999,37 @@ impl BidiDriver {
         Ok(())
     }
 
+    async fn clear_permissions(&self) -> E2eResult<()> {
+        let origin = self
+            .evaluate("location.origin")
+            .await?
+            .as_str()
+            .filter(|origin| origin.starts_with("http"))
+            .map(str::to_string);
+        // Without an origin there is nothing origin-scoped to reset.
+        let Some(origin) = origin else { return Ok(()) };
+        for name in [
+            "geolocation",
+            "notifications",
+            "clipboard-read",
+            "clipboard-write",
+            "camera",
+            "microphone",
+        ] {
+            let mut params = serde_json::json!({
+                "descriptor": { "name": name },
+                "state": "prompt",
+                "origin": origin,
+            });
+            if let Some(user_context) = &self.user_context {
+                params["userContext"] = Value::String(user_context.clone());
+            }
+            // Best-effort: unknown descriptors fail per-name, never the reset.
+            let _ = self.call("permissions.setPermission", params).await;
+        }
+        Ok(())
+    }
+
     async fn set_geolocation(&self, latitude: f64, longitude: f64) -> E2eResult<()> {
         self.call(
             "emulation.setGeolocationOverride",
@@ -2561,6 +3051,25 @@ impl BidiDriver {
             }
         })?;
         Ok(())
+    }
+
+    async fn clear_geolocation(&self) -> E2eResult<()> {
+        // BiDi clears via explicit null coordinates (contexts-only is
+        // rejected: "Expected coordinates to be an object").
+        let result = self
+            .call(
+                "emulation.setGeolocationOverride",
+                serde_json::json!({
+                    "coordinates": null,
+                    "contexts": [self.context.clone()],
+                }),
+            )
+            .await;
+        match result {
+            Ok(_) => Ok(()),
+            Err(error) if is_unsupported_command(&error) => Ok(()),
+            Err(error) => Err(error),
+        }
     }
 
     async fn set_offline(&self, _offline: bool) -> E2eResult<()> {
@@ -2610,17 +3119,10 @@ impl BidiDriver {
     async fn start_routing(
         &self,
         rules: Arc<Vec<RouteRule>>,
+        handlers: Arc<Vec<RouteHandlerEntry>>,
     ) -> E2eResult<tokio::task::AbortHandle> {
-        use globset::{Glob, GlobSetBuilder};
-        let mut builder = GlobSetBuilder::new();
-        for rule in rules.iter() {
-            let glob =
-                Glob::new(&rule.pattern).map_err(|error| E2eError::Config(error.to_string()))?;
-            builder.add(glob);
-        }
-        let set = builder
-            .build()
-            .map_err(|error| E2eError::Config(error.to_string()))?;
+        let set = routing_glob_set(rules.iter().map(|rule| rule.pattern.as_str()))?;
+        let handler_set = routing_glob_set(handlers.iter().map(|entry| entry.pattern.as_str()))?;
         // Firefox accepts `url` overrides but aborts the redirected request,
         // so fail fast instead of breaking the page's fetch.
         if rules
@@ -2668,6 +3170,7 @@ impl BidiDriver {
         let mut events = self.bidi.subscribe();
         let context = self.context.clone();
         let bidi = self.bidi.clone();
+        let sink = self.sink.clone();
         let timeout = self.timeout;
         let handle = tokio::spawn(async move {
             loop {
@@ -2686,7 +3189,42 @@ impl BidiDriver {
                     .as_str()
                     .unwrap_or_default()
                     .to_string();
-                let action = set.matches(&url).first().map(|i| &rules[*i].action);
+                let decided_action: Option<RouteAction> = if let Some(hit) =
+                    handler_set.matches(&url).first().map(|i| &handlers[*i])
+                {
+                    let info = RouteInfo {
+                        url: url.clone(),
+                        method: event.params["request"]["method"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_string(),
+                        headers: bidi_header_pairs(&event.params["request"]["headers"]),
+                        post_data: None,
+                    };
+                    match (hit.handler)(info).await {
+                        Ok(decision)
+                            if matches!(decision, RouteAction::ModifyResponse { .. })
+                                || matches!(
+                                    &decision,
+                                    RouteAction::ContinueWith { url: Some(_), .. }
+                                ) =>
+                        {
+                            sink.record(
+                                "route",
+                                "handler decision not supported on Firefox, aborting".to_string(),
+                            );
+                            Some(RouteAction::Abort)
+                        }
+                        Ok(decision) => Some(decision),
+                        Err(error) => {
+                            sink.record("route", format!("handler failed, aborting: {error}"));
+                            Some(RouteAction::Abort)
+                        }
+                    }
+                } else {
+                    set.matches(&url).first().map(|i| rules[*i].action.clone())
+                };
+                let action = decided_action.as_ref();
                 let is_override = matches!(action, Some(RouteAction::ContinueWith { .. }));
                 let (method, params) = match action {
                     Some(RouteAction::Abort) => (
@@ -2832,6 +3370,7 @@ impl BidiDriver {
                                     headers,
                                     post_data: None,
                                     started: tokio::time::Instant::now(),
+                                    started_ms: now_ms(),
                                 },
                             );
                         }
@@ -2846,12 +3385,23 @@ impl BidiDriver {
                                 .unwrap_or(0)
                                 .min(u64::from(u16::MAX))
                                 as u16;
+                            let response = &event.params["response"];
                             sink.push_request(RecordedRequest {
                                 method: request.method,
                                 url: request.url,
                                 status,
                                 headers: request.headers,
                                 post_data: request.post_data,
+                                status_text: response["statusText"]
+                                    .as_str()
+                                    .unwrap_or_default()
+                                    .to_string(),
+                                mime_type: response["mimeType"]
+                                    .as_str()
+                                    .unwrap_or_default()
+                                    .to_string(),
+                                response_headers: bidi_header_pairs(&response["headers"]),
+                                started_ms: Some(request.started_ms),
                                 duration_ms: Some(
                                     request
                                         .started
@@ -2874,6 +3424,10 @@ impl BidiDriver {
                                 status: 0,
                                 headers: request.headers,
                                 post_data: request.post_data,
+                                status_text: String::new(),
+                                mime_type: String::new(),
+                                response_headers: Vec::new(),
+                                started_ms: Some(request.started_ms),
                                 duration_ms: Some(
                                     request
                                         .started
@@ -2892,7 +3446,12 @@ impl BidiDriver {
         .abort_handle()
     }
 
-    fn start_dialogs(&self, accept: bool, prompt_text: Option<String>) -> tokio::task::AbortHandle {
+    fn start_dialogs(
+        &self,
+        accept: bool,
+        prompt_text: Option<String>,
+        handler: Option<DialogHandler>,
+    ) -> tokio::task::AbortHandle {
         let mut events = self.bidi.subscribe();
         let context = self.context.clone();
         let bidi = self.bidi.clone();
@@ -2909,7 +3468,7 @@ impl BidiDriver {
                 {
                     continue;
                 }
-                sink.push_dialog(DialogInfo {
+                let info = DialogInfo {
                     dialog_type: event.params["type"]
                         .as_str()
                         .unwrap_or_default()
@@ -2918,7 +3477,10 @@ impl BidiDriver {
                         .as_str()
                         .unwrap_or_default()
                         .to_string(),
-                });
+                };
+                let (accept, prompt_text) =
+                    decide_dialog(handler.as_ref(), &info, accept, &prompt_text);
+                sink.push_dialog(info);
                 let mut params = serde_json::json!({ "context": context, "accept": accept });
                 if let Some(text) = &prompt_text {
                     params["userText"] = Value::String(text.clone());
@@ -3204,9 +3766,36 @@ fn handle_bidi_event(event: &BidiEvent, sink: &ConsoleSink) {
         }
         "network.beforeRequestSent" => {
             sink.inflight.fetch_add(1, Ordering::SeqCst);
+            sink.emit(PageEvent::Request {
+                method: event.params["request"]["method"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                url: event.params["request"]["url"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+            });
         }
-        "network.responseCompleted" | "network.fetchError" => {
+        "network.responseCompleted" => {
             sink.inflight.fetch_sub(1, Ordering::SeqCst);
+            sink.emit(PageEvent::Response {
+                url: event.params["request"]["url"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                status: event.params["response"]["status"].as_u64().unwrap_or(0) as u16,
+            });
+        }
+        "network.fetchError" => {
+            sink.inflight.fetch_sub(1, Ordering::SeqCst);
+            sink.emit(PageEvent::Response {
+                url: event.params["request"]["url"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                status: 0,
+            });
         }
         _ => {}
     }
@@ -3296,6 +3885,65 @@ fn decode_base64(data: &str) -> Result<Vec<u8>, String> {
 }
 
 /// Collect frames from a CDP frame tree (main frame first, depth-first).
+/// Surface a CDP `exceptionDetails` payload as an [`E2eError`].
+fn check_cdp_exception(method: &str, result: &Value, expression: &str) -> E2eResult<()> {
+    if let Some(exception) = result.get("exceptionDetails") {
+        let text = exception
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or("js exception");
+        return Err(E2eError::Cdp {
+            method: method.to_string(),
+            message: format!("{text}: {expression}"),
+        });
+    }
+    Ok(())
+}
+
+/// Surface a BiDi script `exception` result as an [`E2eError`].
+fn check_script_exception(method: &str, result: &Value, expression: &str) -> E2eResult<()> {
+    if result.get("type").and_then(Value::as_str) == Some("exception") {
+        let text = result["exceptionDetails"]["text"]
+            .as_str()
+            .unwrap_or("js exception");
+        return Err(E2eError::Cdp {
+            method: method.to_string(),
+            message: format!("{text}: {expression}"),
+        });
+    }
+    Ok(())
+}
+
+/// Emit a CDP socket-frame event, resolving the URL from the sink map.
+fn emit_socket_frame(sink: &ConsoleSink, event: &CdpEvent, direction: WebSocketDirection) {
+    let id = event.params["requestId"].as_str().unwrap_or_default();
+    let url = sink
+        .sockets
+        .lock()
+        .map(|sockets| sockets.get(id).cloned().unwrap_or_default())
+        .unwrap_or_default();
+    let payload = event.params["response"]["payloadData"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    sink.emit(PageEvent::WebSocket(WebSocketEvent {
+        url,
+        direction,
+        payload,
+    }));
+}
+
+/// Retag a transport error with the script method that caused it.
+fn script_call_error(method: &str, error: E2eError) -> E2eError {
+    match error {
+        E2eError::Cdp { message, .. } => E2eError::Cdp {
+            method: method.to_string(),
+            message,
+        },
+        other => other,
+    }
+}
+
 fn collect_cdp_frames(tree: &Value, out: &mut Vec<FrameInfo>) {
     let frame = &tree["frame"];
     out.push(FrameInfo {
@@ -3331,6 +3979,15 @@ struct PendingRequest {
     headers: Vec<(String, String)>,
     post_data: Option<String>,
     started: tokio::time::Instant,
+    started_ms: u64,
+}
+
+/// Milliseconds since the Unix epoch (0 on clock failure).
+pub(crate) fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
 }
 
 /// Header pairs from a CDP request object.
@@ -3496,6 +4153,35 @@ async fn answer_response_pause(
     }
 }
 
+/// Resolve a dialog answer: the handler decision wins, else the armed
+/// accept/prompt defaults.
+fn decide_dialog(
+    handler: Option<&DialogHandler>,
+    info: &DialogInfo,
+    accept: bool,
+    prompt_text: &Option<String>,
+) -> (bool, Option<String>) {
+    match handler.map(|decide| decide(info.clone())) {
+        Some(DialogDecision::Accept(text)) => (true, text),
+        Some(DialogDecision::Dismiss) => (false, None),
+        None => (accept, prompt_text.clone()),
+    }
+}
+
+/// Build a glob set over routing patterns (rules and handlers share it).
+fn routing_glob_set<'a>(
+    patterns: impl IntoIterator<Item = &'a str>,
+) -> E2eResult<globset::GlobSet> {
+    use globset::{Glob, GlobSetBuilder};
+    let mut builder = GlobSetBuilder::new();
+    for pattern in patterns {
+        builder.add(Glob::new(pattern).map_err(|error| E2eError::Config(error.to_string()))?);
+    }
+    builder
+        .build()
+        .map_err(|error| E2eError::Config(error.to_string()))
+}
+
 fn with_content_length(mut headers: Vec<(String, String)>, len: usize) -> Vec<(String, String)> {
     match headers
         .iter_mut()
@@ -3592,9 +4278,64 @@ fn handle_cdp_event(event: &CdpEvent, sink: &ConsoleSink) {
         }
         "Network.requestWillBeSent" => {
             sink.inflight.fetch_add(1, Ordering::SeqCst);
+            sink.emit(PageEvent::Request {
+                method: event.params["request"]["method"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                url: event.params["request"]["url"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+            });
+        }
+        "Network.responseReceived" => {
+            sink.emit(PageEvent::Response {
+                url: event.params["response"]["url"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                status: event.params["response"]["status"].as_u64().unwrap_or(0) as u16,
+            });
         }
         "Network.loadingFinished" | "Network.loadingFailed" => {
             sink.inflight.fetch_sub(1, Ordering::SeqCst);
+        }
+        "Network.webSocketCreated" => {
+            let id = event.params["requestId"].as_str().unwrap_or_default();
+            let url = event.params["url"].as_str().unwrap_or_default().to_string();
+            if !id.is_empty() {
+                sink.sockets
+                    .lock()
+                    .map(|mut sockets| {
+                        sockets.insert(id.to_string(), url.clone());
+                    })
+                    .ok();
+            }
+            sink.emit(PageEvent::WebSocket(WebSocketEvent {
+                url,
+                direction: WebSocketDirection::Created,
+                payload: String::new(),
+            }));
+        }
+        "Network.webSocketFrameSent" => {
+            emit_socket_frame(sink, event, WebSocketDirection::Sent);
+        }
+        "Network.webSocketFrameReceived" => {
+            emit_socket_frame(sink, event, WebSocketDirection::Received);
+        }
+        "Network.webSocketClosed" => {
+            let id = event.params["requestId"].as_str().unwrap_or_default();
+            let url = sink
+                .sockets
+                .lock()
+                .map(|mut sockets| sockets.remove(id).unwrap_or_default())
+                .unwrap_or_default();
+            sink.emit(PageEvent::WebSocket(WebSocketEvent {
+                url,
+                direction: WebSocketDirection::Closed,
+                payload: String::new(),
+            }));
         }
         _ => {}
     }

@@ -1,14 +1,18 @@
 //! Isolated browser contexts (pages, cookies, viewport defaults).
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use serde_json::Value;
 
 use crate::browser::Backend;
-use crate::driver::{BidiDriver, CdpDriver, ConsoleSink, Driver};
+use crate::driver::{base64_encode, now_ms, BidiDriver, CdpDriver, ConsoleSink, Driver};
 use crate::error::{E2eError, E2eResult};
-use crate::page::{Cookie, Page, RouteRule, Viewport};
+use crate::page::{
+    Cookie, Page, RouteAction, RouteHandler, RouteHandlerEntry, RouteInfo, RouteRule, Viewport,
+};
+use std::future::Future;
 
 /// Options for a new browser context.
 #[derive(Debug, Clone, Default)]
@@ -41,6 +45,54 @@ impl ContextOptions {
     }
 }
 
+/// Options for [`BrowserContext::start_tracing`].
+#[derive(Debug, Clone, Default)]
+pub struct TracingOptions {
+    /// Capture a PNG screenshot after every [`Page::step`].
+    pub screenshots: bool,
+}
+
+impl TracingOptions {
+    /// Capture a PNG screenshot after every [`Page::step`].
+    #[must_use]
+    pub fn screenshots(mut self, enabled: bool) -> Self {
+        self.screenshots = enabled;
+        self
+    }
+}
+
+/// One tracing screenshot (PNG bytes; base64-encoded at export).
+#[derive(Debug, Clone)]
+pub(crate) struct TraceScreenshot {
+    /// Milliseconds since the Unix epoch.
+    pub(crate) ts_ms: u64,
+    /// Step name the screenshot was taken after.
+    pub(crate) step: String,
+    /// PNG bytes.
+    pub(crate) png: Vec<u8>,
+}
+
+/// Active tracing session, shared with every page of the context.
+#[derive(Debug)]
+pub(crate) struct TracingState {
+    /// Capture screenshots after steps.
+    screenshots: bool,
+    /// Session start, milliseconds since the Unix epoch.
+    started_ms: u64,
+    /// Captured screenshots (oldest first).
+    shots: Vec<TraceScreenshot>,
+}
+
+impl TracingState {
+    pub(crate) fn screenshots(&self) -> bool {
+        self.screenshots
+    }
+
+    pub(crate) fn push(&mut self, shot: TraceScreenshot) {
+        self.shots.push(shot);
+    }
+}
+
 /// An isolated browser context; pages inside it share cookies and storage.
 #[derive(Clone)]
 pub struct BrowserContext {
@@ -54,13 +106,20 @@ pub struct BrowserContext {
     registry: Weak<Mutex<Vec<BrowserContext>>>,
     /// Routing rules shared with every page (page rules win on overlap).
     routes: Arc<Mutex<Vec<RouteRule>>>,
+    /// Route handlers shared with every page.
+    handlers: Arc<Mutex<Vec<RouteHandlerEntry>>>,
     /// Granted permissions, applied to current and future pages.
     permissions: Arc<Mutex<Vec<String>>>,
     /// Geolocation override, applied to current and future pages.
     geolocation: Arc<Mutex<Option<(f64, f64)>>>,
+    /// Launch-wide download dir (Firefox downloads land here).
+    download_dir: Option<PathBuf>,
+    /// Active tracing session (shared with every page).
+    tracing: Arc<Mutex<Option<TracingState>>>,
 }
 
 impl BrowserContext {
+    #[allow(clippy::too_many_arguments)] // Internal constructor; called from two launch sites.
     pub(crate) fn new(
         backend: Backend,
         id: Option<String>,
@@ -69,6 +128,7 @@ impl BrowserContext {
         timeout: Duration,
         base_url: Option<String>,
         registry: Weak<Mutex<Vec<BrowserContext>>>,
+        download_dir: Option<PathBuf>,
     ) -> Self {
         Self {
             backend,
@@ -80,8 +140,11 @@ impl BrowserContext {
             pages: Arc::new(Mutex::new(Vec::new())),
             registry,
             routes: Arc::new(Mutex::new(Vec::new())),
+            handlers: Arc::new(Mutex::new(Vec::new())),
             permissions: Arc::new(Mutex::new(Vec::new())),
             geolocation: Arc::new(Mutex::new(None)),
+            download_dir,
+            tracing: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -161,6 +224,12 @@ impl BrowserContext {
             }
         };
 
+        self.finish_page(driver, sink).await
+    }
+
+    /// Wrap a live driver as a context page (shared by `new_page` and popup
+    /// adoption): options, stored rules/grants, registration.
+    pub(crate) async fn finish_page(&self, driver: Driver, sink: ConsoleSink) -> E2eResult<Page> {
         let page = Page::new(
             driver,
             sink,
@@ -168,6 +237,8 @@ impl BrowserContext {
             self.base_url.clone(),
             Arc::downgrade(&self.pages),
             Arc::clone(&self.routes),
+            Arc::clone(&self.handlers),
+            Arc::clone(&self.tracing),
         );
         if let Some(viewport) = self.options.viewport {
             page.set_viewport(viewport).await?;
@@ -204,6 +275,9 @@ impl BrowserContext {
             .unwrap_or(true)
         {
             page.restart_routing().await?;
+        }
+        if let Some(dir) = &self.download_dir {
+            page.remember_download_dir(dir);
         }
         self.pages
             .lock()
@@ -271,9 +345,101 @@ impl BrowserContext {
         Ok(())
     }
 
-    /// Remove context rules with `pattern`; returns how many were removed.
+    /// Register a context-level route handler. Handlers run before
+    /// declarative rules and page handlers; the first matching handler (or
+    /// rule) on the page wins (pattern match on `pattern`).
+    pub async fn route_with_handler<F, Fut>(&self, pattern: &str, handler: F) -> E2eResult<()>
+    where
+        F: Fn(RouteInfo) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = E2eResult<RouteAction>> + Send + 'static,
+    {
+        let handler: RouteHandler = Arc::new(move |info| Box::pin(handler(info)));
+        self.handlers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(RouteHandlerEntry {
+                pattern: pattern.to_owned(),
+                handler,
+            });
+        let mut failed = None;
+        for page in self.pages() {
+            if let Err(error) = page.restart_routing().await {
+                failed = Some(error);
+                break;
+            }
+        }
+        // Roll back the stored handler on failure to keep pages in sync.
+        if let Some(error) = failed {
+            self.handlers
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .pop();
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Start tracing this context (Playwright `context.tracing.start()`).
+    ///
+    /// Actions, console messages and captured requests accumulate per page;
+    /// with `screenshots` every [`Page::step`] also captures a PNG.
+    /// Restarting discards the previous session.
+    pub fn start_tracing(&self, options: TracingOptions) {
+        *self.tracing.lock().unwrap_or_else(|e| e.into_inner()) = Some(TracingState {
+            screenshots: options.screenshots,
+            started_ms: now_ms(),
+            shots: Vec::new(),
+        });
+    }
+
+    /// Stop tracing and write the self-contained JSON trace to `path`
+    /// (Playwright `context.tracing.stop({ path })`).
+    ///
+    /// Errors when tracing was never started. Screenshots embed as base64
+    /// PNGs; request bodies are never included.
+    pub async fn stop_tracing(&self, path: impl AsRef<std::path::Path>) -> E2eResult<()> {
+        let state = self
+            .tracing
+            .lock()
+            .map(|mut tracing| tracing.take())
+            .unwrap_or(None)
+            .ok_or_else(|| E2eError::Config("tracing is not started".to_string()))?;
+        let mut pages = Vec::new();
+        for page in self.pages() {
+            pages.push(serde_json::json!({
+                "target_id": page.target_id(),
+                "url": page.url().await.unwrap_or_default(),
+                "actions": page.trace(),
+                "console": page.console_messages(),
+                "requests": page.requests(),
+            }));
+        }
+        let shots: Vec<serde_json::Value> = state
+            .shots
+            .iter()
+            .map(|shot| {
+                serde_json::json!({
+                    "ts_ms": shot.ts_ms,
+                    "step": shot.step,
+                    "png_base64": base64_encode(&shot.png),
+                })
+            })
+            .collect();
+        let trace = serde_json::json!({
+            "tool": "ferrite",
+            "version": env!("CARGO_PKG_VERSION"),
+            "started_ms": state.started_ms,
+            "screenshots_enabled": state.screenshots,
+            "pages": pages,
+            "screenshots": shots,
+        });
+        std::fs::write(path.as_ref(), serde_json::to_string_pretty(&trace)?)?;
+        Ok(())
+    }
+
+    /// Remove context rules/handlers with `pattern`; returns how many were removed.
     pub async fn unroute(&self, pattern: &str) -> E2eResult<usize> {
-        let removed = self
+        let removed_rules = self
             .routes
             .lock()
             .map(|mut routes| {
@@ -282,10 +448,37 @@ impl BrowserContext {
                 before - routes.len()
             })
             .unwrap_or(0);
+        let removed_handlers = self
+            .handlers
+            .lock()
+            .map(|mut handlers| {
+                let before = handlers.len();
+                handlers.retain(|entry| entry.pattern != pattern);
+                before - handlers.len()
+            })
+            .unwrap_or(0);
         for page in self.pages() {
             page.restart_routing().await?;
         }
-        Ok(removed)
+        Ok(removed_rules + removed_handlers)
+    }
+
+    /// Remove all context rules and handlers; returns how many were removed.
+    pub async fn unroute_all(&self) -> E2eResult<usize> {
+        let removed_rules = self
+            .routes
+            .lock()
+            .map(|mut routes| std::mem::take(&mut *routes).len())
+            .unwrap_or(0);
+        let removed_handlers = self
+            .handlers
+            .lock()
+            .map(|mut handlers| std::mem::take(&mut *handlers).len())
+            .unwrap_or(0);
+        for page in self.pages() {
+            page.restart_routing().await?;
+        }
+        Ok(removed_rules + removed_handlers)
     }
 
     /// Grant permissions on every current and future page (replaces the set).
@@ -317,6 +510,24 @@ impl BrowserContext {
             page.set_geolocation(latitude, longitude).await?;
         }
         *self.geolocation.lock().unwrap_or_else(|e| e.into_inner()) = Some((latitude, longitude));
+        Ok(())
+    }
+
+    /// Reset permissions on every current page and forget stored grants.
+    pub async fn clear_permissions(&self) -> E2eResult<()> {
+        for page in self.pages() {
+            page.clear_permissions().await?;
+        }
+        *self.permissions.lock().unwrap_or_else(|e| e.into_inner()) = Vec::new();
+        Ok(())
+    }
+
+    /// Clear the geolocation override on every current page and forget it.
+    pub async fn clear_geolocation(&self) -> E2eResult<()> {
+        for page in self.pages() {
+            page.clear_geolocation().await?;
+        }
+        *self.geolocation.lock().unwrap_or_else(|e| e.into_inner()) = None;
         Ok(())
     }
 

@@ -6,7 +6,7 @@
 //! loud configuration error.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
 use serde_json::Value;
@@ -14,8 +14,9 @@ use serde_json::Value;
 use crate::bidi::BidiConnection;
 use crate::cdp::CdpConnection;
 use crate::context::{BrowserContext, ContextOptions};
+use crate::driver::{BidiDriver, CdpDriver, ConsoleSink, Driver};
 use crate::error::{E2eError, E2eResult};
-use crate::page::Page;
+use crate::page::{Page, PageEvent};
 
 /// Supported browser engines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -272,6 +273,41 @@ pub(crate) enum Backend {
     },
 }
 
+/// Whether `target_id` is an already-tracked page in any context.
+fn is_known_page(contexts: &Weak<Mutex<Vec<BrowserContext>>>, target_id: &str) -> bool {
+    contexts
+        .upgrade()
+        .and_then(|contexts| {
+            contexts
+                .lock()
+                .map(|contexts| {
+                    contexts
+                        .iter()
+                        .flat_map(BrowserContext::pages)
+                        .any(|page| page.target_id() == target_id)
+                })
+                .ok()
+        })
+        .unwrap_or(false)
+}
+
+/// Find the page with `target_id` and its owning context.
+fn find_owner(
+    contexts: &Weak<Mutex<Vec<BrowserContext>>>,
+    target_id: &str,
+) -> Option<(BrowserContext, Page)> {
+    let contexts = contexts.upgrade()?;
+    let contexts = contexts.lock().map(|c| c.clone()).unwrap_or_default();
+    for context in contexts {
+        for page in context.pages() {
+            if page.target_id() == target_id {
+                return Some((context, page));
+            }
+        }
+    }
+    None
+}
+
 /// A launched browser instance.
 pub struct Browser {
     child: Option<tokio::process::Child>,
@@ -286,6 +322,7 @@ pub struct Browser {
     product: String,
     contexts: Arc<Mutex<Vec<BrowserContext>>>,
     default: OnceLock<BrowserContext>,
+    launch_download_dir: Option<PathBuf>,
 }
 
 impl Browser {
@@ -397,7 +434,7 @@ impl Browser {
             .unwrap_or("chromium")
             .to_string();
         tracing::info!(%product, "chromium launched");
-        Ok(Self {
+        let browser = Self {
             child: Some(child),
             backend: Backend::Cdp(cdp),
             kind: BrowserKind::Chromium,
@@ -414,7 +451,10 @@ impl Browser {
             product,
             contexts: Arc::new(Mutex::new(Vec::new())),
             default: OnceLock::new(),
-        })
+            launch_download_dir: options.download_dir.clone(),
+        };
+        browser.spawn_popup_pump();
+        Ok(browser)
     }
 
     async fn launch_firefox(options: LaunchOptions) -> E2eResult<Self> {
@@ -531,6 +571,8 @@ impl Browser {
                     "network.beforeRequestSent",
                     "network.responseCompleted",
                     "network.fetchError",
+                    "browsingContext.contextCreated",
+                    "browsingContext.contextDestroyed",
                     "browsingContext.load",
                     "browsingContext.domContentLoaded",
                     "browsingContext.userPromptOpened",
@@ -540,7 +582,7 @@ impl Browser {
         )
         .await?;
         tracing::info!(%product, "firefox launched");
-        Ok(Self {
+        let browser = Self {
             child: Some(child),
             backend: Backend::Bidi {
                 conn: bidi,
@@ -560,7 +602,10 @@ impl Browser {
             product,
             contexts: Arc::new(Mutex::new(Vec::new())),
             default: OnceLock::new(),
-        })
+            launch_download_dir: options.download_dir.clone(),
+        };
+        browser.spawn_popup_pump();
+        Ok(browser)
     }
 
     /// Connect to an already-running Chromium (e.g. launched with
@@ -578,7 +623,7 @@ impl Browser {
             .and_then(Value::as_str)
             .ok_or_else(|| E2eError::Launch("no webSocketDebuggerUrl".to_string()))?;
         let cdp = CdpConnection::connect(ws_url).await?;
-        Ok(Self {
+        let browser = Self {
             child: None,
             backend: Backend::Cdp(cdp),
             kind: BrowserKind::Chromium,
@@ -591,7 +636,10 @@ impl Browser {
             product: "chromium".to_string(),
             contexts: Arc::new(Mutex::new(Vec::new())),
             default: OnceLock::new(),
-        })
+            launch_download_dir: None,
+        };
+        browser.spawn_popup_pump();
+        Ok(browser)
     }
 
     /// Engine kind.
@@ -604,6 +652,163 @@ impl Browser {
     #[must_use]
     pub fn debug_port(&self) -> u16 {
         self.debug_port
+    }
+
+    /// Adopt popup pages (`window.open` / link targets) into the opener's
+    /// context so `pages()` stays complete and openers observe them.
+    ///
+    /// Our own `new_page` targets carry no opener/parent, so they are never
+    /// double-adopted; popups without a tracked opener are left alone.
+    fn spawn_popup_pump(&self) {
+        let backend = self.backend.clone();
+        let contexts = Arc::downgrade(&self.contexts);
+        let timeout = self.timeout;
+        tokio::spawn(async move {
+            match backend {
+                Backend::Cdp(cdp) => {
+                    let _ = cdp
+                        .call(
+                            None,
+                            "Target.setDiscoverTargets",
+                            serde_json::json!({ "discover": true }),
+                            timeout,
+                        )
+                        .await;
+                    let mut events = cdp.subscribe();
+                    loop {
+                        let event = match events.recv().await {
+                            Ok(event) => event,
+                            Err(_) => break,
+                        };
+                        if event.method == "Target.targetDestroyed" {
+                            if let Some((_, page)) = event.params["targetId"]
+                                .as_str()
+                                .and_then(|id| find_owner(&contexts, id))
+                            {
+                                page.mark_closed();
+                            }
+                            continue;
+                        }
+                        if event.method != "Target.targetCreated" {
+                            continue;
+                        }
+                        let info = &event.params["targetInfo"];
+                        if info["type"].as_str() != Some("page") {
+                            continue;
+                        }
+                        let target = info["targetId"].as_str().unwrap_or_default();
+                        let opener = info["openerId"].as_str().filter(|id| !id.is_empty());
+                        if target.is_empty() || opener.is_none() {
+                            continue;
+                        }
+                        if is_known_page(&contexts, target) {
+                            continue;
+                        }
+                        let attached = match cdp
+                            .call(
+                                None,
+                                "Target.attachToTarget",
+                                serde_json::json!({ "targetId": target, "flatten": true }),
+                                timeout,
+                            )
+                            .await
+                        {
+                            Ok(attached) => attached,
+                            Err(_) => continue,
+                        };
+                        let session = attached
+                            .get("sessionId")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string();
+                        if session.is_empty() {
+                            continue;
+                        }
+                        let Some((owner, opener)) =
+                            find_owner(&contexts, opener.unwrap_or_default())
+                        else {
+                            continue;
+                        };
+                        if is_known_page(&contexts, target) {
+                            continue;
+                        }
+                        let sink = ConsoleSink::new();
+                        let spawned = CdpDriver::spawn(
+                            cdp.clone(),
+                            session,
+                            target.to_string(),
+                            timeout,
+                            sink.clone(),
+                            owner.id().map(str::to_string),
+                        )
+                        .await;
+                        let Ok(driver) = spawned else { continue };
+                        if let Ok(page) = owner.finish_page(Driver::Cdp(driver), sink).await {
+                            opener.emit(PageEvent::Popup(Box::new(page)));
+                        }
+                    }
+                }
+                Backend::Bidi {
+                    conn,
+                    insecure_certs,
+                } => {
+                    let mut events = conn.subscribe();
+                    loop {
+                        let event = match events.recv().await {
+                            Ok(event) => event,
+                            Err(_) => break,
+                        };
+                        if event.method == "browsingContext.contextDestroyed" {
+                            if let Some((_, page)) = event.params["context"]
+                                .as_str()
+                                .and_then(|id| find_owner(&contexts, id))
+                            {
+                                page.mark_closed();
+                            }
+                            continue;
+                        }
+                        if event.method != "browsingContext.contextCreated" {
+                            continue;
+                        }
+                        let context_id = event.params["context"].as_str().unwrap_or_default();
+                        // Popups report `originalOpener` (tabs have no parent);
+                        // our own `new_page` tabs carry neither.
+                        let opener = event.params["originalOpener"]
+                            .as_str()
+                            .filter(|id| !id.is_empty())
+                            .or_else(|| {
+                                event.params["parent"].as_str().filter(|id| !id.is_empty())
+                            });
+                        if context_id.is_empty() || opener.is_none() {
+                            continue;
+                        }
+                        if is_known_page(&contexts, context_id) {
+                            continue;
+                        }
+                        let Some((owner, opener)) =
+                            find_owner(&contexts, opener.unwrap_or_default())
+                        else {
+                            continue;
+                        };
+                        if is_known_page(&contexts, context_id) {
+                            continue;
+                        }
+                        let sink = ConsoleSink::new();
+                        let driver = Driver::Bidi(BidiDriver::spawn(
+                            conn.clone(),
+                            context_id.to_string(),
+                            timeout,
+                            insecure_certs,
+                            sink.clone(),
+                            owner.id().map(str::to_string),
+                        ));
+                        if let Ok(page) = owner.finish_page(driver, sink).await {
+                            opener.emit(PageEvent::Popup(Box::new(page)));
+                        }
+                    }
+                }
+            }
+        });
     }
 
     /// Default protocol timeout.
@@ -650,6 +855,15 @@ impl Browser {
     /// Browser product version (captured at launch).
     pub async fn version(&self) -> E2eResult<String> {
         Ok(self.product.clone())
+    }
+
+    /// Whether the protocol connection is still open.
+    #[must_use]
+    pub fn is_connected(&self) -> bool {
+        match &self.backend {
+            Backend::Cdp(cdp) => cdp.is_open(),
+            Backend::Bidi { conn, .. } => conn.is_open(),
+        }
     }
 
     /// Create an isolated browser context (incognito-equivalent).
@@ -707,6 +921,7 @@ impl Browser {
             self.timeout,
             self.base_url.clone(),
             Arc::downgrade(&self.contexts),
+            self.launch_download_dir.clone(),
         );
         self.contexts
             .lock()
@@ -728,6 +943,7 @@ impl Browser {
                     self.timeout,
                     self.base_url.clone(),
                     Arc::downgrade(&self.contexts),
+                    self.launch_download_dir.clone(),
                 );
                 self.contexts
                     .lock()

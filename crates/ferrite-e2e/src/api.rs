@@ -167,6 +167,51 @@ impl ApiClient {
         self.send(request).await
     }
 
+    /// Send `method` to `url` with no extra headers or body
+    /// (Playwright `request.fetch()` equivalent).
+    pub async fn fetch(&self, method: &str, url: &str) -> E2eResult<ApiResponse> {
+        self.request(method, url, &[], None).await
+    }
+
+    /// POST raw bytes with an explicit content type.
+    pub async fn post_bytes(
+        &self,
+        path: &str,
+        body: &[u8],
+        content_type: &str,
+    ) -> E2eResult<ApiResponse> {
+        self.request(
+            "POST",
+            path,
+            &[("content-type".to_string(), content_type.to_string())],
+            Some(body),
+        )
+        .await
+    }
+
+    /// Send any method to `url` with extra headers and an optional body
+    /// (full verb coverage: `OPTIONS`, `TRACE`, ...).
+    pub async fn request(
+        &self,
+        method: &str,
+        url: &str,
+        headers: &[(String, String)],
+        body: Option<&[u8]>,
+    ) -> E2eResult<ApiResponse> {
+        let url = self.url(url)?;
+        let method: reqwest::Method = method
+            .parse()
+            .map_err(|error| E2eError::Config(format!("bad API method: {error}")))?;
+        let mut request = self.client.request(method, &url);
+        for (name, value) in headers {
+            request = request.header(name, value);
+        }
+        if let Some(body) = body {
+            request = request.body(body.to_vec());
+        }
+        self.send(request).await
+    }
+
     /// Resolve `path` against the base URL (absolute URLs pass through).
     fn url(&self, path: &str) -> E2eResult<String> {
         if path.starts_with("http://") || path.starts_with("https://") {

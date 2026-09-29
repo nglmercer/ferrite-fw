@@ -1060,6 +1060,92 @@ impl Locator {
             .await?;
         Ok(value.as_str().map(str::to_string))
     }
+
+    /// Whether the first match is visible (immediate, no retry).
+    pub async fn is_visible(&self) -> E2eResult<bool> {
+        Ok(self.page.query_state(&self.selector).await?.visible)
+    }
+
+    /// Whether the first match is hidden or absent (immediate, no retry).
+    pub async fn is_hidden(&self) -> E2eResult<bool> {
+        let state = self.page.query_state(&self.selector).await?;
+        Ok(state.count == 0 || !state.visible)
+    }
+
+    /// Whether the first match is enabled (immediate, no retry).
+    pub async fn is_enabled(&self) -> E2eResult<bool> {
+        Ok(self.page.query_state(&self.selector).await?.enabled)
+    }
+
+    /// Whether the first match is disabled (immediate, no retry).
+    pub async fn is_disabled(&self) -> E2eResult<bool> {
+        Ok(!self.page.query_state(&self.selector).await?.enabled)
+    }
+
+    /// Whether the first match is checked (immediate, no retry).
+    pub async fn is_checked(&self) -> E2eResult<bool> {
+        Ok(self.page.query_state(&self.selector).await?.checked)
+    }
+
+    /// Whether the first match is editable (immediate, no retry).
+    pub async fn is_editable(&self) -> E2eResult<bool> {
+        Ok(self.page.query_state(&self.selector).await?.editable)
+    }
+
+    /// Whether the first match is focused (immediate, no retry).
+    pub async fn is_focused(&self) -> E2eResult<bool> {
+        Ok(self.page.query_state(&self.selector).await?.focused)
+    }
+
+    /// Whether at least one element matches (immediate, no retry).
+    pub async fn is_attached(&self) -> E2eResult<bool> {
+        Ok(self.page.query_state(&self.selector).await?.count > 0)
+    }
+
+    /// Bounding box of the first match (`None` when nothing matches).
+    pub async fn bounding_box(&self) -> E2eResult<Option<crate::page::ElementRect>> {
+        Ok(self
+            .page
+            .query_state(&self.selector)
+            .await?
+            .rects
+            .into_iter()
+            .next())
+    }
+
+    /// Outline the first match with a red box for a moment (debugging).
+    pub async fn highlight(&self) -> E2eResult<()> {
+        let value = self
+            .eval_first(
+                "(() => { el.style.outline = '2px solid #ff0000'; \
+                 el.style.outlineOffset = '1px'; return true; })()",
+            )
+            .await?;
+        self.require_match(value)
+    }
+
+    /// Check or uncheck a checkbox to reach `checked`.
+    pub async fn set_checked(&self, checked: bool) -> E2eResult<()> {
+        if checked {
+            self.check().await
+        } else {
+            self.uncheck().await
+        }
+    }
+
+    /// Run `function` with the first match as its argument.
+    ///
+    /// `function` is a JS function expression, e.g. `(el) => el.id`.
+    pub async fn evaluate<T: serde::de::DeserializeOwned>(&self, function: &str) -> E2eResult<T> {
+        let value = self.eval_first(&format!("(({function}))(el)")).await?;
+        if value.is_null() {
+            return Err(E2eError::Locator {
+                selector: self.selector.raw().to_string(),
+                message: "no matching element".to_string(),
+            });
+        }
+        Ok(serde_json::from_value(value)?)
+    }
 }
 
 #[cfg(test)]
