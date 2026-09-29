@@ -440,6 +440,23 @@ release. Firefox child frames are no longer adopted as popup pages. Callback
 registration and native command cancellation remain bounded by existing lifecycle
 and protocol budgets; runner attempt cleanup owns ongoing callback work.
 
+## Filtered cookie clearing
+
+`BrowserContext::clear_cookies_with(CookieFilter)` and the owning Page companion
+accept exact/regex name, domain and path filters. Fields are ANDed, native strings
+retain case/whitespace and an empty filter clears all. Chromium expires only
+selected native keys, retaining supported partition keys; opaque partition keys
+return Config before mutation. Firefox uses native exact cookie deletion scoped
+to the user context. Cookie metadata on unrelated keys is preserved; deletion
+never clears/rebuilds the full store or creates a scratch page. No partition-key
+filter or new portable partition metadata representation is claimed.
+
+Linked API clients refresh from the native store before the next request, so
+filtered removals cannot resurrect their previously cached cookies. The
+[native daily API regression](crates/ferrite-e2e/tests/daily_api.rs) covers same-name
+domain/path independence, string and Rust regex filters, untouched attributes,
+linked requests, zero timeout and cancellation on both engines.
+
 ## Engine and validation evidence
 
 Chromium uses CDP and Firefox uses stock WebDriver BiDi. Firefox accepts user
@@ -469,8 +486,8 @@ Validation for URL/network matching, generated uploads and browser diagnostics:
 - `ferrite-e2e`: **138 unit tests, 3 API tests, 93 browser tests, 7 attempt-diagnostics
   groups, 4 reliability groups, 4 runtime/reporter groups, 6 fixture/network
   groups, 4 step-control/bundle groups, 5 wait/upload/console groups,
-  3 core conformance/capability groups, 4 callback lifecycle groups and
-  2 doctests** (273 checks total).
+  3 core conformance/capability groups, 4 callback lifecycle groups,
+  1 daily API group and 2 doctests** (274 checks total).
   Headless Shell and Firefox were installed and exercised; unsupported-engine branches remain explicit.
 - The five new groups additionally passed with full Chrome and Firefox, covering
   exact/glob/regex and predicate URL matching, frame history, request-start and
@@ -496,7 +513,7 @@ Validation for URL/network matching, generated uploads and browser diagnostics:
 - Existing trace and first-attachment names remain compatible; retry trace files
   and repeated attachment names preserve their individual contents.
 - CLI/configuration checks passed again: 5 CLI tests, 17 configuration tests and
-  1 doctest (296 checks across E2E/CLI/configuration). This change adds no CLI
+  1 doctest (297 checks across E2E/CLI/configuration). This change adds no CLI
   options. A real portable HTML report with expanded automatic/user/hook trees,
   skipped steps, annotations and run lifecycle was rendered in Chromium and
   visually inspected. The console section was also rendered and visually

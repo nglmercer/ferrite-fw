@@ -48,6 +48,7 @@ mod cdp;
 mod config;
 mod context;
 mod context_cookies;
+mod cookie_filter;
 mod coverage;
 mod driver;
 mod error;
@@ -81,6 +82,7 @@ pub use context::{
     BrowserContext, ContextEvent, ContextEventKind, ContextOptions, ServiceWorkerMode,
     TracingOptions,
 };
+pub use cookie_filter::CookieFilter;
 pub use coverage::{Coverage, CoverageFunction, CoverageRange, CssCoverageEntry, JsCoverageEntry};
 pub use driver::FrameStream;
 pub use error::{E2eError, E2eResult};

@@ -350,6 +350,7 @@ put('Locator','innerText','Locator.inner_text','Distinct rendered DOM innerText 
 for c in ['Page','BrowserContext']:
  put(c,'exposeFunction',c+'.expose_function_async','Sync/async JSON callbacks in current/future same-origin documents; independent bounded dispatch, native preload ownership, duplicate-name errors and named removal. Rust errors/panics reject JS promises; cross-origin dispatch/handle arguments deferred.')
  put(c,'exposeBinding',c+'.expose_binding','Async JSON binding with owning context/page/native frame identity. Same-origin frame dispatch; native startup preloads and navigation/disposal cleanup. Cross-origin/OOPIF callers and handle arguments deferred.')
+put('BrowserContext','clearCookies','BrowserContext.clear_cookies_with','ANDed exact/regex name/domain/path filters on native stores; empty filter clears all. Linked API requests refresh cookies; opaque partition key deletion fails explicitly on Chromium. Rust regex syntax and partition filter fields remain narrower.')
 # Fill every remaining upstream member explicitly as absent, with class-specific explanations.
 def default_note(c,e):
  if c.startswith('Android') or c in ['Electron','ElectronApplication']:return 'Experimental upstream API; Ferrite has no Android/ADB/WebView or Electron backend.'

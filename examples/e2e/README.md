@@ -293,3 +293,17 @@ context.remove_exposed_function("double").await?;
 Bindings cover main/same-origin frames. JSON callbacks are polled and bounded;
 errors/panics reject, navigation/closure cancels pending work and removal owns the
 native preload. Duplicate names fail instead of replacing a live callback.
+
+Clear matching native cookies without disturbing other names/paths/domains:
+
+```rust,no_run
+context.clear_cookies_with(
+    CookieFilter::default()
+        .name(TextMatcher::regex("^session_")?)
+        .domain("example.test")
+        .path("/admin"),
+).await?;
+```
+
+Filters are ANDed. Linked API clients observe the deletion on their next request.
+An empty filter clears all, retaining the existing clear-cookies behavior.

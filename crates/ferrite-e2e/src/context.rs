@@ -818,6 +818,28 @@ impl BrowserContext {
             .await
     }
 
+    /// Clear cookies matching all provided exact/regex fields. Linked API
+    /// clients observe the updated native store before their next request.
+    pub async fn clear_cookies_with(&self, filter: crate::CookieFilter) -> E2eResult<()> {
+        let timeout = self
+            .live
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .action_timeout
+            .unwrap_or(self.timeout);
+        self.cancellation
+            .run(crate::operation::Deadline::new(timeout).run(
+                "clear filtered cookies",
+                crate::context_cookies::clear_filtered_cookies(
+                    &self.backend,
+                    self.id.as_deref(),
+                    timeout,
+                    &filter,
+                ),
+            ))
+            .await
+    }
+
     /// Set cookies for `url` without opening or navigating a page.
     pub async fn add_cookies(&self, cookies: &[Cookie], url: &str) -> E2eResult<()> {
         self.cancellation

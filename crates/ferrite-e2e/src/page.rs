@@ -3430,6 +3430,19 @@ impl Page {
             .await
     }
 
+    /// Clear matching cookies from the owning context's native store.
+    pub async fn clear_cookies_with(&self, filter: crate::CookieFilter) -> E2eResult<()> {
+        self.run_operation(async {
+            self.context()
+                .ok_or_else(|| {
+                    E2eError::Config("page's owning context is no longer available".into())
+                })?
+                .clear_cookies_with(filter)
+                .await
+        })
+        .await
+    }
+
     /// Capture this page's storage state (origin, cookies, localStorage).
     pub async fn storage_state(&self) -> E2eResult<StorageState> {
         self.driver

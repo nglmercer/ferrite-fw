@@ -172,3 +172,92 @@ pub(crate) async fn clear_cookies(
         }
     }
 }
+
+pub(crate) async fn clear_filtered_cookies(
+    backend: &Backend,
+    id: Option<&str>,
+    timeout: Duration,
+    filter: &crate::CookieFilter,
+) -> E2eResult<()> {
+    if filter.is_empty() {
+        return clear_cookies(backend, id, timeout).await;
+    }
+    match backend {
+        Backend::Cdp(conn) => {
+            let mut params = serde_json::json!({});
+            if let Some(id) = id {
+                params["browserContextId"] = Value::String(id.into());
+            }
+            let result = conn
+                .call(None, "Storage.getCookies", params.clone(), timeout)
+                .await?;
+            let mut expired = Vec::new();
+            for cookie in result["cookies"]
+                .as_array()
+                .ok_or_else(|| E2eError::Config("native cookies unavailable".into()))?
+            {
+                if !filter.matches(
+                    cookie["name"].as_str().unwrap_or_default(),
+                    cookie["domain"].as_str().unwrap_or_default(),
+                    cookie["path"].as_str().unwrap_or_default(),
+                ) {
+                    continue;
+                }
+                if cookie["partitionKeyOpaque"].as_bool() == Some(true) {
+                    return Err(E2eError::Config(
+                        "filtered deletion of opaque partition cookies is unsupported".into(),
+                    ));
+                }
+                // Expire only selected native keys; never clear and rebuild the
+                // whole store (which loses metadata and unrelated concurrent writes).
+                let mut value = serde_json::Map::new();
+                for key in [
+                    "name",
+                    "value",
+                    "domain",
+                    "path",
+                    "secure",
+                    "httpOnly",
+                    "sameSite",
+                    "priority",
+                    "sameParty",
+                    "sourceScheme",
+                    "sourcePort",
+                    "partitionKey",
+                ] {
+                    if let Some(field) = cookie.get(key) {
+                        value.insert(key.into(), field.clone());
+                    }
+                }
+                value.insert("expires".into(), Value::from(1));
+                expired.push(Value::Object(value));
+            }
+            if !expired.is_empty() {
+                params["cookies"] = Value::Array(expired);
+                conn.call(None, "Storage.setCookies", params, timeout)
+                    .await?;
+            }
+        }
+        Backend::Bidi { conn, .. } => {
+            for cookie in cookies(backend, id, timeout).await? {
+                if !filter.matches(
+                    &cookie.name,
+                    cookie.domain.as_deref().unwrap_or_default(),
+                    cookie.path.as_deref().unwrap_or_default(),
+                ) {
+                    continue;
+                }
+                conn.call(
+                    "storage.deleteCookies",
+                    serde_json::json!({
+                        "filter":{"name":cookie.name,"domain":cookie.domain,"path":cookie.path},
+                        "partition":{"type":"storageKey","userContext":id.unwrap_or("default")}
+                    }),
+                    timeout,
+                )
+                .await?;
+            }
+        }
+    }
+    Ok(())
+}
