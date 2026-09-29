@@ -1,10 +1,10 @@
 //! Test results and reporters (`list`, `dot`, `json`, `junit`, `html`).
 
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// Identity of one attempt. Retries and repetitions have separate identities.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttemptInfo {
     pub name: String,
     pub file: String,
@@ -15,13 +15,90 @@ pub struct AttemptInfo {
     pub retry: u32,
 }
 
-/// One named user step. Interrupted steps finish when their future is dropped.
-#[derive(Debug, Clone)]
+/// Raw execution status, independent of whether failure was expected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AttemptStatus {
+    Passed,
+    Failed,
+    TimedOut,
+    Skipped,
+    Interrupted,
+}
+
+/// Source position of a test or user step.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceLocation {
+    pub file: String,
+    pub line: u32,
+    pub column: u32,
+}
+impl SourceLocation {
+    pub(crate) fn caller(location: &'static std::panic::Location<'static>) -> Self {
+        Self {
+            file: location.file().into(),
+            line: location.line(),
+            column: location.column(),
+        }
+    }
+}
+
+/// A structured failure with its runner phase and stable error code.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TestError {
+    pub message: String,
+    pub code: String,
+    pub phase: String,
+    pub location: Option<SourceLocation>,
+}
+impl TestError {
+    pub(crate) fn new(
+        error: &crate::E2eError,
+        phase: &str,
+        location: Option<SourceLocation>,
+    ) -> Self {
+        Self {
+            message: error.to_string(),
+            code: error.code().into(),
+            phase: phase.into(),
+            location,
+        }
+    }
+}
+
+/// One named user step, including nested children and step-local attachments.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StepInfo {
     pub id: u64,
+    pub parent_id: Option<u64>,
     pub title: String,
+    pub location: SourceLocation,
+    /// Unix epoch milliseconds.
+    pub start_time_ms: u64,
     pub duration_ms: u64,
     pub interrupted: bool,
+    pub error: Option<TestError>,
+    pub steps: Vec<StepInfo>,
+    pub attachments: Vec<Attachment>,
+}
+
+/// Complete diagnostics and artifacts for a single attempt.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttemptResult {
+    pub info: AttemptInfo,
+    pub status: AttemptStatus,
+    pub expected_status: AttemptStatus,
+    /// Includes cleanup and expectation checks, not just the body outcome.
+    pub is_expected: bool,
+    pub start_time_ms: u64,
+    pub duration_ms: u64,
+    pub errors: Vec<TestError>,
+    pub annotations: Vec<(String, String)>,
+    pub steps: Vec<StepInfo>,
+    pub attachments: Vec<Attachment>,
+    pub screenshots: Vec<String>,
+    pub trace: Option<String>,
+    pub video: Option<String>,
 }
 
 /// Live runner callbacks, in lifecycle order within each attempt.
@@ -54,38 +131,202 @@ impl ReporterHub {
     }
 }
 
-pub(crate) struct StepGuard {
+tokio::task_local! {
+    static CURRENT_STEP: (u64, u64);
+}
+#[derive(Default)]
+struct StepRecords {
+    nodes: Vec<(StepInfo, std::time::Instant, bool)>,
+    sealed: bool,
+}
+#[derive(Clone)]
+pub(crate) struct StepSession {
+    id: u64,
     hub: ReporterHub,
     attempt: AttemptInfo,
-    step: StepInfo,
-    started: std::time::Instant,
+    records: Arc<Mutex<StepRecords>>,
 }
-impl StepGuard {
-    pub(crate) fn new(hub: ReporterHub, attempt: AttemptInfo, title: &str) -> Self {
-        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        let mut step = StepInfo {
-            id: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-            title: title.into(),
-            duration_ms: 0,
-            interrupted: false,
-        };
-        hub.emit(|r| r.on_step_begin(&attempt, &step));
-        step.interrupted = true;
+impl StepSession {
+    pub(crate) fn new(hub: ReporterHub, attempt: AttemptInfo) -> Self {
         Self {
+            id: next_id(),
             hub,
             attempt,
-            step,
-            started: std::time::Instant::now(),
+            records: Arc::default(),
         }
     }
-    pub(crate) fn complete(&mut self) {
-        self.step.interrupted = false;
+    pub(crate) async fn run<F: std::future::Future>(
+        &self,
+        title: &str,
+        location: SourceLocation,
+        future: F,
+        error: impl FnOnce(&F::Output) -> Option<TestError>,
+    ) -> F::Output {
+        use futures::FutureExt;
+        let mut guard = self.start(title, location);
+        let result = CURRENT_STEP
+            .scope(
+                (self.id, guard.id),
+                std::panic::AssertUnwindSafe(future).catch_unwind(),
+            )
+            .await;
+        match result {
+            Ok(value) => {
+                guard.finish(error(&value), false);
+                value
+            }
+            Err(panic) => {
+                let message = panic
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+                    .or_else(|| panic.downcast_ref::<&str>().copied())
+                    .unwrap_or("non-string panic");
+                guard.finish(
+                    Some(TestError {
+                        message: message.into(),
+                        code: "panic".into(),
+                        phase: "step".into(),
+                        location: None,
+                    }),
+                    false,
+                );
+                std::panic::resume_unwind(panic)
+            }
+        }
+    }
+    fn start(&self, title: &str, location: SourceLocation) -> StepGuard {
+        let parent_id = CURRENT_STEP
+            .try_with(|(session, step)| (*session == self.id).then_some(*step))
+            .ok()
+            .flatten();
+        let step = StepInfo {
+            id: next_id(),
+            parent_id,
+            title: title.into(),
+            location,
+            start_time_ms: crate::driver::now_ms(),
+            duration_ms: 0,
+            interrupted: false,
+            error: None,
+            steps: Vec::new(),
+            attachments: Vec::new(),
+        };
+        let id = step.id;
+        let active = {
+            let mut records = self.records.lock().unwrap_or_else(|e| e.into_inner());
+            if records.sealed {
+                false
+            } else {
+                records
+                    .nodes
+                    .push((step.clone(), std::time::Instant::now(), false));
+                true
+            }
+        };
+        if active {
+            self.hub.emit(|r| r.on_step_begin(&self.attempt, &step));
+        }
+        StepGuard {
+            session: self.clone(),
+            id,
+            finished: !active,
+        }
+    }
+    fn finish(&self, id: u64, error: Option<TestError>, interrupted: bool) {
+        let step = {
+            let mut records = self.records.lock().unwrap_or_else(|e| e.into_inner());
+            let Some((step, started, finished)) = records.nodes.iter_mut().find(|n| n.0.id == id)
+            else {
+                return;
+            };
+            if *finished {
+                return;
+            }
+            *finished = true;
+            step.duration_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+            step.interrupted = interrupted;
+            step.error = error.map(|mut error| {
+                if error.location.is_none() {
+                    error.location = Some(step.location.clone());
+                }
+                error
+            });
+            tree(&records, id)
+        };
+        self.hub.emit(|r| r.on_step_end(&self.attempt, &step));
+    }
+    pub(crate) fn attach(&self, attachment: &Attachment) {
+        if let Ok((session, id)) = CURRENT_STEP.try_with(|id| *id) {
+            if session == self.id {
+                let mut records = self.records.lock().unwrap_or_else(|e| e.into_inner());
+                if !records.sealed {
+                    if let Some((step, _, _)) = records.nodes.iter_mut().find(|n| n.0.id == id) {
+                        step.attachments.push(attachment.clone());
+                    }
+                }
+            }
+        }
+    }
+    pub(crate) fn finish_all(&self) -> Vec<StepInfo> {
+        let pending = {
+            let mut records = self.records.lock().unwrap_or_else(|e| e.into_inner());
+            records.sealed = true;
+            records
+                .nodes
+                .iter()
+                .rev()
+                .filter(|n| !n.2)
+                .map(|n| n.0.id)
+                .collect::<Vec<_>>()
+        };
+        for id in pending {
+            self.finish(id, None, true);
+        }
+        let records = self.records.lock().unwrap_or_else(|e| e.into_inner());
+        records
+            .nodes
+            .iter()
+            .filter(|n| n.0.parent_id.is_none())
+            .map(|n| tree(&records, n.0.id))
+            .collect()
+    }
+}
+fn tree(records: &StepRecords, id: u64) -> StepInfo {
+    let mut step = records
+        .nodes
+        .iter()
+        .find(|n| n.0.id == id)
+        .unwrap()
+        .0
+        .clone();
+    step.steps = records
+        .nodes
+        .iter()
+        .filter(|n| n.0.parent_id == Some(id))
+        .map(|n| tree(records, n.0.id))
+        .collect();
+    step
+}
+fn next_id() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+struct StepGuard {
+    session: StepSession,
+    id: u64,
+    finished: bool,
+}
+impl StepGuard {
+    fn finish(&mut self, error: Option<TestError>, interrupted: bool) {
+        self.finished = true;
+        self.session.finish(self.id, error, interrupted);
     }
 }
 impl Drop for StepGuard {
     fn drop(&mut self) {
-        self.step.duration_ms = self.started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
-        self.hub.emit(|r| r.on_step_end(&self.attempt, &self.step));
+        if !self.finished {
+            self.session.finish(self.id, None, true);
+        }
     }
 }
 
@@ -118,6 +359,12 @@ pub struct Attachment {
 /// Result of one test.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TestResult {
+    /// Full history, including attempts that failed before a successful retry.
+    #[serde(default)]
+    pub attempt_results: Vec<AttemptResult>,
+    /// Passed after at least one unexpected unsuccessful attempt.
+    #[serde(default)]
+    pub flaky: bool,
     /// Test name.
     pub name: String,
     /// Outcome.
@@ -167,6 +414,12 @@ impl TestReport {
             .iter()
             .filter(|r| r.status == TestStatus::Passed)
             .count()
+    }
+
+    /// Number of tests recovered by retries.
+    #[must_use]
+    pub fn flaky(&self) -> usize {
+        self.results.iter().filter(|r| r.flaky).count()
     }
 
     /// Number of failed tests.
@@ -220,6 +473,9 @@ impl TestReport {
         );
         if expected > 0 {
             out.push_str(&format!(", {expected} expected-failed"));
+        }
+        if self.flaky() > 0 {
+            out.push_str(&format!(", {} flaky", self.flaky()));
         }
         out.push_str(&format!(" ({} total)", self.results.len()));
         out
@@ -363,6 +619,7 @@ impl TestReport {
         );
         for result in &self.results {
             let (label, class) = match result.status {
+                TestStatus::Passed if result.flaky => ("flaky", "exp"),
                 TestStatus::Passed => ("passed", "pass"),
                 TestStatus::Failed => ("failed", "fail"),
                 TestStatus::Skipped => ("skipped", "skip"),
@@ -407,11 +664,105 @@ impl TestReport {
                     xml_escape(&attachment.name)
                 ));
             }
+            for attempt in &result.attempt_results {
+                out.push_str(&format!(
+                    "<details><summary>Attempt {}: {:?} (expected {:?}), {}ms</summary>",
+                    attempt.info.retry + 1,
+                    attempt.status,
+                    attempt.expected_status,
+                    attempt.duration_ms
+                ));
+                out.push_str(&format!(
+                    "<div>Started: {} · worker {} · repeat {}</div>",
+                    crate::har::iso8601(attempt.start_time_ms),
+                    attempt.info.worker_index,
+                    attempt.info.repeat_each_index
+                ));
+                for error in &attempt.errors {
+                    render_error(&mut out, error);
+                }
+                for (kind, value) in &attempt.annotations {
+                    out.push_str(&format!(
+                        "<div>{}: {}</div>",
+                        xml_escape(kind),
+                        xml_escape(value)
+                    ));
+                }
+                render_steps(&mut out, &attempt.steps);
+                for path in &attempt.screenshots {
+                    render_link(&mut out, path, "screenshot");
+                }
+                if let Some(path) = &attempt.trace {
+                    render_link(&mut out, path, "trace");
+                }
+                if let Some(path) = &attempt.video {
+                    render_link(&mut out, path, "video");
+                }
+                for attachment in &attempt.attachments {
+                    render_link(&mut out, &attachment.path, &attachment.name);
+                }
+                out.push_str("</details>");
+            }
             out.push_str("</td></tr>");
         }
         out.push_str("</tbody></table></body></html>");
         out
     }
+}
+
+fn render_link(out: &mut String, path: &str, name: &str) {
+    out.push_str(&format!(
+        "<a href=\"{}\">{}</a> ",
+        xml_escape(path),
+        xml_escape(name)
+    ));
+}
+fn render_error(out: &mut String, error: &TestError) {
+    out.push_str(&format!(
+        "<pre>{}: {} [{}]</pre>",
+        xml_escape(&error.phase),
+        xml_escape(&error.message),
+        xml_escape(&error.code)
+    ));
+    if let Some(location) = &error.location {
+        out.push_str(&format!(
+            "<div>{}:{}:{}</div>",
+            xml_escape(&location.file),
+            location.line,
+            location.column
+        ));
+    }
+}
+fn render_steps(out: &mut String, steps: &[StepInfo]) {
+    if steps.is_empty() {
+        return;
+    }
+    out.push_str("<ul>");
+    for step in steps {
+        out.push_str(&format!(
+            "<li><details open><summary>{} ({}ms{})</summary><div>{}:{}:{} · {}</div>",
+            xml_escape(&step.title),
+            step.duration_ms,
+            if step.interrupted {
+                ", interrupted"
+            } else {
+                ""
+            },
+            xml_escape(&step.location.file),
+            step.location.line,
+            step.location.column,
+            crate::har::iso8601(step.start_time_ms)
+        ));
+        if let Some(error) = &step.error {
+            render_error(out, error);
+        }
+        for attachment in &step.attachments {
+            render_link(out, &attachment.path, &attachment.name);
+        }
+        render_steps(out, &step.steps);
+        out.push_str("</details></li>");
+    }
+    out.push_str("</ul>");
 }
 
 fn one_line(text: &str) -> String {
@@ -430,8 +781,245 @@ fn xml_escape(text: &str) -> String {
 mod tests {
     use super::*;
 
+    fn session() -> StepSession {
+        StepSession::new(
+            ReporterHub::default(),
+            AttemptInfo {
+                name: "steps".into(),
+                file: "test.rs".into(),
+                line: 1,
+                project: None,
+                worker_index: 0,
+                repeat_each_index: 0,
+                retry: 0,
+            },
+        )
+    }
+    fn source() -> SourceLocation {
+        SourceLocation {
+            file: "test.rs".into(),
+            line: 12,
+            column: 3,
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_nested_steps_keep_parentage_and_handled_errors() {
+        let session = session();
+        session
+            .run(
+                "outer",
+                source(),
+                async {
+                    let (_, handled) = tokio::join!(
+                        session.run(
+                            "left",
+                            source(),
+                            async {
+                                tokio::task::yield_now().await;
+                                session.attach(&Attachment {
+                                    name: "left data".into(),
+                                    path: "data.txt".into(),
+                                    content_type: "text/plain".into(),
+                                });
+                                session
+                                    .run("grandchild", source(), async { 7 }, |_| None)
+                                    .await
+                            },
+                            |_| None
+                        ),
+                        session.run(
+                            "right",
+                            source(),
+                            async { Err::<(), _>(crate::E2eError::Expect("handled".into())) },
+                            |result| result
+                                .as_ref()
+                                .err()
+                                .map(|e| TestError::new(e, "step", None))
+                        )
+                    );
+                    assert!(handled.is_err());
+                },
+                |_| None,
+            )
+            .await;
+        let roots = session.finish_all();
+        assert_eq!(roots.len(), 1);
+        let outer = &roots[0];
+        assert!(!outer.interrupted);
+        assert_eq!(outer.steps.len(), 2);
+        let left = &outer.steps[0];
+        let right = &outer.steps[1];
+        assert_eq!(left.parent_id, Some(outer.id));
+        assert_eq!(left.steps[0].parent_id, Some(left.id));
+        assert_eq!(left.attachments.len(), 1);
+        assert!(right.attachments.is_empty());
+        assert_eq!(right.error.as_ref().unwrap().code, "FERRITE_E2E_EXPECT");
+        assert_eq!(
+            right
+                .error
+                .as_ref()
+                .unwrap()
+                .location
+                .as_ref()
+                .unwrap()
+                .line,
+            12
+        );
+        assert!(outer.start_time_ms > 0);
+    }
+
+    #[tokio::test]
+    async fn cancelled_steps_finish_children_and_parent_once() {
+        #[derive(Clone)]
+        struct Events(Arc<Mutex<Vec<StepInfo>>>);
+        impl Reporter for Events {
+            fn on_step_end(&self, _: &AttemptInfo, step: &StepInfo) {
+                self.0.lock().unwrap().push(step.clone());
+            }
+        }
+        let events = Events(Arc::default());
+        let mut session = session();
+        session.hub.0.push(Arc::new(events.clone()));
+        let future = session.run(
+            "outer",
+            source(),
+            async {
+                session
+                    .run("child", source(), std::future::pending::<()>(), |_| None)
+                    .await
+            },
+            |_| None,
+        );
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), future)
+                .await
+                .is_err()
+        );
+        let roots = session.finish_all();
+        assert!(roots[0].interrupted);
+        assert!(roots[0].steps[0].interrupted);
+        let ended = events.0.lock().unwrap();
+        assert_eq!(ended.len(), 2);
+        assert_eq!(ended[0].title, "child");
+        assert_eq!(ended[1].steps.len(), 1);
+        drop(ended);
+        session.finish_all();
+        assert_eq!(events.0.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn panics_record_failures_and_resume_unwinding() {
+        use futures::FutureExt;
+        let session = session();
+        let result = std::panic::AssertUnwindSafe(session.run(
+            "panic",
+            source(),
+            async { panic!("boom") },
+            |_: &()| None,
+        ))
+        .catch_unwind()
+        .await;
+        assert!(result.is_err());
+        let steps = session.finish_all();
+        assert!(!steps[0].interrupted);
+        assert_eq!(steps[0].error.as_ref().unwrap().code, "panic");
+        assert_eq!(steps[0].error.as_ref().unwrap().message, "boom");
+    }
+
+    #[tokio::test]
+    async fn sealed_attempt_finishes_detached_steps_without_late_events() {
+        let session = session();
+        let guard = session.start("detached", source());
+        assert!(session.finish_all()[0].interrupted);
+        drop(guard);
+        session.run("late", source(), async {}, |_| None).await;
+        assert_eq!(session.finish_all().len(), 1);
+    }
+
+    #[test]
+    fn legacy_json_without_attempt_history_still_loads() {
+        let mut value = serde_json::to_value(sample_result("old", TestStatus::Passed)).unwrap();
+        value.as_object_mut().unwrap().remove("attempt_results");
+        value.as_object_mut().unwrap().remove("flaky");
+        let result: TestResult = serde_json::from_value(value).unwrap();
+        assert!(result.attempt_results.is_empty());
+        assert!(!result.flaky);
+    }
+
+    #[tokio::test]
+    async fn html_and_json_retain_attempt_diagnostics_and_escape_text() {
+        let session = session();
+        session
+            .run("<script>step</script>", source(), async {}, |_| {
+                Some(TestError {
+                    message: "<bad>".into(),
+                    phase: "step".into(),
+                    code: "error".into(),
+                    location: None,
+                })
+            })
+            .await;
+        let attempt = AttemptResult {
+            info: session.attempt.clone(),
+            status: AttemptStatus::Failed,
+            expected_status: AttemptStatus::Passed,
+            is_expected: false,
+            start_time_ms: 1,
+            duration_ms: 20,
+            errors: vec![TestError {
+                message: "first failure".into(),
+                code: "error".into(),
+                phase: "body".into(),
+                location: Some(source()),
+            }],
+            annotations: Vec::new(),
+            steps: session.finish_all(),
+            attachments: vec![Attachment {
+                name: "<attachment>".into(),
+                path: "a\".txt".into(),
+                content_type: "text/plain".into(),
+            }],
+            screenshots: vec!["first.png".into()],
+            trace: Some("first.json".into()),
+            video: Some("first.webm".into()),
+        };
+        let mut second = attempt.clone();
+        second.info.retry = 1;
+        second.status = AttemptStatus::Passed;
+        second.is_expected = true;
+        let mut result = sample_result("recovered", TestStatus::Passed);
+        result.flaky = true;
+        result.attempts = 2;
+        result.attempt_results = vec![attempt, second];
+        let report = TestReport {
+            results: vec![result],
+        };
+        assert_eq!(report.flaky(), 1);
+        let html = report.to_html();
+        for expected in [
+            "Attempt 1",
+            "Attempt 2",
+            "first failure",
+            "first.png",
+            "first.webm",
+            "test.rs:12:3",
+            "flaky",
+            "&lt;script&gt;",
+            "a&quot;.txt",
+        ] {
+            assert!(html.contains(expected), "missing {expected}");
+        }
+        assert!(!html.contains("<script>"));
+        let round_trip: TestReport = serde_json::from_str(&report.to_json()).unwrap();
+        assert_eq!(round_trip.results[0].attempt_results.len(), 2);
+        assert_eq!(round_trip.results[0].attempt_results[0].steps.len(), 1);
+    }
+
     fn sample_result(name: &str, status: TestStatus) -> TestResult {
         TestResult {
+            attempt_results: Vec::new(),
+            flaky: false,
             name: name.to_string(),
             status,
             attempts: 1,
@@ -452,6 +1040,8 @@ mod tests {
             results: vec![
                 sample_result("passes", TestStatus::Passed),
                 TestResult {
+                    attempt_results: Vec::new(),
+                    flaky: false,
                     name: "fails <bad>".to_string(),
                     status: TestStatus::Failed,
                     attempts: 3,

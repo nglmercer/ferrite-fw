@@ -136,7 +136,7 @@ fn split_query(url: &str) -> (String, Vec<Value>) {
 }
 
 /// Format epoch milliseconds as `YYYY-MM-DDTHH:MM:SS.sssZ` (no date crates).
-fn iso8601(epoch_ms: u64) -> String {
+pub(crate) fn iso8601(epoch_ms: u64) -> String {
     let secs = epoch_ms / 1000;
     let ms = epoch_ms % 1000;
     let days = (secs / 86_400) as i64;

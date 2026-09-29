@@ -13,7 +13,10 @@ use std::time::{Duration, Instant};
 use crate::browser::{Browser, BrowserKind, LaunchOptions};
 use crate::error::{E2eError, E2eResult};
 use crate::page::{Page, ScreenshotOptions};
-use crate::report::{Attachment, TestReport, TestResult, TestStatus};
+use crate::report::{
+    Attachment, AttemptResult, AttemptStatus, SourceLocation, TestError, TestReport, TestResult,
+    TestStatus,
+};
 use crate::video::{VideoMode, VideoOptions};
 use crate::ContextOptions;
 
@@ -24,6 +27,8 @@ struct RuntimeState {
     slow: bool,
     expected_fail: bool,
     skipped: Option<String>,
+    status: Option<AttemptStatus>,
+    errors: Vec<TestError>,
     annotations: Vec<(String, String)>,
 }
 
@@ -46,6 +51,8 @@ impl RuntimeControl {
                     slow,
                     expected_fail,
                     skipped: None,
+                    status: None,
+                    errors: Vec::new(),
                     annotations,
                 })
                 .0,
@@ -580,9 +587,73 @@ pub struct TestInfo {
     runtime: RuntimeControl,
     reporters: crate::report::ReporterHub,
     attempt: crate::report::AttemptInfo,
+    steps: Option<crate::report::StepSession>,
 }
 
 impl TestInfo {
+    /// Current raw outcome. `None` while setup/body is still running.
+    /// Published before `after_each`; cleanup failures update it immediately.
+    pub fn status(&self) -> Option<AttemptStatus> {
+        self.runtime.snapshot().status
+    }
+    /// The expected outcome, including runtime `fail` and `skip` modifiers.
+    pub fn expected_status(&self) -> AttemptStatus {
+        let state = self.runtime.snapshot();
+        if state.skipped.is_some() || state.status == Some(AttemptStatus::Skipped) {
+            AttemptStatus::Skipped
+        } else if state.expected_fail {
+            AttemptStatus::Failed
+        } else {
+            AttemptStatus::Passed
+        }
+    }
+    /// All failures recorded so far, including setup/body and completed cleanup phases.
+    pub fn errors(&self) -> Vec<TestError> {
+        self.runtime.snapshot().errors
+    }
+    fn record_error(&self, error: &E2eError, phase: &str) {
+        let status = match error {
+            E2eError::Timeout(..) => AttemptStatus::TimedOut,
+            E2eError::Cancelled(_) => AttemptStatus::Interrupted,
+            E2eError::Skipped(_)
+                if matches!(
+                    phase,
+                    "body" | "test setup" | "worker fixture setup" | "before_all"
+                ) =>
+            {
+                AttemptStatus::Skipped
+            }
+            _ => AttemptStatus::Failed,
+        };
+        let location = Some(SourceLocation {
+            file: self.file.clone(),
+            line: self.line,
+            column: 0,
+        });
+        self.runtime.state.send_modify(|state| {
+            if !matches!(
+                state.status,
+                Some(AttemptStatus::TimedOut | AttemptStatus::Interrupted)
+            ) {
+                state.status = Some(status);
+            }
+            if status != AttemptStatus::Skipped {
+                state.errors.push(TestError::new(error, phase, location));
+            }
+        });
+    }
+    fn body_outcome(&self, outcome: &E2eResult<()>, phase: &str) {
+        match outcome {
+            Ok(()) => self.runtime.state.send_modify(|state| {
+                state.status = Some(if state.skipped.is_some() {
+                    AttemptStatus::Skipped
+                } else {
+                    AttemptStatus::Passed
+                })
+            }),
+            Err(error) => self.record_error(error, phase),
+        }
+    }
     /// Stop this attempt. Use `info.skip(reason)?` to stop the current closure
     /// immediately. Shared control also stops pending setup/body futures.
     pub fn skip(&self, reason: impl Into<String>) -> E2eResult<()> {
@@ -678,6 +749,9 @@ impl TestInfo {
         };
         attachments.push(attachment.clone());
         drop(attachments);
+        if let Some(steps) = &self.steps {
+            steps.attach(&attachment);
+        }
         self.reporters
             .emit(|r| r.on_attachment(&self.attempt, &attachment));
         Ok(path)
@@ -869,10 +943,38 @@ struct FixtureState {
     built: Vec<(usize, Arc<dyn Any + Send + Sync>)>,
 }
 
+// Setup errors are cached for later suite members. Preserve control-flow kinds
+// instead of turning a timeout/cancellation into an ordinary configuration error.
+#[derive(Clone)]
+enum SetupFailure {
+    Failed(String),
+    TimedOut(u64, String),
+    Interrupted(String),
+    Skipped(String),
+}
+impl SetupFailure {
+    fn new(error: E2eError, label: &str) -> Self {
+        match error {
+            E2eError::Timeout(ms, detail) => Self::TimedOut(ms, format!("{label}: {detail}")),
+            E2eError::Cancelled(detail) => Self::Interrupted(format!("{label}: {detail}")),
+            E2eError::Skipped(reason) => Self::Skipped(reason),
+            error => Self::Failed(format!("{label}: {error}")),
+        }
+    }
+    fn error(&self) -> E2eError {
+        match self {
+            Self::Failed(message) => E2eError::Config(message.clone()),
+            Self::TimedOut(ms, message) => E2eError::Timeout(*ms, message.clone()),
+            Self::Interrupted(message) => E2eError::Cancelled(message.clone()),
+            Self::Skipped(reason) => E2eError::Skipped(reason.clone()),
+        }
+    }
+}
+
 #[derive(Default)]
 struct SuiteState {
     worker: Option<WorkerInfo>,
-    started: Vec<(Arc<Suite>, Option<String>)>,
+    started: Vec<(Arc<Suite>, Option<SetupFailure>)>,
 }
 
 impl SuiteState {
@@ -893,7 +995,7 @@ impl SuiteState {
                 .find(|(seen, _)| Arc::ptr_eq(seen, suite))
             {
                 if let Some(error) = error {
-                    return Err(E2eError::Config(error.clone()));
+                    return Err(error.error());
                 }
                 continue;
             }
@@ -904,9 +1006,10 @@ impl SuiteState {
                 })
                 .await
                 {
-                    let error = format!("suite {} before_all: {error}", suite.name);
+                    let error =
+                        SetupFailure::new(error, &format!("suite {} before_all", suite.name));
                     self.started.last_mut().unwrap().1 = Some(error.clone());
-                    return Err(E2eError::Config(error));
+                    return Err(error.error());
                 }
             }
         }
@@ -1092,12 +1195,9 @@ async fn setup_fixtures(
                 dependencies.inner.insert(*dependency, value.clone());
             }
         }
-        let value = (def.setup)(dependencies)
-            .await
-            .map_err(|error| match error {
-                E2eError::Skipped(_) => error,
-                _ => E2eError::Config(format!("fixture {} setup: {error}", def.name)),
-            })?;
+        let value = (def.setup)(dependencies).await.map_err(|error| {
+            SetupFailure::new(error, &format!("fixture {} setup", def.name)).error()
+        })?;
         let target = if def.scope == FixtureScope::Worker {
             &mut *worker
         } else {
@@ -1375,6 +1475,8 @@ fn take_shard(mut items: Vec<WorkItem>, index: usize, total: usize) -> Vec<WorkI
 /// A one-off failed result (`<global setup>`, `<join>`, ...).
 fn failed_result(name: &str, error: String) -> TestResult {
     TestResult {
+        attempt_results: Vec::new(),
+        flaky: false,
         name: name.to_string(),
         status: TestStatus::Failed,
         attempts: 1,
@@ -1995,6 +2097,8 @@ impl Runner {
                 println!("[skip] {name}");
             }
             report.results.push(TestResult {
+                attempt_results: Vec::new(),
+                flaky: false,
                 name,
                 status: TestStatus::Skipped,
                 attempts: 0,
@@ -2325,15 +2429,27 @@ async fn bounded<T>(
     }
 }
 
+fn attempt_history(history: &Mutex<Vec<AttemptResult>>) -> Vec<AttemptResult> {
+    history.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
 struct AttemptGuard {
     hub: crate::report::ReporterHub,
     info: TestInfo,
     result: TestResult,
     started: Instant,
+    start_time_ms: u64,
     attachments_start: usize,
+    history: Arc<Mutex<Vec<AttemptResult>>>,
 }
 impl AttemptGuard {
-    fn new(hub: crate::report::ReporterHub, info: TestInfo) -> Self {
+    fn new(
+        hub: crate::report::ReporterHub,
+        info: TestInfo,
+        history: Arc<Mutex<Vec<AttemptResult>>>,
+    ) -> Self {
+        let started = Instant::now();
+        let start_time_ms = crate::driver::now_ms();
         hub.emit(|r| r.on_test_begin(&info.attempt));
         let mut result = failed_result(
             &info.attempt.name,
@@ -2347,8 +2463,10 @@ impl AttemptGuard {
             hub,
             info,
             result,
-            started: Instant::now(),
+            started,
+            start_time_ms,
             attachments_start,
+            history,
         }
     }
     fn outcome(&mut self, status: TestStatus, error: Option<String>) {
@@ -2358,6 +2476,12 @@ impl AttemptGuard {
 }
 impl Drop for AttemptGuard {
     fn drop(&mut self) {
+        if self.info.status().is_none() {
+            self.info.record_error(
+                &E2eError::Cancelled("attempt interrupted before completion".into()),
+                "attempt",
+            );
+        }
         self.result.duration_ms =
             self.started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
         self.result.annotations = self.info.annotations();
@@ -2367,6 +2491,31 @@ impl Drop for AttemptGuard {
             .into_iter()
             .skip(self.attachments_start)
             .collect();
+        let attempt = AttemptResult {
+            info: self.info.attempt.clone(),
+            status: self.info.status().unwrap(),
+            expected_status: self.info.expected_status(),
+            is_expected: self.result.status != TestStatus::Failed,
+            start_time_ms: self.start_time_ms,
+            duration_ms: self.result.duration_ms,
+            errors: self.info.errors(),
+            annotations: self.result.annotations.clone(),
+            steps: self
+                .info
+                .steps
+                .as_ref()
+                .map(|s| s.finish_all())
+                .unwrap_or_default(),
+            attachments: self.result.attachments.clone(),
+            screenshots: self.result.screenshots.clone(),
+            trace: self.result.trace.clone(),
+            video: self.result.video.clone(),
+        };
+        self.history
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(attempt.clone());
+        self.result.attempt_results = vec![attempt];
         if let Some(error) = &self.result.error {
             self.hub
                 .emit(|r| r.on_error(Some(&self.info.attempt), error));
@@ -2419,6 +2568,7 @@ async fn run_one(
     let mut trace_path = None;
     let mut video_path = None;
     let attachments = Arc::new(Mutex::new(Vec::new()));
+    let history = Arc::new(Mutex::new(Vec::<AttemptResult>::new()));
     let name = item.display_name();
     let slug = if item.repeat_each_index == 0 {
         slug(&name)
@@ -2442,7 +2592,7 @@ async fn run_one(
         expected_failure_observed = false;
         let runtime =
             RuntimeControl::new(timeout, test.slow, expected_fail, test.annotations.clone());
-        let info = TestInfo {
+        let mut info = TestInfo {
             title: test.name.clone(),
             file: test.file.clone(),
             line: test.line,
@@ -2457,6 +2607,7 @@ async fn run_one(
                 .to_string(),
             project: item.project.clone(),
             attachments: Arc::clone(&attachments),
+            steps: None,
             runtime: runtime.clone(),
             reporters: runner.reporters.clone(),
             attempt: crate::report::AttemptInfo {
@@ -2469,7 +2620,12 @@ async fn run_one(
                 retry: attempts - 1,
             },
         };
-        let mut attempt_report = AttemptGuard::new(runner.reporters.clone(), info.clone());
+        info.steps = Some(crate::report::StepSession::new(
+            runner.reporters.clone(),
+            info.attempt.clone(),
+        ));
+        let mut attempt_report =
+            AttemptGuard::new(runner.reporters.clone(), info.clone(), Arc::clone(&history));
         worker_fixtures.values.inner.insert(
             TypeId::of::<WorkerInfo>(),
             Arc::new(WorkerInfo {
@@ -2502,6 +2658,7 @@ async fn run_one(
         )
         .await
         {
+            info.record_error(&error, "worker fixture setup");
             let cleanup =
                 retire_worker_resources(runner, suites, worker_fixtures, item.project.as_deref())
                     .await;
@@ -2513,6 +2670,9 @@ async fn run_one(
                     format!("; worker cleanup: {}", cleanup.join("; "))
                 }
             );
+            if !cleanup.is_empty() {
+                info.record_error(&E2eError::Config(cleanup.join("; ")), "worker cleanup");
+            }
             attempt_report.outcome(TestStatus::Failed, Some(last_error.clone()));
             annotations = info.annotations();
             continue;
@@ -2532,6 +2692,7 @@ async fn run_one(
             )
             .await
         {
+            info.record_error(&error, "before_all");
             last_error = error.to_string();
             if attempts <= item.retries && !control.is_cancelled() {
                 let cleanup = retire_worker_resources(
@@ -2542,6 +2703,7 @@ async fn run_one(
                 )
                 .await;
                 if !cleanup.is_empty() {
+                    info.record_error(&E2eError::Config(cleanup.join("; ")), "worker cleanup");
                     last_error.push_str(&format!("; worker cleanup: {}", cleanup.join("; ")));
                 }
                 attempt_report.outcome(TestStatus::Failed, Some(last_error.clone()));
@@ -2565,6 +2727,7 @@ async fn run_one(
         {
             Ok(guard) => guard,
             Err(error) => {
+                info.record_error(&error, "context scheduling");
                 last_error = error.to_string();
                 attempt_report.outcome(TestStatus::Failed, Some(last_error.clone()));
                 break;
@@ -2586,6 +2749,7 @@ async fn run_one(
         {
             Ok(context) => context,
             Err(error) => {
+                info.record_error(&error, "context setup");
                 last_error = error.to_string();
                 attempt_report.outcome(TestStatus::Failed, Some(last_error.clone()));
                 annotations = info.annotations();
@@ -2596,6 +2760,7 @@ async fn run_one(
             match bounded(deadline, Some(control), "page setup", context.new_page()).await {
                 Ok(page) => page,
                 Err(error) => {
+                    info.record_error(&error, "page setup");
                     last_error = error.to_string();
                     let _ = bounded(
                         crate::operation::Deadline::new(runner.cleanup_timeout),
@@ -2616,10 +2781,11 @@ async fn run_one(
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|_| std::path::Path::new(&runner.output_dir).join("snapshots")),
         );
-        page.reporter = Some((runner.reporters.clone(), info.attempt.clone()));
+        page.reporter = info.steps.clone();
         let request = match crate::ApiClient::with_options(context.api_options()) {
             Ok(request) => request,
             Err(error) => {
+                info.record_error(&error, "request setup");
                 last_error = error.to_string();
                 let _ = bounded(
                     crate::operation::Deadline::new(runner.cleanup_timeout),
@@ -2726,6 +2892,7 @@ async fn run_one(
             }),
         )
         .await;
+        info.body_outcome(&outcome, if body_started { "body" } else { "test setup" });
         let state = runtime.snapshot();
         let skipped = matches!(&outcome, Err(E2eError::Skipped(_)))
             || (state.skipped.is_some() && outcome.is_ok());
@@ -2770,6 +2937,7 @@ async fn run_one(
             .await
             {
                 expected_failure_observed = false;
+                info.record_error(&error, "after_each");
                 let note = format!("after_each: {error}");
                 failed = Some(match failed {
                     Some(prior) => format!("{prior} ({note})"),
@@ -2777,7 +2945,9 @@ async fn run_one(
                 });
             }
         }
-        if let Some(note) = teardown_fixtures(runner, &attempt_fixtures.built).await {
+        if let Some(note) =
+            teardown_fixtures_with_info(runner, &attempt_fixtures.built, Some(&info)).await
+        {
             expected_failure_observed = false;
             failed = Some(match failed {
                 Some(prior) => format!("{prior} ({note})"),
@@ -2786,6 +2956,19 @@ async fn run_one(
         }
         let unexpected_pass = failed.is_none() && expected_fail && !skipped;
         if unexpected_pass {
+            let error = TestError {
+                message: "expected to fail, but passed".into(),
+                code: "unexpected_pass".into(),
+                phase: "expectation".into(),
+                location: Some(SourceLocation {
+                    file: info.file.clone(),
+                    line: info.line,
+                    column: 0,
+                }),
+            };
+            info.runtime
+                .state
+                .send_modify(|state| state.errors.push(error));
             failed = Some("expected to fail, but passed".to_string());
         }
         if recording {
@@ -2805,6 +2988,7 @@ async fn run_one(
                     Ok(done) => video_path = Some(done.display().to_string()),
                     Err(error) => {
                         expected_failure_observed = false;
+                        info.record_error(&error, "stop video");
                         let note = format!("stop video: {error}");
                         failed = Some(match failed {
                             Some(prior) => format!("{prior} ({note})"),
@@ -2878,6 +3062,7 @@ async fn run_one(
             Ok(guard) => guard,
             Err(error) => {
                 expected_failure_observed = false;
+                info.record_error(&error, "context cleanup scheduling");
                 let note = format!("context cleanup scheduling: {error}");
                 failed = Some(
                     failed
@@ -2911,6 +3096,7 @@ async fn run_one(
         ] {
             if let Err(error) = result {
                 expected_failure_observed = false;
+                info.record_error(&error, label);
                 let note = format!("{label}: {error}");
                 failed = Some(
                     failed
@@ -2927,6 +3113,7 @@ async fn run_one(
                 retire_worker_resources(runner, suites, worker_fixtures, item.project.as_deref())
                     .await;
             if !notes.is_empty() {
+                info.record_error(&E2eError::Config(notes.join("; ")), "worker cleanup");
                 failed = Some(format!(
                     "{}; worker cleanup: {}",
                     failed.unwrap(),
@@ -2960,9 +3147,12 @@ async fn run_one(
             },
             failed.clone(),
         );
+        drop(attempt_report);
         // Unexpected passes fail immediately (no retry can redeem a pass).
         if unexpected_pass {
             return TestResult {
+                attempt_results: attempt_history(&history),
+                flaky: false,
                 name: name.clone(),
                 status: TestStatus::Failed,
                 attempts,
@@ -2980,6 +3170,8 @@ async fn run_one(
         match failed {
             None => {
                 return TestResult {
+                    attempt_results: attempt_history(&history),
+                    flaky: !skipped && attempt_history(&history).iter().any(|a| !a.is_expected),
                     name: name.clone(),
                     status: if skipped {
                         TestStatus::Skipped
@@ -3007,6 +3199,8 @@ async fn run_one(
         }
     }
     TestResult {
+        attempt_results: attempt_history(&history),
+        flaky: false,
         name: name.clone(),
         status: if expected_failure_observed {
             TestStatus::FailedExpected
@@ -3030,6 +3224,14 @@ async fn teardown_fixtures(
     runner: &Runner,
     built: &[(usize, Arc<dyn Any + Send + Sync>)],
 ) -> Option<String> {
+    teardown_fixtures_with_info(runner, built, None).await
+}
+
+async fn teardown_fixtures_with_info(
+    runner: &Runner,
+    built: &[(usize, Arc<dyn Any + Send + Sync>)],
+    info: Option<&TestInfo>,
+) -> Option<String> {
     let mut errors = Vec::new();
     for (index, value) in built.iter().rev() {
         let def = &runner.fixtures[*index];
@@ -3042,6 +3244,9 @@ async fn teardown_fixtures(
             )
             .await
             {
+                if let Some(info) = info {
+                    info.record_error(&error, "fixture teardown");
+                }
                 errors.push(format!("fixture teardown: {error}"));
             }
         }
@@ -3223,6 +3428,8 @@ mod tests {
         let runner = Runner::default().output_dir(dir.display().to_string());
         let report = TestReport {
             results: vec![TestResult {
+                attempt_results: Vec::new(),
+                flaky: false,
                 name: "a".to_string(),
                 status: TestStatus::Passed,
                 attempts: 1,
@@ -3376,6 +3583,7 @@ mod tests {
             output_dir: dir.display().to_string(),
             project: None,
             attachments: Arc::new(Mutex::new(Vec::new())),
+            steps: None,
             runtime: RuntimeControl::new(Duration::from_secs(1), false, false, Vec::new()),
             reporters: crate::report::ReporterHub::default(),
             attempt: crate::report::AttemptInfo {
@@ -3440,6 +3648,8 @@ mod tests {
         let runner = Runner::default().output_dir(dir.display().to_string());
         let report = TestReport {
             results: vec![TestResult {
+                attempt_results: Vec::new(),
+                flaky: false,
                 name: "a".to_string(),
                 status: TestStatus::Failed,
                 attempts: 2,
@@ -3746,6 +3956,7 @@ mod fixture_cancellation_tests {
             output_dir: String::new(),
             project: None,
             attachments: Arc::default(),
+            steps: None,
             runtime: RuntimeControl::new(timeout, false, false, Vec::new()),
             reporters: crate::report::ReporterHub::default(),
             attempt: crate::report::AttemptInfo {
@@ -3759,6 +3970,25 @@ mod fixture_cancellation_tests {
             },
         }
     }
+    #[test]
+    fn outcome_metadata_is_shared_and_cleanup_skip_cannot_erase_failure() {
+        let info = runtime_info(Duration::from_secs(1));
+        let cleanup = info.clone();
+        assert_eq!(cleanup.status(), None);
+        info.body_outcome(&Ok(()), "body");
+        assert_eq!(cleanup.status(), Some(AttemptStatus::Passed));
+        info.record_error(&E2eError::Skipped("cleanup skip".into()), "after_each");
+        assert_eq!(cleanup.status(), Some(AttemptStatus::Failed));
+        assert_eq!(cleanup.errors()[0].code, "FERRITE_E2E_SKIPPED");
+        let mut snapshot = cleanup.errors();
+        snapshot.clear();
+        assert_eq!(info.errors().len(), 1);
+        info.record_error(&E2eError::Timeout(10, "fixture".into()), "fixture teardown");
+        info.record_error(&E2eError::Expect("later".into()), "fixture teardown");
+        assert_eq!(cleanup.status(), Some(AttemptStatus::TimedOut));
+        assert_eq!(cleanup.errors().len(), 3);
+    }
+
     #[tokio::test]
     async fn runtime_timeout_updates_wake_active_waits_and_include_elapsed_time() {
         let info = runtime_info(Duration::from_millis(60));

@@ -301,6 +301,24 @@ for m,t in {'onBegin':'on_begin','onEnd':'on_end','onError':'on_error','onTestBe
 for m,t in {'title':'title','duration':'duration_ms'}.items():put('TestStep',m,'StepInfo.'+t,'Named Page.step live event metadata; no automatic action tree, parent hierarchy or structured error/source data.')
 put('WorkerInfo','workerIndex','WorkerInfo.worker_index','Logical Tokio worker index, not a process identity.')
 put('WorkerInfo','project','WorkerInfo.project','Optional project name only, not a resolved FullProject object.')
+# Structured user steps, hook outcomes, and retained retry history.
+put('Test','step','Page.step_result','Nested user-step tree with call-site source, start/duration, returned errors, panic and interruption recording. Legacy Page.step preserves arbitrary outputs; use step_result for Rust Result errors. No automatic action tree, boxing, timeout or subtitle/params options.')
+for m,t in {'status':'status','expectedStatus':'expected_status','errors':'errors'}.items():
+ put('TestInfo',m,'TestInfo.'+t,'Live getters shared across metadata clones; raw outcome published before afterEach and updated after cleanup failures. status returns None during setup/body; errors have phase/code/message/location, without JS stack/cause/snippet serialization.')
+for m,t in {'title':'title','duration':'duration_ms','location':'location','error':'error','parent':'parent_id','startTime':'start_time_ms','steps':'steps','attachments':'attachments'}.items():
+ put('TestStep',m,'StepInfo.'+t,'Persisted user-step metadata on each attempt and live callback; parent is an ID, timestamps are epoch milliseconds and sources are Rust call sites. Attachments are file paths; no automatic browser-action/hook tree or JS stack information.')
+put('TestStepInfo','attach','TestInfo.attach','Attachments inside an awaited user step associate with that step and its attempt. No separate step-info callback object; detached Tokio tasks do not inherit parent scope.')
+for m,t in {'file':'file','line':'line','column':'column'}.items():
+ put('Location',m,'SourceLocation.'+t,'Rust caller location for user steps; test phase errors point to the test definition, with column zero when unknown.')
+for c in ['TestInfoError','TestError']:
+ put(c,'message','TestError.message','Structured Rust diagnostics carry message, code, phase and optional source; no JavaScript stack/cause/snippet object.')
+put('TestError','location','TestError.location','Optional Rust source location; exact user-step call site, test definition for runner phase errors, not a JS throw-site location.')
+for m,t in {'attachments':'attachments','annotations':'annotations','duration':'duration_ms','errors':'errors','startTime':'start_time_ms','status':'status','steps':'steps'}.items():
+ put('TestResult',m,'AttemptResult.'+t,'Each attempt is retained in TestResult.attempt_results and JSON/HTML; raw status includes timeout/interruption, errors include phase/code and steps are nested user steps. Different Rust schema, no stdout/stderr or automatic action tree.')
+for m,t in {'retry':'retry','workerIndex':'worker_index'}.items():
+ put('TestResult',m,'AttemptInfo.'+t,'Per-attempt identity on AttemptResult.info; logical Tokio workers, not process-worker IDs.')
+put('TestCase','results','TestResult.attempt_results','Full attempt history retained under the aggregate test result; no upstream TestCase/Suite graph.')
+put('TestCase','outcome','TestResult.flaky','Recovered successful retries flagged flaky; aggregate TestStatus separates passed/failed/skipped/expected-failed. Rust fields, not the upstream outcome() enum.')
 # Fill every remaining upstream member explicitly as absent, with class-specific explanations.
 def default_note(c,e):
  if c.startswith('Android') or c in ['Electron','ElectronApplication']:return 'Experimental upstream API; Ferrite has no Android/ADB/WebView or Electron backend.'

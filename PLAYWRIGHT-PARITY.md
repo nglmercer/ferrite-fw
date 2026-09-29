@@ -19,9 +19,9 @@ reporter, Android and Electron APIs:
 | Classification | Members | Meaning |
 |---|---:|---|
 | Equivalent | 15 | Counterpart for the basic operation/value, without full options or engine compatibility |
-| Partial | 553 | Related exposed operation with material semantic, option or engine differences |
+| Partial | 571 | Related exposed operation with material semantic, option or engine differences |
 | Idiomatic | 42 | Comparable operation through Rust language/library facilities |
-| Missing | 408 | No dedicated public counterpart |
+| Missing | 390 | No dedicated public counterpart |
 
 These counts describe an inventory, **not a behavioral compatibility
 percentage**. The earlier inventory had 458 Partial and 503 Missing members.
@@ -122,7 +122,7 @@ These are exclusions from the practical implementation, not implemented APIs:
 - Inspector/UI mode, code generation, component mounting, Android/ADB/WebView
   and Electron backends.
 - Process-based workers, project dependencies, named fixture overrides,
-  live custom reporters, Trace Viewer archives and advanced report merging.
+  Trace Viewer archives and advanced report merging.
 - Full accessibility/selector algorithms, YAML ARIA matchers, all JS value
   serialization, IndexedDB/OPFS state persistence and complete backend parity.
 
@@ -189,7 +189,7 @@ project and worker identity are explicit. Step futures dropped by cancellation
 emit an interrupted end event. Each retry keeps its own trace file, with the
 original trace filename retained as a latest-attempt alias; repeated attachment
 names get a suffix instead of overwriting earlier files. Reporter panics are
-contained. Final reports still aggregate retries; begin receives discovered definitions before filtering, and
+contained. Final reports retain each attempt alongside the aggregate result; begin receives discovered definitions before filtering, and
 static skips have no attempt callbacks. Asynchronous uploads, stdout capture,
 automatic action step trees and upstream status overrides remain deferred.
 
@@ -209,6 +209,46 @@ These Rust counterparts follow the practical lifecycle described in the official
 [TestInfo controls](https://playwright.dev/docs/api/class-testinfo), and
 [reporter callbacks](https://playwright.dev/docs/api/class-reporter), with the
 explicit differences above.
+
+## Structured step diagnostics and complete retry reporting
+
+`Page::step_result` records returned `E2eResult` failures, including failures the
+caller handles. Existing `Page::step` keeps arbitrary return types; it cannot
+inspect a returned Rust `Err`. Both APIs record nested user steps, Rust call-site
+file/line/column, start time, duration, panics and interruption. Attachments made
+through `TestInfo::attach` inside a step belong to both that step and its attempt.
+Concurrent awaited branches keep separate parent scopes; detached Tokio tasks
+start root steps because task-local scope is not inherited. Finish or join spawned
+work before returning from the test. Attempt completion seals the recorder and
+ends any unfinished steps; later detached work cannot add late step events.
+Automatic browser-action and hook step trees remain deferred.
+
+`TestInfo::status()`, `expected_status()` and `errors()` share live state across
+hooks, fixtures and body clones. Status is `None` while setup/body is running;
+its raw outcome is published before afterEach. Later hooks and fixture dependency
+teardown see previous cleanup failures. `AttemptStatus` preserves failed, passed,
+skipped, timed-out and interrupted outcomes; expected failure is a separate
+expectation, and cleanup errors cannot redeem it. Unexpected passes retain their
+raw passed status and add an expectation error. Structured `TestError` contains a
+message, stable code, runner phase and source; runner-phase locations point to the
+test definition (unknown column zero), while step errors point to the step call.
+This does not provide JavaScript stack/cause objects or precise Rust throw sites.
+
+`TestResult::attempt_results` retains every executed attempt's identity, raw and
+expected status, expectation check, start/duration, errors, annotations, nested
+steps, attachments and screenshot/trace/video paths. JSON serializes the complete
+history; HTML exposes expandable attempts and step trees. A recovered successful
+retry sets `TestResult::flaky`, with `TestReport::flaky()` and the summary showing
+the count. A handled step failure alone does not mark a passing test flaky.
+Legacy aggregate result/artifact fields remain available; old JSON without the
+new history/flag fields still loads. Static skips and run-wide errors have no
+executed attempt history. Adding public result fields requires manual Rust struct
+initializers to supply those fields. Live `on_test_end` receives exactly one
+attempt record, after cleanup, and the final run report retains all attempts.
+
+These additions follow the official [TestStep metadata](https://playwright.dev/docs/api/class-teststep)
+and [TestInfo outcomes](https://playwright.dev/docs/api/class-testinfo), with the
+Rust schema and lifecycle differences described above.
 
 ## Engine and validation evidence
 
@@ -233,22 +273,25 @@ TMPDIR=/path/to/disk-backed-temp cargo test -p ferrite-e2e -- --test-threads=2
 cargo clippy -p ferrite-e2e -p ferrite-cli --all-targets -- -D warnings
 ```
 
-Validation for the contextual fixtures, live reporters and runtime controls:
+Validation for the contextual fixtures, structured diagnostics and retry reporting:
 
-- `ferrite-e2e`: **118 unit tests, 3 API tests, 93 browser tests, 4 reliability
-  regression groups, 4 runtime/reporter groups, 6 fixture/network groups and
-  2 doctests** (230 checks total). Headless Shell and Firefox were installed and
+- `ferrite-e2e`: **125 unit tests, 3 API tests, 93 browser tests, 7 attempt-diagnostics
+  groups, 4 reliability groups, 4 runtime/reporter groups, 6 fixture/network
+  groups and 2 doctests** (244 checks total). Headless Shell and Firefox were installed and
   exercised; unsupported-engine branches remain explicit.
-- The four runtime/reporter groups additionally passed with full Chrome and
-  Firefox, including live event ordering, retries, interrupted steps, cookie
-  isolation, scope validation, runtime skip/expected failure and cleanup errors.
-- Strict Clippy on all `ferrite-e2e` targets, package formatting, diff checks and
+- The seven diagnostics groups additionally passed with full Chrome and Firefox,
+  including nested/concurrent steps, handled and propagated errors, exact caller
+  sources, every retry/artifact, cleanup metadata, expected failure/pass mismatch,
+  setup timeouts, cancellation, fixture teardown and project/repetition isolation.
+  The earlier four runtime/reporter groups also passed with full Chrome/Firefox.
+- Strict Clippy on all `ferrite-e2e`/`ferrite-cli` targets, package formatting, diff checks and
   matrix regeneration passed. Reporter panic containment and live timeout
   extension/shortening/zero/slow semantics have unit regressions.
 - Existing trace and first-attachment names remain compatible; retry trace files
   and repeated attachment names preserve their individual contents.
-- Prior CLI/configuration validation remains unchanged: 5 CLI tests,
-  17 configuration tests and 1 doctest. This change adds no CLI options.
+- CLI/configuration checks passed again: 5 CLI tests, 17 configuration tests and
+  1 doctest. This change adds no CLI options. A real recovered-retry HTML report
+  was rendered in Chromium with both attempts expanded and visually inspected.
 
 New regressions cover isolation/retries/locks, project engines and cleanup,
 persistent profiles,

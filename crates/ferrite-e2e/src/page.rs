@@ -1378,7 +1378,7 @@ impl Download {
 /// An automated page (one browser tab).
 #[derive(Clone)]
 pub struct Page {
-    pub(crate) reporter: Option<(crate::report::ReporterHub, crate::report::AttemptInfo)>,
+    pub(crate) reporter: Option<crate::report::StepSession>,
     expect_timeout: Arc<Mutex<Duration>>,
     action_timeout: Arc<Mutex<Duration>>,
     navigation_timeout: Arc<Mutex<Option<Duration>>>,
@@ -2765,24 +2765,54 @@ impl Page {
             .await
     }
 
-    /// Run a named step, recording it (with duration) in the trace.
-    pub async fn step<F, T>(&self, name: &str, step: F) -> T
+    /// Run a named step. For fallible steps use `step_result` to record returned errors.
+    #[track_caller]
+    pub fn step<'a, F, T>(&'a self, name: &'a str, step: F) -> impl Future<Output = T> + 'a
     where
-        F: Future<Output = T>,
+        F: Future<Output = T> + 'a,
+        T: 'a,
     {
+        let location = crate::SourceLocation::caller(std::panic::Location::caller());
+        self.run_step(name, step, location, |_| None)
+    }
+
+    /// Run a fallible step, preserving its error even if the caller handles it.
+    #[track_caller]
+    pub fn step_result<'a, F, T>(
+        &'a self,
+        name: &'a str,
+        step: F,
+    ) -> impl Future<Output = E2eResult<T>> + 'a
+    where
+        F: Future<Output = E2eResult<T>> + 'a,
+        T: 'a,
+    {
+        let location = crate::SourceLocation::caller(std::panic::Location::caller());
+        self.run_step(name, step, location, |result| {
+            result
+                .as_ref()
+                .err()
+                .map(|e| crate::TestError::new(e, "step", None))
+        })
+    }
+
+    async fn run_step<F: Future>(
+        &self,
+        name: &str,
+        future: F,
+        location: crate::SourceLocation,
+        error: impl FnOnce(&F::Output) -> Option<crate::TestError>,
+    ) -> F::Output {
         let started = std::time::Instant::now();
-        let mut reporting = self.reporter.as_ref().map(|(hub, attempt)| {
-            crate::report::StepGuard::new(hub.clone(), attempt.clone(), name)
-        });
-        let out = step.await;
+        let out = match &self.reporter {
+            Some(session) => session.run(name, location, future, error).await,
+            None => future.await,
+        };
         self.sink.record(
             "step",
             format!("{name} ({}ms)", started.elapsed().as_millis()),
         );
         self.trace_screenshot(name).await;
-        if let Some(guard) = &mut reporting {
-            guard.complete();
-        }
         out
     }
 

@@ -125,6 +125,37 @@ Retries have distinct `AttemptInfo.retry` values. Cleanup completes before attem
 end, and cancelled steps emit an interrupted end event. File reporters continue
 to serialize the final aggregate report.
 
+Use `ctx.info.status()`, `expected_status()` and `errors()` in cleanup hooks or
+fixture teardown. Status is `None` during setup/body and is published before
+`after_each`; later cleanup failures update shared metadata. Expected failures
+retain a raw `Failed` status with `Failed` expected status, while an unexpected
+pass is raw `Passed` and fails the aggregate result.
+
+```rust,ignore
+ctx.page.step_result("sign in", async {
+    ctx.page.step_result("fill email", async {
+        ctx.page.get_by_label("Email").fill("user@example.com").await
+    }).await?;
+    ctx.info.attach("account", b"signed in", "text/plain")?;
+    Ok(())
+}).await?;
+```
+
+`step_result` captures returned errors; `step` preserves arbitrary outputs and
+records panics/interruption but cannot inspect Rust `Err` values. Awaited nested
+steps retain source positions, timing, children and attachments. Concurrent
+branches keep their parent scopes; detached Tokio tasks start root steps and
+must be joined before the body returns to retain their completed diagnostics.
+
+JSON and HTML include every executed attempt in `result.attempt_results`, with
+its own steps, errors, annotations and artifacts. `result.flaky` and
+`report.flaky()` identify successful retries after an unexpected failure. Handled
+step errors stay in the step tree without making a successful test flaky. Existing
+aggregate result fields remain available; older JSON without attempt history
+still deserializes. Manual Rust `TestResult` literals need `attempt_results` and
+`flaky` fields. `on_test_end` includes only the current attempt; the final report
+includes the whole retry history.
+
 Network events now distinguish response headers, request completion and transport
 failure. `PageEvent::RequestFinished(NetworkRequest)` supplies request ID, method
 and URL; `RequestFailed` additionally supplies error text and a backend cancellation
