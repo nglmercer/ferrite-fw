@@ -3,6 +3,8 @@
 //! [`Page`] is engine-agnostic: it delegates to a [`Driver`](crate::driver::Driver)
 //! (CDP for Chromium, WebDriver BiDi for Firefox).
 
+use std::collections::HashMap;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -64,6 +66,39 @@ pub struct ConsoleMessage {
     pub text: String,
 }
 
+/// Saved storage state: cookies plus one origin's localStorage.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageState {
+    /// Origin the state belongs to.
+    pub origin: String,
+    /// Cookies (restored by name/value on the current origin).
+    #[serde(default)]
+    pub cookies: Vec<Cookie>,
+    /// localStorage entries.
+    #[serde(default)]
+    pub local_storage: HashMap<String, String>,
+}
+
+/// A network request observed while capturing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecordedRequest {
+    /// HTTP method.
+    pub method: String,
+    /// Request URL.
+    pub url: String,
+    /// Response status (0 when the request failed).
+    pub status: u16,
+}
+
+/// A JavaScript dialog observed while auto-handling.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DialogInfo {
+    /// `alert`, `confirm`, `prompt`, or `beforeunload`.
+    pub dialog_type: String,
+    /// Dialog message text.
+    pub message: String,
+}
+
 /// A browser cookie.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Cookie {
@@ -101,6 +136,24 @@ pub struct ClickOptions {
     pub force: bool,
     /// Number of clicks (2 = double-click).
     pub click_count: u32,
+}
+
+/// Preferred color scheme for media emulation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorScheme {
+    /// `prefers-color-scheme: dark`.
+    Dark,
+    /// `prefers-color-scheme: light`.
+    Light,
+}
+
+/// Reduced-motion preference for media emulation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReducedMotion {
+    /// `prefers-reduced-motion: reduce`.
+    Reduce,
+    /// `prefers-reduced-motion: no-preference`.
+    NoPreference,
 }
 
 /// A key press (name like `Enter`, `Tab`, `ArrowLeft`, or a single char).
@@ -198,6 +251,12 @@ pub struct ElementState {
     /// First match is checked.
     #[serde(default)]
     pub checked: bool,
+    /// First match is editable (enabled input/textarea/select or contenteditable).
+    #[serde(default)]
+    pub editable: bool,
+    /// First match is the focused element.
+    #[serde(default)]
+    pub focused: bool,
     /// First match text content (trimmed).
     #[serde(default)]
     pub text: String,
@@ -236,6 +295,8 @@ pub struct Page {
     routing: Arc<Mutex<Option<tokio::task::AbortHandle>>>,
     dialogs: Arc<Mutex<Option<tokio::task::AbortHandle>>>,
     capture: Arc<Mutex<Option<CaptureState>>>,
+    routes: Arc<Mutex<Vec<RouteRule>>>,
+    net_capture: Arc<Mutex<Option<tokio::task::AbortHandle>>>,
 }
 
 /// At most one capture (recording or frame stream) per page: both use the
@@ -262,6 +323,8 @@ impl Page {
             routing: Arc::new(Mutex::new(None)),
             dialogs: Arc::new(Mutex::new(None)),
             capture: Arc::new(Mutex::new(None)),
+            routes: Arc::new(Mutex::new(Vec::new())),
+            net_capture: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -501,6 +564,50 @@ impl Page {
         Locator::new(self.clone(), Selector::parse(selector.into()))
     }
 
+    /// Locate `[data-testid="id"]` exactly.
+    #[must_use]
+    pub fn get_by_test_id(&self, id: &str) -> Locator {
+        Locator::new(self.clone(), Selector::test_id(id))
+    }
+
+    /// Locate elements containing `text` (case-insensitive substring).
+    #[must_use]
+    pub fn get_by_text(&self, text: &str) -> Locator {
+        Locator::new(self.clone(), Selector::by_text(text))
+    }
+
+    /// Locate an ARIA role, optionally filtered by accessible name.
+    #[must_use]
+    pub fn get_by_role(&self, role: &str, name: &str) -> Locator {
+        Locator::new(self.clone(), Selector::by_role(role, name))
+    }
+
+    /// Locate a `<label>` by its text.
+    ///
+    /// Matches the label element itself (not the labeled control).
+    #[must_use]
+    pub fn get_by_label(&self, text: &str) -> Locator {
+        Locator::new(self.clone(), Selector::by_label(text))
+    }
+
+    /// Locate by `[placeholder]` (case-insensitive substring).
+    #[must_use]
+    pub fn get_by_placeholder(&self, text: &str) -> Locator {
+        Locator::new(self.clone(), Selector::by_placeholder(text))
+    }
+
+    /// Locate by `[alt]` (case-insensitive substring).
+    #[must_use]
+    pub fn get_by_alt(&self, text: &str) -> Locator {
+        Locator::new(self.clone(), Selector::by_alt(text))
+    }
+
+    /// Locate by `[title]` (case-insensitive substring).
+    #[must_use]
+    pub fn get_by_title(&self, text: &str) -> Locator {
+        Locator::new(self.clone(), Selector::by_title(text))
+    }
+
     /// Snapshot the state of a selector (count, visibility, text, ...).
     pub async fn query_state(&self, selector: &Selector) -> E2eResult<ElementState> {
         let expression = selector.state_expression();
@@ -556,6 +663,41 @@ impl Page {
     /// Dispatch a key press (name like `Enter` or a single char).
     pub async fn press_key(&self, key: &str) -> E2eResult<()> {
         self.driver.press_key(key).await?;
+        self.slow_mo().await;
+        Ok(())
+    }
+
+    /// Press the left mouse button at CSS-pixel coordinates.
+    pub async fn mouse_down(&self, x: f64, y: f64) -> E2eResult<()> {
+        self.driver.mouse_down(x, y).await?;
+        self.slow_mo().await;
+        Ok(())
+    }
+
+    /// Release the left mouse button at CSS-pixel coordinates.
+    pub async fn mouse_up(&self, x: f64, y: f64) -> E2eResult<()> {
+        self.driver.mouse_up(x, y).await?;
+        self.slow_mo().await;
+        Ok(())
+    }
+
+    /// Scroll a wheel at CSS-pixel coordinates by (`delta_x`, `delta_y`).
+    pub async fn mouse_wheel(&self, x: f64, y: f64, delta_x: f64, delta_y: f64) -> E2eResult<()> {
+        self.driver.mouse_wheel(x, y, delta_x, delta_y).await?;
+        self.slow_mo().await;
+        Ok(())
+    }
+
+    /// Hold a key down (pair with [`Page::key_up`]).
+    pub async fn key_down(&self, key: &str) -> E2eResult<()> {
+        self.driver.key_down(key).await?;
+        self.slow_mo().await;
+        Ok(())
+    }
+
+    /// Release a held key.
+    pub async fn key_up(&self, key: &str) -> E2eResult<()> {
+        self.driver.key_up(key).await?;
         self.slow_mo().await;
         Ok(())
     }
@@ -619,31 +761,222 @@ impl Page {
         self.driver.clear_cookies().await
     }
 
+    /// Save cookies plus current-origin localStorage to a JSON file.
+    pub async fn save_storage_state(&self, path: impl AsRef<Path>) -> E2eResult<()> {
+        let origin = self.evaluate_string("location.origin").await?;
+        let local_storage: HashMap<String, String> =
+            serde_json::from_value(self.evaluate_value("({ ...localStorage })").await?)?;
+        let state = StorageState {
+            origin,
+            cookies: self.cookies().await?,
+            local_storage,
+        };
+        std::fs::write(path, serde_json::to_string_pretty(&state)?)?;
+        Ok(())
+    }
+
+    /// Load storage state saved by [`Page::save_storage_state`].
+    ///
+    /// The page must already be on the saved origin; cookies restore by
+    /// name/value and localStorage is replaced wholesale.
+    pub async fn load_storage_state(&self, path: impl AsRef<Path>) -> E2eResult<()> {
+        let raw = std::fs::read_to_string(path)?;
+        let state: StorageState = serde_json::from_str(&raw)?;
+        let origin = self.evaluate_string("location.origin").await?;
+        if origin != state.origin {
+            return Err(E2eError::Config(format!(
+                "storage state is for origin '{}', navigate there first (at '{origin}')",
+                state.origin
+            )));
+        }
+        let url = self.url().await?;
+        for cookie in &state.cookies {
+            self.driver
+                .set_cookie(&cookie.name, &cookie.value, &url)
+                .await?;
+        }
+        let entries = serde_json::to_string(&state.local_storage)?;
+        self.evaluate_value(&format!(
+            "(() => {{ localStorage.clear(); \
+             for (const [k, v] of Object.entries({entries})) localStorage.setItem(k, v); \
+             return true; }})()"
+        ))
+        .await?;
+        Ok(())
+    }
+
+    /// Grant permissions (`geolocation`, `notifications`, ...).
+    ///
+    /// Chromium grants to all origins; Firefox grants to the current page
+    /// origin (navigate first).
+    pub async fn grant_permissions(&self, permissions: &[&str]) -> E2eResult<()> {
+        self.driver.grant_permissions(permissions).await
+    }
+
+    /// Override the geolocation coordinates.
+    ///
+    /// Pair with [`Page::grant_permissions`]; Firefox supports this only on
+    /// recent builds and otherwise fails loudly.
+    pub async fn set_geolocation(&self, latitude: f64, longitude: f64) -> E2eResult<()> {
+        self.driver.set_geolocation(latitude, longitude).await
+    }
+
+    /// Emulate offline mode (Chromium only).
+    pub async fn set_offline(&self, offline: bool) -> E2eResult<()> {
+        self.driver.set_offline(offline).await
+    }
+
+    /// Set extra HTTP headers for subsequent requests (Chromium only).
+    pub async fn set_extra_http_headers(&self, headers: &[(&str, &str)]) -> E2eResult<()> {
+        self.driver.set_extra_http_headers(headers).await
+    }
+
+    /// Override the locale (Chromium only).
+    ///
+    /// Applies to subsequently loaded documents; navigate or reload after.
+    /// Drives `Intl` and `Accept-Language`; `navigator.language` follows the
+    /// launch `--lang` flag instead.
+    pub async fn set_locale(&self, locale: &str) -> E2eResult<()> {
+        self.driver.set_locale(locale).await
+    }
+
+    /// Override the timezone (Chromium only).
+    ///
+    /// Applies to subsequently loaded documents; navigate or reload after.
+    pub async fn set_timezone(&self, timezone_id: &str) -> E2eResult<()> {
+        self.driver.set_timezone(timezone_id).await
+    }
+
+    /// Emulate media features (Chromium only).
+    ///
+    /// `(None, None)` is a no-op on every engine.
+    pub async fn emulate_media(
+        &self,
+        color_scheme: Option<ColorScheme>,
+        reduced_motion: Option<ReducedMotion>,
+    ) -> E2eResult<()> {
+        if color_scheme.is_none() && reduced_motion.is_none() {
+            return Ok(());
+        }
+        self.driver
+            .emulate_media(color_scheme, reduced_motion)
+            .await
+    }
+
     /// Start intercepting requests with glob rules.
     pub async fn route(&self, rules: Vec<RouteRule>) -> E2eResult<()> {
-        self.stop_routing().await;
+        *self.routes.lock().unwrap_or_else(|e| e.into_inner()) = rules;
+        self.restart_routing().await
+    }
+
+    /// Stop intercepting requests.
+    pub async fn stop_routing(&self) {
+        *self.routes.lock().unwrap_or_else(|e| e.into_inner()) = Vec::new();
+        let handle = self.routing.lock().map(|mut r| r.take()).unwrap_or(None);
+        if let Some(handle) = handle {
+            handle.abort();
+            self.driver.stop_routing().await;
+        }
+    }
+
+    /// Remove rules with `pattern`; returns how many were removed.
+    pub async fn unroute(&self, pattern: &str) -> E2eResult<usize> {
+        let removed = self
+            .routes
+            .lock()
+            .map(|mut routes| {
+                let before = routes.len();
+                routes.retain(|rule| rule.pattern != pattern);
+                before - routes.len()
+            })
+            .unwrap_or(0);
+        self.restart_routing().await?;
+        Ok(removed)
+    }
+
+    /// Apply the stored rules (no pump when empty).
+    async fn restart_routing(&self) -> E2eResult<()> {
+        let handle = self.routing.lock().map(|mut r| r.take()).unwrap_or(None);
+        if let Some(handle) = handle {
+            handle.abort();
+            self.driver.stop_routing().await;
+        }
+        let rules = self
+            .routes
+            .lock()
+            .map(|routes| routes.clone())
+            .unwrap_or_default();
+        if rules.is_empty() {
+            return Ok(());
+        }
         let handle = self.driver.start_routing(Arc::new(rules)).await?;
         *self.routing.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
         Ok(())
     }
 
-    /// Stop intercepting requests.
-    pub async fn stop_routing(&self) {
-        let handle = self.routing.lock().map(|mut r| r.take()).unwrap_or(None);
-        if handle.is_some() {
-            if let Some(handle) = handle {
-                handle.abort();
-            }
-            self.driver.stop_routing().await;
+    /// Start recording requests; clears previously recorded ones.
+    pub fn start_request_capture(&self) {
+        self.stop_request_capture();
+        self.sink.clear_requests();
+        let handle = self.driver.start_request_capture();
+        *self.net_capture.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
+    }
+
+    /// Stop recording requests (keeps recorded ones).
+    pub fn stop_request_capture(&self) {
+        let handle = self
+            .net_capture
+            .lock()
+            .map(|mut c| c.take())
+            .unwrap_or(None);
+        if let Some(handle) = handle {
+            handle.abort();
         }
+    }
+
+    /// Requests recorded since capture started (oldest first, capped).
+    #[must_use]
+    pub fn requests(&self) -> Vec<RecordedRequest> {
+        self.sink.requests()
     }
 
     /// Auto-handle JavaScript dialogs (`accept` = OK vs dismiss).
     pub async fn handle_dialogs(&self, accept: bool) -> E2eResult<()> {
         self.stop_dialog_handling().await;
-        let handle = self.driver.start_dialogs(accept).await?;
+        let handle = self.driver.start_dialogs(accept, None).await?;
         *self.dialogs.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
         Ok(())
+    }
+
+    /// Auto-handle dialogs, answering prompts with `prompt_text`.
+    pub async fn handle_dialogs_with_prompt(
+        &self,
+        accept: bool,
+        prompt_text: &str,
+    ) -> E2eResult<()> {
+        self.stop_dialog_handling().await;
+        let handle = self
+            .driver
+            .start_dialogs(accept, Some(prompt_text.to_string()))
+            .await?;
+        *self.dialogs.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
+        Ok(())
+    }
+
+    /// Dialogs observed while auto-handling (oldest first).
+    #[must_use]
+    pub fn dialogs(&self) -> Vec<DialogInfo> {
+        self.sink
+            .dialogs
+            .lock()
+            .map(|d| d.clone())
+            .unwrap_or_default()
+    }
+
+    /// The most recently observed dialog, if any.
+    #[must_use]
+    pub fn last_dialog(&self) -> Option<DialogInfo> {
+        self.dialogs().pop()
     }
 
     /// Stop auto-handling dialogs.
@@ -762,6 +1095,7 @@ impl Page {
     pub async fn close(&self) -> E2eResult<()> {
         self.stop_routing().await;
         self.stop_dialog_handling().await;
+        self.stop_request_capture();
         self.stop_frames().await;
         self.cancel_video().await;
         self.driver.close().await
@@ -770,10 +1104,35 @@ impl Page {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     // Navigation without a base URL stays loud (covered through goto errors).
     #[test]
     fn relative_urls_need_a_base() {
         let message = "relative URL without a base_url";
         assert!(message.contains("base_url"));
+    }
+
+    #[test]
+    fn storage_state_round_trips() {
+        let mut local_storage = HashMap::new();
+        local_storage.insert("k".to_string(), "v".to_string());
+        let state = StorageState {
+            origin: "http://127.0.0.1:9".to_string(),
+            cookies: vec![Cookie {
+                name: "sess".to_string(),
+                value: "abc".to_string(),
+                domain: None,
+                path: None,
+                http_only: false,
+                secure: false,
+            }],
+            local_storage,
+        };
+        let json = serde_json::to_string(&state).unwrap();
+        let back: StorageState = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.origin, state.origin);
+        assert_eq!(back.cookies.len(), 1);
+        assert_eq!(back.local_storage.get("k").unwrap(), "v");
     }
 }

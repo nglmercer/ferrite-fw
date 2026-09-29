@@ -3,6 +3,8 @@
 use std::future::Future;
 use std::time::Duration;
 
+use serde::Serialize;
+
 use crate::error::{E2eError, E2eResult};
 use crate::locator::Locator;
 use crate::page::Page;
@@ -69,10 +71,20 @@ where
     }
 }
 
+/// Description suffix for negated assertions.
+fn not_tag(negated: bool) -> &'static str {
+    if negated {
+        " (not)"
+    } else {
+        ""
+    }
+}
+
 /// Page-level assertions.
 pub struct PageExpect {
     page: Page,
     timeout: Duration,
+    negated: bool,
 }
 
 impl PageExpect {
@@ -80,6 +92,7 @@ impl PageExpect {
         Self {
             page,
             timeout: Duration::from_millis(DEFAULT_EXPECT_MS),
+            negated: false,
         }
     }
 
@@ -90,25 +103,38 @@ impl PageExpect {
         self
     }
 
+    /// Negate the assertion (`not().not()` cancels out).
+    #[must_use]
+    #[allow(clippy::should_implement_trait)] // Playwright names it `not`.
+    pub fn not(mut self) -> Self {
+        self.negated = !self.negated;
+        self
+    }
+
     /// Assert the exact title.
     pub async fn title(&self, expected: &str) -> E2eResult<()> {
         let page = self.page.clone();
         let expected = expected.to_string();
-        poll(self.timeout, format!("title == {expected:?}"), || {
-            let page = page.clone();
-            let expected = expected.clone();
-            async move {
-                let title = match page.title().await {
-                    Ok(title) => title,
-                    Err(error) => return Ok(Some(error.to_string())),
-                };
-                if title == expected {
-                    Ok(None)
-                } else {
-                    Ok(Some(format!("title was {title:?}")))
+        let negated = self.negated;
+        poll(
+            self.timeout,
+            format!("title == {expected:?}{}", not_tag(negated)),
+            || {
+                let page = page.clone();
+                let expected = expected.clone();
+                async move {
+                    let title = match page.title().await {
+                        Ok(title) => title,
+                        Err(error) => return Ok(Some(error.to_string())),
+                    };
+                    if (title == expected) != negated {
+                        Ok(None)
+                    } else {
+                        Ok(Some(format!("title was {title:?}")))
+                    }
                 }
-            }
-        })
+            },
+        )
         .await
     }
 
@@ -116,21 +142,26 @@ impl PageExpect {
     pub async fn title_contains(&self, fragment: &str) -> E2eResult<()> {
         let page = self.page.clone();
         let fragment = fragment.to_string();
-        poll(self.timeout, format!("title contains {fragment:?}"), || {
-            let page = page.clone();
-            let fragment = fragment.clone();
-            async move {
-                let title = match page.title().await {
-                    Ok(title) => title,
-                    Err(error) => return Ok(Some(error.to_string())),
-                };
-                if title.contains(&fragment) {
-                    Ok(None)
-                } else {
-                    Ok(Some(format!("title was {title:?}")))
+        let negated = self.negated;
+        poll(
+            self.timeout,
+            format!("title contains {fragment:?}{}", not_tag(negated)),
+            || {
+                let page = page.clone();
+                let fragment = fragment.clone();
+                async move {
+                    let title = match page.title().await {
+                        Ok(title) => title,
+                        Err(error) => return Ok(Some(error.to_string())),
+                    };
+                    if title.contains(&fragment) != negated {
+                        Ok(None)
+                    } else {
+                        Ok(Some(format!("title was {title:?}")))
+                    }
                 }
-            }
-        })
+            },
+        )
         .await
     }
 
@@ -138,21 +169,26 @@ impl PageExpect {
     pub async fn url_contains(&self, fragment: &str) -> E2eResult<()> {
         let page = self.page.clone();
         let fragment = fragment.to_string();
-        poll(self.timeout, format!("url contains {fragment:?}"), || {
-            let page = page.clone();
-            let fragment = fragment.clone();
-            async move {
-                let url = match page.url().await {
-                    Ok(url) => url,
-                    Err(error) => return Ok(Some(error.to_string())),
-                };
-                if url.contains(&fragment) {
-                    Ok(None)
-                } else {
-                    Ok(Some(format!("url was {url:?}")))
+        let negated = self.negated;
+        poll(
+            self.timeout,
+            format!("url contains {fragment:?}{}", not_tag(negated)),
+            || {
+                let page = page.clone();
+                let fragment = fragment.clone();
+                async move {
+                    let url = match page.url().await {
+                        Ok(url) => url,
+                        Err(error) => return Ok(Some(error.to_string())),
+                    };
+                    if url.contains(&fragment) != negated {
+                        Ok(None)
+                    } else {
+                        Ok(Some(format!("url was {url:?}")))
+                    }
                 }
-            }
-        })
+            },
+        )
         .await
     }
 }
@@ -161,6 +197,7 @@ impl PageExpect {
 pub struct LocatorExpect {
     locator: Locator,
     timeout: Duration,
+    negated: bool,
 }
 
 impl LocatorExpect {
@@ -168,6 +205,7 @@ impl LocatorExpect {
         Self {
             locator,
             timeout: Duration::from_millis(DEFAULT_EXPECT_MS),
+            negated: false,
         }
     }
 
@@ -178,12 +216,21 @@ impl LocatorExpect {
         self
     }
 
+    /// Negate the assertion (`not().not()` cancels out).
+    #[must_use]
+    #[allow(clippy::should_implement_trait)] // Playwright names it `not`.
+    pub fn not(mut self) -> Self {
+        self.negated = !self.negated;
+        self
+    }
+
     /// Assert the element is visible.
     pub async fn visible(&self) -> E2eResult<()> {
         let locator = self.locator.clone();
+        let negated = self.negated;
         poll(
             self.timeout,
-            format!("`{}` visible", locator.selector()),
+            format!("`{}` visible{}", locator.selector(), not_tag(negated)),
             || {
                 let locator = locator.clone();
                 async move {
@@ -191,7 +238,7 @@ impl LocatorExpect {
                         Ok(state) => state,
                         Err(error) => return Ok(Some(error.to_string())),
                     };
-                    if state.count > 0 && state.visible {
+                    if (state.count > 0 && state.visible) != negated {
                         Ok(None)
                     } else {
                         Ok(Some(format!(
@@ -208,9 +255,10 @@ impl LocatorExpect {
     /// Assert the element is hidden or absent.
     pub async fn hidden(&self) -> E2eResult<()> {
         let locator = self.locator.clone();
+        let negated = self.negated;
         poll(
             self.timeout,
-            format!("`{}` hidden", locator.selector()),
+            format!("`{}` hidden{}", locator.selector(), not_tag(negated)),
             || {
                 let locator = locator.clone();
                 async move {
@@ -218,7 +266,7 @@ impl LocatorExpect {
                         Ok(state) => state,
                         Err(error) => return Ok(Some(error.to_string())),
                     };
-                    if state.count == 0 || !state.visible {
+                    if (state.count == 0 || !state.visible) != negated {
                         Ok(None)
                     } else {
                         Ok(Some("still visible".to_string()))
@@ -233,9 +281,14 @@ impl LocatorExpect {
     pub async fn text(&self, expected: &str) -> E2eResult<()> {
         let locator = self.locator.clone();
         let expected = expected.to_string();
+        let negated = self.negated;
         poll(
             self.timeout,
-            format!("`{}` text == {expected:?}", locator.selector()),
+            format!(
+                "`{}` text == {expected:?}{}",
+                locator.selector(),
+                not_tag(negated)
+            ),
             || {
                 let locator = locator.clone();
                 let expected = expected.clone();
@@ -244,7 +297,7 @@ impl LocatorExpect {
                         Ok(state) => state,
                         Err(error) => return Ok(Some(error.to_string())),
                     };
-                    if state.text == expected {
+                    if (state.text == expected) != negated {
                         Ok(None)
                     } else {
                         Ok(Some(format!("text was {:?}", state.text)))
@@ -259,9 +312,14 @@ impl LocatorExpect {
     pub async fn contains_text(&self, fragment: &str) -> E2eResult<()> {
         let locator = self.locator.clone();
         let fragment = fragment.to_string();
+        let negated = self.negated;
         poll(
             self.timeout,
-            format!("`{}` contains {fragment:?}", locator.selector()),
+            format!(
+                "`{}` contains {fragment:?}{}",
+                locator.selector(),
+                not_tag(negated)
+            ),
             || {
                 let locator = locator.clone();
                 let fragment = fragment.clone();
@@ -270,7 +328,7 @@ impl LocatorExpect {
                         Ok(state) => state,
                         Err(error) => return Ok(Some(error.to_string())),
                     };
-                    if state.text.contains(&fragment) {
+                    if state.text.contains(&fragment) != negated {
                         Ok(None)
                     } else {
                         Ok(Some(format!("text was {:?}", state.text)))
@@ -285,9 +343,14 @@ impl LocatorExpect {
     pub async fn value(&self, expected: &str) -> E2eResult<()> {
         let locator = self.locator.clone();
         let expected = expected.to_string();
+        let negated = self.negated;
         poll(
             self.timeout,
-            format!("`{}` value == {expected:?}", locator.selector()),
+            format!(
+                "`{}` value == {expected:?}{}",
+                locator.selector(),
+                not_tag(negated)
+            ),
             || {
                 let locator = locator.clone();
                 let expected = expected.clone();
@@ -296,7 +359,7 @@ impl LocatorExpect {
                         Ok(state) => state,
                         Err(error) => return Ok(Some(error.to_string())),
                     };
-                    if state.value == expected {
+                    if (state.value == expected) != negated {
                         Ok(None)
                     } else {
                         Ok(Some(format!("value was {:?}", state.value)))
@@ -310,9 +373,14 @@ impl LocatorExpect {
     /// Assert the match count.
     pub async fn count(&self, expected: usize) -> E2eResult<()> {
         let locator = self.locator.clone();
+        let negated = self.negated;
         poll(
             self.timeout,
-            format!("`{}` count == {expected}", locator.selector()),
+            format!(
+                "`{}` count == {expected}{}",
+                locator.selector(),
+                not_tag(negated)
+            ),
             || {
                 let locator = locator.clone();
                 async move {
@@ -320,7 +388,7 @@ impl LocatorExpect {
                         Ok(state) => state,
                         Err(error) => return Ok(Some(error.to_string())),
                     };
-                    if state.count == expected {
+                    if (state.count == expected) != negated {
                         Ok(None)
                     } else {
                         Ok(Some(format!("count was {}", state.count)))
@@ -343,9 +411,14 @@ impl LocatorExpect {
 
     async fn checked_state(&self, want: bool) -> E2eResult<()> {
         let locator = self.locator.clone();
+        let negated = self.negated;
         poll(
             self.timeout,
-            format!("`{}` checked == {want}", locator.selector()),
+            format!(
+                "`{}` checked == {want}{}",
+                locator.selector(),
+                not_tag(negated)
+            ),
             || {
                 let locator = locator.clone();
                 async move {
@@ -353,7 +426,7 @@ impl LocatorExpect {
                         Ok(state) => state,
                         Err(error) => return Ok(Some(error.to_string())),
                     };
-                    if state.checked == want {
+                    if (state.checked == want) != negated {
                         Ok(None)
                     } else {
                         Ok(Some(format!("checked was {}", state.checked)))
@@ -367,9 +440,10 @@ impl LocatorExpect {
     /// Assert the element is enabled.
     pub async fn enabled(&self) -> E2eResult<()> {
         let locator = self.locator.clone();
+        let negated = self.negated;
         poll(
             self.timeout,
-            format!("`{}` enabled", locator.selector()),
+            format!("`{}` enabled{}", locator.selector(), not_tag(negated)),
             || {
                 let locator = locator.clone();
                 async move {
@@ -377,10 +451,282 @@ impl LocatorExpect {
                         Ok(state) => state,
                         Err(error) => return Ok(Some(error.to_string())),
                     };
-                    if state.count > 0 && state.enabled {
+                    if (state.count > 0 && state.enabled) != negated {
                         Ok(None)
                     } else {
                         Ok(Some("disabled or absent".to_string()))
+                    }
+                }
+            },
+        )
+        .await
+    }
+
+    /// Assert the element is disabled.
+    pub async fn disabled(&self) -> E2eResult<()> {
+        let locator = self.locator.clone();
+        let negated = self.negated;
+        poll(
+            self.timeout,
+            format!("`{}` disabled{}", locator.selector(), not_tag(negated)),
+            || {
+                let locator = locator.clone();
+                async move {
+                    let state = match locator.state().await {
+                        Ok(state) => state,
+                        Err(error) => return Ok(Some(error.to_string())),
+                    };
+                    if (state.count > 0 && !state.enabled) != negated {
+                        Ok(None)
+                    } else {
+                        Ok(Some("enabled or absent".to_string()))
+                    }
+                }
+            },
+        )
+        .await
+    }
+
+    /// Assert the element is editable (enabled input/textarea/select or contenteditable).
+    pub async fn editable(&self) -> E2eResult<()> {
+        let locator = self.locator.clone();
+        let negated = self.negated;
+        poll(
+            self.timeout,
+            format!("`{}` editable{}", locator.selector(), not_tag(negated)),
+            || {
+                let locator = locator.clone();
+                async move {
+                    let state = match locator.state().await {
+                        Ok(state) => state,
+                        Err(error) => return Ok(Some(error.to_string())),
+                    };
+                    if (state.count > 0 && state.editable) != negated {
+                        Ok(None)
+                    } else {
+                        Ok(Some(format!(
+                            "count={} editable={}",
+                            state.count, state.editable
+                        )))
+                    }
+                }
+            },
+        )
+        .await
+    }
+
+    /// Assert the element is empty (no text and no form value).
+    pub async fn empty(&self) -> E2eResult<()> {
+        let locator = self.locator.clone();
+        let negated = self.negated;
+        poll(
+            self.timeout,
+            format!("`{}` empty{}", locator.selector(), not_tag(negated)),
+            || {
+                let locator = locator.clone();
+                async move {
+                    let state = match locator.state().await {
+                        Ok(state) => state,
+                        Err(error) => return Ok(Some(error.to_string())),
+                    };
+                    let empty = state.count > 0 && state.text.is_empty() && state.value.is_empty();
+                    if empty != negated {
+                        Ok(None)
+                    } else {
+                        Ok(Some(format!(
+                            "text={:?} value={:?}",
+                            state.text, state.value
+                        )))
+                    }
+                }
+            },
+        )
+        .await
+    }
+
+    /// Assert the element is focused.
+    pub async fn focused(&self) -> E2eResult<()> {
+        let locator = self.locator.clone();
+        let negated = self.negated;
+        poll(
+            self.timeout,
+            format!("`{}` focused{}", locator.selector(), not_tag(negated)),
+            || {
+                let locator = locator.clone();
+                async move {
+                    let state = match locator.state().await {
+                        Ok(state) => state,
+                        Err(error) => return Ok(Some(error.to_string())),
+                    };
+                    if (state.count > 0 && state.focused) != negated {
+                        Ok(None)
+                    } else {
+                        Ok(Some("unfocused or absent".to_string()))
+                    }
+                }
+            },
+        )
+        .await
+    }
+
+    /// Assert the element is attached to the DOM.
+    pub async fn attached(&self) -> E2eResult<()> {
+        let locator = self.locator.clone();
+        let negated = self.negated;
+        poll(
+            self.timeout,
+            format!("`{}` attached{}", locator.selector(), not_tag(negated)),
+            || {
+                let locator = locator.clone();
+                async move {
+                    let state = match locator.state().await {
+                        Ok(state) => state,
+                        Err(error) => return Ok(Some(error.to_string())),
+                    };
+                    if (state.count > 0) != negated {
+                        Ok(None)
+                    } else {
+                        Ok(Some("absent".to_string()))
+                    }
+                }
+            },
+        )
+        .await
+    }
+
+    /// Assert an attribute value (exact match).
+    pub async fn attribute(&self, name: &str, expected: &str) -> E2eResult<()> {
+        let locator = self.locator.clone();
+        let name = name.to_string();
+        let expected = expected.to_string();
+        let negated = self.negated;
+        poll(
+            self.timeout,
+            format!(
+                "`{}` attribute {name:?} == {expected:?}{}",
+                locator.selector(),
+                not_tag(negated)
+            ),
+            || {
+                let locator = locator.clone();
+                let name = name.clone();
+                let expected = expected.clone();
+                async move {
+                    let actual = match locator.attribute(&name).await {
+                        Ok(actual) => actual,
+                        Err(error) => return Ok(Some(error.to_string())),
+                    };
+                    if (actual.as_deref() == Some(expected.as_str())) != negated {
+                        Ok(None)
+                    } else {
+                        Ok(Some(format!("attribute {name:?} was {actual:?}")))
+                    }
+                }
+            },
+        )
+        .await
+    }
+
+    /// Assert the element has a CSS class.
+    pub async fn contains_class(&self, class: &str) -> E2eResult<()> {
+        let locator = self.locator.clone();
+        let class = class.to_string();
+        let negated = self.negated;
+        poll(
+            self.timeout,
+            format!(
+                "`{}` has class {class:?}{}",
+                locator.selector(),
+                not_tag(negated)
+            ),
+            || {
+                let locator = locator.clone();
+                let class = class.clone();
+                async move {
+                    let actual = match locator.attribute("class").await {
+                        Ok(actual) => actual,
+                        Err(error) => return Ok(Some(error.to_string())),
+                    };
+                    let has = actual
+                        .as_deref()
+                        .unwrap_or_default()
+                        .split_whitespace()
+                        .any(|c| c == class);
+                    if has != negated {
+                        Ok(None)
+                    } else {
+                        Ok(Some(format!("class was {actual:?}")))
+                    }
+                }
+            },
+        )
+        .await
+    }
+
+    /// Assert the element id (exact match).
+    pub async fn id(&self, expected: &str) -> E2eResult<()> {
+        self.attribute("id", expected).await
+    }
+
+    /// Assert a computed CSS property value (exact match).
+    pub async fn css(&self, property: &str, expected: &str) -> E2eResult<()> {
+        let locator = self.locator.clone();
+        let property = property.to_string();
+        let expected = expected.to_string();
+        let negated = self.negated;
+        poll(
+            self.timeout,
+            format!(
+                "`{}` css {property:?} == {expected:?}{}",
+                locator.selector(),
+                not_tag(negated)
+            ),
+            || {
+                let locator = locator.clone();
+                let property = property.clone();
+                let expected = expected.clone();
+                async move {
+                    let actual = match locator.css_value(&property).await {
+                        Ok(actual) => actual,
+                        Err(error) => return Ok(Some(error.to_string())),
+                    };
+                    if (actual.as_deref() == Some(expected.as_str())) != negated {
+                        Ok(None)
+                    } else {
+                        Ok(Some(format!("css {property:?} was {actual:?}")))
+                    }
+                }
+            },
+        )
+        .await
+    }
+
+    /// Assert a DOM property value (JSON equality).
+    pub async fn js_property<T: Serialize>(&self, name: &str, expected: &T) -> E2eResult<()> {
+        let expected = serde_json::to_value(expected).map_err(E2eError::Json)?;
+        let locator = self.locator.clone();
+        let name = name.to_string();
+        let negated = self.negated;
+        poll(
+            self.timeout,
+            format!(
+                "`{}` js property {name:?} == {expected}{}",
+                locator.selector(),
+                not_tag(negated)
+            ),
+            || {
+                let locator = locator.clone();
+                let name = name.clone();
+                let expected = expected.clone();
+                async move {
+                    let actual = match locator.js_property(&name).await {
+                        Ok(actual) => actual,
+                        Err(error) => return Ok(Some(error.to_string())),
+                    };
+                    if (actual.as_ref() == Some(&expected)) != negated {
+                        Ok(None)
+                    } else {
+                        Ok(Some(format!("property {name:?} was {actual:?}")))
                     }
                 }
             },

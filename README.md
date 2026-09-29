@@ -241,6 +241,7 @@ ferrite e2e                         # boot + cargo test --test e2e
 ferrite e2e --engine firefox        # same suite on Firefox
 ferrite e2e --headed --retries 2    # visible browser, retries
 ferrite e2e --video only-on-failure # record test videos (webm)
+ferrite e2e --grep auth --shard 1/3 # filter by name/tag, run one shard
 ferrite e2e --url http://127.0.0.1:3000/ -- cargo test --test shop
 ```
 
@@ -260,9 +261,11 @@ url = "http://127.0.0.1:5190/"
 ```
 
 Suites use the `ferrite_e2e` library (`Browser`, `Page`, locators with
-`css`/`text=`/`xpath=`/`role=` engines, auto-retrying `expect_*`,
-request routing, screenshots, video recording, live frame streams,
-traces, parallel `Runner`). Chromium recordings assemble via `ffmpeg`
+`css`/`text=`/`xpath=`/`role=` engines plus `get_by_*`, `nth`/`first`/`last`,
+chaining, filters, and `and_`/`or_`, auto-retrying `expect_*` with `not()`,
+dialog info, permissions and geolocation, storage state, request routing and
+observation, screenshots, video recording, live frame streams, traces,
+parallel `Runner` with tags and sharding). Chromium recordings assemble via `ffmpeg`
 (fail-fast hint when missing; `FERRITE_FFMPEG_PATH` override); Firefox
 records natively. See
 `examples/e2e/` for a runnable project and

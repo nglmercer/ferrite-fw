@@ -2,6 +2,8 @@
 
 use std::time::Duration;
 
+use serde_json::Value;
+
 use crate::error::{E2eError, E2eResult};
 use crate::page::{ClickOptions, ElementState, Page};
 
@@ -11,6 +13,9 @@ pub struct Selector {
     raw: String,
     engine: Engine,
     body: String,
+    pick: Pick,
+    scope: Option<Box<Selector>>,
+    has_text: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,6 +24,19 @@ enum Engine {
     Text,
     XPath,
     Role,
+    Union(Box<Selector>, Box<Selector>),
+    Intersect(Box<Selector>, Box<Selector>),
+}
+
+/// Which matches a narrowed selector keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pick {
+    /// All matches (actions use the first).
+    First,
+    /// The last match only.
+    Last,
+    /// The `index`-th match only.
+    Nth(usize),
 }
 
 impl Selector {
@@ -36,7 +54,72 @@ impl Selector {
         } else {
             (Engine::Css, raw.clone())
         };
-        Self { raw, engine, body }
+        Self::leaf(raw, engine, body)
+    }
+
+    /// A leaf selector (no narrowing, document scope).
+    fn leaf(raw: String, engine: Engine, body: String) -> Self {
+        Self {
+            raw,
+            engine,
+            body,
+            pick: Pick::First,
+            scope: None,
+            has_text: Vec::new(),
+        }
+    }
+
+    /// Match `[data-testid="id"]` exactly.
+    pub(crate) fn test_id(id: &str) -> Self {
+        let raw = format!("css=[data-testid={}]", css_string(id));
+        Self::parse(raw)
+    }
+
+    /// Match elements containing `text` (case-insensitive).
+    pub(crate) fn by_text(text: &str) -> Self {
+        Self::parse(format!("text={text}"))
+    }
+
+    /// Match an ARIA role, optionally filtered by accessible name.
+    pub(crate) fn by_role(role: &str, name: &str) -> Self {
+        if name.is_empty() {
+            Self::parse(format!("role={role}"))
+        } else {
+            Self::parse(format!("role={role}[name=\"{name}\"]"))
+        }
+    }
+
+    /// Match a `<label>` by its text (case-insensitive substring).
+    pub(crate) fn by_label(text: &str) -> Self {
+        Self::parse(format!(
+            "xpath=//label[contains(normalize-space(.), {})]",
+            xpath_string(text)
+        ))
+    }
+
+    /// Match an attribute by case-insensitive substring.
+    fn by_attribute_contains(tag: &str, attribute: &str, text: &str) -> Self {
+        const UPPER: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        const LOWER: &str = "abcdefghijklmnopqrstuvwxyz";
+        Self::parse(format!(
+            "xpath=//{tag}[contains(translate(@{attribute},'{UPPER}','{LOWER}'), {})]",
+            xpath_string(&text.to_lowercase())
+        ))
+    }
+
+    /// Match `[placeholder]` by case-insensitive substring.
+    pub(crate) fn by_placeholder(text: &str) -> Self {
+        Self::by_attribute_contains("*", "placeholder", text)
+    }
+
+    /// Match `[alt]` by case-insensitive substring.
+    pub(crate) fn by_alt(text: &str) -> Self {
+        Self::by_attribute_contains("*", "alt", text)
+    }
+
+    /// Match `[title]` by case-insensitive substring.
+    pub(crate) fn by_title(text: &str) -> Self {
+        Self::by_attribute_contains("*", "title", text)
     }
 
     /// Original selector text.
@@ -47,29 +130,108 @@ impl Selector {
 
     /// JS that resolves to `Element[]` for this selector.
     fn resolve_js(&self) -> String {
+        self.resolve_with(None)
+    }
+
+    /// Resolve against `roots` (`None` = whole document).
+    ///
+    /// An explicit [`Selector::scope`] (locator chaining) wins over inherited
+    /// `roots`; combinators distribute `roots` to children without their own
+    /// scope.
+    fn resolve_with(&self, roots: Option<&str>) -> String {
+        let scoped;
+        let effective = match &self.scope {
+            Some(parent) => {
+                scoped = parent.resolve_js();
+                Some(scoped.as_str())
+            }
+            None => roots,
+        };
+        let matched = match &self.engine {
+            Engine::Union(first, second) => {
+                let a = first.resolve_with(effective);
+                let b = second.resolve_with(effective);
+                format!("[...new Set([...({a}), ...({b})])]")
+            }
+            Engine::Intersect(first, second) => {
+                let a = first.resolve_with(effective);
+                let b = second.resolve_with(effective);
+                format!(
+                    "(() => {{ const keep = new Set(({b})); \
+                     return ({a}).filter(el => keep.has(el)); }})()"
+                )
+            }
+            leaf => self.resolve_leaf(leaf, effective),
+        };
+        let mut expression = matched;
+        for needle in &self.has_text {
+            let query = serde_json::to_string(needle).unwrap_or_default();
+            expression = format!(
+                "(() => {{ const els = ({expression}); \
+                 const q = {query}.toLowerCase(); \
+                 return els.filter(el => \
+                 (el.textContent || '').toLowerCase().includes(q)); }})()"
+            );
+        }
+        match self.pick {
+            Pick::First => expression,
+            Pick::Last => format!("({expression}).slice(-1)"),
+            Pick::Nth(index) => {
+                format!("({expression}).slice({index}, {})", index.saturating_add(1))
+            }
+        }
+    }
+
+    /// JS that resolves a leaf engine to `Element[]` against `roots`.
+    fn resolve_leaf(&self, engine: &Engine, roots: Option<&str>) -> String {
         let body = serde_json::to_string(&self.body).unwrap_or_default();
-        match self.engine {
-            Engine::Css => format!("[...document.querySelectorAll({body})]"),
-            Engine::XPath => format!(
-                "(() => {{ const out = []; const it = document.evaluate({body}, \
-                 document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null); \
-                 for (let i = 0; i < it.snapshotLength; i++) {{ \
-                 const n = it.snapshotItem(i); \
-                 if (n instanceof Element) out.push(n); }} return out; }})()"
-            ),
-            Engine::Text => format!(
-                "(() => {{ const needle = {body}.toLowerCase(); \
-                 const els = [...document.querySelectorAll('body *')]; \
-                 const hits = els.filter(el => \
-                 (el.textContent || '').toLowerCase().includes(needle)); \
-                 hits.sort((a, b) => \
-                 (a.textContent || '').length - (b.textContent || '').length); \
-                 return hits.slice(0, 20); }})()"
-            ),
+        match engine {
+            Engine::Css => match roots {
+                None => format!("[...document.querySelectorAll({body})]"),
+                Some(r) => {
+                    format!("[...({r}).flatMap(root => [...root.querySelectorAll({body})])]")
+                }
+            },
+            Engine::XPath => match roots {
+                None => format!(
+                    "(() => {{ const out = []; const it = document.evaluate({body}, \
+                     document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null); \
+                     for (let i = 0; i < it.snapshotLength; i++) {{ \
+                     const n = it.snapshotItem(i); \
+                     if (n instanceof Element) out.push(n); }} return out; }})()"
+                ),
+                Some(r) => format!(
+                    "(() => {{ const out = []; for (const root of ({r})) {{ \
+                     const it = document.evaluate({body}, root, null, \
+                     XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null); \
+                     for (let i = 0; i < it.snapshotLength; i++) {{ \
+                     const n = it.snapshotItem(i); \
+                     if (n instanceof Element) out.push(n); }} }} return out; }})()"
+                ),
+            },
+            Engine::Text => {
+                let candidates = match roots {
+                    None => "document.querySelectorAll('body *')".to_string(),
+                    Some(r) => format!("({r}).flatMap(root => [...root.querySelectorAll('*')])"),
+                };
+                format!(
+                    "(() => {{ const needle = {body}.toLowerCase(); \
+                     const els = [...{candidates}]; \
+                     const hits = els.filter(el => \
+                     (el.textContent || '').toLowerCase().includes(needle)); \
+                     hits.sort((a, b) => \
+                     (a.textContent || '').length - (b.textContent || '').length); \
+                     return hits.slice(0, 20); }})()"
+                )
+            }
             Engine::Role => {
                 let (role, name) = parse_role(&self.body);
                 let role_json = serde_json::to_string(&role).unwrap_or_default();
                 let name_json = serde_json::to_string(&name).unwrap_or_default();
+                let source = match roots {
+                    None => "document.querySelectorAll(sel)".to_string(),
+                    Some(r) => format!("({r}).flatMap(root => [...root.querySelectorAll(sel)])"),
+                };
                 format!(
                     "(() => {{ const byRole = {{ button: 'button,[role=\"button\"],\
                      input[type=\"button\"],input[type=\"submit\"]', \
@@ -82,13 +244,16 @@ impl Selector {
                      listbox: 'select,[role=\"listbox\"]', \
                      option: 'option,[role=\"option\"]' }}; \
                      const sel = byRole[{role_json}] || ('[role=' + {role_json} + ']'); \
-                     let els = [...document.querySelectorAll(sel)]; \
+                     let els = [...{source}]; \
                      const want = {name_json}.toLowerCase(); \
                      if (want) els = els.filter(el => \
                      ((el.getAttribute('aria-label') || el.textContent || '')\
                      .toLowerCase().includes(want))); \
                      return els; }})()"
                 )
+            }
+            Engine::Union(..) | Engine::Intersect(..) => {
+                unreachable!("combinators resolve in resolve_with")
             }
         }
     }
@@ -103,6 +268,15 @@ impl Selector {
              const s = getComputedStyle(el); const r = el.getBoundingClientRect(); \
              return s.display !== 'none' && s.visibility !== 'hidden' \
              && r.width > 0 && r.height > 0; }}; \
+             const editable = el => {{ if (!el || el.disabled) return false; \
+             const tag = el.tagName; \
+             if (tag === 'INPUT') {{ \
+             const t = (el.type || 'text').toLowerCase(); \
+             if (['hidden','submit','button','reset','checkbox','radio',\
+             'file','image','range','color'].includes(t)) return false; \
+             return !el.readOnly; }} \
+             if (tag === 'TEXTAREA' || tag === 'SELECT') return !el.readOnly; \
+             return Boolean(el.isContentEditable); }}; \
              const rects = els.slice(0, 20).map(el => {{ \
              const r = el.getBoundingClientRect(); \
              return {{ x: r.x, y: r.y, width: r.width, height: r.height }}; }}); \
@@ -110,6 +284,8 @@ impl Selector {
              visible: visible(first), \
              enabled: first ? !first.disabled : false, \
              checked: first ? Boolean(first.checked) : false, \
+             editable: editable(first), \
+             focused: first ? document.activeElement === first : false, \
              text: first ? (first.textContent || '').trim() : '', \
              value: first && 'value' in first ? String(first.value) : '', \
              rects }}; }})()"
@@ -163,6 +339,46 @@ impl Selector {
     }
 }
 
+/// A double-quoted CSS string literal with `\` and `"` escaped.
+fn css_string(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// An XPath string literal, using `concat()` when both quote types appear.
+fn xpath_string(value: &str) -> String {
+    if !value.contains('"') {
+        return format!("\"{value}\"");
+    }
+    if !value.contains('\'') {
+        return format!("'{value}'");
+    }
+    let mut parts: Vec<String> = Vec::new();
+    let mut run = String::new();
+    for ch in value.chars() {
+        match ch {
+            '"' => {
+                if !run.is_empty() {
+                    parts.push(format!("'{run}'"));
+                    run.clear();
+                }
+                parts.push("'\"'".to_string());
+            }
+            '\'' => {
+                if !run.is_empty() {
+                    parts.push(format!("'{run}'"));
+                    run.clear();
+                }
+                parts.push("\"'\"".to_string());
+            }
+            _ => run.push(ch),
+        }
+    }
+    if !run.is_empty() {
+        parts.push(format!("'{run}'"));
+    }
+    format!("concat({})", parts.join(", "))
+}
+
 /// Parse `role[name="x"]` into (role, name).
 fn parse_role(body: &str) -> (String, String) {
     let Some(bracket) = body.find('[') else {
@@ -201,6 +417,160 @@ impl Locator {
     #[must_use]
     pub fn selector(&self) -> &str {
         self.selector.raw()
+    }
+
+    /// Scope `sub` to this locator's matches.
+    fn scoped(&self, mut sub: Selector) -> Self {
+        sub.raw = format!("{} >> {}", self.selector.raw(), sub.raw);
+        sub.scope = Some(Box::new(self.selector.clone()));
+        Self {
+            page: self.page.clone(),
+            selector: sub,
+        }
+    }
+
+    /// Chain a sub-selector scoped to this locator's matches.
+    #[must_use]
+    pub fn locator(&self, selector: &str) -> Self {
+        self.scoped(Selector::parse(selector.to_string()))
+    }
+
+    /// Narrow to the first match.
+    #[must_use]
+    pub fn first(&self) -> Self {
+        self.picked(Pick::First, "first".to_string())
+    }
+
+    /// Narrow to the last match.
+    #[must_use]
+    pub fn last(&self) -> Self {
+        self.picked(Pick::Last, "last".to_string())
+    }
+
+    /// Narrow to the `index`-th match (0-based).
+    #[must_use]
+    pub fn nth(&self, index: usize) -> Self {
+        self.picked(Pick::Nth(index), format!("nth={index}"))
+    }
+
+    /// Narrow to one pick (later picks win).
+    fn picked(&self, pick: Pick, label: String) -> Self {
+        let mut selector = self.selector.clone();
+        selector.pick = pick;
+        selector.raw = format!("{} >> {label}", selector.raw);
+        Self {
+            page: self.page.clone(),
+            selector,
+        }
+    }
+
+    /// Keep only matches containing `has_text` (case-insensitive substring).
+    #[must_use]
+    pub fn filter(&self, has_text: &str) -> Self {
+        let mut selector = self.selector.clone();
+        selector.has_text.push(has_text.to_string());
+        selector.raw = format!("{} >> has-text={has_text:?}", selector.raw);
+        Self {
+            page: self.page.clone(),
+            selector,
+        }
+    }
+
+    /// Matches of either locator (same page required).
+    pub fn or_(&self, other: &Locator) -> E2eResult<Self> {
+        self.combine(other, true)
+    }
+
+    /// Matches of both locators (same page required).
+    pub fn and_(&self, other: &Locator) -> E2eResult<Self> {
+        self.combine(other, false)
+    }
+
+    /// Combine two same-page locators.
+    fn combine(&self, other: &Locator, union: bool) -> E2eResult<Self> {
+        if self.page.target_id() != other.page.target_id() {
+            return Err(E2eError::Locator {
+                selector: self.selector.raw().to_string(),
+                message: "cannot combine locators from different pages".to_string(),
+            });
+        }
+        let (engine, op) = if union {
+            (
+                Engine::Union(
+                    Box::new(self.selector.clone()),
+                    Box::new(other.selector.clone()),
+                ),
+                "|",
+            )
+        } else {
+            (
+                Engine::Intersect(
+                    Box::new(self.selector.clone()),
+                    Box::new(other.selector.clone()),
+                ),
+                "&",
+            )
+        };
+        let selector = Selector {
+            raw: format!("({} {op} {})", self.selector.raw(), other.selector.raw()),
+            engine,
+            body: String::new(),
+            pick: Pick::First,
+            scope: None,
+            has_text: Vec::new(),
+        };
+        Ok(Self {
+            page: self.page.clone(),
+            selector,
+        })
+    }
+
+    /// One locator per match.
+    pub async fn all(&self) -> E2eResult<Vec<Self>> {
+        let count = self.count().await?;
+        Ok((0..count).map(|index| self.nth(index)).collect())
+    }
+
+    /// Locate `[data-testid]` within this locator's matches.
+    #[must_use]
+    pub fn get_by_test_id(&self, id: &str) -> Self {
+        self.scoped(Selector::test_id(id))
+    }
+
+    /// Locate by text within this locator's matches.
+    #[must_use]
+    pub fn get_by_text(&self, text: &str) -> Self {
+        self.scoped(Selector::by_text(text))
+    }
+
+    /// Locate by ARIA role within this locator's matches.
+    #[must_use]
+    pub fn get_by_role(&self, role: &str, name: &str) -> Self {
+        self.scoped(Selector::by_role(role, name))
+    }
+
+    /// Locate a `<label>` by text within this locator's matches.
+    #[must_use]
+    pub fn get_by_label(&self, text: &str) -> Self {
+        self.scoped(Selector::by_label(text))
+    }
+
+    /// Locate by `[placeholder]` within this locator's matches.
+    #[must_use]
+    pub fn get_by_placeholder(&self, text: &str) -> Self {
+        self.scoped(Selector::by_placeholder(text))
+    }
+
+    /// Locate by `[alt]` within this locator's matches.
+    #[must_use]
+    pub fn get_by_alt(&self, text: &str) -> Self {
+        self.scoped(Selector::by_alt(text))
+    }
+
+    /// Locate by `[title]` within this locator's matches.
+    #[must_use]
+    pub fn get_by_title(&self, text: &str) -> Self {
+        self.scoped(Selector::by_title(text))
     }
 
     /// Number of matching elements.
@@ -318,6 +688,49 @@ impl Locator {
         Ok(())
     }
 
+    /// Scroll the element into the center of the viewport.
+    pub async fn scroll_into_view(&self) -> E2eResult<()> {
+        self.page.action(&self.selector, "scroll", None).await?;
+        Ok(())
+    }
+
+    /// Dispatch a bubbling `CustomEvent` with an optional JSON `detail`.
+    pub async fn dispatch_event(&self, name: &str, detail: Option<&Value>) -> E2eResult<()> {
+        let name_json = serde_json::to_string(name).unwrap_or_default();
+        let detail_json = detail
+            .map(|value| serde_json::to_string(value).unwrap_or_else(|_| "null".to_string()))
+            .unwrap_or_else(|| "null".to_string());
+        let value = self
+            .eval_first(&format!(
+                "el.dispatchEvent(new CustomEvent({name_json}, \
+                 {{ bubbles: true, detail: {detail_json} }}))"
+            ))
+            .await?;
+        self.require_match(value)
+    }
+
+    /// Select the element's text (input value or rendered text).
+    pub async fn select_text(&self) -> E2eResult<()> {
+        let value = self
+            .eval_first(
+                "(() => { if (el.select) el.select(); \
+                 else getSelection().selectAllChildren(el); return true; })()",
+            )
+            .await?;
+        self.require_match(value)
+    }
+
+    /// A null `eval_first` projection means nothing matched: fail loudly.
+    fn require_match(&self, value: Value) -> E2eResult<()> {
+        if value.is_null() {
+            return Err(E2eError::Locator {
+                selector: self.selector.raw().to_string(),
+                message: "no matching element".to_string(),
+            });
+        }
+        Ok(())
+    }
+
     /// Screenshot just this element (PNG bytes).
     pub async fn screenshot(&self) -> E2eResult<Vec<u8>> {
         self.page.action(&self.selector, "scroll", None).await?;
@@ -398,6 +811,50 @@ impl Locator {
     pub async fn input_value(&self) -> E2eResult<String> {
         Ok(self.page.query_state(&self.selector).await?.value)
     }
+
+    /// Evaluate `projection` (an expression over `el`) on the first match.
+    ///
+    /// Returns [`Value::Null`] when nothing matches.
+    async fn eval_first(&self, projection: &str) -> E2eResult<Value> {
+        let resolve = self.selector.resolve_js();
+        let expression = format!(
+            "(() => {{ const els = {resolve}; const el = els[0]; \
+             if (!el) return null; return ({projection}); }})()"
+        );
+        self.page.evaluate_value(&expression).await
+    }
+
+    /// Read an attribute (`None` when the element or attribute is missing).
+    pub async fn attribute(&self, name: &str) -> E2eResult<Option<String>> {
+        let name_json = serde_json::to_string(name).unwrap_or_default();
+        let value = self
+            .eval_first(&format!("el.getAttribute({name_json})"))
+            .await?;
+        Ok(value.as_str().map(str::to_string))
+    }
+
+    /// Read a computed CSS property (`None` when the element is missing).
+    pub async fn css_value(&self, property: &str) -> E2eResult<Option<String>> {
+        let property_json = serde_json::to_string(property).unwrap_or_default();
+        let value = self
+            .eval_first(&format!(
+                "getComputedStyle(el).getPropertyValue({property_json})"
+            ))
+            .await?;
+        Ok(value.as_str().map(str::to_string))
+    }
+
+    /// Read a DOM property as JSON (`None` when the element is missing or
+    /// the property is `null`/`undefined`).
+    pub async fn js_property(&self, name: &str) -> E2eResult<Option<Value>> {
+        let name_json = serde_json::to_string(name).unwrap_or_default();
+        let value = self.eval_first(&format!("el[{name_json}]")).await?;
+        if value.is_null() {
+            Ok(None)
+        } else {
+            Ok(Some(value))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -444,10 +901,111 @@ mod tests {
     }
 
     #[test]
+    fn state_snapshot_covers_editable_and_focused() {
+        let expression = Selector::parse("#a".to_string()).state_expression();
+        assert!(expression.contains("editable: editable(first)"));
+        assert!(expression.contains("document.activeElement === first"));
+    }
+
+    #[test]
     fn unknown_action_reports_error() {
         let selector = Selector::parse("h1".to_string());
         assert!(selector
             .action_expression("nope", None)
             .contains("unknown action"));
+    }
+
+    #[test]
+    fn css_strings_escape() {
+        assert_eq!(css_string("plain"), "\"plain\"");
+        assert_eq!(css_string("a\"b"), "\"a\\\"b\"");
+        assert_eq!(css_string("a\\b"), "\"a\\\\b\"");
+    }
+
+    #[test]
+    fn xpath_strings_escape() {
+        assert_eq!(xpath_string("plain"), "\"plain\"");
+        assert_eq!(xpath_string("a\"b"), "'a\"b'");
+        assert_eq!(xpath_string("a'b"), "\"a'b\"");
+        assert_eq!(xpath_string("a\"b'c"), "concat('a', '\"', 'b', \"'\", 'c')");
+    }
+
+    #[test]
+    fn by_builders_map() {
+        assert_eq!(Selector::test_id("go").raw(), "css=[data-testid=\"go\"]");
+        assert_eq!(Selector::by_text("hi").raw(), "text=hi");
+        assert_eq!(Selector::by_role("button", "").raw(), "role=button");
+        assert_eq!(
+            Selector::by_role("button", "save").raw(),
+            "role=button[name=\"save\"]"
+        );
+        assert!(Selector::by_label("Name")
+            .raw()
+            .starts_with("xpath=//label["));
+        assert!(Selector::by_placeholder("ENTER")
+            .raw()
+            .contains("@placeholder"));
+        assert!(Selector::by_placeholder("ENTER")
+            .raw()
+            .contains("\"enter\""));
+        assert!(Selector::by_alt("logo").raw().contains("@alt"));
+        assert!(Selector::by_title("docs").raw().contains("@title"));
+    }
+
+    #[test]
+    fn pick_narrows_resolution() {
+        let base = Selector::parse(".a".to_string());
+        let mut nth = base.clone();
+        nth.pick = Pick::Nth(2);
+        assert!(nth.resolve_js().ends_with(".slice(2, 3)"));
+        let mut last = base.clone();
+        last.pick = Pick::Last;
+        assert!(last.resolve_js().ends_with(".slice(-1)"));
+        assert!(!base.resolve_js().contains(".slice("));
+    }
+
+    #[test]
+    fn filter_and_scope_shape() {
+        let mut filtered = Selector::parse(".a".to_string());
+        filtered.has_text.push("hi".to_string());
+        let expression = filtered.resolve_js();
+        assert!(expression.contains("toLowerCase().includes(q)"));
+        let mut scoped = Selector::parse(".b".to_string());
+        scoped.scope = Some(Box::new(Selector::parse("form".to_string())));
+        let expression = scoped.resolve_js();
+        assert!(expression.contains("flatMap"));
+        assert!(expression.contains("querySelectorAll(\"form\")"));
+    }
+
+    #[test]
+    fn combinators_resolve() {
+        let combo = Selector {
+            raw: "(a | b)".to_string(),
+            engine: Engine::Union(
+                Box::new(Selector::parse("#a".to_string())),
+                Box::new(Selector::parse("#b".to_string())),
+            ),
+            body: String::new(),
+            pick: Pick::First,
+            scope: None,
+            has_text: Vec::new(),
+        };
+        let expression = combo.resolve_js();
+        assert!(expression.contains("new Set"));
+        assert!(expression.contains("#a"));
+        assert!(expression.contains("#b"));
+        let both = Selector {
+            raw: "(a & b)".to_string(),
+            engine: Engine::Intersect(
+                Box::new(Selector::parse("#a".to_string())),
+                Box::new(Selector::parse("#b".to_string())),
+            ),
+            body: String::new(),
+            pick: Pick::First,
+            scope: None,
+            has_text: Vec::new(),
+        };
+        let expression = both.resolve_js();
+        assert!(expression.contains("keep.has(el)"));
     }
 }

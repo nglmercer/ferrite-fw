@@ -109,6 +109,12 @@ fn apply_flag_overrides(e2e: &mut ferrite::config::E2eConfig, args: &E2eArgs) {
             args.filter.as_deref().unwrap_or_default(),
         );
     }
+    if let Some(grep) = &args.grep {
+        std::env::set_var("FERRITE_E2E_GREP", grep);
+    }
+    if let Some((index, total)) = args.shard {
+        std::env::set_var("FERRITE_E2E_SHARD", format!("{index}/{total}"));
+    }
 }
 
 async fn check_browser(

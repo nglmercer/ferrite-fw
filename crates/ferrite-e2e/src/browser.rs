@@ -466,17 +466,21 @@ impl Browser {
         let ws_url = format!("ws://127.0.0.1:{debug_port}/session");
         let bidi = BidiConnection::connect(&ws_url).await?;
         let mut capabilities = serde_json::Map::new();
+        // Keep prompts open until handled: the default ("dismiss and notify")
+        // auto-dismisses before `handleUserPrompt` arrives, making accept and
+        // prompt text meaningless. Unhandled dialogs now block the page until
+        // `Page::handle_dialogs` runs.
+        capabilities.insert(
+            "unhandledPromptBehavior".to_string(),
+            Value::String("ignore".to_string()),
+        );
         if options.ignore_https_errors {
             capabilities.insert("acceptInsecureCerts".to_string(), Value::Bool(true));
         }
         if let Some(proxy) = &options.proxy_server {
             capabilities.insert("proxy".to_string(), proxy_capabilities(proxy));
         }
-        let session_params = if capabilities.is_empty() {
-            serde_json::json!({ "capabilities": {} })
-        } else {
-            serde_json::json!({ "capabilities": { "alwaysMatch": capabilities } })
-        };
+        let session_params = serde_json::json!({ "capabilities": { "alwaysMatch": capabilities } });
         let session = bidi
             .call("session.new", session_params, options.timeout)
             .await?;

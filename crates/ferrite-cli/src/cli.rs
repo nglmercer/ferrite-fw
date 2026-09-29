@@ -26,6 +26,7 @@ pub(crate) struct Cli {
 }
 
 #[derive(Debug, Subcommand)]
+#[allow(clippy::large_enum_variant)] // Parsed once at startup; size is irrelevant.
 pub(crate) enum Command {
     /// Start the dev server.
     Dev(DevArgs),
@@ -198,6 +199,27 @@ pub(crate) struct CreateArgs {
     pub(crate) template: String,
 }
 
+/// Parse `--shard 1/3` into a 1-based (index, total).
+fn parse_shard(raw: &str) -> Result<(usize, usize), String> {
+    let (index, total) = raw
+        .split_once('/')
+        .ok_or_else(|| format!("invalid --shard {raw:?} (want 1-based index/total like 1/3)"))?;
+    let index: usize = index
+        .trim()
+        .parse()
+        .map_err(|_| format!("invalid --shard {raw:?} (index is not a number)"))?;
+    let total: usize = total
+        .trim()
+        .parse()
+        .map_err(|_| format!("invalid --shard {raw:?} (total is not a number)"))?;
+    if index < 1 || index > total {
+        return Err(format!(
+            "invalid --shard {raw:?} (want a 1-based index within the total)"
+        ));
+    }
+    Ok((index, total))
+}
+
 #[derive(Debug, Args)]
 pub(crate) struct E2eArgs {
     /// Project root.
@@ -233,6 +255,12 @@ pub(crate) struct E2eArgs {
     /// Only run tests whose name contains this.
     #[arg(long)]
     pub(crate) filter: Option<String>,
+    /// Only run tests whose name or tags contain this (ANDed with `--filter`).
+    #[arg(long)]
+    pub(crate) grep: Option<String>,
+    /// Run one shard (`1/3` = first third by name order).
+    #[arg(long, value_parser = parse_shard)]
+    pub(crate) shard: Option<(usize, usize)>,
     /// Video policy (`on`, `off`, `only-on-failure`).
     #[arg(long)]
     pub(crate) video: Option<String>,
@@ -242,4 +270,20 @@ pub(crate) struct E2eArgs {
     /// Test command to run (default: `cargo test --test e2e`).
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub(crate) command: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shard_parses_index_and_total() {
+        assert_eq!(parse_shard("1/3"), Ok((1, 3)));
+        assert_eq!(parse_shard("3/3"), Ok((3, 3)));
+        assert!(parse_shard("shard").is_err());
+        assert!(parse_shard("0/2").is_err());
+        assert!(parse_shard("3/2").is_err());
+        assert!(parse_shard("1/0").is_err());
+        assert!(parse_shard("x/y").is_err());
+    }
 }

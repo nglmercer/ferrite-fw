@@ -4,6 +4,7 @@
 //! against. Engine differences (sessions vs contexts, RemoteValue decoding,
 //! interception mechanisms) stay inside the two drivers.
 
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -15,7 +16,8 @@ use crate::bidi::{bytes_to_string, remote_to_json, BidiConnection, BidiEvent};
 use crate::cdp::{CdpConnection, CdpEvent};
 use crate::error::{E2eError, E2eResult};
 use crate::page::{
-    ConsoleMessage, Cookie, ElementRect, LoadState, RouteAction, RouteRule, TraceEntry,
+    ColorScheme, ConsoleMessage, Cookie, DialogInfo, ElementRect, LoadState, RecordedRequest,
+    ReducedMotion, RouteAction, RouteRule, TraceEntry,
 };
 use crate::video::{assemble_webm, SpooledFrame, VideoFrame, VideoOptions};
 
@@ -28,7 +30,14 @@ pub struct ConsoleSink {
     pub trace: Arc<Mutex<Vec<TraceEntry>>>,
     /// In-flight network requests (network-idle waits).
     pub inflight: Arc<AtomicUsize>,
+    /// Dialogs observed while auto-handling (oldest first).
+    pub dialogs: Arc<Mutex<Vec<DialogInfo>>>,
+    /// Recorded network requests (oldest first, capped).
+    requests: Arc<Mutex<VecDeque<RecordedRequest>>>,
 }
+
+/// Maximum recorded requests per page (oldest dropped first).
+const MAX_RECORDED_REQUESTS: usize = 4096;
 
 impl ConsoleSink {
     /// Empty sinks.
@@ -38,6 +47,8 @@ impl ConsoleSink {
             console: Arc::new(Mutex::new(Vec::new())),
             trace: Arc::new(Mutex::new(Vec::new())),
             inflight: Arc::new(AtomicUsize::new(0)),
+            dialogs: Arc::new(Mutex::new(Vec::new())),
+            requests: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 
@@ -50,6 +61,42 @@ impl ConsoleSink {
             });
         }
         self.record("console", format!("{kind}: {text}"));
+    }
+
+    /// Record an observed dialog (also appended to the trace).
+    pub fn push_dialog(&self, dialog: DialogInfo) {
+        if let Ok(mut dialogs) = self.dialogs.lock() {
+            dialogs.push(dialog.clone());
+        }
+        self.record(
+            "dialog",
+            format!("{}: {}", dialog.dialog_type, dialog.message),
+        );
+    }
+
+    /// Record an observed request (drops the oldest past the cap).
+    pub fn push_request(&self, request: RecordedRequest) {
+        if let Ok(mut requests) = self.requests.lock() {
+            requests.push_back(request);
+            while requests.len() > MAX_RECORDED_REQUESTS {
+                requests.pop_front();
+            }
+        }
+    }
+
+    /// Recorded requests (oldest first).
+    pub fn requests(&self) -> Vec<RecordedRequest> {
+        self.requests
+            .lock()
+            .map(|requests| requests.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// Drop recorded requests.
+    pub fn clear_requests(&self) {
+        if let Ok(mut requests) = self.requests.lock() {
+            requests.clear();
+        }
     }
 
     /// Record a trace entry.
@@ -82,6 +129,8 @@ pub struct CdpDriver {
     target: String,
     timeout: Duration,
     sink: ConsoleSink,
+    /// Held modifier bitmask (CDP does not track it across calls).
+    modifiers: Arc<Mutex<u8>>,
 }
 
 /// BiDi-backed driver (Firefox): one browsing context.
@@ -149,6 +198,7 @@ impl CdpDriver {
             target,
             timeout,
             sink,
+            modifiers: Arc::new(Mutex::new(0)),
         };
         driver.call("Page.enable", Value::Null).await?;
         driver.call("Runtime.enable", Value::Null).await?;
@@ -364,6 +414,106 @@ impl Driver {
         }
     }
 
+    /// Press the left mouse button at coordinates.
+    pub async fn mouse_down(&self, x: f64, y: f64) -> E2eResult<()> {
+        match self {
+            Self::Cdp(driver) => driver.mouse_down(x, y).await,
+            Self::Bidi(driver) => driver.mouse_down(x, y).await,
+        }
+    }
+
+    /// Release the left mouse button at coordinates.
+    pub async fn mouse_up(&self, x: f64, y: f64) -> E2eResult<()> {
+        match self {
+            Self::Cdp(driver) => driver.mouse_up(x, y).await,
+            Self::Bidi(driver) => driver.mouse_up(x, y).await,
+        }
+    }
+
+    /// Scroll a wheel at coordinates by (`delta_x`, `delta_y`).
+    pub async fn mouse_wheel(&self, x: f64, y: f64, delta_x: f64, delta_y: f64) -> E2eResult<()> {
+        match self {
+            Self::Cdp(driver) => driver.mouse_wheel(x, y, delta_x, delta_y).await,
+            Self::Bidi(driver) => driver.mouse_wheel(x, y, delta_x, delta_y).await,
+        }
+    }
+
+    /// Hold a key down (pair with [`Driver::key_up`]).
+    pub async fn key_down(&self, key: &str) -> E2eResult<()> {
+        match self {
+            Self::Cdp(driver) => driver.key_down(key).await,
+            Self::Bidi(driver) => driver.key_down(key).await,
+        }
+    }
+
+    /// Release a held key.
+    pub async fn key_up(&self, key: &str) -> E2eResult<()> {
+        match self {
+            Self::Cdp(driver) => driver.key_up(key).await,
+            Self::Bidi(driver) => driver.key_up(key).await,
+        }
+    }
+
+    /// Grant permissions.
+    pub async fn grant_permissions(&self, permissions: &[&str]) -> E2eResult<()> {
+        match self {
+            Self::Cdp(driver) => driver.grant_permissions(permissions).await,
+            Self::Bidi(driver) => driver.grant_permissions(permissions).await,
+        }
+    }
+
+    /// Override the geolocation coordinates.
+    pub async fn set_geolocation(&self, latitude: f64, longitude: f64) -> E2eResult<()> {
+        match self {
+            Self::Cdp(driver) => driver.set_geolocation(latitude, longitude).await,
+            Self::Bidi(driver) => driver.set_geolocation(latitude, longitude).await,
+        }
+    }
+
+    /// Emulate offline mode.
+    pub async fn set_offline(&self, offline: bool) -> E2eResult<()> {
+        match self {
+            Self::Cdp(driver) => driver.set_offline(offline).await,
+            Self::Bidi(driver) => driver.set_offline(offline).await,
+        }
+    }
+
+    /// Set extra HTTP headers for subsequent requests.
+    pub async fn set_extra_http_headers(&self, headers: &[(&str, &str)]) -> E2eResult<()> {
+        match self {
+            Self::Cdp(driver) => driver.set_extra_http_headers(headers).await,
+            Self::Bidi(driver) => driver.set_extra_http_headers(headers).await,
+        }
+    }
+
+    /// Override the locale.
+    pub async fn set_locale(&self, locale: &str) -> E2eResult<()> {
+        match self {
+            Self::Cdp(driver) => driver.set_locale(locale).await,
+            Self::Bidi(driver) => driver.set_locale(locale).await,
+        }
+    }
+
+    /// Override the timezone.
+    pub async fn set_timezone(&self, timezone_id: &str) -> E2eResult<()> {
+        match self {
+            Self::Cdp(driver) => driver.set_timezone(timezone_id).await,
+            Self::Bidi(driver) => driver.set_timezone(timezone_id).await,
+        }
+    }
+
+    /// Emulate media features.
+    pub async fn emulate_media(
+        &self,
+        color_scheme: Option<ColorScheme>,
+        reduced_motion: Option<ReducedMotion>,
+    ) -> E2eResult<()> {
+        match self {
+            Self::Cdp(driver) => driver.emulate_media(color_scheme, reduced_motion).await,
+            Self::Bidi(driver) => driver.emulate_media(color_scheme, reduced_motion).await,
+        }
+    }
+
     /// Start intercepting requests; returns the handler task handle.
     pub async fn start_routing(
         &self,
@@ -384,10 +534,22 @@ impl Driver {
     }
 
     /// Auto-handle dialogs; returns the handler task handle.
-    pub async fn start_dialogs(&self, accept: bool) -> E2eResult<tokio::task::AbortHandle> {
+    /// Start recording requests into the shared sink.
+    pub fn start_request_capture(&self) -> tokio::task::AbortHandle {
         match self {
-            Self::Cdp(driver) => Ok(driver.start_dialogs(accept)),
-            Self::Bidi(driver) => Ok(driver.start_dialogs(accept)),
+            Self::Cdp(driver) => driver.start_request_capture(),
+            Self::Bidi(driver) => driver.start_request_capture(),
+        }
+    }
+
+    pub async fn start_dialogs(
+        &self,
+        accept: bool,
+        prompt_text: Option<String>,
+    ) -> E2eResult<tokio::task::AbortHandle> {
+        match self {
+            Self::Cdp(driver) => Ok(driver.start_dialogs(accept, prompt_text)),
+            Self::Bidi(driver) => Ok(driver.start_dialogs(accept, prompt_text)),
         }
     }
 
@@ -742,10 +904,18 @@ impl CdpDriver {
         Ok(())
     }
 
+    /// Currently held modifier bitmask.
+    fn held_modifiers(&self) -> u8 {
+        self.modifiers.lock().map(|held| *held).unwrap_or_default()
+    }
+
     async fn mouse_move(&self, x: f64, y: f64) -> E2eResult<()> {
+        let modifiers = self.held_modifiers();
         self.call(
             "Input.dispatchMouseEvent",
-            serde_json::json!({ "type": "mouseMoved", "x": x, "y": y }),
+            serde_json::json!({
+                "type": "mouseMoved", "x": x, "y": y, "modifiers": modifiers,
+            }),
         )
         .await?;
         Ok(())
@@ -754,11 +924,12 @@ impl CdpDriver {
     async fn mouse_click(&self, x: f64, y: f64, click_count: u32) -> E2eResult<()> {
         self.bring_to_front().await?;
         self.mouse_move(x, y).await?;
+        let modifiers = self.held_modifiers();
         for kind in ["mousePressed", "mouseReleased"] {
             self.call(
                 "Input.dispatchMouseEvent",
                 serde_json::json!({
-                    "type": kind, "x": x, "y": y,
+                    "type": kind, "x": x, "y": y, "modifiers": modifiers,
                     "button": "left", "clickCount": click_count.max(1),
                 }),
             )
@@ -783,18 +954,213 @@ impl CdpDriver {
             .await?;
             return Ok(());
         }
+        // A transient press reports its own modifier bit without touching
+        // the held tracker.
+        let modifiers = self.held_modifiers() | modifier_bit(key);
         for kind in ["rawKeyDown", "keyUp"] {
             let mut params = serde_json::json!({
                 "type": kind,
                 "windowsVirtualKeyCode": windows_code,
                 "key": key_name,
                 "code": code,
+                "modifiers": modifiers,
             });
             if kind == "rawKeyDown" && key.chars().count() == 1 {
                 params["text"] = Value::String(key.to_string());
             }
             self.call("Input.dispatchKeyEvent", params).await?;
         }
+        Ok(())
+    }
+
+    async fn mouse_down(&self, x: f64, y: f64) -> E2eResult<()> {
+        self.bring_to_front().await?;
+        self.mouse_move(x, y).await?;
+        let modifiers = self.held_modifiers();
+        self.call(
+            "Input.dispatchMouseEvent",
+            serde_json::json!({
+                "type": "mousePressed", "x": x, "y": y, "modifiers": modifiers,
+                "button": "left", "clickCount": 1,
+            }),
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn mouse_up(&self, x: f64, y: f64) -> E2eResult<()> {
+        self.mouse_move(x, y).await?;
+        let modifiers = self.held_modifiers();
+        self.call(
+            "Input.dispatchMouseEvent",
+            serde_json::json!({
+                "type": "mouseReleased", "x": x, "y": y, "modifiers": modifiers,
+                "button": "left", "clickCount": 1,
+            }),
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn mouse_wheel(&self, x: f64, y: f64, delta_x: f64, delta_y: f64) -> E2eResult<()> {
+        self.bring_to_front().await?;
+        self.mouse_move(x, y).await?;
+        let modifiers = self.held_modifiers();
+        self.call(
+            "Input.dispatchMouseEvent",
+            serde_json::json!({
+                "type": "mouseWheel", "x": x, "y": y, "modifiers": modifiers,
+                "deltaX": delta_x, "deltaY": delta_y,
+            }),
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn key_down(&self, key: &str) -> E2eResult<()> {
+        let (windows_code, key_name, code) = key_definition(key);
+        let bit = modifier_bit(key);
+        let modifiers = if bit == 0 {
+            self.held_modifiers()
+        } else {
+            self.modifiers
+                .lock()
+                .map(|mut held| {
+                    *held |= bit;
+                    *held
+                })
+                .unwrap_or(bit)
+        };
+        let mut params = serde_json::json!({
+            "type": "rawKeyDown",
+            "windowsVirtualKeyCode": windows_code,
+            "key": key_name,
+            "code": code,
+            "modifiers": modifiers,
+        });
+        if key.chars().count() == 1 {
+            params["text"] = Value::String(key.to_string());
+        }
+        self.call("Input.dispatchKeyEvent", params).await?;
+        Ok(())
+    }
+
+    async fn key_up(&self, key: &str) -> E2eResult<()> {
+        let (windows_code, key_name, code) = key_definition(key);
+        // Report the release with the key still held, then clear it.
+        let modifiers = self.held_modifiers();
+        self.call(
+            "Input.dispatchKeyEvent",
+            serde_json::json!({
+                "type": "keyUp",
+                "windowsVirtualKeyCode": windows_code,
+                "key": key_name,
+                "code": code,
+                "modifiers": modifiers,
+            }),
+        )
+        .await?;
+        let bit = modifier_bit(key);
+        if bit != 0 {
+            if let Ok(mut held) = self.modifiers.lock() {
+                *held &= !bit;
+            }
+        }
+        Ok(())
+    }
+
+    async fn grant_permissions(&self, permissions: &[&str]) -> E2eResult<()> {
+        self.call(
+            "Browser.grantPermissions",
+            serde_json::json!({ "permissions": permissions }),
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn set_geolocation(&self, latitude: f64, longitude: f64) -> E2eResult<()> {
+        self.call(
+            "Emulation.setGeolocationOverride",
+            serde_json::json!({
+                "latitude": latitude, "longitude": longitude, "accuracy": 100,
+            }),
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn set_offline(&self, offline: bool) -> E2eResult<()> {
+        let (download, upload) = if offline { (0, 0) } else { (-1, -1) };
+        self.call(
+            "Network.emulateNetworkConditions",
+            serde_json::json!({
+                "offline": offline, "latency": 0,
+                "downloadThroughput": download, "uploadThroughput": upload,
+            }),
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn set_extra_http_headers(&self, headers: &[(&str, &str)]) -> E2eResult<()> {
+        let map: serde_json::Map<String, Value> = headers
+            .iter()
+            .map(|(name, value)| (name.to_string(), Value::String(value.to_string())))
+            .collect();
+        self.call(
+            "Network.setExtraHTTPHeaders",
+            serde_json::json!({ "headers": map }),
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn set_locale(&self, locale: &str) -> E2eResult<()> {
+        self.call(
+            "Emulation.setLocaleOverride",
+            serde_json::json!({ "locale": locale }),
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn set_timezone(&self, timezone_id: &str) -> E2eResult<()> {
+        self.call(
+            "Emulation.setTimezoneOverride",
+            serde_json::json!({ "timezoneId": timezone_id }),
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn emulate_media(
+        &self,
+        color_scheme: Option<ColorScheme>,
+        reduced_motion: Option<ReducedMotion>,
+    ) -> E2eResult<()> {
+        let mut features = Vec::new();
+        if let Some(scheme) = color_scheme {
+            let value = match scheme {
+                ColorScheme::Dark => "dark",
+                ColorScheme::Light => "light",
+            };
+            features.push(serde_json::json!({ "name": "prefers-color-scheme", "value": value }));
+        }
+        if let Some(motion) = reduced_motion {
+            let value = match motion {
+                ReducedMotion::Reduce => "reduce",
+                ReducedMotion::NoPreference => "no-preference",
+            };
+            features.push(serde_json::json!({ "name": "prefers-reduced-motion", "value": value }));
+        }
+        if features.is_empty() {
+            return Ok(());
+        }
+        self.call(
+            "Emulation.setEmulatedMedia",
+            serde_json::json!({ "features": features }),
+        )
+        .await?;
         Ok(())
     }
 
@@ -875,10 +1241,73 @@ impl CdpDriver {
         let _ = self.call("Fetch.disable", Value::Null).await;
     }
 
-    fn start_dialogs(&self, accept: bool) -> tokio::task::AbortHandle {
+    fn start_request_capture(&self) -> tokio::task::AbortHandle {
+        let mut events = self.cdp.subscribe();
+        let session = self.session.clone();
+        let sink = self.sink.clone();
+        tokio::spawn(async move {
+            let mut pending: HashMap<String, (String, String)> = HashMap::new();
+            loop {
+                let event = match events.recv().await {
+                    Ok(event) => event,
+                    Err(_) => break,
+                };
+                if event.session.as_deref() != Some(&session) {
+                    continue;
+                }
+                match event.method.as_str() {
+                    "Network.requestWillBeSent" => {
+                        let id = event.params["requestId"].as_str().unwrap_or_default();
+                        // Redirect chains re-send; keep the first method/URL.
+                        if !id.is_empty() && !pending.contains_key(id) {
+                            let method = event.params["request"]["method"]
+                                .as_str()
+                                .unwrap_or_default()
+                                .to_string();
+                            let url = event.params["request"]["url"]
+                                .as_str()
+                                .unwrap_or_default()
+                                .to_string();
+                            pending.insert(id.to_string(), (method, url));
+                        }
+                    }
+                    "Network.responseReceived" => {
+                        let id = event.params["requestId"].as_str().unwrap_or_default();
+                        if let Some((method, url)) = pending.remove(id) {
+                            let status = event.params["response"]["status"]
+                                .as_u64()
+                                .unwrap_or(0)
+                                .min(u64::from(u16::MAX))
+                                as u16;
+                            sink.push_request(RecordedRequest {
+                                method,
+                                url,
+                                status,
+                            });
+                        }
+                    }
+                    "Network.loadingFailed" => {
+                        let id = event.params["requestId"].as_str().unwrap_or_default();
+                        if let Some((method, url)) = pending.remove(id) {
+                            sink.push_request(RecordedRequest {
+                                method,
+                                url,
+                                status: 0,
+                            });
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .abort_handle()
+    }
+
+    fn start_dialogs(&self, accept: bool, prompt_text: Option<String>) -> tokio::task::AbortHandle {
         let mut events = self.cdp.subscribe();
         let session = self.session.clone();
         let cdp = self.cdp.clone();
+        let sink = self.sink.clone();
         let timeout = self.timeout;
         tokio::spawn(async move {
             loop {
@@ -891,11 +1320,25 @@ impl CdpDriver {
                 {
                     continue;
                 }
+                sink.push_dialog(DialogInfo {
+                    dialog_type: event.params["type"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string(),
+                    message: event.params["message"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string(),
+                });
+                let mut params = serde_json::json!({ "accept": accept });
+                if let Some(text) = &prompt_text {
+                    params["promptText"] = Value::String(text.clone());
+                }
                 let _ = cdp
                     .call(
                         Some(&session),
                         "Page.handleJavaScriptDialog",
-                        serde_json::json!({ "accept": accept }),
+                        params,
                         timeout,
                     )
                     .await;
@@ -1218,6 +1661,10 @@ fn key_definition(key: &str) -> (u16, &str, &str) {
         "End" => (35, "End", "End"),
         "PageUp" => (33, "PageUp", "PageUp"),
         "PageDown" => (34, "PageDown", "PageDown"),
+        "Shift" => (16, "Shift", "ShiftLeft"),
+        "Control" | "Ctrl" => (17, "Control", "ControlLeft"),
+        "Alt" => (18, "Alt", "AltLeft"),
+        "Meta" | "Command" => (91, "Meta", "MetaLeft"),
         " " => (32, " ", "Space"),
         single if single.chars().count() == 1 => {
             let ch = single.chars().next().unwrap_or_default();
@@ -1228,6 +1675,17 @@ fn key_definition(key: &str) -> (u16, &str, &str) {
             }
         }
         _ => (0, key, key),
+    }
+}
+
+/// CDP modifier bitmask for a key name (0 when not a modifier).
+fn modifier_bit(key: &str) -> u8 {
+    match key {
+        "Alt" => 1,
+        "Control" | "Ctrl" => 2,
+        "Meta" | "Command" => 4,
+        "Shift" => 8,
+        _ => 0,
     }
 }
 
@@ -1550,6 +2008,148 @@ impl BidiDriver {
         .await
     }
 
+    async fn mouse_down(&self, x: f64, y: f64) -> E2eResult<()> {
+        self.bring_to_front().await?;
+        self.perform(serde_json::json!([{
+            "type": "pointer", "id": "ferrite-mouse",
+            "parameters": { "pointerType": "mouse" },
+            "actions": [
+                { "type": "pointerMove", "x": x, "y": y },
+                { "type": "pointerDown", "button": 0 },
+            ],
+        }]))
+        .await
+    }
+
+    async fn mouse_up(&self, x: f64, y: f64) -> E2eResult<()> {
+        self.perform(serde_json::json!([{
+            "type": "pointer", "id": "ferrite-mouse",
+            "parameters": { "pointerType": "mouse" },
+            "actions": [
+                { "type": "pointerMove", "x": x, "y": y },
+                { "type": "pointerUp", "button": 0 },
+            ],
+        }]))
+        .await
+    }
+
+    async fn mouse_wheel(&self, x: f64, y: f64, delta_x: f64, delta_y: f64) -> E2eResult<()> {
+        self.bring_to_front().await?;
+        self.perform(serde_json::json!([{
+            "type": "wheel", "id": "ferrite-wheel",
+            "actions": [{
+                "type": "scroll", "x": x, "y": y,
+                "deltaX": delta_x as i64, "deltaY": delta_y as i64,
+            }],
+        }]))
+        .await
+    }
+
+    async fn key_down(&self, key: &str) -> E2eResult<()> {
+        let value = bidi_key_value(key);
+        self.perform(serde_json::json!([{
+            "type": "key", "id": "ferrite-keyboard",
+            "actions": [{ "type": "keyDown", "value": value }],
+        }]))
+        .await
+    }
+
+    async fn key_up(&self, key: &str) -> E2eResult<()> {
+        let value = bidi_key_value(key);
+        self.perform(serde_json::json!([{
+            "type": "key", "id": "ferrite-keyboard",
+            "actions": [{ "type": "keyUp", "value": value }],
+        }]))
+        .await
+    }
+
+    async fn grant_permissions(&self, permissions: &[&str]) -> E2eResult<()> {
+        let origin = self
+            .evaluate("location.origin")
+            .await?
+            .as_str()
+            .filter(|origin| origin.starts_with("http"))
+            .map(str::to_string);
+        for name in permissions {
+            let mut params = serde_json::json!({
+                "descriptor": { "name": name },
+                "state": "granted",
+            });
+            if let Some(origin) = &origin {
+                params["origin"] = Value::String(origin.clone());
+            }
+            self.call("permissions.setPermission", params).await?;
+        }
+        Ok(())
+    }
+
+    async fn set_geolocation(&self, latitude: f64, longitude: f64) -> E2eResult<()> {
+        self.call(
+            "emulation.setGeolocationOverride",
+            serde_json::json!({
+                "coordinates": { "latitude": latitude, "longitude": longitude },
+                "contexts": [self.context.clone()],
+            }),
+        )
+        .await
+        .map_err(|error| {
+            if is_unsupported_command(&error) {
+                E2eError::Config(
+                    "firefox geolocation override needs a newer build \
+                     (BiDi emulation.setGeolocationOverride is unknown)"
+                        .to_string(),
+                )
+            } else {
+                error
+            }
+        })?;
+        Ok(())
+    }
+
+    async fn set_offline(&self, _offline: bool) -> E2eResult<()> {
+        Err(E2eError::Config(
+            "firefox offline emulation is not supported \
+             (BiDi has no network-conditions override)"
+                .to_string(),
+        ))
+    }
+
+    async fn set_extra_http_headers(&self, _headers: &[(&str, &str)]) -> E2eResult<()> {
+        Err(E2eError::Config(
+            "firefox extra HTTP headers are not supported \
+             (BiDi has no global header override)"
+                .to_string(),
+        ))
+    }
+
+    async fn set_locale(&self, _locale: &str) -> E2eResult<()> {
+        Err(E2eError::Config(
+            "firefox locale override is not supported \
+             (BiDi has no locale emulation)"
+                .to_string(),
+        ))
+    }
+
+    async fn set_timezone(&self, _timezone_id: &str) -> E2eResult<()> {
+        Err(E2eError::Config(
+            "firefox timezone override is not supported \
+             (BiDi has no timezone emulation)"
+                .to_string(),
+        ))
+    }
+
+    async fn emulate_media(
+        &self,
+        _color_scheme: Option<ColorScheme>,
+        _reduced_motion: Option<ReducedMotion>,
+    ) -> E2eResult<()> {
+        Err(E2eError::Config(
+            "firefox media emulation is not supported \
+             (BiDi has no emulated-media override)"
+                .to_string(),
+        ))
+    }
+
     async fn start_routing(
         &self,
         rules: Arc<Vec<RouteRule>>,
@@ -1651,10 +2251,78 @@ impl BidiDriver {
         }
     }
 
-    fn start_dialogs(&self, accept: bool) -> tokio::task::AbortHandle {
+    fn start_request_capture(&self) -> tokio::task::AbortHandle {
+        let mut events = self.bidi.subscribe();
+        let context = self.context.clone();
+        let sink = self.sink.clone();
+        tokio::spawn(async move {
+            let mut pending: HashMap<String, (String, String)> = HashMap::new();
+            loop {
+                let event = match events.recv().await {
+                    Ok(event) => event,
+                    Err(_) => break,
+                };
+                if event.context() != Some(context.as_str()) {
+                    continue;
+                }
+                match event.method.as_str() {
+                    "network.beforeRequestSent" => {
+                        let id = event.params["request"]["request"]
+                            .as_str()
+                            .unwrap_or_default();
+                        if !id.is_empty() && !pending.contains_key(id) {
+                            let method = event.params["request"]["method"]
+                                .as_str()
+                                .unwrap_or_default()
+                                .to_string();
+                            let url = event.params["request"]["url"]
+                                .as_str()
+                                .unwrap_or_default()
+                                .to_string();
+                            pending.insert(id.to_string(), (method, url));
+                        }
+                    }
+                    "network.responseCompleted" => {
+                        let id = event.params["request"]["request"]
+                            .as_str()
+                            .unwrap_or_default();
+                        if let Some((method, url)) = pending.remove(id) {
+                            let status = event.params["response"]["status"]
+                                .as_u64()
+                                .unwrap_or(0)
+                                .min(u64::from(u16::MAX))
+                                as u16;
+                            sink.push_request(RecordedRequest {
+                                method,
+                                url,
+                                status,
+                            });
+                        }
+                    }
+                    "network.fetchError" => {
+                        let id = event.params["request"]["request"]
+                            .as_str()
+                            .unwrap_or_default();
+                        if let Some((method, url)) = pending.remove(id) {
+                            sink.push_request(RecordedRequest {
+                                method,
+                                url,
+                                status: 0,
+                            });
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .abort_handle()
+    }
+
+    fn start_dialogs(&self, accept: bool, prompt_text: Option<String>) -> tokio::task::AbortHandle {
         let mut events = self.bidi.subscribe();
         let context = self.context.clone();
         let bidi = self.bidi.clone();
+        let sink = self.sink.clone();
         let timeout = self.timeout;
         tokio::spawn(async move {
             loop {
@@ -1667,12 +2335,22 @@ impl BidiDriver {
                 {
                     continue;
                 }
+                sink.push_dialog(DialogInfo {
+                    dialog_type: event.params["type"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string(),
+                    message: event.params["message"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string(),
+                });
+                let mut params = serde_json::json!({ "context": context, "accept": accept });
+                if let Some(text) = &prompt_text {
+                    params["userText"] = Value::String(text.clone());
+                }
                 let _ = bidi
-                    .call(
-                        "browsingContext.handleUserPrompt",
-                        serde_json::json!({ "context": context, "accept": accept }),
-                        timeout,
-                    )
+                    .call("browsingContext.handleUserPrompt", params, timeout)
                     .await;
             }
         })
@@ -1900,7 +2578,25 @@ fn bidi_key_value(key: &str) -> String {
         "End" => "\u{E010}".to_string(),
         "PageUp" => "\u{E00E}".to_string(),
         "PageDown" => "\u{E00F}".to_string(),
+        "Shift" => "\u{E008}".to_string(),
+        "Control" | "Ctrl" => "\u{E009}".to_string(),
+        "Alt" => "\u{E00A}".to_string(),
+        "Meta" | "Command" => "\u{E00D}".to_string(),
         other => other.to_string(),
+    }
+}
+
+/// True when a protocol error means "this build does not know the command".
+fn is_unsupported_command(error: &E2eError) -> bool {
+    match error {
+        E2eError::Cdp { method, message } => {
+            let text = format!("{method} {message}").to_lowercase();
+            text.contains("unknown command")
+                || text.contains("unsupported")
+                || text.contains("unimplemented")
+                || text.contains("not implemented")
+        }
+        _ => false,
     }
 }
 
@@ -2154,5 +2850,19 @@ mod tests {
         assert_eq!(key_definition("Escape").0, 27);
         assert_eq!(key_definition("ArrowLeft").0, 37);
         assert_eq!(key_definition("a").0, u16::from(b'A'));
+    }
+
+    #[test]
+    fn key_definitions_cover_modifiers() {
+        assert_eq!(key_definition("Shift"), (16, "Shift", "ShiftLeft"));
+        assert_eq!(key_definition("Control"), (17, "Control", "ControlLeft"));
+        assert_eq!(key_definition("Ctrl"), (17, "Control", "ControlLeft"));
+        assert_eq!(key_definition("Alt"), (18, "Alt", "AltLeft"));
+        assert_eq!(key_definition("Meta"), (91, "Meta", "MetaLeft"));
+        assert_eq!(bidi_key_value("Shift"), "\u{E008}");
+        assert_eq!(bidi_key_value("Control"), "\u{E009}");
+        assert_eq!(bidi_key_value("Alt"), "\u{E00A}");
+        assert_eq!(bidi_key_value("Meta"), "\u{E00D}");
+        assert_eq!(bidi_key_value("Enter"), "\u{E007}");
     }
 }

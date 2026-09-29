@@ -24,6 +24,17 @@ pub struct Test {
     pub name: String,
     /// Test body.
     pub func: TestFn,
+    /// Tags for filtering.
+    pub tags: Vec<String>,
+}
+
+impl Test {
+    /// Add a tag for filtering.
+    #[must_use]
+    pub fn tag(mut self, tag: impl Into<String>) -> Self {
+        self.tags.push(tag.into());
+        self
+    }
 }
 
 /// Define a test.
@@ -35,7 +46,70 @@ where
     Test {
         name: name.into(),
         func: Arc::new(move |page| Box::pin(func(page))),
+        tags: Vec::new(),
     }
+}
+
+/// Group tests under `name` (`"group > test"`); nests naturally.
+#[must_use]
+pub fn describe(name: &str, tests: Vec<Test>) -> Vec<Test> {
+    tests
+        .into_iter()
+        .map(|mut test| {
+            test.name = format!("{name} > {}", test.name);
+            test
+        })
+        .collect()
+}
+
+/// Select the tests to run: name-or-tag substring filters, then one shard.
+///
+/// `shard` is 1-based (`shard(1, 3)` runs the first third by name order).
+pub(crate) fn select<'a>(
+    tests: &'a [Test],
+    filter: Option<&str>,
+    grep: Option<&str>,
+    shard: Option<(usize, usize)>,
+) -> Vec<&'a Test> {
+    let mut selected: Vec<&Test> = tests.iter().collect();
+    for needle in filter.into_iter().chain(grep) {
+        selected.retain(|test| {
+            test.name.contains(needle) || test.tags.iter().any(|tag| tag.contains(needle))
+        });
+    }
+    if let Some((index, total)) = shard {
+        let mut ordered = selected;
+        ordered.sort_by(|a: &&Test, b: &&Test| a.name.cmp(&b.name));
+        let total = total.max(1);
+        let want = index.saturating_sub(1) % total;
+        selected = ordered
+            .into_iter()
+            .enumerate()
+            .filter(|(position, _)| position % total == want)
+            .map(|(_, test)| test)
+            .collect();
+    }
+    selected
+}
+
+/// Shard from `FERRITE_E2E_SHARD` (`"1/3"`); warns and ignores garbage.
+fn shard_from_env() -> Option<(usize, usize)> {
+    let raw = std::env::var("FERRITE_E2E_SHARD").ok()?;
+    let (index, total) = raw.split_once('/')?;
+    let index: usize = index.trim().parse().ok()?;
+    let total: usize = total.trim().parse().ok()?;
+    if index < 1 || index > total {
+        eprintln!(
+            "warning: ignoring invalid FERRITE_E2E_SHARD={raw:?} (want 1-based index within total)"
+        );
+        return None;
+    }
+    Some((index, total))
+}
+
+/// Non-empty env var, if set.
+fn env_filter(var: &str) -> Option<String> {
+    std::env::var(var).ok().filter(|value| !value.is_empty())
 }
 
 /// Runs tests against a [`Browser`] with workers, retries, and artifacts.
@@ -45,6 +119,8 @@ pub struct Runner {
     retries: u32,
     test_timeout: Duration,
     filter: Option<String>,
+    grep: Option<String>,
+    shard: Option<(usize, usize)>,
     output_dir: String,
     screenshot_on_failure: bool,
     screenshot_always: bool,
@@ -61,6 +137,8 @@ impl Default for Runner {
             retries: 0,
             test_timeout: Duration::from_secs(30),
             filter: None,
+            grep: None,
+            shard: None,
             output_dir: "test-results".to_string(),
             screenshot_on_failure: true,
             screenshot_always: false,
@@ -81,6 +159,8 @@ impl Runner {
             retries: config.retries,
             test_timeout: Duration::from_millis(config.timeout_ms.max(1)),
             filter: None,
+            grep: None,
+            shard: None,
             output_dir: config.output_dir.clone(),
             screenshot_on_failure: config.screenshot_on_failure(),
             screenshot_always: config.screenshot_always(),
@@ -112,10 +192,38 @@ impl Runner {
         self
     }
 
-    /// Only run tests whose name contains `filter`.
+    /// Only run tests whose name or tags contain `filter`.
+    ///
+    /// Builder values win over `FERRITE_E2E_FILTER` (set by `--filter`).
     #[must_use]
     pub fn filter(mut self, filter: impl Into<String>) -> Self {
         self.filter = Some(filter.into());
+        self
+    }
+
+    /// Only run tests whose name or tags contain `grep` (ANDed with `filter`).
+    ///
+    /// Builder values win over `FERRITE_E2E_GREP` (set by `--grep`).
+    #[must_use]
+    pub fn grep(mut self, grep: impl Into<String>) -> Self {
+        self.grep = Some(grep.into());
+        self
+    }
+
+    /// Run one shard: 1-based `index` of `total` by name order.
+    ///
+    /// Builder values win over `FERRITE_E2E_SHARD` (set by `--shard`).
+    ///
+    /// # Panics
+    ///
+    /// Panics on a zero index/total or an index past the total.
+    #[must_use]
+    pub fn shard(mut self, index: usize, total: usize) -> Self {
+        assert!(
+            index >= 1 && total >= 1 && index <= total,
+            "invalid shard {index}/{total} (want a 1-based index within the total)"
+        );
+        self.shard = Some((index, total));
         self
     }
 
@@ -148,15 +256,23 @@ impl Runner {
     }
 
     /// Run tests to completion (never fails the call itself).
+    ///
+    /// Unset builder filters fall back to `FERRITE_E2E_FILTER`,
+    /// `FERRITE_E2E_GREP`, and `FERRITE_E2E_SHARD` (set by the CLI flags).
     pub async fn run(&self, browser: &Browser, tests: Vec<Test>) -> TestReport {
+        let filter = self
+            .filter
+            .clone()
+            .or_else(|| env_filter("FERRITE_E2E_FILTER"));
+        let grep = self.grep.clone().or_else(|| env_filter("FERRITE_E2E_GREP"));
+        let shard = self.shard.or_else(shard_from_env);
+        let selected: Vec<Test> = select(&tests, filter.as_deref(), grep.as_deref(), shard)
+            .into_iter()
+            .cloned()
+            .collect();
         let semaphore = Arc::new(tokio::sync::Semaphore::new(self.workers));
         let mut handles = Vec::new();
-        for test in tests {
-            if let Some(filter) = &self.filter {
-                if !test.name.contains(filter) {
-                    continue;
-                }
-            }
+        for test in selected {
             let permit = semaphore.clone().acquire_owned().await.expect("semaphore");
             let runner = self.clone();
             let context = browser.default_context();
@@ -382,6 +498,91 @@ mod tests {
         assert_eq!(slug("home renders!"), "home-renders");
         assert_eq!(slug("  A/B: c  "), "a-b-c");
         assert_eq!(slug("!!!"), "test");
+    }
+
+    fn named(name: &str) -> Test {
+        test(name, |_| async { Ok(()) })
+    }
+
+    #[test]
+    fn describe_prefixes_and_nests() {
+        let tests = describe("auth", vec![named("login"), named("logout")]);
+        assert_eq!(tests[0].name, "auth > login");
+        assert_eq!(tests[1].name, "auth > logout");
+        let nested = describe("app", tests);
+        assert_eq!(nested[0].name, "app > auth > login");
+    }
+
+    #[test]
+    fn select_matches_names_and_tags() {
+        let tests = vec![
+            named("home renders"),
+            named("auth > login").tag("fast"),
+            named("auth > logout").tag("slow"),
+        ];
+        let names = |selected: Vec<&Test>| {
+            selected
+                .iter()
+                .map(|test| test.name.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(select(&tests, None, None, None)).len(), 3);
+        assert_eq!(
+            names(select(&tests, Some("auth"), None, None)),
+            vec!["auth > login".to_string(), "auth > logout".to_string()]
+        );
+        assert_eq!(
+            names(select(&tests, Some("fast"), None, None)),
+            vec!["auth > login".to_string()]
+        );
+        // grep ANDs with filter.
+        assert_eq!(
+            names(select(&tests, Some("auth"), Some("slow"), None)),
+            vec!["auth > logout".to_string()]
+        );
+        assert_eq!(select(&tests, Some("auth"), Some("fast"), None).len(), 1);
+        assert!(select(&tests, Some("zzz"), None, None).is_empty());
+    }
+
+    #[test]
+    fn select_shards_by_name_order() {
+        let tests = vec![named("c"), named("a"), named("b"), named("d")];
+        let names = |selected: Vec<&Test>| {
+            selected
+                .iter()
+                .map(|test| test.name.clone())
+                .collect::<Vec<_>>()
+        };
+        // Sorted a,b,c,d; shard 1/2 takes positions 0,2.
+        assert_eq!(
+            names(select(&tests, None, None, Some((1, 2)))),
+            vec!["a".to_string(), "c".to_string()]
+        );
+        assert_eq!(
+            names(select(&tests, None, None, Some((2, 2)))),
+            vec!["b".to_string(), "d".to_string()]
+        );
+        assert_eq!(
+            names(select(&tests, None, None, Some((3, 3)))),
+            vec!["c".to_string()]
+        );
+        // Filters apply before sharding.
+        assert_eq!(
+            names(select(&tests, Some("a"), None, Some((1, 2)))),
+            vec!["a".to_string()]
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid shard 0/2")]
+    fn shard_rejects_zero_index() {
+        let _ = Runner::default().shard(0, 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid shard 3/2")]
+    fn shard_rejects_index_past_total() {
+        let _ = Runner::default().shard(3, 2);
     }
 
     #[test]

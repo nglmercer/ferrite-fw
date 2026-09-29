@@ -60,11 +60,12 @@ pub use error::{E2eError, E2eResult};
 pub use expect::{PageExpect, Timeout};
 pub use locator::{Locator, LocatorOptions, Selector};
 pub use page::{
-    ClickOptions, ConsoleMessage, Cookie, ElementState, KeyPress, LoadState, NavigationOptions,
-    Page, RouteAction, RouteRule, ScreenshotOptions, Viewport,
+    ClickOptions, ColorScheme, ConsoleMessage, Cookie, DialogInfo, ElementState, KeyPress,
+    LoadState, NavigationOptions, Page, RecordedRequest, ReducedMotion, RouteAction, RouteRule,
+    ScreenshotOptions, StorageState, Viewport,
 };
 pub use report::{TestReport, TestResult, TestStatus};
-pub use runner::{test, Runner, Test};
+pub use runner::{describe, test, Runner, Test};
 pub use video::{find_ffmpeg, find_ffprobe, VideoFormat, VideoFrame, VideoMode, VideoOptions};
 pub use webserver::{wait_for_url, RunningWebServer, WebServer};
 
