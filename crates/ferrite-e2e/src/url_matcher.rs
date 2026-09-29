@@ -24,23 +24,44 @@ impl UrlMatcher {
         let mut chars = pattern.chars().peekable();
         let mut expression = String::from("^");
         let mut depth = 0usize;
+        let mut previous = None;
         while let Some(c) = chars.next() {
+            let before = previous;
+            previous = Some(c);
             match c {
                 '\\' => {
                     let escaped = chars
                         .next()
                         .ok_or_else(|| E2eError::Config("URL glob ends with an escape".into()))?;
                     expression.push_str(&regex::escape(&escaped.to_string()));
+                    previous = Some(escaped);
                 }
                 '*' => {
                     if chars.peek() == Some(&'*') {
-                        chars.next();
-                        expression.push_str(".*");
+                        while chars.peek() == Some(&'*') {
+                            chars.next();
+                        }
+                        if chars.peek() == Some(&'/') {
+                            chars.next();
+                            previous = Some('/');
+                            expression.push_str(if before == Some('/') {
+                                "(?:.+/)?"
+                            } else {
+                                ".*/"
+                            });
+                        } else {
+                            expression.push_str(".*");
+                        }
                     } else {
                         expression.push_str("[^/]*");
                     }
                 }
                 '{' => {
+                    if depth != 0 {
+                        return Err(E2eError::Config(
+                            "URL glob does not support nested '{'".into(),
+                        ));
+                    }
                     depth += 1;
                     expression.push_str("(?:");
                 }

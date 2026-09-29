@@ -1757,6 +1757,52 @@ impl Locator {
             .await
     }
 
+    /// Dispatch a synthetic event with native constructor/init semantics.
+    /// Successful dispatch includes events canceled by preventDefault().
+    pub async fn dispatch_event_with(
+        &self,
+        name: &str,
+        options: crate::DispatchEventOptions,
+    ) -> E2eResult<()> {
+        if !options.init.is_object() {
+            return Err(E2eError::Config("event init must be a JSON object".into()));
+        }
+        let name = serde_json::to_string(name)?;
+        let init = serde_json::to_string(&options.init)?;
+        let constructor = serde_json::to_string(options.kind.constructor())?;
+        self.page.auto_step(
+            format!("locator.dispatch_event_with {}", self.selector()),
+            crate::StepCategory::Action,
+            async {
+                let value = self.eval_first(&format!(r#"(() => {{
+                    const type = {name}, init = Object.assign({{ bubbles: true, cancelable: true, composed: true }}, {init});
+                    let name = {constructor};
+                    if (name === 'auto') {{
+                        if (/^(?:click|dblclick|auxclick|contextmenu|mouse(?:down|up|move|over|out|enter|leave))$/.test(type)) name = 'MouseEvent';
+                        else if (/^(?:keydown|keyup|keypress)$/.test(type)) name = 'KeyboardEvent';
+                        else if (/^(?:focus|blur|focusin|focusout)$/.test(type)) name = 'FocusEvent';
+                        else if (/^(?:pointer(?:down|up|move|over|out|enter|leave|cancel)|gotpointercapture|lostpointercapture)$/.test(type)) name = 'PointerEvent';
+                        else if (type === 'wheel') name = 'WheelEvent';
+                        else if (/^(?:dragstart|drag|dragenter|dragleave|dragover|drop|dragend)$/.test(type)) name = 'DragEvent';
+                        else name = 'Event';
+                    }}
+                    const Constructor = el.ownerDocument.defaultView[name];
+                    if (typeof Constructor !== 'function') throw new Error('unsupported DOM event constructor ' + name);
+                    el.dispatchEvent(new Constructor(type, init));
+                    return true;
+                }})()"#)).await?;
+                self.require_match(value)
+            }
+        ).await
+    }
+
+    /// Native intersection ratio, including clipping ancestors and the owning
+    /// frame's viewport. The observer is disconnected after its first sample.
+    pub async fn intersection_ratio(&self) -> E2eResult<f64> {
+        self.evaluate("el => new Promise(resolve => { const observer = new el.ownerDocument.defaultView.IntersectionObserver(entries => { observer.disconnect(); resolve(entries[0].intersectionRatio); }); observer.observe(el); })")
+            .await
+    }
+
     /// Select the element's text (input value or rendered text).
     pub async fn select_text(&self) -> E2eResult<()> {
         self.page
@@ -2390,16 +2436,7 @@ impl Locator {
                     self.page
                         .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
                             format!("locator in_viewport `{}`", self.selector.raw()),
-                            async {
-                                let value = self
-                                    .eval_first(
-                                        "(() => { const r = el.getBoundingClientRect(); \
-                 return r.bottom > 0 && r.right > 0 \
-                 && r.top < innerHeight && r.left < innerWidth; })()",
-                                    )
-                                    .await?;
-                                Ok(value.as_bool().unwrap_or(false))
-                            },
+                            async { Ok(self.intersection_ratio().await? > 0.0) },
                         ))
                         .await
                 },

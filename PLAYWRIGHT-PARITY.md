@@ -19,9 +19,9 @@ reporter, Android and Electron APIs:
 | Classification | Members | Meaning |
 |---|---:|---|
 | Equivalent | 15 | Counterpart for the basic operation/value, without full options or engine compatibility |
-| Partial | 581 | Related exposed operation with material semantic, option or engine differences |
+| Partial | 584 | Related exposed operation with material semantic, option or engine differences |
 | Idiomatic | 42 | Comparable operation through Rust language/library facilities |
-| Missing | 380 | No dedicated public counterpart |
+| Missing | 377 | No dedicated public counterpart |
 
 These counts describe an inventory, **not a behavioral compatibility
 percentage**. The earlier inventory had 458 Partial and 503 Missing members.
@@ -34,6 +34,9 @@ requires a complete inventory and validates local evidence links.
 
 The [implementation TODO](E2E-PARITY-TODO.md) prioritizes the remaining practical
 work, with dependencies, completion criteria and explicit substantial-work exclusions.
+The [engine capability table](E2E-ENGINE-CAPABILITIES.md) and
+[pinned conformance corpus](scripts/e2e-conformance/README.md) distinguish native
+shared behavior, engine-specific operations and missing protocol metadata.
 
 A follow-up audit corrected three false Missing entries: `Page.close`,
 `BrowserContext.isClosed` and `Locator.visible` already have implementations.
@@ -60,11 +63,11 @@ implementation.
 | URL/network waits | Exact, glob, regex and URL/request/response predicates, including async network predicates | Explicit Rust APIs and snapshot records; no waitUntil/URLPattern or complete live Request/Response objects |
 | DOM access | Separate textContent/innerText, arrays, evaluate-all/JSON arguments, highlight removal; single-target getters wait and enforce strictness | JSON values only, without arbitrary JS/JSHandle argument serialization |
 | Frames and handles | Same-origin lazy/nested/replacement `FrameLocator`, frame ownership, content/function/URL/load/selector helpers, remote handle evaluation/properties | Cross-origin/OOPIF lazy selection and ElementHandle are deferred |
-| Assertions | Exact/regex page title/URL, normalized ordered texts, classes, values, role/error message, custom predicates, `expect_to_pass` | No custom matcher registry/asymmetric matchers or full options parity |
+| Assertions | Exact/regex page title/URL, raw regex/normalized or rendered text options, mixed lists, ordered text subsets, exact classes/class tokens, values, state/indeterminate options, native intersection ratios, accessible regex, custom predicates and `expect_to_pass` | Rust regex syntax; accessibility approximation; no custom matcher registry/asymmetric matchers or full options parity |
 | Accessibility snapshots | Structured DOM role/name/state tree and locator/page exact snapshot assertions | Approximation, without complete ARIA/YAML matching or all upstream modes |
 | Clock | Separate fixed Date/system time, run-for/fast-forward, promise/timer ordering, pause-at/resume and installation time | Page-local; navigation reinstalls initial state; idle callbacks approximate browser behavior |
 | API testing | Query/headers/JSON/form/raw/multipart, cookies, TLS/proxy/auth, timeout, redirects, status checks and connect retries | IndexedDB state and all redirect/retry semantics remain deferred; returned response buffers are independently owned |
-| Browser/API storage | Context-linked cookies in both directions; isolated protocol cookie partitions; Playwright cookies/origins localStorage JSON | API transport options configured separately; redirect/partition/SameSite details remain narrower; no IndexedDB/OPFS snapshots |
+| Browser/API storage | Context-linked cookies in both directions; isolated protocol cookie partitions; Playwright cookies/origins localStorage JSON; Page/context API clients inherit transport defaults at creation | Redirect/partition/SameSite details remain narrower; no IndexedDB/OPFS snapshots |
 | HTTP credentials | Browser challenge authentication on Chromium, preserving extra headers; explicit preemptive Basic helper | Firefox challenge credentials unsupported; cached-auth clearing is approximate |
 | Callbacks and buffers | Page-exposed functions survive navigation; console/error source metadata, context history and per-attempt reporting | No context-wide bindings, async Rust callbacks or complete frame/worker dispatch |
 | Downloads | Chromium download behavior/cancellation scoped to the owning context; completed-file deduplication | File-based lifecycle, limited Firefox URL/failure/cancellation metadata |
@@ -307,6 +310,40 @@ These additions follow the official [TestStep metadata](https://playwright.dev/d
 and [TestInfo outcomes](https://playwright.dev/docs/api/class-testinfo), with the
 Rust schema and lifecycle differences described above.
 
+## Typed events and assertion options
+
+`Locator::dispatch_event_with` accepts `DispatchEventOptions`: explicit native
+constructors or common event-name inference, JSON initialization and
+bubbles/cancelable/composed flags (true by default). Canceled synthetic dispatch
+still succeeds. Auto input uses Event as in the pinned Playwright version;
+explicit `DomEventKind::Input` supplies InputEvent fields. The old CustomEvent
+detail helper remains available. Events are untrusted; native mouse/keyboard
+APIs provide trusted input. Live remote-handle arguments remain excluded.
+
+`TextMatcher` and `TextAssertionOptions` add raw regex vs normalized exact/
+contains text, case handling, rendered innerText, mixed ordered lists and
+ordered contains-text subsets. Class equality preserves class order; separate
+class-token containment ignores order. Multiple-select values can mix strings
+and regexes. `MatchOptions` also applies to accessible name/description/error
+assertions, with the existing DOM approximation. Regex syntax is Rust regex,
+and inline pattern flags retain Rust's own semantics.
+
+`CheckedOptions` supports checked/unchecked or indeterminate expectations;
+combining the two is invalid. `state_with` accepts explicit expected states,
+preserving absent-element behavior only for attachment/visibility. Negation
+cannot convert ambiguous/missing input resolution into a passing state assertion.
+`in_viewport_with(ratio)` uses native IntersectionObserver ratios and clipping,
+including the supported same-origin frame scope; finite ratios from 0 to 1 are
+accepted, and zero requires positive intersection. `intersection_ratio` exposes
+the native sample. Default `in_viewport` getters/assertions also use positive
+native intersection, replacing the previous rectangle-only overlap check.
+
+Focused regressions compare native Chromium/Firefox outcomes with a recorded
+Playwright 1.63.0 Chromium reference and separately check invalid options,
+strict/negative assertions, delayed updates, zero deadlines, cancellation,
+disposal and same-origin frame intersections. This is targeted differential
+coverage; it does not establish complete behavioral parity.
+
 ## URL/network matching, generated uploads and browser diagnostics
 
 `UrlMatcher::exact`, `glob`, `regex` and `contains` are reusable across
@@ -394,10 +431,10 @@ cargo clippy -p ferrite-e2e -p ferrite-cli --all-targets -- -D warnings
 
 Validation for URL/network matching, generated uploads and browser diagnostics:
 
-- `ferrite-e2e`: **137 unit tests, 3 API tests, 93 browser tests, 7 attempt-diagnostics
+- `ferrite-e2e`: **138 unit tests, 3 API tests, 93 browser tests, 7 attempt-diagnostics
   groups, 4 reliability groups, 4 runtime/reporter groups, 6 fixture/network
-  groups, 4 step-control/bundle groups, 5 wait/upload/console groups and
-  2 doctests** (265 checks total).
+  groups, 4 step-control/bundle groups, 5 wait/upload/console groups,
+  3 core conformance/capability groups and 2 doctests** (269 checks total).
   Headless Shell and Firefox were installed and exercised; unsupported-engine branches remain explicit.
 - The five new groups additionally passed with full Chrome and Firefox, covering
   exact/glob/regex and predicate URL matching, frame history, request-start and
@@ -423,7 +460,7 @@ Validation for URL/network matching, generated uploads and browser diagnostics:
 - Existing trace and first-attachment names remain compatible; retry trace files
   and repeated attachment names preserve their individual contents.
 - CLI/configuration checks passed again: 5 CLI tests, 17 configuration tests and
-  1 doctest (288 checks across E2E/CLI/configuration). This change adds no CLI
+  1 doctest (292 checks across E2E/CLI/configuration). This change adds no CLI
   options. A real portable HTML report with expanded automatic/user/hook trees,
   skipped steps, annotations and run lifecycle was rendered in Chromium and
   visually inspected. The console section was also rendered and visually

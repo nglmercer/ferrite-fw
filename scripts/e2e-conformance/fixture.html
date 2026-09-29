@@ -1,0 +1,34 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+html, body { background: rgb(12,34,56); margin: 0; }
+#text { white-space: pre-line; }
+#clip { position: absolute; bottom: 0; right: 0; overflow: hidden; width: 40px; height: 40px; }
+#clipped { width: 40px; height: 80px; background: white; }
+</style>
+<p id="text"> A&#x200b;&#xad;
+&nbsp;B <span hidden>Hidden</span></p>
+<div class="items"><p class="alpha one">Alpha</p><p class="beta two">Beta</p><p class="gamma three">Gamma</p></div>
+<div id="classes" class="one two"></div><div id="duplicate" class="one"></div>
+<select id="values" multiple><option value="a" selected>A</option><option value="bee" selected>B</option></select>
+<input id="checkbox" type="checkbox"><input id="disabled" disabled><input id="enabled">
+<button id="event" type="button">event</button>
+<button id="accessible" aria-label="Save Changes" aria-describedby="description" aria-errormessage="error" aria-invalid="true">visible</button>
+<span id="description">Helpful Description</span><span id="error">Invalid Entry</span>
+<div id="shadow"></div><div id="clip"><div id="clipped"></div></div>
+<script>
+window.samples = [];
+document.getElementById('checkbox').indeterminate = true;
+for (const type of ['click', 'keydown', 'focus', 'input', 'pointerdown', 'probe']) {
+  document.getElementById('event').addEventListener(type, e => {
+    e.preventDefault();
+    const sample = { constructor: e.constructor.name, type: e.type };
+    for (const field of ['bubbles','cancelable','composed','clientX','ctrlKey','key','data','inputType','pointerId','pointerType','detail','isTrusted','defaultPrevented']) sample[field] = e[field] ?? null;
+    window.samples.push(sample);
+  });
+}
+const root = document.getElementById('shadow').attachShadow({mode:'open'});
+root.innerHTML = '<button id="shadow-button">shadow</button>';
+window.shadowReached = 0;
+document.addEventListener('shadow-probe', () => window.shadowReached++);
+</script>

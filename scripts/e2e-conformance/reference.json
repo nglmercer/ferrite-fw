@@ -1,0 +1,187 @@
+{
+  "playwright": "1.63.0",
+  "reference_engine": "chromium",
+  "reference_browser_version": "153.0.8010.12",
+  "event_samples": [
+    {
+      "constructor": "MouseEvent",
+      "type": "click",
+      "bubbles": true,
+      "cancelable": true,
+      "composed": true,
+      "clientX": 17,
+      "ctrlKey": true,
+      "key": null,
+      "data": null,
+      "inputType": null,
+      "pointerId": null,
+      "pointerType": null,
+      "detail": 0,
+      "isTrusted": false,
+      "defaultPrevented": true
+    },
+    {
+      "constructor": "KeyboardEvent",
+      "type": "keydown",
+      "bubbles": true,
+      "cancelable": true,
+      "composed": true,
+      "clientX": null,
+      "ctrlKey": false,
+      "key": "Q",
+      "data": null,
+      "inputType": null,
+      "pointerId": null,
+      "pointerType": null,
+      "detail": 0,
+      "isTrusted": false,
+      "defaultPrevented": true
+    },
+    {
+      "constructor": "FocusEvent",
+      "type": "focus",
+      "bubbles": true,
+      "cancelable": true,
+      "composed": true,
+      "clientX": null,
+      "ctrlKey": null,
+      "key": null,
+      "data": null,
+      "inputType": null,
+      "pointerId": null,
+      "pointerType": null,
+      "detail": 0,
+      "isTrusted": false,
+      "defaultPrevented": true
+    },
+    {
+      "constructor": "Event",
+      "type": "input",
+      "bubbles": true,
+      "cancelable": true,
+      "composed": true,
+      "clientX": null,
+      "ctrlKey": null,
+      "key": null,
+      "data": null,
+      "inputType": null,
+      "pointerId": null,
+      "pointerType": null,
+      "detail": null,
+      "isTrusted": false,
+      "defaultPrevented": true
+    },
+    {
+      "constructor": "PointerEvent",
+      "type": "pointerdown",
+      "bubbles": true,
+      "cancelable": true,
+      "composed": true,
+      "clientX": 0,
+      "ctrlKey": false,
+      "key": null,
+      "data": null,
+      "inputType": null,
+      "pointerId": 7,
+      "pointerType": "pen",
+      "detail": 0,
+      "isTrusted": false,
+      "defaultPrevented": true
+    },
+    {
+      "constructor": "Event",
+      "type": "probe",
+      "bubbles": true,
+      "cancelable": true,
+      "composed": true,
+      "clientX": null,
+      "ctrlKey": null,
+      "key": null,
+      "data": null,
+      "inputType": null,
+      "pointerId": null,
+      "pointerType": null,
+      "detail": null,
+      "isTrusted": false,
+      "defaultPrevented": true
+    },
+    {
+      "constructor": "InputEvent",
+      "type": "input",
+      "bubbles": true,
+      "cancelable": true,
+      "composed": true,
+      "clientX": null,
+      "ctrlKey": null,
+      "key": null,
+      "data": "typed",
+      "inputType": "insertText",
+      "pointerId": null,
+      "pointerType": null,
+      "detail": 0,
+      "isTrusted": false,
+      "defaultPrevented": true
+    }
+  ],
+  "shadow_reached": 1,
+  "assertions": {
+    "normalized": true,
+    "raw_regex": true,
+    "rendered": true,
+    "ordered_mixed": true,
+    "subset": true,
+    "reversed_subset": false,
+    "class_order": false,
+    "class_duplicates": false,
+    "class_list": false,
+    "class_list_exact": true,
+    "contains_class_tokens": true,
+    "contains_class_list": true,
+    "values_mixed": true,
+    "indeterminate": true,
+    "unchecked": true,
+    "viewport_low": true,
+    "viewport_high": false,
+    "accessible_name": true,
+    "accessible_description": true,
+    "accessible_error": true
+  },
+  "screenshot": {
+    "width": 640,
+    "height": 480,
+    "background": [
+      12,
+      34,
+      56
+    ]
+  },
+  "redirects": [
+    [
+      "/redirect",
+      302
+    ],
+    [
+      "/final",
+      200
+    ]
+  ],
+  "callback_after_navigation": 42,
+  "url_matchers": [
+    {
+      "pattern": "**/api/item.js",
+      "matches": true
+    },
+    {
+      "pattern": "**/api/**/item.js",
+      "matches": true
+    },
+    {
+      "pattern": "**/api/{item,other}.js",
+      "matches": true
+    },
+    {
+      "pattern": "**/api/*.css",
+      "matches": false
+    }
+  ]
+}

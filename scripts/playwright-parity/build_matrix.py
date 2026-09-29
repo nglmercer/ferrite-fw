@@ -335,6 +335,17 @@ for c,target in [('Page','Page.set_input_file_payloads'),('Locator','Locator.set
  put(c,'setInputFiles',target,'FilePayload filename/MIME/bytes or existing path uploads; empty lists clear, multiple files require a multiple input, 64 MiB total cap. DOM File/DataTransfer injection on both engines; no native chooser/directory upload/options parity. Frame uses Frame.locator.')
 for m,t in {'text':'text','type':'kind','location':'location','timestamp':'timestamp_ms','page':'page_id'}.items():
  put('ConsoleMessage',m,'ConsoleMessage.'+t,'Native CDP/BiDi source URL/zero-based position, epoch-ms timestamp and owning page ID when available. Optional unknown metadata; page is an ID rather than a Page object. String previews, not JSHandle argument or worker ownership parity. Context history and attempt JSON/HTML/trace retain closed-page messages.')
+# Audit current event forwarding and selector facades independently of old mappings.
+put('Locator','dispatchEvent','Locator.dispatch_event_with','Typed synthetic DOM constructors with JSON event-specific initialization and bubbles/cancelable/composed flags; CustomEvent legacy helper retained. Auto input events follow the pinned Event constructor; InputEvent can be requested explicitly. No live handle arguments.')
+for m,t in {'toHaveText':'text_with','toContainText':'contains_texts_with','toHaveClass':'class_with','toContainClass':'contains_class_tokens','toHaveValues':'values_with','toBeChecked':'checked_with','toBeInViewport':'in_viewport_with','toHaveAccessibleName':'accessible_name_with','toHaveAccessibleDescription':'accessible_description_with','toHaveAccessibleErrorMessage':'accessible_error_message_with'}.items():
+ put('LocatorAssertions',m,'LocatorExpect.'+t,'Dedicated options API: raw Rust regex vs normalized string text, rendered-text/case options, mixed lists and ordered text subsets, exact class order vs token containment, checkbox indeterminate and native viewport ratios. Accessible computation remains a DOM approximation; some upstream overload/options remain absent.')
+for m,t in {'dialog':'Dialog','download':'Download','pageClose':'PageClose'}.items():
+ put('BrowserContext',m,'BrowserContext.subscribe','ContextEventKind::'+t+' forwards the existing page observation with source page ID; payloads and backend metadata remain narrower.','Partial','event')
+for c in ['Page','Frame']:
+ for m,t in {'innerText':'inner_text','textContent':'text_content'}.items():
+  put(c,m,'Locator.'+t,c+'.locator(selector) followed by the distinct rendered/raw text getter; strict resolution and same-origin frame limitations remain.')
+put('Locator','textContent','Locator.text_content','Untrimmed nullable DOM textContent with strict single-target resolution; no ElementHandle or full options surface.')
+put('Locator','innerText','Locator.inner_text','Distinct rendered DOM innerText getter; strict resolution, nullable Rust result and same-origin lazy frame limitations remain.')
 # Fill every remaining upstream member explicitly as absent, with class-specific explanations.
 def default_note(c,e):
  if c.startswith('Android') or c in ['Electron','ElectronApplication']:return 'Experimental upstream API; Ferrite has no Android/ADB/WebView or Electron backend.'

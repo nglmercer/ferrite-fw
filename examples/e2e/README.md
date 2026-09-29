@@ -240,3 +240,34 @@ Console/error messages include optional source URL/zero-based line/column,
 epoch-ms timestamp and owning page ID. `ctx.context.console_messages()` also
 retains closed-page/popup output, independently of Page buffers. Attempt JSON,
 HTML, trace and `on_test_end` preserve this history across cleanup and retries.
+
+Typed synthetic events and richer assertions are available through explicit
+options APIs:
+
+```rust
+use ferrite_e2e::{DispatchEventOptions, DomEventKind, TextAssertionOptions, TextMatcher};
+
+ctx.page.locator("input[name=search]").dispatch_event_with("input",
+    DispatchEventOptions::default().kind(DomEventKind::Input)
+        .init(serde_json::json!({"data":"rust", "inputType":"insertText"})),
+).await?;
+ctx.page.locator(".status").expect().text_with(
+    &TextMatcher::exact("ready"),
+    TextAssertionOptions::default().use_inner_text(true).ignore_case(true),
+).await?;
+ctx.page.locator(".results li").expect().contains_texts_with(
+    &[TextMatcher::exact("First"), TextMatcher::regex("Last.*")?],
+    TextAssertionOptions::default(),
+).await?;
+ctx.page.locator(".card").expect().contains_class_tokens(&["selected", "ready"]).await?;
+ctx.page.locator(".card").expect().in_viewport_with(0.5).await?;
+```
+
+Exact class assertions preserve order; token containment ignores order. Exact
+strings normalize text whitespace, while regexes read raw values. Default viewport
+assertions use native intersection and account for clipping ancestors. Typed
+events are untrusted; use the native action APIs when trusted input matters.
+
+See the [engine table](../../E2E-ENGINE-CAPABILITIES.md) and
+[pinned conformance corpus](../../scripts/e2e-conformance/README.md) for native
+verification and remaining limits.

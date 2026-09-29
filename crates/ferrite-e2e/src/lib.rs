@@ -39,6 +39,7 @@
 
 mod api;
 mod api_cookies;
+mod assertion_options;
 mod bidi;
 mod browser;
 mod bundle;
@@ -49,6 +50,7 @@ mod context_cookies;
 mod coverage;
 mod driver;
 mod error;
+mod event;
 mod expect;
 mod file_payload;
 mod frame_locator;
@@ -65,6 +67,9 @@ mod video;
 mod webserver;
 
 pub use api::{ApiClient, ApiClientOptions, ApiRequestOptions, ApiResponse, MultipartField};
+pub use assertion_options::{
+    CheckedOptions, MatchOptions, StateAssertion, TextAssertionOptions, TextMatcher,
+};
 pub use bidi::BidiConnection;
 pub use browser::{find_chromium, find_firefox, Browser, BrowserKind, LaunchOptions};
 pub use bundle::ReportBundle;
@@ -77,6 +82,7 @@ pub use context::{
 pub use coverage::{Coverage, CoverageFunction, CoverageRange, CssCoverageEntry, JsCoverageEntry};
 pub use driver::FrameStream;
 pub use error::{E2eError, E2eResult};
+pub use event::{DispatchEventOptions, DomEventKind};
 pub use expect::{expect_poll, expect_to_pass, LocatorExpect, PageExpect, SoftAsserts, Timeout};
 pub use file_payload::FilePayload;
 pub use frame_locator::FrameLocator;

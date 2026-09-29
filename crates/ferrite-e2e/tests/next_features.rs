@@ -48,6 +48,13 @@ async fn browsers() -> Vec<Browser> {
             );
         }
     }
+    if std::env::var_os("FERRITE_E2E_REQUIRE_BOTH_BROWSERS").is_some() {
+        assert_eq!(
+            result.len(),
+            2,
+            "both Chromium and Firefox must launch successfully"
+        );
+    }
     result
 }
 #[tokio::test]

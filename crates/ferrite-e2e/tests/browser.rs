@@ -338,6 +338,13 @@ async fn browsers() -> Vec<(BrowserKind, Browser)> {
             Err(error) => eprintln!("skipping {}: {error}", kind.name()),
         }
     }
+    if std::env::var_os("FERRITE_E2E_REQUIRE_BOTH_BROWSERS").is_some() {
+        assert_eq!(
+            out.len(),
+            2,
+            "both Chromium and Firefox must launch successfully"
+        );
+    }
     if out.is_empty() {
         eprintln!("skipping browser test: no chromium or firefox found");
     }

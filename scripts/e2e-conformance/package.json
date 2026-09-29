@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": { "reference": "node reference.mjs" },
+  "devDependencies": { "playwright": "1.63.0" }
+}

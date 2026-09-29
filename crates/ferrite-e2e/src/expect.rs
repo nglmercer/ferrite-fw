@@ -95,7 +95,7 @@ impl From<Duration> for Timeout {
 /// Default assertion window in milliseconds.
 pub(crate) const DEFAULT_EXPECT_MS: u64 = 5_000;
 
-async fn poll<F, Fut>(timeout: Duration, description: String, check: F) -> E2eResult<()>
+pub(crate) async fn poll<F, Fut>(timeout: Duration, description: String, check: F) -> E2eResult<()>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = E2eResult<Option<String>>>,
@@ -513,9 +513,9 @@ impl PageExpect {
 
 /// Locator-level assertions.
 pub struct LocatorExpect {
-    locator: Locator,
-    timeout: Duration,
-    negated: bool,
+    pub(crate) locator: Locator,
+    pub(crate) timeout: Duration,
+    pub(crate) negated: bool,
 }
 
 impl LocatorExpect {
@@ -1409,36 +1409,7 @@ impl LocatorExpect {
 
     /// Assert the element intersects the viewport.
     pub async fn in_viewport(&self) -> E2eResult<()> {
-        self.locator
-            .page()
-            .auto_step(
-                format!("expect.in_viewport {}", self.locator.selector()),
-                crate::StepCategory::Assertion,
-                async {
-                    let locator = self.locator.clone();
-                    let negated = self.negated;
-                    poll(
-                        self.timeout,
-                        format!("`{}` in viewport{}", locator.selector(), not_tag(negated)),
-                        || {
-                            let locator = locator.clone();
-                            async move {
-                                let inside = match locator.in_viewport().await {
-                                    Ok(inside) => inside,
-                                    Err(error) => return Ok(Some(error.to_string())),
-                                };
-                                if inside != negated {
-                                    Ok(None)
-                                } else {
-                                    Ok(Some("outside the viewport or absent".to_string()))
-                                }
-                            }
-                        },
-                    )
-                    .await
-                },
-            )
-            .await
+        self.in_viewport_with(0.0).await
     }
 
     /// Assert the accessible name (exact match).
