@@ -224,6 +224,32 @@ headers, including in-flight requests. Returned records are metadata snapshots;
 body capture remains separate. Poll waits before triggering traffic. Timeout,
 cancellation and disposal also bound pending predicates; lag is an explicit error.
 
+Pointer action options provide positions, modifiers, trial readiness and scoped
+timeouts without changing Page defaults:
+
+```rust,ignore
+use ferrite_e2e::{ActionOptions, ClickOptions, DragOptions, KeyboardModifier};
+
+let save = ctx.page.get_by_role("button", "Save");
+save.click_with_options(ClickOptions::default().trial(true)).await?;
+save.click_with_options(
+    ClickOptions::default().position(8.0, 12.0)
+        .modifiers(&[KeyboardModifier::Shift])
+        .timeout(std::time::Duration::from_secs(2)),
+).await?;
+ctx.page.locator("#enabled")
+    .check_with_options(ActionOptions::default()).await?;
+ctx.page.locator("#source").drag_to_with_options(
+    &ctx.page.locator("#target"), DragOptions::default().steps(12),
+).await?;
+```
+
+Positions use CSS pixels from the padding-box top-left. Trial may scroll but sends
+no input. Acquired modifiers/buttons are released on failure or cancellation;
+previously held keys are preserved. `ClickOptions` struct literals need
+`..ClickOptions::default()` for the additional fields. Same-origin frame offsets
+and positive axis scaling are supported; see the audit for transform limitations.
+
 Generated uploads do not require disk files:
 
 ```rust,ignore

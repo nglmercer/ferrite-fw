@@ -1481,50 +1481,124 @@ impl Locator {
             .await
     }
 
-    /// Click with explicit options.
+    /// Click with position, modifiers, trial readiness and a scoped timeout.
     pub async fn click_with_options(&self, options: ClickOptions) -> E2eResult<()> {
-        self.page
+        let locator = options
+            .timeout
+            .map(|timeout| self.with_timeout(timeout))
+            .unwrap_or_else(|| self.clone());
+        locator
+            .page
             .auto_step(
                 format!("locator.click_with_options {}", self.selector.raw()),
                 crate::StepCategory::Action,
-                async {
-                    self.page
-                        .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
-                            format!("locator click_with_options `{}`", self.selector.raw()),
-                            async {
-                                let locator_options = LocatorOptions { timeout: None };
-                                self.page.action(&self.selector, "scroll", None).await?;
-                                let state = if options.force {
-                                    self.page.query_state(&self.selector).await?
-                                } else {
-                                    self.ready_state(&locator_options, true, true).await?
-                                };
-                                match Self::center(&state) {
-                                    Some((x, y)) => {
-                                        self.page
-                                            .mouse_click_with(
-                                                x,
-                                                y,
-                                                crate::page::MouseClickOptions {
-                                                    button: options.button,
-                                                    click_count: options.click_count.max(1),
-                                                    delay: options.delay,
-                                                },
-                                            )
-                                            .await?;
-                                        Ok(())
-                                    }
-                                    None => Err(E2eError::Locator {
-                                        selector: self.selector.raw().to_string(),
-                                        message: "element has no bounding box".to_string(),
-                                    }),
-                                }
-                            },
-                        ))
-                        .await
-                },
+                locator.page.run_operation(
+                    crate::operation::Deadline::new(locator.page.timeout()).run(
+                        format!("locator click_with_options `{}`", self.selector.raw()),
+                        async {
+                            let point =
+                                locator.ready_point(&options.action_options(), true).await?;
+                            if options.trial {
+                                return Ok(());
+                            }
+                            let mut input =
+                                crate::action_options::InputGuard::new(locator.page.clone());
+                            input.press(&locator.page, &options.modifiers).await?;
+                            input.mouse(options.button, point.0, point.1);
+                            let result = locator
+                                .page
+                                .mouse_click_with(
+                                    point.0,
+                                    point.1,
+                                    crate::MouseClickOptions {
+                                        button: options.button,
+                                        click_count: options.click_count.max(1),
+                                        delay: options.delay,
+                                    },
+                                )
+                                .await;
+                            if result.is_ok() {
+                                input.mouse_completed();
+                            }
+                            let cleanup = input.release().await;
+                            result.and(cleanup)
+                        },
+                    ),
+                ),
             )
             .await
+    }
+
+    async fn ready_point(
+        &self,
+        options: &crate::ActionOptions,
+        enabled: bool,
+    ) -> E2eResult<(f64, f64)> {
+        if options
+            .position
+            .is_some_and(|p| !p.x.is_finite() || !p.y.is_finite() || p.x < 0.0 || p.y < 0.0)
+        {
+            return Err(E2eError::Config(
+                "action position must be finite and nonnegative".into(),
+            ));
+        }
+        self.page.action(&self.selector, "scroll", None).await?;
+        loop {
+            let state = if options.force {
+                self.page.query_state(&self.selector).await?
+            } else {
+                self.ready_state(&LocatorOptions { timeout: None }, enabled, false)
+                    .await?
+            };
+            if self.selector.strict && state.count > 1 {
+                return Err(E2eError::Locator {
+                    selector: self.selector.raw().into(),
+                    message: "strict mode violation: multiple elements match".into(),
+                });
+            }
+            if state.count != 1 {
+                return Err(E2eError::Locator {
+                    selector: self.selector.raw().into(),
+                    message: "no matching actionable element".into(),
+                });
+            }
+            let position = options
+                .position
+                .map(|p| serde_json::json!({"x":p.x,"y":p.y}))
+                .unwrap_or(Value::Null);
+            let point=self.eval_first(&format!(r#"(() => {{
+                const position={position}; const r=el.getBoundingClientRect();
+                if(!r.width || !r.height) throw new Error('element has no bounding box');
+                const axisAligned=e=>{{const transform=e.ownerDocument.defaultView.getComputedStyle(e).transform;
+                    if(transform==='none')return;const m=new e.ownerDocument.defaultView.DOMMatrixReadOnly(transform);
+                    if(!m.is2D || m.b || m.c || m.a<=0 || m.d<=0)throw new Error('rotated or reflected action coordinates are unsupported');}};
+                if(position) axisAligned(el);
+                if(position && (position.x>el.clientWidth || position.y>el.clientHeight))throw new Error('action position is outside the padding box');
+                const sx=el.offsetWidth ? r.width/el.offsetWidth : 1,sy=el.offsetHeight ? r.height/el.offsetHeight : 1;
+                let x=position ? r.x+(el.clientLeft+position.x)*sx : Math.max(0,Math.min(innerWidth-1,r.x+r.width/2));
+                let y=position ? r.y+(el.clientTop+position.y)*sy : Math.max(0,Math.min(innerHeight-1,r.y+r.height/2));
+                const hit=(doc,x,y)=>{{let h=doc.elementFromPoint(x,y);while(h?.shadowRoot){{const child=h.shadowRoot.elementFromPoint(x,y);if(!child || child===h)break;h=child;}}return h;}};
+                let target=hit(document,x,y),receives=!!target && (target===el || el.contains(target));
+                let w=window;
+                while(w.parent!==w){{const frame=w.frameElement;if(!frame)throw new Error('cross-origin action coordinates are unsupported');axisAligned(frame);
+                    const fr=frame.getBoundingClientRect(),fx=fr.width/frame.offsetWidth,fy=fr.height/frame.offsetHeight;
+                    x=fr.x+(frame.clientLeft+x)*fx;y=fr.y+(frame.clientTop+y)*fy;
+                    target=hit(frame.ownerDocument,x,y);receives=receives && target===frame;w=w.parent;
+                }}
+                return {{x,y,receives}};
+            }})()"#)).await?;
+            if options.force || point["receives"].as_bool() == Some(true) {
+                return Ok((
+                    point["x"]
+                        .as_f64()
+                        .ok_or_else(|| E2eError::Config("action point unavailable".into()))?,
+                    point["y"]
+                        .as_f64()
+                        .ok_or_else(|| E2eError::Config("action point unavailable".into()))?,
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     /// Double-click the element.
@@ -1543,6 +1617,7 @@ impl Locator {
                                     click_count: 2,
                                     button: crate::page::MouseButton::Left,
                                     delay: Duration::ZERO,
+                                    ..Default::default()
                                 })
                                 .await
                             },
@@ -1553,32 +1628,38 @@ impl Locator {
             .await
     }
 
-    /// Hover the element.
+    /// Hover with native input.
     pub async fn hover(&self) -> E2eResult<()> {
-        self.page
+        self.hover_with_options(crate::ActionOptions::default())
+            .await
+    }
+    pub async fn hover_with_options(&self, options: crate::ActionOptions) -> E2eResult<()> {
+        let locator = options
+            .timeout
+            .map(|timeout| self.with_timeout(timeout))
+            .unwrap_or_else(|| self.clone());
+        locator
+            .page
             .auto_step(
                 format!("locator.hover {}", self.selector.raw()),
                 crate::StepCategory::Action,
-                async {
-                    self.page
-                        .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
-                            format!("locator hover `{}`", self.selector.raw()),
-                            async {
-                                self.page.action(&self.selector, "scroll", None).await?;
-                                let state = self
-                                    .ready_state(&LocatorOptions { timeout: None }, false, true)
-                                    .await?;
-                                match Self::center(&state) {
-                                    Some((x, y)) => self.page.mouse_move(x, y).await,
-                                    None => Err(E2eError::Locator {
-                                        selector: self.selector.raw().to_string(),
-                                        message: "element has no bounding box".to_string(),
-                                    }),
-                                }
-                            },
-                        ))
-                        .await
-                },
+                locator.page.run_operation(
+                    crate::operation::Deadline::new(locator.page.timeout()).run(
+                        format!("locator hover `{}`", self.selector.raw()),
+                        async {
+                            let point = locator.ready_point(&options, false).await?;
+                            if options.trial {
+                                return Ok(());
+                            }
+                            let mut input =
+                                crate::action_options::InputGuard::new(locator.page.clone());
+                            input.press(&locator.page, &options.modifiers).await?;
+                            let result = locator.page.mouse_move(point.0, point.1).await;
+                            let cleanup = input.release().await;
+                            result.and(cleanup)
+                        },
+                    ),
+                ),
             )
             .await
     }
@@ -1655,50 +1736,61 @@ impl Locator {
             .await
     }
 
-    /// Drag the element's center onto `target` in `steps` moves (min 1).
-    /// Both locators must live on the same page.
+    /// Drag the element to a target on the same page, with at least one move.
     pub async fn drag_to(&self, target: &Locator, steps: u32) -> E2eResult<()> {
-        self.page
+        self.drag_to_with_options(target, crate::DragOptions::default().steps(steps))
+            .await
+    }
+    pub async fn drag_to_with_options(
+        &self,
+        target: &Locator,
+        options: crate::DragOptions,
+    ) -> E2eResult<()> {
+        if self.page.target_id() != target.page.target_id() {
+            return Err(E2eError::Config(
+                "drag_to needs locators on the same page".into(),
+            ));
+        }
+        if options.steps == 0 {
+            return Err(E2eError::Config("drag_to needs at least 1 step".into()));
+        }
+        let locator = options
+            .action
+            .timeout
+            .map(|timeout| self.with_timeout(timeout))
+            .unwrap_or_else(|| self.clone());
+        let target = target.with_timeout(locator.page.timeout());
+        locator
+            .page
             .auto_step(
                 format!("locator.drag_to {}", self.selector.raw()),
                 crate::StepCategory::Action,
-                async {
-                    self.page
-                        .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
-                            format!("locator drag_to `{}`", self.selector.raw()),
-                            async {
-                                if self.page.target_id() != target.page.target_id() {
-                                    return Err(E2eError::Locator {
-                                        selector: self.selector.raw().to_string(),
-                                        message: "drag_to needs locators on the same page"
-                                            .to_string(),
-                                    });
-                                }
-                                if steps == 0 {
-                                    return Err(E2eError::Config(
-                                        "drag_to needs at least 1 step".to_string(),
-                                    ));
-                                }
-                                self.page.action(&self.selector, "scroll", None).await?;
-                                let from = self
-                                    .ready_state(&LocatorOptions { timeout: None }, false, true)
-                                    .await?;
-                                let to = target
-                                    .ready_state(&LocatorOptions { timeout: None }, false, true)
-                                    .await?;
-                                let (Some((x0, y0)), Some((x1, y1))) =
-                                    (Self::center(&from), Self::center(&to))
-                                else {
-                                    return Err(E2eError::Locator {
-                                        selector: self.selector.raw().to_string(),
-                                        message: "element has no bounding box".to_string(),
-                                    });
-                                };
-                                self.page.mouse_drag((x0, y0), (x1, y1), steps).await
-                            },
-                        ))
-                        .await
-                },
+                locator.page.run_operation(
+                    crate::operation::Deadline::new(locator.page.timeout()).run(
+                        format!("locator drag_to `{}`", self.selector.raw()),
+                        async {
+                            let from = locator.ready_point(&options.action, false).await?;
+                            let mut target_options = options.action.clone();
+                            target_options.position = options.target_position;
+                            let to = target.ready_point(&target_options, false).await?;
+                            if options.action.trial {
+                                return Ok(());
+                            }
+                            let mut input =
+                                crate::action_options::InputGuard::new(locator.page.clone());
+                            input
+                                .press(&locator.page, &options.action.modifiers)
+                                .await?;
+                            input.mouse(crate::MouseButton::Left, to.0, to.1);
+                            let result = locator.page.mouse_drag(from, to, options.steps).await;
+                            if result.is_ok() {
+                                input.mouse_completed();
+                            }
+                            let cleanup = input.release().await;
+                            result.and(cleanup)
+                        },
+                    ),
+                ),
             )
             .await
     }
@@ -2149,21 +2241,33 @@ impl Locator {
     }
 
     async fn change_checked(&self, checked: bool) -> E2eResult<()> {
-        self.page.run_operation(crate::operation::Deadline::new(self.page.timeout()).run(format!("locator change_checked `{}`",self.selector.raw()), async {
-        let current = self.eval_first("(() => { if (!(el instanceof HTMLInputElement) || !['checkbox', 'radio'].includes(el.type)) throw new Error('element is not a checkbox or radio'); return el.checked; })()").await?;
-        if current.as_bool() == Some(checked) {
-            return Ok(());
-        }
-        self.click().await?;
-        if self.is_checked().await? != checked {
-            return Err(E2eError::Config(format!(
-                "click did not set {} to checked={checked}",
-                self.selector()
-            )));
-        }
-        Ok(())
-
- })).await
+        self.set_checked_with_options(checked, crate::ActionOptions::default())
+            .await
+    }
+    pub async fn check_with_options(&self, options: crate::ActionOptions) -> E2eResult<()> {
+        self.set_checked_with_options(true, options).await
+    }
+    pub async fn uncheck_with_options(&self, options: crate::ActionOptions) -> E2eResult<()> {
+        self.set_checked_with_options(false, options).await
+    }
+    pub async fn set_checked_with_options(
+        &self,
+        checked: bool,
+        options: crate::ActionOptions,
+    ) -> E2eResult<()> {
+        let locator = options
+            .timeout
+            .map(|timeout| self.with_timeout(timeout))
+            .unwrap_or_else(|| self.clone());
+        locator.page.auto_step(format!("locator.set_checked {}",self.selector.raw()),crate::StepCategory::Action,
+            locator.page.run_operation(crate::operation::Deadline::new(locator.page.timeout()).run(format!("locator set_checked `{}`",self.selector.raw()),async {
+                let current=locator.eval_first("(() => {if(!(el instanceof HTMLInputElement) || !['checkbox','radio'].includes(el.type))throw new Error('element is not a checkbox or radio');return el.checked;})()").await?;
+                if current.as_bool()==Some(checked) && !options.trial {return Ok(());}
+                locator.click_with_options(ClickOptions{force:options.force,position:options.position,modifiers:options.modifiers,trial:options.trial,timeout:None,..Default::default()}).await?;
+                if !options.trial && locator.is_checked().await?!=checked {return Err(E2eError::Config(format!("click did not set {} to checked={checked}",self.selector())));}
+                Ok(())
+            }))
+        ).await
     }
 
     /// Select an `<option>` by value.

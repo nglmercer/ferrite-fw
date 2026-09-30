@@ -58,7 +58,7 @@ implementation.
 | Runtime test controls | Shared TestInfo skip, expected failure, slow, annotations and timeout changes affect running attempts and final results | Result propagation for immediate skip; cooperative async cancellation and independent cleanup budgets |
 | Locator selection | Strict single-target operations, genuine first/last/nth slicing, relative has/hasNot filters, exact/regex/visibility builders | No complete Playwright selector extension/custom-engine surface |
 | Semantic locators | Associated labels target controls; roles and accessible names use shared DOM helpers; open shadow-root traversal | Full accessible-name specification and closed shadow roots remain outside this implementation |
-| Actions | Retry readiness, visibility/stability/hit testing, trusted forced clicks, trusted checkbox/key input; delayed fill/select and contenteditable support | Some actions use DOM setters/events; full native input/event/layout semantics remain narrower |
+| Actions | Retry readiness and requested-point hit testing, trusted input, positions/modifiers/trial/scoped timeouts for click/hover/check/drag; delayed fill/select and contenteditable support | Same-origin offsets and positive axis scaling; rotated/perspective frames and cross-origin coordinates unsupported. Some actions use DOM setters/events |
 | Uploads | Path and in-memory filename/MIME/binary payloads, multiple/empty batches and input/change events on both engines | DOM injection, 64 MiB total cap; native chooser and directory uploads remain deferred |
 | URL/network waits | Exact, glob, regex and URL/request/response predicates, including async network predicates | Explicit Rust APIs and snapshot records; no waitUntil/URLPattern or complete live Request/Response objects |
 | DOM access | Separate textContent/innerText, arrays, evaluate-all/JSON arguments, highlight removal; single-target getters wait and enforce strictness | JSON values only, without arbitrary JS/JSHandle argument serialization |
@@ -457,6 +457,34 @@ filtered removals cannot resurrect their previously cached cookies. The
 domain/path independence, string and Rust regex filters, untouched attributes,
 linked requests, zero timeout and cancellation on both engines.
 
+## Pointer action options
+
+`ClickOptions` retains click count, button and delay controls and adds position,
+modifiers, trial and timeout. `ActionOptions` provides those shared controls for
+hover/check/uncheck/set-checked; `DragOptions` adds a target position and move count.
+Positions are CSS pixels from the padding-box top-left. Readiness hit-tests the
+requested point, allowing an uncovered corner when the center is covered. Force
+skips readiness checks while retaining strict resolution and trusted input.
+
+Trial may scroll but sends no mouse/key input or checkbox state change. Modifier
+cleanup releases only keys acquired by that action; previously held Ferrite keys
+are preserved. Cancellation and errors release acquired modifiers and held mouse
+buttons. Firefox drag pacing and click delays use cancelable Rust waits between
+native input commands. Scoped timeouts do not change Page defaults; zero disables
+the local timeout while enclosing deadlines and lifecycle cancellation still apply.
+
+Main-document positions and same-origin nested frame offsets/positive axis-aligned
+scaling are supported. Rotated/reflected/perspective frame transforms and cross-origin
+coordinate translation return explicit errors. Explicit element positions require
+positive axis-aligned transforms; SVG padding-box positions remain narrower. These
+controls do not establish complete Playwright geometry/input parity.
+
+Migration: `ClickOptions` has four additional public fields. Use builder methods
+or `..ClickOptions::default()` in existing struct literals. Native regressions in
+[action_options.rs](crates/ferrite-e2e/tests/action_options.rs) cover requested points,
+trial silence, checkbox/drag behavior, frame scaling, scoped budgets, held-key
+preservation and cleanup after cancellation on Chromium and Firefox.
+
 ## Engine and validation evidence
 
 Chromium uses CDP and Firefox uses stock WebDriver BiDi. Firefox accepts user
@@ -487,7 +515,7 @@ Validation for URL/network matching, generated uploads and browser diagnostics:
   groups, 4 reliability groups, 4 runtime/reporter groups, 6 fixture/network
   groups, 4 step-control/bundle groups, 5 wait/upload/console groups,
   3 core conformance/capability groups, 4 callback lifecycle groups,
-  1 daily API group and 2 doctests** (274 checks total).
+  1 daily API group, 2 action option groups and 2 doctests** (276 checks total).
   Headless Shell and Firefox were installed and exercised; unsupported-engine branches remain explicit.
 - The five new groups additionally passed with full Chrome and Firefox, covering
   exact/glob/regex and predicate URL matching, frame history, request-start and
@@ -513,7 +541,7 @@ Validation for URL/network matching, generated uploads and browser diagnostics:
 - Existing trace and first-attachment names remain compatible; retry trace files
   and repeated attachment names preserve their individual contents.
 - CLI/configuration checks passed again: 5 CLI tests, 17 configuration tests and
-  1 doctest (297 checks across E2E/CLI/configuration). This change adds no CLI
+  1 doctest (299 checks across E2E/CLI/configuration). This change adds no CLI
   options. A real portable HTML report with expanded automatic/user/hook trees,
   skipped steps, annotations and run lifecycle was rendered in Chromium and
   visually inspected. The console section was also rendered and visually

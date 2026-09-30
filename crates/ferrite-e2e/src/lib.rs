@@ -37,6 +37,7 @@
 //! }
 //! ```
 
+mod action_options;
 mod api;
 mod api_cookies;
 mod assertion_options;
@@ -68,6 +69,7 @@ mod url_matcher;
 mod video;
 mod webserver;
 
+pub use action_options::{ActionOptions, ActionPosition, DragOptions, KeyboardModifier};
 pub use api::{ApiClient, ApiClientOptions, ApiRequestOptions, ApiResponse, MultipartField};
 pub use assertion_options::{
     CheckedOptions, MatchOptions, StateAssertion, TextAssertionOptions, TextMatcher,

@@ -431,9 +431,9 @@ pub(crate) struct FrameInfo {
 }
 
 /// A frame in the page (main frame or iframe) with frame-scoped
-/// `evaluate` and locators. Note: coordinate-based locator actions
-/// (`hover`, `tap`, `drag_to`) use frame-relative coordinates and may miss
-/// on offset iframes; DOM actions and assertions are exact.
+/// `evaluate` and locators. Pointer action options support same-origin frame
+/// offsets and positive axis-aligned scaling. Cross-origin frame coordinates
+/// and rotated/perspective frame transforms are unsupported.
 #[derive(Clone)]
 pub struct Frame {
     page: Page,
@@ -782,7 +782,7 @@ impl DeviceDescriptor {
 /// Click modifiers + button.
 #[derive(Debug, Clone, Default)]
 pub struct ClickOptions {
-    /// Use synthetic `el.click()` instead of trusted mouse input.
+    /// Skip nonessential readiness checks; still uses trusted mouse input.
     pub force: bool,
     /// Number of clicks (2 = double-click).
     pub click_count: u32,
@@ -790,6 +790,38 @@ pub struct ClickOptions {
     pub button: MouseButton,
     /// Delay between button down and up.
     pub delay: Duration,
+    pub position: Option<crate::ActionPosition>,
+    pub modifiers: Vec<crate::KeyboardModifier>,
+    pub trial: bool,
+    pub timeout: Option<Duration>,
+}
+
+impl ClickOptions {
+    pub fn position(mut self, x: f64, y: f64) -> Self {
+        self.position = Some(crate::ActionPosition { x, y });
+        self
+    }
+    pub fn modifiers(mut self, values: &[crate::KeyboardModifier]) -> Self {
+        self.modifiers = values.into();
+        self
+    }
+    pub fn trial(mut self, value: bool) -> Self {
+        self.trial = value;
+        self
+    }
+    pub fn timeout(mut self, value: Duration) -> Self {
+        self.timeout = Some(value);
+        self
+    }
+    pub(crate) fn action_options(&self) -> crate::ActionOptions {
+        crate::ActionOptions {
+            force: self.force,
+            position: self.position,
+            modifiers: self.modifiers.clone(),
+            trial: self.trial,
+            timeout: self.timeout,
+        }
+    }
 }
 
 /// Mouse button for clicks.
@@ -2763,9 +2795,8 @@ impl Page {
 
     /// Press the left mouse button at CSS-pixel coordinates.
     ///
-    /// Note: on Firefox the hold does not survive across calls (BiDi input
-    /// state resets after each action sequence), so build drags with
-    /// [`Page::mouse_drag`], not manual down/move/up sequences.
+    /// Input state persists across calls on both engines. Locator drag options
+    /// additionally release the held button on cancellation or failure.
     pub async fn mouse_down(&self, x: f64, y: f64) -> E2eResult<()> {
         self.driver
             .run(async {

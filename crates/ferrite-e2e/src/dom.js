@@ -60,15 +60,19 @@
   }
   function box(element) {
     const bounds = element.getBoundingClientRect();
-    let x = bounds.x, y = bounds.y, current = window;
+    let x = bounds.x, y = bounds.y, width = bounds.width, height = bounds.height, current = window;
     try {
       while (current.frameElement) {
         const frame = current.frameElement, offset = frame.getBoundingClientRect();
-        x += offset.x + frame.clientLeft; y += offset.y + frame.clientTop;
+        const sx = frame.offsetWidth ? offset.width / frame.offsetWidth : 1;
+        const sy = frame.offsetHeight ? offset.height / frame.offsetHeight : 1;
+        x = offset.x + (x + frame.clientLeft) * sx;
+        y = offset.y + (y + frame.clientTop) * sy;
+        width *= sx; height *= sy;
         current = current.parent;
       }
     } catch (_) { /* Cross-origin coordinates require driver-side frame offsets. */ }
-    return { x, y, width: bounds.width, height: bounds.height };
+    return { x, y, width, height };
   }
   function receives(element) {
     const bounds = element.getBoundingClientRect();

@@ -401,6 +401,7 @@ fn fetch_enable_params(patterns: Option<&[Value]>, handle_auth: bool) -> Option<
 /// BiDi-backed driver (Firefox): one browsing context.
 #[derive(Clone)]
 pub struct BidiDriver {
+    modifiers: Arc<Mutex<u8>>,
     bidi: BidiConnection,
     context: String,
     timeout: Arc<Mutex<Duration>>,
@@ -661,6 +662,7 @@ impl BidiDriver {
     ) -> Self {
         *sink.page_id.lock().unwrap_or_else(|e| e.into_inner()) = Some(context.clone());
         let driver = Self {
+            modifiers: Arc::new(Mutex::new(0)),
             bidi,
             context,
             timeout: Arc::new(Mutex::new(timeout)),
@@ -1259,6 +1261,31 @@ impl Driver {
             }
         })
         .await
+    }
+
+    pub(crate) fn modifier_held(&self, key: &str) -> bool {
+        let held = match self {
+            Self::Cdp(driver) => driver.held_modifiers(),
+            Self::Bidi(driver) => *driver.modifiers.lock().unwrap_or_else(|e| e.into_inner()),
+        };
+        held & modifier_bit(key) != 0
+    }
+    pub(crate) async fn release_mouse_button(
+        &self,
+        button: crate::MouseButton,
+        x: f64,
+        y: f64,
+    ) -> E2eResult<()> {
+        self.run(async {
+            match self {
+                Self::Cdp(driver)=>{
+                    driver.call("Input.dispatchMouseEvent",serde_json::json!({"type":"mouseReleased","x":x,"y":y,"button":button.as_cdp(),"clickCount":1,"modifiers":driver.held_modifiers()})).await?;
+                    if button==crate::MouseButton::Left {*driver.pressed.lock().unwrap_or_else(|e|e.into_inner())=false;}
+                }
+                Self::Bidi(driver)=>driver.perform(serde_json::json!([{"type":"pointer","id":"ferrite-mouse","parameters":{"pointerType":"mouse"},"actions":[{"type":"pointerUp","button":button.as_bidi()}]}])).await?,
+            }
+            Ok(())
+        }).await
     }
 
     /// Hold a key down (pair with [`Driver::key_up`]).
@@ -2401,8 +2428,8 @@ impl CdpDriver {
 
     async fn key_up(&self, key: &str) -> E2eResult<()> {
         let (windows_code, key_name, code) = key_definition(key);
-        // Report the release with the key still held, then clear it.
-        let modifiers = self.held_modifiers();
+        // Keyup observes the released modifier cleared, like native UI events.
+        let modifiers = self.held_modifiers() & !modifier_bit(key);
         self.call(
             "Input.dispatchKeyEvent",
             serde_json::json!({
@@ -3975,27 +4002,24 @@ impl BidiDriver {
         &self,
         x: f64,
         y: f64,
-        options: &crate::page::MouseClickOptions,
+        options: &crate::MouseClickOptions,
     ) -> E2eResult<()> {
         self.bring_to_front().await?;
-        let button = options.button.as_bidi();
-        let mut actions = vec![serde_json::json!({ "type": "pointerMove", "x": x, "y": y })];
+        self.mouse_move(x, y).await?;
+        // Keep delay on the Rust side so caller cancellation can release
+        // input promptly instead of waiting for a long native pause action.
         for _ in 0..options.click_count.max(1) {
-            actions.push(serde_json::json!({ "type": "pointerDown", "button": button }));
-            if !options.delay.is_zero() {
-                actions.push(serde_json::json!({
-                    "type": "pause",
-                    "duration": options.delay.as_millis().min(u128::from(u64::MAX)) as u64,
-                }));
+            for down in [true, false] {
+                self.perform(serde_json::json!([{
+                    "type":"pointer","id":"ferrite-mouse","parameters":{"pointerType":"mouse"},
+                    "actions":[{"type":if down {"pointerDown"} else {"pointerUp"},"button":options.button.as_bidi()}]
+                }])).await?;
+                if down && !options.delay.is_zero() {
+                    tokio::time::sleep(options.delay).await;
+                }
             }
-            actions.push(serde_json::json!({ "type": "pointerUp", "button": button }));
         }
-        self.perform(serde_json::json!([{
-            "type": "pointer", "id": "ferrite-mouse",
-            "parameters": { "pointerType": "mouse" },
-            "actions": actions,
-        }]))
-        .await
+        Ok(())
     }
 
     async fn insert_text(&self, text: &str) -> E2eResult<()> {
@@ -4066,29 +4090,17 @@ impl BidiDriver {
     }
 
     async fn mouse_drag(&self, from: (f64, f64), to: (f64, f64), steps: u32) -> E2eResult<()> {
-        // Button state does not survive across `performActions` calls, so the
-        // whole drag runs as one action sequence with paced intermediate moves.
-        self.bring_to_front().await?;
-        let mut actions = vec![
-            serde_json::json!({ "type": "pointerMove", "x": from.0, "y": from.1 }),
-            serde_json::json!({ "type": "pointerDown", "button": 0 }),
-        ];
+        self.mouse_down(from.0, from.1).await?;
         for step in 1..=steps.max(1) {
             let t = f64::from(step) / f64::from(steps.max(1));
-            actions.push(serde_json::json!({
-                "type": "pointerMove",
-                "x": from.0 + (to.0 - from.0) * t,
-                "y": from.1 + (to.1 - from.1) * t,
-                "duration": 16,
-            }));
+            self.mouse_move(
+                (from.0 + (to.0 - from.0) * t).round(),
+                (from.1 + (to.1 - from.1) * t).round(),
+            )
+            .await?;
+            tokio::time::sleep(Duration::from_millis(16)).await;
         }
-        actions.push(serde_json::json!({ "type": "pointerUp", "button": 0 }));
-        self.perform(serde_json::json!([{
-            "type": "pointer", "id": "ferrite-mouse",
-            "parameters": { "pointerType": "mouse" },
-            "actions": actions,
-        }]))
-        .await
+        self.mouse_up(to.0, to.1).await
     }
 
     async fn mouse_wheel(&self, x: f64, y: f64, delta_x: f64, delta_y: f64) -> E2eResult<()> {
@@ -4105,6 +4117,7 @@ impl BidiDriver {
 
     async fn key_down(&self, key: &str) -> E2eResult<()> {
         let value = bidi_key_value(key);
+        *self.modifiers.lock().unwrap_or_else(|e| e.into_inner()) |= modifier_bit(key);
         self.perform(serde_json::json!([{
             "type": "key", "id": "ferrite-keyboard",
             "actions": [{ "type": "keyDown", "value": value }],
@@ -4118,7 +4131,9 @@ impl BidiDriver {
             "type": "key", "id": "ferrite-keyboard",
             "actions": [{ "type": "keyUp", "value": value }],
         }]))
-        .await
+        .await?;
+        *self.modifiers.lock().unwrap_or_else(|e| e.into_inner()) &= !modifier_bit(key);
+        Ok(())
     }
 
     async fn touchscreen_tap(&self, x: f64, y: f64) -> E2eResult<()> {
