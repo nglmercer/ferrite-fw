@@ -114,7 +114,7 @@ impl ConsoleSink {
         document: Option<String>,
     ) {
         // CDP reuses identifiers for redirects. The old hop has finished.
-        self.finish_network_request(&request.request_id, None);
+        self.finish_network_request_observation(&request.request_id, None, false);
         self.active_requests
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -194,18 +194,28 @@ impl ConsoleSink {
         }
     }
     fn finish_network_request(&self, id: &str, failure: Option<(String, Option<bool>)>) {
-        self.network_log
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .finish(
-                id,
-                failure
-                    .as_ref()
-                    .map(|(error_text, cancelled)| crate::RequestFailure {
-                        error_text: error_text.clone(),
-                        cancelled: *cancelled,
-                    }),
-            );
+        self.finish_network_request_observation(id, failure, true);
+    }
+    fn finish_network_request_observation(
+        &self,
+        id: &str,
+        failure: Option<(String, Option<bool>)>,
+        native_terminal: bool,
+    ) {
+        if native_terminal {
+            self.network_log
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .finish(
+                    id,
+                    failure
+                        .as_ref()
+                        .map(|(error_text, cancelled)| crate::RequestFailure {
+                            error_text: error_text.clone(),
+                            cancelled: *cancelled,
+                        }),
+                );
+        }
         self.observed_network
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -255,6 +265,35 @@ impl ConsoleSink {
             .unwrap_or_else(|e| e.into_inner())
             .clear();
         self.inflight.store(0, Ordering::SeqCst);
+    }
+
+    fn routed_headers(
+        &self,
+        pause_id: &str,
+        id: &str,
+        url: &str,
+        action: Option<&RouteAction>,
+    ) -> Option<crate::network::RouteHeadersGuard> {
+        let RouteAction::Fulfill {
+            headers,
+            content_type,
+            ..
+        } = action?
+        else {
+            return None;
+        };
+        let mut headers = headers.clone();
+        if !content_type.is_empty()
+            && !headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+        {
+            headers.push(("Content-Type".into(), content_type.clone()));
+        }
+        self.network_log
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .routed_headers(pause_id, id, url, headers)
     }
 
     pub(crate) fn network_activity(&self) -> (usize, u64) {
@@ -2948,7 +2987,17 @@ impl CdpDriver {
                         serde_json::json!({ "requestId": request_id }),
                     ),
                 };
+                let supplied = event.params["networkId"].as_str().and_then(|id| {
+                    request_id
+                        .as_str()
+                        .and_then(|pause_id| sink.routed_headers(pause_id, id, &url, action))
+                });
                 let result = cdp.call(Some(&session), method, params, timeout).await;
+                if result.is_ok() {
+                    if let Some(supplied) = supplied {
+                        supplied.accept();
+                    }
+                }
                 if result.is_err() && is_override {
                     // Rejected overrides must not hang the page: let it through.
                     let _ = cdp
@@ -4692,7 +4741,23 @@ impl BidiDriver {
                         serde_json::json!({ "request": request }),
                     ),
                 };
+                let supplied = request.as_str().and_then(|id| {
+                    sink.routed_headers(
+                        &format!(
+                            "bidi:{id}:{}",
+                            event.params["redirectCount"].as_u64().unwrap_or(0)
+                        ),
+                        id,
+                        &url,
+                        action,
+                    )
+                });
                 let result = bidi.call(method, params, timeout).await;
+                if result.is_ok() {
+                    if let Some(supplied) = supplied {
+                        supplied.accept();
+                    }
+                }
                 if result.is_err() && is_override {
                     // Rejected overrides must not hang the page: let it through.
                     let _ = bidi
@@ -5203,6 +5268,16 @@ fn handle_bidi_event(event: &BidiEvent, sink: &ConsoleSink) {
             ));
         }
         "network.beforeRequestSent" => {
+            if event.params["redirectCount"].as_u64().unwrap_or(0) > 0 {
+                sink.network_log
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .finish_redirect(
+                        event.params["request"]["request"]
+                            .as_str()
+                            .unwrap_or_default(),
+                    );
+            }
             sink.start_network_request(
                 NetworkRequest {
                     request_id: event.params["request"]["request"]
@@ -5258,6 +5333,23 @@ fn handle_bidi_event(event: &BidiEvent, sink: &ConsoleSink) {
                     raw_headers: false,
                 },
             );
+            if event.params["isBlocked"].as_bool() == Some(true) {
+                let id = event.params["request"]["request"]
+                    .as_str()
+                    .unwrap_or_default();
+                let pause_id = format!(
+                    "bidi:{id}:{}",
+                    event.params["redirectCount"].as_u64().unwrap_or(0)
+                );
+                sink.network_log
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .paused(
+                        &pause_id,
+                        id,
+                        event.params["request"]["url"].as_str().unwrap_or_default(),
+                    );
+            }
         }
         "network.responseStarted" => {
             sink.observe_response(
@@ -5823,6 +5915,18 @@ fn read_manifest(path: &std::path::Path) -> Vec<SpooledFrame> {
 
 fn handle_cdp_event(event: &CdpEvent, sink: &ConsoleSink) {
     match event.method.as_str() {
+        "Fetch.requestPaused" => {
+            if let (Some(pause_id), Some(native_id), Some(url)) = (
+                event.params["requestId"].as_str(),
+                event.params["networkId"].as_str(),
+                event.params["request"]["url"].as_str(),
+            ) {
+                sink.network_log
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .paused(pause_id, native_id, url);
+            }
+        }
         "Page.frameNavigated" => {
             let frame = &event.params["frame"];
             if let (Some(id), Some(loader)) = (frame["id"].as_str(), frame["loaderId"].as_str()) {
@@ -5886,6 +5990,10 @@ fn handle_cdp_event(event: &CdpEvent, sink: &ConsoleSink) {
                     url: response["url"].as_str().unwrap_or_default().into(),
                     status: response["status"].as_u64().unwrap_or(0) as u16,
                 });
+                sink.network_log
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .finish_redirect(id);
             }
             sink.start_network_request(
                 NetworkRequest {

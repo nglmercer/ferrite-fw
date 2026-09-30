@@ -295,6 +295,15 @@ successfully, while native transport failures return `E2eError::Network`.
 Firefox may omit POST text/resource type or fold duplicate headers; inspect
 snapshot completeness/truncation flags. Body helpers remain separate. API
 responses also provide `headers_array`, `header_values` and `header_value`.
+`ApiResponse::header` keeps its legacy first-value behavior. To forward a fetched
+response, pass `response.headers().to_vec()` to `RouteAction::fulfill_full` with
+its status/body; the pair array retains repeated names. Typed observations keep
+acknowledged route-supplied pairs when the backend omits/folds them, identified
+by `snapshot.response_headers_from_route`; raw completeness remains separate.
+`finished()` settles the native completion and associated fulfillment reply.
+Firefox may omit response/completion events for a synthetic redirect's earlier
+hop: its request settles unavailable and `response()` remains None; the final
+response and per-hop identity stay separate.
 
 Pointer action options provide positions, modifiers, trial readiness and scoped
 timeouts without changing Page defaults:

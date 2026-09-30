@@ -17,6 +17,7 @@ Partial means the listed limitation must be retained in API/docs/test evidence.
 | Request/response lifecycle and redirects | Supported | Supported | IDs are scoped to a page; optional native metadata must stay optional |
 | Typed request/response metadata and completion | Supported | Supported | Per-hop identity, page/frame ownership, bounded weak redirect history; completion independent of body capture |
 | Native headers and request POST text | Partial | Partial | Chromium extra headers require native hop flags; Firefox can fold repeated fields and omit POST text/resource destination; completeness remains optional |
+| API/header lookup and route fulfillment pairs | Supported | Supported | Case-insensitive lookup and duplicate-preserving serialized arrays; acknowledged route headers have an explicit source flag when native events omit/fold them. Firefox 156/157 omits first-hop synthetic redirect response/completion events; that observation settles unavailable. |
 | Console/error metadata and attempt history | Supported | Supported | Unknown source/timestamp fields remain None; page identity retained |
 | In-memory/path uploads | Supported | Supported | DOM File/DataTransfer injection, 64 MiB total; no chooser/directories |
 | Page/context functions and bindings | Supported | Supported | JSON sync/async callbacks; main/same-origin frames; startup preload and named removal; cross-origin/handles excluded |
@@ -56,6 +57,12 @@ concurrent requests, child frames, redirects, JSON/form request text, duplicate
 cookies, headers-before-completion, HTTP/transport errors, disposal, disconnect,
 zero/caller/enclosing deadlines and runner retries on both engines. Missing
 Firefox fields are checked as absent rather than inferred.
+
+[header_forwarding.rs](crates/ferrite-e2e/tests/header_forwarding.rs) verifies
+actual API transport, serialization, binary fulfillment, separate cookies with
+Expires commas, browser cookie storage and per-hop same-URL synthetic redirects.
+Generic native comma folding stays intact; known route-supplied pairs are
+retained separately from native completeness signals.
 
 Run the portable gate with both executable paths supplied:
 

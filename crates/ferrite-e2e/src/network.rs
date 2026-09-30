@@ -47,6 +47,10 @@ pub struct RequestSnapshot {
     pub request_headers_complete: Option<bool>,
     /// Uses the same native completeness semantics as request_headers_complete.
     pub response_headers_complete: Option<bool>,
+    /// True when accepted route-supplied pairs supplement narrower native events.
+    /// This does not imply raw network-stack header completeness.
+    #[serde(default)]
+    pub response_headers_from_route: bool,
     pub post_data_truncated: bool,
     pub headers_truncated: bool,
     pub redirect_history_truncated: bool,
@@ -81,6 +85,33 @@ struct ObservationData {
     response_headers_complete: Option<bool>,
     post_data_truncated: bool,
     headers_truncated: bool,
+    route_headers: Option<Arc<RouteHeaders>>,
+}
+struct RouteHeaders {
+    headers: Vec<(String, String)>,
+    truncated: bool,
+    accepted: tokio::sync::watch::Sender<Option<bool>>,
+}
+struct PendingRouteHeaders {
+    native_id: String,
+    url: String,
+    headers: Arc<RouteHeaders>,
+}
+/// Rejection, canceled calls and dropped routing pumps release the pending
+/// acknowledgement. Only successful native replies accept supplied metadata.
+pub(crate) struct RouteHeadersGuard(Arc<RouteHeaders>);
+impl RouteHeadersGuard {
+    pub(crate) fn accept(self) {
+        self.0.accepted.send_replace(Some(true));
+    }
+}
+impl Drop for RouteHeadersGuard {
+    fn drop(&mut self) {
+        let pending = self.0.accepted.borrow().is_none();
+        if pending {
+            self.0.accepted.send_replace(Some(false));
+        }
+    }
 }
 const MAX_METADATA_TEXT: usize = 64 * 1024;
 fn bound_headers(headers: &mut Vec<(String, String)>) -> bool {
@@ -115,7 +146,39 @@ impl ObservationData {
             response_headers_complete: None,
             post_data_truncated,
             headers_truncated,
+            route_headers: None,
         }
+    }
+    fn headers_from_route(&self) -> bool {
+        self.received
+            && self.response_headers_complete != Some(true)
+            && self
+                .route_headers
+                .as_ref()
+                .is_some_and(|headers| *headers.accepted.borrow() == Some(true))
+    }
+    fn response_header_view(&self) -> (Vec<(String, String)>, bool) {
+        if !self.headers_from_route() {
+            return (self.record.response_headers.clone(), false);
+        }
+        let supplied = &self.route_headers.as_ref().unwrap().headers;
+        let mut headers = supplied.clone();
+        headers.extend(
+            self.record
+                .response_headers
+                .iter()
+                .filter(|(name, _)| {
+                    !supplied
+                        .iter()
+                        .any(|(provided, _)| provided.eq_ignore_ascii_case(name))
+                })
+                .cloned(),
+        );
+        let truncated = bound_headers(&mut headers);
+        (headers, truncated)
+    }
+    fn response_headers(&self) -> Vec<(String, String)> {
+        self.response_header_view().0
     }
     fn size(&self) -> usize {
         self.record.url.len() * 2
@@ -128,12 +191,22 @@ impl ObservationData {
                 .chain(&self.record.response_headers)
                 .map(|(n, v)| n.len() + v.len())
                 .sum::<usize>()
+            + self.route_headers.as_ref().map_or(0, |headers| {
+                headers
+                    .headers
+                    .iter()
+                    .map(|(n, v)| n.len() + v.len())
+                    .sum::<usize>()
+            })
     }
 }
 impl RequestState {
     pub(crate) fn snapshot(&self) -> RequestSnapshot {
         let data = self.data.lock().unwrap_or_else(|e| e.into_inner());
         let next = self.next.lock().unwrap_or_else(|e| e.into_inner());
+        let mut recorded = data.record.clone();
+        let (headers, truncated) = data.response_header_view();
+        recorded.response_headers = headers;
         RequestSnapshot {
             id: self.id.clone(),
             native_id: self.native_id.clone(),
@@ -154,10 +227,16 @@ impl RequestState {
             response_received: data.received,
             request_headers_complete: data.request_headers_complete,
             response_headers_complete: data.response_headers_complete,
+            response_headers_from_route: data.headers_from_route(),
             post_data_truncated: data.post_data_truncated,
-            headers_truncated: data.headers_truncated,
+            headers_truncated: data.headers_truncated
+                || truncated
+                || data
+                    .route_headers
+                    .as_ref()
+                    .is_some_and(|headers| headers.truncated),
             completion: self.completion.borrow().clone(),
-            recorded: data.record.clone(),
+            recorded,
         }
     }
 }
@@ -221,6 +300,8 @@ pub(crate) struct NetworkLog {
     latest: HashMap<String, Weak<RequestState>>,
     recent: VecDeque<Arc<RequestState>>,
     extra: HashMap<String, ExtraHeaders>,
+    pending_route_headers: HashMap<String, PendingRouteHeaders>,
+    paused: HashMap<String, Weak<RequestState>>,
     raw_headers_enabled: bool,
     events: tokio::sync::broadcast::Sender<NetworkNotice>,
 }
@@ -232,6 +313,8 @@ impl Default for NetworkLog {
             latest: HashMap::new(),
             recent: VecDeque::new(),
             extra: HashMap::new(),
+            pending_route_headers: HashMap::new(),
+            paused: HashMap::new(),
             raw_headers_enabled: true,
             events: tokio::sync::broadcast::channel(256).0,
         }
@@ -275,6 +358,13 @@ impl NetworkLog {
                 self.latest.remove(&old.native_id);
             }
         }
+        self.paused.retain(|_, state| {
+            state.upgrade().is_some_and(|state| {
+                self.current
+                    .get(&state.native_id)
+                    .is_some_and(|current| Arc::ptr_eq(current, &state))
+            })
+        });
         let bytes: usize = self.extra.values().map(ExtraHeaders::size).sum();
         if self.extra.len() > MAX_OBSERVATIONS || bytes > MAX_METADATA_HISTORY {
             // Correlation after dropping an unmatched row would assign a later
@@ -295,6 +385,16 @@ impl NetworkLog {
             .redirect
             .then(|| self.latest.get(&native_id).and_then(Weak::upgrade))
             .flatten();
+        if let Some(previous) = &previous {
+            let pending = matches!(*previous.completion.borrow(), RequestCompletion::Pending);
+            if pending {
+                previous
+                    .completion
+                    .send_replace(RequestCompletion::Unavailable(
+                        "native backend omitted redirect response/completion metadata".into(),
+                    ));
+            }
+        }
         self.sequence += 1;
         let state = Arc::new(RequestState {
             id: format!("{native_id}:{}", self.sequence),
@@ -319,7 +419,6 @@ impl NetworkLog {
                 .unwrap_or_else(|e| e.into_inner())
                 .request_headers_complete = Some(false);
         }
-
         self.current.insert(native_id.clone(), state.clone());
         self.latest.insert(native_id, Arc::downgrade(&state));
         self.recent.push_back(state.clone());
@@ -350,6 +449,7 @@ impl NetworkLog {
             data.response_headers_complete = Some(true);
         }
         data.headers_truncated |= old.headers_truncated;
+        data.route_headers = old.route_headers.clone();
         *old = data;
         drop(old);
         if self.raw_headers_enabled {
@@ -423,6 +523,8 @@ impl NetworkLog {
         self.prune();
     }
     pub(crate) fn finish(&mut self, id: &str, failure: Option<RequestFailure>) {
+        self.paused
+            .retain(|_, state| state.upgrade().is_some_and(|state| state.native_id != id));
         if let Some(state) = self.current.remove(id) {
             let failed = failure.is_some();
             state.completion.send_replace(match failure {
@@ -436,6 +538,94 @@ impl NetworkLog {
             });
         }
     }
+    pub(crate) fn finish_redirect(&mut self, id: &str) {
+        let received = self.current.get(id).is_some_and(|state| {
+            state
+                .data
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .received
+        });
+        if received {
+            // The next native redirect hop proves this observed HTTP response
+            // ended. Without response metadata, start() marks it unavailable.
+            self.finish(id, None);
+        }
+    }
+    pub(crate) fn paused(&mut self, pause_id: &str, native_id: &str, url: &str) {
+        let Some(state) = self
+            .current
+            .get(native_id)
+            .filter(|state| state.url == url)
+            .cloned()
+        else {
+            return;
+        };
+        if let Some(pending) = self.pending_route_headers.remove(pause_id) {
+            if pending.native_id == native_id && pending.url == url {
+                state
+                    .data
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .route_headers = Some(pending.headers);
+            }
+        }
+        if self.paused.len() < MAX_OBSERVATIONS || self.paused.contains_key(pause_id) {
+            self.paused.insert(pause_id.into(), Arc::downgrade(&state));
+        }
+        self.prune();
+    }
+    pub(crate) fn routed_headers(
+        &mut self,
+        pause_id: &str,
+        id: &str,
+        url: &str,
+        mut headers: Vec<(String, String)>,
+    ) -> Option<RouteHeadersGuard> {
+        let truncated = bound_headers(&mut headers);
+        let headers = Arc::new(RouteHeaders {
+            headers,
+            truncated,
+            accepted: tokio::sync::watch::channel(None).0,
+        });
+        if let Some(state) = self
+            .paused
+            .get(pause_id)
+            .and_then(Weak::upgrade)
+            .filter(|state| state.native_id == id && state.url == url)
+        {
+            state
+                .data
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .route_headers = Some(headers.clone());
+            self.prune();
+        } else {
+            self.pending_route_headers
+                .retain(|_, pending| *pending.headers.accepted.borrow() != Some(false));
+            let bytes: usize = self
+                .pending_route_headers
+                .values()
+                .flat_map(|pending| &pending.headers.headers)
+                .map(|(n, v)| n.len() + v.len())
+                .sum();
+            let added: usize = headers.headers.iter().map(|(n, v)| n.len() + v.len()).sum();
+            if self.pending_route_headers.len() >= MAX_OBSERVATIONS
+                || bytes + added > MAX_METADATA_HISTORY
+            {
+                return None;
+            }
+            self.pending_route_headers.insert(
+                pause_id.into(),
+                PendingRouteHeaders {
+                    native_id: id.into(),
+                    url: url.into(),
+                    headers: headers.clone(),
+                },
+            );
+        }
+        Some(RouteHeadersGuard(headers))
+    }
     pub(crate) fn close(&mut self, reason: &str) {
         for (_, state) in self.current.drain() {
             state
@@ -443,6 +633,8 @@ impl NetworkLog {
                 .send_replace(RequestCompletion::Unavailable(reason.into()));
         }
         self.extra.clear();
+        self.pending_route_headers.clear();
+        self.paused.clear();
     }
     pub(crate) fn states(&self) -> Vec<Arc<RequestState>> {
         self.recent.iter().cloned().collect()
@@ -738,8 +930,7 @@ impl Response {
                 .data
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .record
-                .response_headers,
+                .response_headers(),
         )
     }
     pub fn header_values(&self, name: &str) -> Vec<String> {
@@ -750,8 +941,7 @@ impl Response {
                 .data
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .record
-                .response_headers,
+                .response_headers(),
             name,
         )
     }
@@ -763,8 +953,7 @@ impl Response {
                 .data
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .record
-                .response_headers,
+                .response_headers(),
             name,
         )
     }
@@ -779,8 +968,19 @@ impl Response {
             token.check()?;
         }
         let mut completion = self.request.state.completion.subscribe();
+        let mut route_ack = self
+            .request
+            .state
+            .data
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .route_headers
+            .as_ref()
+            .map(|headers| headers.accepted.subscribe());
         if let Some(result) = terminal(&completion.borrow(), self.url()) {
-            return result;
+            if result.is_err() || route_ack.as_ref().is_none_or(|ack| ack.borrow().is_some()) {
+                return result;
+            }
         }
         let timeout = options
             .timeout
@@ -793,8 +993,17 @@ impl Response {
             "response.finished",
             async {
                 loop {
-                    if let Some(result) = terminal(&completion.borrow(), self.url()) {
-                        return result;
+                    let result = terminal(&completion.borrow(), self.url());
+                    if let Some(result) = result {
+                        if result.is_err()
+                            || route_ack.as_ref().is_none_or(|ack| ack.borrow().is_some())
+                        {
+                            return result;
+                        }
+                        route_ack.as_mut().unwrap().changed().await.map_err(|_| {
+                            E2eError::Disconnected("route fulfillment acknowledgement ended".into())
+                        })?;
+                        continue;
                     }
                     completion.changed().await.map_err(|_| {
                         E2eError::Disconnected("request completion observation ended".into())
@@ -1073,5 +1282,94 @@ mod tests {
         assert!(large.headers_truncated);
         assert!(large.recorded.post_data.is_none());
         assert!(large.recorded.headers.is_empty());
+    }
+
+    #[test]
+    fn routed_headers_require_native_ack_and_response_and_survive_event_ordering() {
+        let mut log = NetworkLog::default();
+        let headers = vec![
+            ("Set-Cookie".into(), "first=1".into()),
+            ("Set-Cookie".into(), "second=2".into()),
+        ];
+        let pending = log
+            .routed_headers(
+                "pause-first",
+                "native",
+                "http://host/first",
+                headers.clone(),
+            )
+            .unwrap();
+        pending.accept();
+        let state = log.start(
+            record("native", "http://host/first"),
+            RequestDetails::default(),
+            None,
+        );
+        log.paused("pause-first", "native", "http://host/first");
+        assert!(!state.snapshot().response_headers_from_route);
+        assert!(state.snapshot().recorded.response_headers.is_empty());
+        log.response("native", record("native", "http://host/first"), Some(false));
+        assert!(state.snapshot().response_headers_from_route);
+        assert_eq!(state.snapshot().recorded.response_headers, headers);
+        assert_eq!(state.snapshot().response_headers_complete, Some(false));
+        // A same-URL redirect's early routing event must not edit the older
+        // hop or be discarded when that older native ID finishes.
+        let pending = log
+            .routed_headers(
+                "pause-next",
+                "native",
+                "http://host/first",
+                vec![("X-Hop".into(), "next".into())],
+            )
+            .unwrap();
+        log.finish("native", None);
+        let next = log.start(
+            record("native", "http://host/first"),
+            RequestDetails {
+                redirect: true,
+                ..Default::default()
+            },
+            None,
+        );
+        log.paused("pause-next", "native", "http://host/first");
+        log.response("native", record("native", "http://host/first"), Some(true));
+        assert!(!next.snapshot().response_headers_from_route);
+        let mut ack = pending.0.accepted.subscribe();
+        assert!(ack.borrow_and_update().is_none());
+        pending.accept();
+        assert!(next.snapshot().response_headers_from_route);
+        assert_eq!(state.snapshot().recorded.response_headers, headers);
+        log.extra_headers("native", true, vec![("X-Hop".into(), "raw-native".into())]);
+        assert!(!next.snapshot().response_headers_from_route);
+        assert_eq!(next.snapshot().recorded.response_headers[0].1, "raw-native");
+
+        // Failed/dropped submissions cannot claim values or leave ack waits pending.
+        let rejected = log
+            .routed_headers("pause-next", "native", "http://host/first", headers)
+            .unwrap();
+        let receipt = rejected.0.clone();
+        drop(rejected);
+        assert_eq!(*receipt.accepted.borrow(), Some(false));
+        assert!(!next.snapshot().response_headers_from_route);
+        let large = log
+            .routed_headers(
+                "pause-large",
+                "large",
+                "http://host/large",
+                vec![("huge".into(), "x".repeat(MAX_METADATA_TEXT + 1))],
+            )
+            .unwrap();
+        large.accept();
+        let large = log.start(
+            record("large", "http://host/large"),
+            RequestDetails::default(),
+            None,
+        );
+        log.paused("pause-large", "large", "http://host/large");
+        log.response("large", record("large", "http://host/large"), None);
+        assert!(large.snapshot().headers_truncated);
+        assert!(large.snapshot().recorded.response_headers.is_empty());
+        log.close("done");
+        assert!(log.pending_route_headers.is_empty());
     }
 }

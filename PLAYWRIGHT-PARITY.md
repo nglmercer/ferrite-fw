@@ -381,7 +381,20 @@ or unavailable, and None without a native signal. Failed pre-header requests
 retain primary headers without claiming raw completeness. Firefox may fold
 duplicates or omit POST text/resource destination; ambiguous comma-delimited
 values remain intact. API responses share the array/value lookup helpers;
-duplicate-preserving route forwarding remains a separate task.
+route fulfillment retains successfully acknowledged supplied header pairs when
+native response events omit cookies or fold duplicates. The snapshot flag
+`response_headers_from_route` identifies that source; it does not claim raw
+native completeness. Supplied values are exposed only after both native headers
+and a successful fulfillment reply. Full native raw headers take precedence.
+Firefox 156/157 omits response/completion events for the first synthetic redirect
+hop. Such a hop keeps no fabricated Response and settles as unavailable when
+the native next-hop event arrives; its identity links remain available.
+Per-hop native pause identity prevents same-URL redirects from editing an older
+hop. Rejection/drop settles pending acknowledgements; `finished()` also settles
+the associated acknowledgement within its existing budget. Pending correlation
+is bounded to 4,096 records/16 MiB and is cleared at listener shutdown.
+This field has a serde default for older serialized typed snapshots; Rust
+`RequestSnapshot` literals need `response_headers_from_route: false`.
 
 Metadata history is bounded to 4,096 hops and 16 MiB. Each POST/header list is
 limited to 64 KiB and header lists to 256 pairs; snapshots identify truncation.
@@ -392,8 +405,9 @@ correlation for that page rather than assigning rows to the wrong hop. Native
 event buffers hold 256 entries and report lag explicitly. Bodies remain in the
 existing bounded capture API; typed body helpers are still C02.
 
-Evidence: [network_metadata.rs](crates/ferrite-e2e/tests/network_metadata.rs)
-and focused FIFO/budget/weak-history units in [network.rs](crates/ferrite-e2e/src/network.rs).
+Evidence: [network_metadata.rs](crates/ferrite-e2e/tests/network_metadata.rs),
+[header_forwarding.rs](crates/ferrite-e2e/tests/header_forwarding.rs) and focused
+FIFO/budget/weak-history/acknowledgement units in [network.rs](crates/ferrite-e2e/src/network.rs).
 
 ### URL matchers and snapshot waits
 
@@ -609,13 +623,14 @@ cargo clippy -p ferrite-e2e -p ferrite-cli --all-targets -- -D warnings
 
 Validation for URL/network matching, generated uploads and browser diagnostics:
 
-- Combined verified `ferrite-e2e` inventory: **142 unit tests, 3 API tests, 93 browser tests, 7 attempt-diagnostics
+- Combined verified `ferrite-e2e` inventory: **143 unit tests, 3 API tests, 93 browser tests, 7 attempt-diagnostics
   groups, 4 reliability groups, 4 runtime/reporter groups, 6 fixture/network
   groups, 4 step-control/bundle groups, 5 wait/upload/console groups,
   3 core conformance/capability groups, 4 callback lifecycle groups,
   1 daily API group, 2 action option groups, 3 URL readiness groups,
   2 shared URL matching groups, 3 function wait groups, 1 frame lookup group,
-  2 completed download groups, 4 typed network metadata groups and 2 doctests** (295 checks total).
+  2 completed download groups, 4 typed network metadata groups, 1 header forwarding group
+  and 2 doctests** (297 checks total).
   Headless Shell and Firefox were installed and exercised; unsupported-engine branches remain explicit.
 - The five new groups additionally passed with full Chrome and Firefox, covering
   exact/glob/regex and predicate URL matching, frame history, request-start and
@@ -641,7 +656,7 @@ Validation for URL/network matching, generated uploads and browser diagnostics:
 - Existing trace and first-attachment names remain compatible; retry trace files
   and repeated attachment names preserve their individual contents.
 - CLI/configuration checks passed again: 5 CLI tests, 17 configuration tests and
-  1 doctest (318 checks across E2E/CLI/configuration). This change adds no CLI
+  1 doctest (320 checks across E2E/CLI/configuration). This change adds no CLI
   options. A real portable HTML report with expanded automatic/user/hook trees,
   skipped steps, annotations and run lifecycle was rendered in Chromium and
   visually inspected. The console section was also rendered and visually
