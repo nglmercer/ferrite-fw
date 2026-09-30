@@ -1,0 +1,86 @@
+{
+  "playwright": "1.63.0",
+  "engine": "chromium",
+  "cases": [
+    {
+      "name": "cleanup mismatch",
+      "result": {
+        "expected": "passed",
+        "attempts": [
+          {
+            "status": "failed",
+            "errors": 1,
+            "continued": false
+          },
+          {
+            "status": "failed",
+            "errors": 1,
+            "continued": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "expected mismatch",
+      "result": {
+        "expected": "failed",
+        "attempts": [
+          {
+            "status": "failed",
+            "errors": 1,
+            "continued": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "parallel clean",
+      "result": {
+        "expected": "passed",
+        "attempts": [
+          {
+            "status": "passed",
+            "errors": 0,
+            "continued": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "retry mismatches",
+      "result": {
+        "expected": "passed",
+        "attempts": [
+          {
+            "status": "failed",
+            "errors": 2,
+            "continued": true
+          },
+          {
+            "status": "passed",
+            "errors": 0,
+            "continued": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "skip after mismatch",
+      "result": {
+        "expected": "skipped",
+        "attempts": [
+          {
+            "status": "failed",
+            "errors": 1,
+            "continued": false
+          },
+          {
+            "status": "skipped",
+            "errors": 0,
+            "continued": false
+          }
+        ]
+      }
+    }
+  ]
+}

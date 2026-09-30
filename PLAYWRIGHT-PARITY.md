@@ -65,7 +65,7 @@ implementation.
 | DOM access | Separate textContent/innerText, arrays, evaluate-all/JSON arguments, highlight removal; single-target getters wait and enforce strictness | JSON values only, without arbitrary JS/JSHandle argument serialization |
 | Frames and handles | Same-origin lazy/nested/replacement `FrameLocator`, frame ownership, content/function/URL/load/selector helpers, remote handle evaluation/properties | Cross-origin/OOPIF lazy selection and ElementHandle are deferred |
 | Native lifecycle events | Frame attach/navigation/detach with native identities, main DOM/load readiness, dialog closure and single context forwarding; bounded earliest popup diagnostics | Owned metadata snapshots; optional native fields/subscriptions; Chromium current target only, with OOPIF adoption deferred; popup observation loss is explicit |
-| Assertions | Exact/regex page title/URL, raw regex/normalized or rendered text options, mixed lists, ordered text subsets, exact classes/class tokens, values, state/indeterminate options, native intersection ratios, accessible regex, custom predicates and `expect_to_pass` | Rust regex syntax; accessibility approximation; no custom matcher registry/asymmetric matchers or full options parity |
+| Assertions | Attempt-owned soft mismatches, contextual assertion steps, exact/regex page title/URL, raw regex/normalized or rendered text options, mixed lists, ordered text subsets, exact classes/class tokens, values, state/indeterminate options, native intersection ratios, accessible regex, custom predicates and `expect_to_pass` | Rust regex syntax; accessibility approximation; no custom matcher registry/asymmetric matchers or full options parity |
 | Accessibility snapshots | Structured DOM role/name/state tree and locator/page exact snapshot assertions | Approximation, without complete ARIA/YAML matching or all upstream modes |
 | Clock | Separate fixed Date/system time, run-for/fast-forward, promise/timer ordering, pause-at/resume and installation time | Page-local; navigation reinstalls initial state; idle callbacks approximate browser behavior |
 | API testing | Query/headers/JSON/form/raw/multipart, hop cookies, TLS/proxy, scoped preemptive/challenge Basic auth, bounded manual redirects, reset retries and status checks | Legacy preemptive default; client-scoped TLS settings, no automatic compression decoding or full upstream option surface; returned buffers are independently owned |
@@ -1109,3 +1109,59 @@ inspected; all three artifact links per relocated bundle resolved and label text
 remained escaped. An additional whole-workspace formatting probe reports
 pre-existing formatting differences in unrelated crates; it is not counted as
 a pass. B17 is complete; B12 is next and G04 remains open.
+
+### Attempt-owned soft assertions
+
+`TestInfo::soft_asserts()` and `SoftAsserts::for_attempt` return a weak, clonable
+AttemptSoftAsserts handle for one attempt. Its `run(message, future)` owns one
+assertion step and exact synchronous call-site source; a mismatch records a failed
+step but returns Ok so later checks run. `check`/`check_with_message` consume an
+already awaited result and retain the collection source/current step without
+creating an extra step. Only E2eError::Expect mismatches are collected;
+operational deadlines, cancellation, disconnection, invalid options, typed
+causes and test/step skip control propagate unchanged. Local futures remain supported.
+Standalone SoftAsserts keeps its manual check/failures/assert_all contracts and
+adds contextual messages; there is no custom matcher registry.
+
+Collection publishes errors and Failed status immediately, survives a successful
+body result, and reaches subsequent hooks/fixture teardown. Body mismatches can
+satisfy expected-failure annotations; setup/cleanup mismatches remain unexpected.
+Prior soft errors remain alongside timeout/interruption/hard failures or a later
+skip request. Every retry owns a fresh collector. Atomic sealing after hooks/test
+fixture teardown includes all accepted failures before result classification and
+rejects late writes before artifact/context cleanup. Dropping an unfinished
+attempt retains both soft failures and interruption rather than treating a
+previously published Failed status as completion. The handle does not retain its
+runtime; archive/query final report records after runtime release.
+
+Migration: `AttemptResult::soft_assertions` is a serde-defaulted vector of owned
+SoftAssertionFailure records (error/message/step ID/title path). Rust struct
+literals need the additional vector; old JSON loads it as empty. TestError fields
+are unchanged. JSON, HTML and live final-attempt callbacks retain these records;
+HTML adds an escaped soft-assertion section with source and step path. Collection
+emits a live on_error notification per mismatch; the existing final failure
+notification reports the combined result.
+
+The actual [pinned test-runner reference](scripts/e2e-conformance/soft-assertion-reference.json)
+records five Playwright 1.63.0 cases. Normalized errors, continuation, retries,
+expected failures, cleanup and parallel isolation agree on both native engines.
+The upstream skip-after-mismatch case first fails, then skips its retry before
+its body runs because a runtime skip alters upstream test configuration. Rust
+modifiers stay attempt-local; the comparison explicitly omits the mismatch on
+its retry before requesting skip again. This does not claim persistent modifier
+parity. [Native soft checks](crates/ferrite-e2e/tests/soft_assertions.rs) also cover
+source/step ownership, retained handles, setup/cleanup/fixtures, operational
+failures, failed setup and dependency release, JSON defaults and escaped reports.
+
+Validation: all 355 E2E checks passed (160 units, 192 integrations across all
+28 targets and three doctests), plus 23 CLI/configuration checks. The 53-check
+runner/diagnostics batch ran on full Chrome 153/Firefox 157; core183/browser93/
+routing23 used Headless Shell/Firefox. The final 160-unit rerun includes actual
+concurrent writers racing atomic sealing, a late future that is never polled,
+weak-runtime release and unfinished-attempt interruption. Strict Clippy initially
+found a test-only mutex guard held across browser shutdown; releasing it before
+the await fixed the issue, and the affected native group plus final strict
+E2E/CLI all-target Clippy passed. Package formatting, matrix symbol anchors and
+local links passed. Expanded reports from both engines were inspected and all
+three links per relocated bundle resolved with escaped text intact. B12 is
+complete; B14/B13 and G04 remain open.

@@ -30,6 +30,9 @@ struct RuntimeState {
     status: Option<AttemptStatus>,
     errors: Vec<TestError>,
     annotations: Vec<(String, String)>,
+    soft_assertions: Vec<crate::SoftAssertionFailure>,
+    soft_phase: SoftPhase,
+    soft_sealed: bool,
 }
 
 #[derive(Clone)]
@@ -53,6 +56,9 @@ impl RuntimeControl {
                     skipped: None,
                     status: None,
                     errors: Vec::new(),
+                    soft_assertions: Vec::new(),
+                    soft_phase: SoftPhase::Setup,
+                    soft_sealed: false,
                     annotations,
                 })
                 .0,
@@ -87,6 +93,167 @@ impl RuntimeControl {
                 result=&mut future=>return result,
             }
         }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SoftPhase {
+    Setup,
+    Body,
+    Cleanup,
+}
+impl SoftPhase {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Setup => "soft setup",
+            Self::Body => "soft body",
+            Self::Cleanup => "soft cleanup",
+        }
+    }
+}
+
+/// Shared soft checks for a single attempt. Only assertion mismatches are collected;
+/// operational failures and skip control propagate to the caller unchanged.
+/// The handle is weak and rejects collection after its attempt ends.
+#[derive(Clone)]
+pub struct AttemptSoftAsserts {
+    state: std::sync::Weak<tokio::sync::watch::Sender<RuntimeState>>,
+    steps: Option<crate::report::StepSession>,
+    reporters: crate::report::ReporterHub,
+    attempt: crate::report::AttemptInfo,
+}
+impl std::fmt::Debug for AttemptSoftAsserts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AttemptSoftAsserts")
+            .field("attempt", &self.attempt)
+            .finish_non_exhaustive()
+    }
+}
+impl AttemptSoftAsserts {
+    fn state(&self) -> E2eResult<Arc<tokio::sync::watch::Sender<RuntimeState>>> {
+        let state = self
+            .state
+            .upgrade()
+            .ok_or_else(|| E2eError::Config("soft assertion attempt has ended".into()))?;
+        if state.borrow().soft_sealed {
+            return Err(E2eError::Config("soft assertion attempt has ended".into()));
+        }
+        Ok(state)
+    }
+    /// Collect an assertion result at this synchronous call site.
+    /// Use `?`: cancellation, transport/validation errors and skip control are not softened.
+    #[track_caller]
+    pub fn check(&self, result: E2eResult<()>) -> E2eResult<()> {
+        self.check_with_message(result, "")
+    }
+    /// Collect a result with contextual text and the actual collection source.
+    #[track_caller]
+    pub fn check_with_message(
+        &self,
+        result: E2eResult<()>,
+        message: impl Into<String>,
+    ) -> E2eResult<()> {
+        self.state()?;
+        match result {
+            Err(error @ E2eError::Expect(_)) => {
+                let message = message.into();
+                self.record(
+                    error,
+                    (!message.is_empty()).then_some(message),
+                    SourceLocation::caller(Location::caller()),
+                )?;
+                Ok(())
+            }
+            result => result,
+        }
+    }
+    fn record(
+        &self,
+        error: E2eError,
+        message: Option<String>,
+        location: SourceLocation,
+    ) -> E2eResult<E2eError> {
+        let state = self.state()?;
+        let error = match &message {
+            Some(message) => error.with_context(message),
+            None => error,
+        };
+        let (step_id, title_path) = self.steps.as_ref().map(|steps| steps.context()).unwrap_or((
+            None,
+            vec![self.attempt.file.clone(), self.attempt.name.clone()],
+        ));
+        let mut accepted = false;
+        state.send_modify(|state| {
+            if state.soft_sealed {
+                return;
+            }
+            let failure = crate::SoftAssertionFailure {
+                error: TestError::new(&error, state.soft_phase.label(), Some(location)),
+                message,
+                step_id,
+                title_path,
+            };
+            state.errors.push(failure.error.clone());
+            state.soft_assertions.push(failure);
+            if !matches!(
+                state.status,
+                Some(AttemptStatus::TimedOut | AttemptStatus::Interrupted)
+            ) {
+                state.status = Some(AttemptStatus::Failed);
+            }
+            accepted = true;
+        });
+        if !accepted {
+            return Err(E2eError::Config("soft assertion attempt has ended".into()));
+        }
+        self.reporters
+            .emit(|reporter| reporter.on_error(Some(&self.attempt), &error.to_string()));
+        Ok(error)
+    }
+    /// Wrap an assertion future in one contextual assertion step, preserving its
+    /// caller source and suppressing nested implementation steps. A mismatch
+    /// records a failed step and returns Ok so the test body can continue.
+    #[track_caller]
+    pub fn run<'a>(
+        &'a self,
+        message: impl Into<String>,
+        future: impl Future<Output = E2eResult<()>> + 'a,
+    ) -> impl Future<Output = E2eResult<()>> + 'a {
+        let message = message.into();
+        let message = (!message.is_empty()).then_some(message);
+        let location = SourceLocation::caller(Location::caller());
+        async move {
+            self.state()?;
+            let title = message
+                .as_ref()
+                .map(|message| format!("expect.soft {message}"))
+                .unwrap_or_else(|| "expect.soft".into());
+            let work = async {
+                match future.await {
+                    Err(error @ E2eError::Expect(_)) => {
+                        Err(self.record(error, message, location.clone())?)
+                    }
+                    result => result,
+                }
+            };
+            let result = match &self.steps {
+                Some(steps) => steps.assertion(&title, location.clone(), work).await,
+                None => work.await,
+            };
+            match result {
+                Err(E2eError::Expect(_)) => Ok(()),
+                result => result,
+            }
+        }
+    }
+    /// Snapshot all failures collected by any handle for this live attempt.
+    pub fn failures(&self) -> E2eResult<Vec<crate::SoftAssertionFailure>> {
+        let state = self
+            .state
+            .upgrade()
+            .ok_or_else(|| E2eError::Config("soft assertion attempt has ended".into()))?;
+        let failures = state.borrow().soft_assertions.clone();
+        Ok(failures)
     }
 }
 
@@ -591,8 +758,8 @@ pub struct TestInfo {
 }
 
 impl TestInfo {
-    /// Current raw outcome. `None` while setup/body is still running.
-    /// Published before `after_each`; cleanup failures update it immediately.
+    /// Current raw outcome. None before a body outcome or the first soft mismatch.
+    /// Soft and cleanup failures publish immediately; body outcome precedes after_each.
     pub fn status(&self) -> Option<AttemptStatus> {
         self.runtime.snapshot().status
     }
@@ -610,6 +777,51 @@ impl TestInfo {
     /// All failures recorded so far, including setup/body and completed cleanup phases.
     pub fn errors(&self) -> Vec<TestError> {
         self.runtime.snapshot().errors
+    }
+    /// Shared collector for this attempt, including setup/body/cleanup. No final
+    /// assert-all is needed. Retained collectors cannot write after completion.
+    #[must_use]
+    pub fn soft_asserts(&self) -> AttemptSoftAsserts {
+        AttemptSoftAsserts {
+            state: Arc::downgrade(&self.runtime.state),
+            steps: self.steps.clone(),
+            reporters: self.reporters.clone(),
+            attempt: self.attempt.clone(),
+        }
+    }
+    /// Collected soft mismatches, also included in `errors()` and attempt reports.
+    pub fn soft_failures(&self) -> Vec<crate::SoftAssertionFailure> {
+        self.runtime.snapshot().soft_assertions
+    }
+    fn merge_soft_failures(
+        &self,
+        reported: &mut usize,
+        failed: &mut Option<String>,
+        seal: bool,
+    ) -> bool {
+        let mut remaining = Vec::new();
+        self.runtime.state.send_modify(|state| {
+            state.soft_sealed |= seal;
+            remaining = state
+                .soft_assertions
+                .iter()
+                .skip(*reported)
+                .cloned()
+                .collect();
+            *reported = state.soft_assertions.len();
+        });
+        if !remaining.is_empty() {
+            let note = remaining
+                .iter()
+                .map(|failure| format!("{}: {}", failure.error.phase, failure.error.message))
+                .collect::<Vec<_>>()
+                .join("\n");
+            *failed = Some(match failed.take() {
+                Some(prior) => format!("{prior}\n{note}"),
+                None => note,
+            });
+        }
+        !remaining.is_empty()
     }
     fn record_error(&self, error: &E2eError, phase: &str) {
         let status = match error {
@@ -637,6 +849,15 @@ impl TestInfo {
             ) {
                 state.status = Some(status);
             }
+            if status == AttemptStatus::Skipped
+                && !state.soft_assertions.is_empty()
+                && !matches!(
+                    state.status,
+                    Some(AttemptStatus::TimedOut | AttemptStatus::Interrupted)
+                )
+            {
+                state.status = Some(AttemptStatus::Failed);
+            }
             if status != AttemptStatus::Skipped {
                 state.errors.push(TestError::new(error, phase, location));
             }
@@ -645,14 +866,24 @@ impl TestInfo {
     fn body_outcome(&self, outcome: &E2eResult<()>, phase: &str) {
         match outcome {
             Ok(()) => self.runtime.state.send_modify(|state| {
-                state.status = Some(if state.skipped.is_some() {
-                    AttemptStatus::Skipped
-                } else {
-                    AttemptStatus::Passed
-                })
+                if !matches!(
+                    state.status,
+                    Some(AttemptStatus::TimedOut | AttemptStatus::Interrupted)
+                ) {
+                    state.status = Some(if !state.soft_assertions.is_empty() {
+                        AttemptStatus::Failed
+                    } else if state.skipped.is_some() {
+                        AttemptStatus::Skipped
+                    } else {
+                        AttemptStatus::Passed
+                    });
+                }
             }),
             Err(error) => self.record_error(error, phase),
         }
+        self.runtime
+            .state
+            .send_modify(|state| state.soft_phase = SoftPhase::Cleanup);
     }
     /// Stop this attempt. Use `info.skip(reason)?` to stop the current closure
     /// immediately. Shared control also stops pending setup/body futures.
@@ -2542,6 +2773,7 @@ struct AttemptGuard {
     started: Instant,
     start_time_ms: u64,
     attachments_start: usize,
+    outcome_set: bool,
     history: Arc<Mutex<Vec<AttemptResult>>>,
 }
 impl AttemptGuard {
@@ -2569,22 +2801,30 @@ impl AttemptGuard {
             started,
             start_time_ms,
             attachments_start,
+            outcome_set: false,
             history,
         }
     }
     fn outcome(&mut self, status: TestStatus, error: Option<String>) {
+        self.outcome_set = true;
         self.result.status = status;
         self.result.error = error;
     }
 }
 impl Drop for AttemptGuard {
     fn drop(&mut self) {
-        if self.info.status().is_none() {
+        if !self.outcome_set {
             self.info.record_error(
                 &E2eError::Cancelled("attempt interrupted before completion".into()),
                 "attempt",
             );
+            self.info
+                .merge_soft_failures(&mut 0, &mut self.result.error, true);
         }
+        self.info
+            .runtime
+            .state
+            .send_modify(|state| state.soft_sealed = true);
         self.result.duration_ms =
             self.started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
         self.result.annotations = self.info.annotations();
@@ -2595,6 +2835,7 @@ impl Drop for AttemptGuard {
             .skip(self.attachments_start)
             .collect();
         let attempt = AttemptResult {
+            soft_assertions: self.info.soft_failures(),
             popup_diagnostics: self
                 .context
                 .as_ref()
@@ -3026,6 +3267,9 @@ async fn run_one(
                     recording = true;
                 }
                 body_started = true;
+                runtime
+                    .state
+                    .send_modify(|state| state.soft_phase = SoftPhase::Body);
                 match &test.ctx_func {
                     Some(func) => {
                         func(TestContext {
@@ -3044,17 +3288,32 @@ async fn run_one(
         .await;
         info.body_outcome(&outcome, if body_started { "body" } else { "test setup" });
         let state = runtime.snapshot();
-        let skipped = matches!(&outcome, Err(E2eError::Skipped(_)))
-            || (state.skipped.is_some() && outcome.is_ok());
+        let skipped = state.soft_assertions.is_empty()
+            && (matches!(&outcome, Err(E2eError::Skipped(_)))
+                || (state.skipped.is_some() && outcome.is_ok()));
         let expected_fail = state.expected_fail;
-        let failure_can_be_expected = matches!(&outcome, Err(error) if !matches!(error, E2eError::Timeout(..) | E2eError::Cancelled(_) | E2eError::Skipped(_)));
+        let failure_can_be_expected = matches!(&outcome, Err(error) if !matches!(error, E2eError::Timeout(..) | E2eError::Cancelled(_) | E2eError::Skipped(_)))
+            || (outcome.is_ok()
+                && !state.soft_assertions.is_empty()
+                && state
+                    .soft_assertions
+                    .iter()
+                    .all(|failure| failure.error.phase == SoftPhase::Body.label()));
         let mut failed = if skipped {
             None
         } else {
             outcome.err().map(|e| e.to_string())
         };
-        expected_failure_observed =
-            expected_fail && body_started && failure_can_be_expected && !control.is_cancelled();
+        let mut reported_soft = 0;
+        info.merge_soft_failures(&mut reported_soft, &mut failed, false);
+        expected_failure_observed = expected_fail
+            && body_started
+            && failure_can_be_expected
+            && !control.is_cancelled()
+            && state
+                .soft_assertions
+                .iter()
+                .all(|failure| failure.error.phase == SoftPhase::Body.label());
         for hook in test
             .suites
             .iter()
@@ -3095,6 +3354,9 @@ async fn run_one(
                     None => note,
                 });
             }
+            if info.merge_soft_failures(&mut reported_soft, &mut failed, false) {
+                expected_failure_observed = false;
+            }
         }
         if let Some(note) =
             teardown_fixtures_with_info(runner, &attempt_fixtures.built, Some(&info)).await
@@ -3104,6 +3366,9 @@ async fn run_one(
                 Some(prior) => format!("{prior} ({note})"),
                 None => note,
             });
+        }
+        if info.merge_soft_failures(&mut reported_soft, &mut failed, true) {
+            expected_failure_observed = false;
         }
         let unexpected_pass = failed.is_none() && expected_fail && !skipped;
         if unexpected_pass {
@@ -4234,5 +4499,117 @@ mod fixture_cancellation_tests {
             .unwrap_err()
             .to_string()
             .contains("test-scoped built-in"));
+    }
+    #[tokio::test]
+    async fn attempt_soft_control_errors_are_not_collected_and_local_futures_remain_supported() {
+        let info = runtime_info(Duration::ZERO);
+        let soft = info.soft_asserts();
+        for error in [
+            E2eError::Timeout(7, "native".into()),
+            E2eError::Cancelled("caller".into()),
+            E2eError::Disconnected("transport".into()),
+            E2eError::Skipped("skip".into()),
+            E2eError::StepSkipped("step".into()),
+            E2eError::Config("options".into()),
+        ] {
+            let code = error.code();
+            let message = error.to_string();
+            let returned = soft.check_with_message(Err(error), "context").unwrap_err();
+            assert_eq!(returned.code(), code);
+            assert_eq!(returned.to_string(), message);
+        }
+        let local = std::rc::Rc::new(42);
+        soft.run("local mismatch", async move {
+            assert_eq!(*local, 42);
+            Err(E2eError::Expect("local".into()))
+        })
+        .await
+        .unwrap();
+        assert_eq!(info.soft_failures().len(), 1);
+        info.body_outcome(&Ok(()), "body");
+        assert_eq!(info.status(), Some(AttemptStatus::Failed));
+        info.record_error(&E2eError::Timeout(7, "native".into()), "body");
+        info.body_outcome(&Err(E2eError::Skipped("skip".into())), "body");
+        assert_eq!(info.status(), Some(AttemptStatus::TimedOut));
+    }
+    #[test]
+    fn attempt_soft_sealing_is_atomic_and_collectors_do_not_retain_the_runtime() {
+        let info = runtime_info(Duration::ZERO);
+        let soft = info.soft_asserts();
+        soft.check(Err(E2eError::Expect("first".into()))).unwrap();
+        let mut reported = 0;
+        let mut failed = None;
+        assert!(info.merge_soft_failures(&mut reported, &mut failed, true));
+        assert!(matches!(
+            soft.check(Err(E2eError::Expect("late".into()))),
+            Err(E2eError::Config(_))
+        ));
+        assert_eq!(info.soft_failures().len(), 1);
+        assert!(!info.merge_soft_failures(&mut reported, &mut failed, true));
+        assert_eq!(failed.unwrap().matches("first").count(), 1);
+        let polled = std::sync::atomic::AtomicBool::new(false);
+        assert!(futures::executor::block_on(soft.run("late future", async {
+            polled.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }))
+        .is_err());
+        assert!(!polled.load(std::sync::atomic::Ordering::SeqCst));
+        drop(info);
+        assert!(soft.state.upgrade().is_none());
+        // Race writers with sealing: every accepted mismatch must be included
+        // in the final classification; rejected writes cannot change it.
+        let info = runtime_info(Duration::ZERO);
+        let soft = info.soft_asserts();
+        let barrier = Arc::new(std::sync::Barrier::new(9));
+        let writers = (0..8)
+            .map(|index| {
+                let soft = soft.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    let label = format!("writer {index}");
+                    soft.check(Err(E2eError::Expect(label.clone())))
+                        .map(|()| label)
+                })
+            })
+            .collect::<Vec<_>>();
+        barrier.wait();
+        let mut failed = None;
+        info.merge_soft_failures(&mut 0, &mut failed, true);
+        let accepted = writers
+            .into_iter()
+            .filter_map(|writer| match writer.join().unwrap() {
+                Ok(label) => Some(label),
+                Err(E2eError::Config(_)) => None,
+                Err(error) => panic!("{error}"),
+            })
+            .collect::<Vec<_>>();
+        let archived = info.soft_failures();
+        assert_eq!(archived.len(), accepted.len());
+        for label in accepted {
+            assert!(archived
+                .iter()
+                .any(|failure| failure.error.message.contains(&label)));
+            assert!(failed.as_ref().unwrap().contains(&label));
+        }
+    }
+    #[test]
+    fn dropping_an_unfinished_attempt_preserves_soft_failures_and_interruption() {
+        let info = runtime_info(Duration::ZERO);
+        let soft = info.soft_asserts();
+        let history = Arc::new(Mutex::new(Vec::new()));
+        let guard = AttemptGuard::new(
+            crate::report::ReporterHub::default(),
+            info.clone(),
+            history.clone(),
+        );
+        soft.check(Err(E2eError::Expect("before drop".into())))
+            .unwrap();
+        drop(guard);
+        let attempts = attempt_history(&history);
+        assert_eq!(attempts[0].status, AttemptStatus::Interrupted);
+        assert_eq!(attempts[0].soft_assertions.len(), 1);
+        assert_eq!(attempts[0].errors.len(), 2);
+        assert!(matches!(soft.check(Ok(())), Err(E2eError::Config(_))));
     }
 }

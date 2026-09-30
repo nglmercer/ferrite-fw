@@ -741,3 +741,40 @@ intact. Typed I/O, HTTP or JSON failures from labeled operations use the new
 `E2eError::Diagnostic { context, source }` variant, retaining the original typed
 cause and code. Update exhaustive enum matches accordingly and inspect `source`
 or the standard error chain when needed. Skip-control reasons remain unchanged.
+
+Collect soft mismatches automatically for each runner attempt:
+
+```rust,no_run
+let test = ferrite_e2e::test_with_context("account", |ctx| async move {
+    let soft = ctx.info.soft_asserts();
+    soft.run("account heading", ctx.page.locator("h1").expect().text("Account")).await?;
+    soft.run("save button", ctx.page.get_by_role("button", "Save").expect().visible()).await?;
+    // Both checks execute. Collected mismatches fail this attempt automatically.
+    assert_eq!(ctx.info.soft_failures().len(), ctx.info.errors().len());
+    Ok(())
+});
+```
+
+`run` creates one assertion step with the contextual message and its exact Rust
+call site. A mismatch records a failed step and lets execution continue. For an
+already awaited result, `check(result)?` or `check_with_message(result, message)?`
+records the collection source and current user/fixture step without adding an
+extra step. `SoftAsserts::for_attempt(&ctx.info)` returns the same attempt-owned
+collector; clones share its failures. Use `?`: only E2eError::Expect mismatches
+are softened, while operational timeouts, cancellation, disconnection, invalid
+options and skip control propagate unchanged. Local assertion futures still work.
+
+Soft failures immediately appear in TestInfo errors/status, reach cleanup hooks,
+remain distinct across retries/workers, and survive in attempt JSON/HTML reports.
+Expected failure can cover body mismatches, while setup/cleanup failures remain
+unexpected. A later skip cannot erase earlier mismatches. Collection is sealed
+after hooks/test fixtures finish, before artifact/context cleanup; a retained
+collector cannot write into a completed attempt or another retry. Use the final
+report for archived failures; collector snapshots require its runtime to remain.
+Standalone `SoftAsserts::new()` still uses `check`/`failures`/`assert_all`; its
+`check_with_message` adds contextual text without automatic runner ownership.
+
+Migration: `AttemptResult` has a serde-defaulted `soft_assertions` vector of
+`SoftAssertionFailure` records with error, message, step ID and title path.
+Update exhaustive Rust AttemptResult literals with `soft_assertions: Vec::new()`.
+Old JSON without this field loads as empty; TestError's fields remain unchanged.

@@ -66,6 +66,19 @@ impl TestError {
     }
 }
 
+/// One attempt-owned soft mismatch, including its collection source and step.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SoftAssertionFailure {
+    /// Contextual assertion failure, also present in the attempt errors.
+    pub error: TestError,
+    /// Optional caller-supplied assertion message.
+    pub message: Option<String>,
+    /// Owning assertion or user step, when collection occurs inside one.
+    pub step_id: Option<u64>,
+    /// Owning step path, or the test identity when no step is active.
+    pub title_path: Vec<String>,
+}
+
 /// Category of a recorded step.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -244,6 +257,9 @@ pub struct AttemptResult {
     /// Popup startup observations, including failed or immediately closed adoption.
     #[serde(default)]
     pub popup_diagnostics: crate::PopupDiagnosticsHistory,
+    /// Attempt-owned soft mismatches, isolated from other retries and tests.
+    #[serde(default)]
+    pub soft_assertions: Vec<SoftAssertionFailure>,
     pub info: AttemptInfo,
     pub status: AttemptStatus,
     pub expected_status: AttemptStatus,
@@ -368,6 +384,45 @@ impl StepSession {
     }
     pub(crate) async fn scope<F: std::future::Future>(&self, future: F) -> F::Output {
         CURRENT_SESSION.scope(self.clone(), future).await
+    }
+    pub(crate) fn context(&self) -> (Option<u64>, Vec<String>) {
+        let id = CURRENT_STEP
+            .try_with(|(session, id)| (*session == self.id).then_some(*id))
+            .ok()
+            .flatten();
+        let records = self.records.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((step, _, _)) = records
+            .nodes
+            .iter()
+            .find(|(step, _, _)| Some(step.id) == id)
+        {
+            return (id, step.title_path.clone());
+        }
+        (
+            None,
+            vec![self.attempt.file.clone(), self.attempt.name.clone()],
+        )
+    }
+    pub(crate) async fn assertion<F: std::future::Future<Output = crate::E2eResult<()>>>(
+        &self,
+        title: &str,
+        location: SourceLocation,
+        future: F,
+    ) -> crate::E2eResult<()> {
+        self.run_kind(
+            title,
+            location.clone(),
+            StepCategory::Assertion,
+            Vec::new(),
+            future,
+            |result| {
+                result
+                    .as_ref()
+                    .err()
+                    .map(|error| TestError::new(error, "soft assertion", Some(location)))
+            },
+        )
+        .await
     }
     fn default_location(&self) -> SourceLocation {
         SourceLocation {
@@ -1043,6 +1098,19 @@ impl TestReport {
                         xml_escape(value)
                     ));
                 }
+                if !attempt.soft_assertions.is_empty() {
+                    out.push_str("<details><summary>Soft assertions</summary><ul>");
+                    for failure in &attempt.soft_assertions {
+                        out.push_str("<li>");
+                        out.push_str(&format!(
+                            "<div>{}</div>",
+                            xml_escape(&failure.title_path.join(" > "))
+                        ));
+                        render_error(&mut out, &failure.error);
+                        out.push_str("</li>");
+                    }
+                    out.push_str("</ul></details>");
+                }
                 render_steps(&mut out, &attempt.steps);
                 render_console(&mut out, &attempt.console);
                 render_popup_diagnostics(&mut out, &attempt.popup_diagnostics);
@@ -1456,6 +1524,7 @@ mod tests {
         let attempt = AttemptResult {
             console: Vec::new(),
             popup_diagnostics: Default::default(),
+            soft_assertions: Vec::new(),
             info: session.attempt.clone(),
             status: AttemptStatus::Failed,
             expected_status: AttemptStatus::Passed,

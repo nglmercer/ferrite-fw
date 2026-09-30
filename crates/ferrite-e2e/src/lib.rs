@@ -129,16 +129,16 @@ pub use page::{
 };
 pub use popup_capture::{PopupAdoption, PopupDiagnostics, PopupDiagnosticsHistory};
 pub use report::{
-    Attachment, AttemptInfo, AttemptResult, AttemptStatus, Reporter, SourceLocation,
-    StepAnnotation, StepCategory, StepContext, StepInfo, StepOptions, StepOutcome, StepStatus,
-    TestError, TestReport, TestResult, TestStatus,
+    Attachment, AttemptInfo, AttemptResult, AttemptStatus, Reporter, SoftAssertionFailure,
+    SourceLocation, StepAnnotation, StepCategory, StepContext, StepInfo, StepOptions, StepOutcome,
+    StepStatus, TestError, TestReport, TestResult, TestStatus,
 };
 pub use route_options::{RouteBodyState, RouteFetchOptions, RouteFulfillOptions};
 pub use routing::{UnrouteBehavior, UnrouteOptions};
 pub use runner::{
-    describe, test, test_with_context, ContextHook, Fixture, FixtureMap, FixtureScope, GlobalHook,
-    HookFn, Project, Runner, Suite, Test, TestContext, TestContextFn, TestInfo, TestMode,
-    WorkerContext, WorkerHook, WorkerInfo,
+    describe, test, test_with_context, AttemptSoftAsserts, ContextHook, Fixture, FixtureMap,
+    FixtureScope, GlobalHook, HookFn, Project, Runner, Suite, Test, TestContext, TestContextFn,
+    TestInfo, TestMode, WorkerContext, WorkerHook, WorkerInfo,
 };
 pub use snapshot::{
     assert_snapshot_png, assert_snapshot_text, compare_png, match_text_snapshot,

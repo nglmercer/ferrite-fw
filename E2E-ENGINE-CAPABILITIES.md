@@ -43,6 +43,7 @@ Partial means the listed limitation must be retained in API/docs/test evidence.
 | WebSocket observation | Supported | Unsupported | No stock BiDi socket-frame stream; routing/mocking excluded |
 | Video / frame streams | Supported | Supported | Chromium video requires ffmpeg; Firefox records natively |
 | Browser CDP connections / raw sessions | Supported | Unsupported | Scoped session ownership is a separate extension |
+| Attempt-owned soft assertions | Supported | Supported | Only assertion mismatches are softened; operational/control errors propagate. Source/step/message data and failure status survive cleanup/retries. Atomic sealing rejects late writes; Rust runtime modifiers remain attempt-local. |
 | Portable reports, runner/fixtures/retries | Supported | Supported | Tokio workers, cooperative cancellation, current artifact formats |
 
 ## Evidence and validation gates
@@ -64,6 +65,12 @@ shared defaults, failed storage setup cleanup, final-owner release, persistent
 profiles, canceled/concurrent shutdown and actual transport loss. Linux checks
 the launched process and temporary profile are released. Remote Chromium owner
 close leaves its source process running; weak contexts do not retain a browser.
+
+[soft_assertions.rs](crates/ferrite-e2e/tests/soft_assertions.rs) compares five
+actual pinned runner cases and verifies contextual sources/steps, retained weak
+handles, setup/cleanup/fixtures, operational cancellation/timeouts and failed
+setup dependency release on both engines. Old report JSON defaults remain valid;
+soft mismatch text and paths are escaped in portable reports.
 
 [locator_descriptions.rs](crates/ferrite-e2e/tests/locator_descriptions.rs) compares
 three actual pinned description/resolution/error cases on both engines. It also

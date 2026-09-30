@@ -39,6 +39,29 @@ FERRITE_E2E_REQUIRE_BOTH_BROWSERS=1 cargo test -p ferrite-e2e --test core_confor
 Node/Playwright are optional development tooling and are not dependencies of
 Ferrite's library or its normal Rust test command.
 
+`soft-assertion-reference.mjs` / `soft-assertion-reference.json` run five actual
+Playwright 1.63.0 test-runner cases: two mismatches followed by a passing retry,
+expected failure, cleanup mismatch, parallel clean test and skip after mismatch.
+Regenerate with `npm run reference:soft-assertions` or the external installation
+above and `node scripts/e2e-conformance/soft-assertion-reference.mjs`. It uses
+Playwright's test export and runner CLI, not a fabricated browser-only collector.
+Expected fixture failures make the child runner exit 1; the script still requires
+valid, complete JSON results. Browser and test-runner temporary data is released.
+
+The pinned skip case fails its first attempt despite requesting skip after a
+mismatch, then skips its retry before the body runs. Playwright's runtime skip
+changes test configuration; Rust TestInfo modifiers remain attempt-local. The
+native normalized comparison explicitly collects only on the first attempt
+before requesting skip on each attempt. It does not claim persistent skip parity.
+
+`cargo test -p ferrite-e2e --test soft_assertions` covers five native groups on
+both engines: normalized runner cases, contextual/source/step ownership and
+retained handles, setup/cleanup/fixture mismatches, operational timeout/cancellation,
+and failed fixture setup with released dependencies. JSON defaults and escaped
+portable reports are checked. Separate units cover zero budgets/local futures,
+control-error passthrough, atomic sealing/weak ownership and interrupted-attempt
+Drop. Existing standalone SoftAsserts retains manual assert_all behavior.
+
 `locator-description-reference.mjs` / `locator-description-reference.json`
 record three actual Playwright 1.63.0 Chromium cases: description replacement/
 removal and derived selectors, unchanged DOM resolution, and timeout diagnostics.

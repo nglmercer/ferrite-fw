@@ -141,7 +141,7 @@ for m in ['toHaveClass','toHaveValues','toHaveRole','toHaveAccessibleErrorMessag
 group('PageAssertions',{'not':'PageExpect.not','toHaveTitle':'PageExpect.title','toHaveURL':'PageExpect.url_contains','toHaveScreenshot':'PageExpect.screenshot_with','toMatchAriaSnapshot':'PageExpect.aria_snapshot'},'Retrying page assertion; exact/regex title and URL helpers, with narrower options and different screenshot/ARIA algorithms.')
 put('PageAssertions','toHaveURL','PageExpect.url_contains','Substring-only check, not Playwright exact string/regex/predicate semantics.')
 put('SnapshotAssertions','toMatchSnapshot','assert_snapshot_text','Text and PNG helper functions; no Playwright snapshot-path template/source update/changed mode or arbitrary binary snapshots.')
-group('PlaywrightAssertions',{'expectLocator':'Locator.expect','expectPage':'Page.expect'},'Rust assertion builders; fewer matcher/expect configuration capabilities.')
+group('PlaywrightAssertions',{'expectLocator':'Locator.expect','expectPage':'Page.expect'},'Rust assertion builders with attempt-owned TestInfo.soft_asserts / AttemptSoftAsserts.run contextual steps and automatic mismatch failure. Operational/control errors propagate; no custom matcher registry or full expect configuration.')
 for m in ['toBeOK','not']:put('APIResponseAssertions',m,'ApiResponse.ok','Use assert!(response.ok()) or its negation; no dedicated retrying assertion object.','Idiomatic')
 put('PlaywrightAssertions','expectAPIResponse','ApiResponse.ok','Use native Rust assertions over the standalone response.','Idiomatic')
 put('PlaywrightAssertions','expectGeneric','','Use native Rust assertions and explicit pattern/container checks; no Playwright expect matcher library.','Idiomatic')
@@ -319,7 +319,7 @@ put('WorkerInfo','project','WorkerInfo.project','Optional project name only, not
 # Structured user steps, hook outcomes, and retained retry history.
 put('Test','step','Page.step_with','Nested controlled steps with local timeout, skip, annotations and title paths through Page.step_with; legacy step_result remains available. Automatic navigation/locator/assertion/hook/fixture scopes; no boxing or subtitle/params options.')
 for m,t in {'status':'status','expectedStatus':'expected_status','errors':'errors'}.items():
- put('TestInfo',m,'TestInfo.'+t,'Live getters shared across metadata clones; raw outcome published before afterEach and updated after cleanup failures. status returns None during setup/body; errors have phase/code/message/location, without JS stack/cause/snippet serialization.')
+ put('TestInfo',m,'TestInfo.'+t,'Live getters shared across metadata clones; raw outcome published before afterEach and updated after cleanup failures. status is None until a body outcome or soft mismatch; soft failures publish immediately with source/step/message metadata and survive successful bodies/cleanup. Attempts seal against late writes; no JS stack/cause/snippet serialization.')
 for m,t in {'title':'title','duration':'duration_ms','location':'location','error':'error','parent':'parent_id','startTime':'start_time_ms','steps':'steps','attachments':'attachments'}.items():
  put('TestStep',m,'StepInfo.'+t,'Persisted user/action/assertion/hook/fixture trees on attempts and live callbacks; run-wide lifecycle scopes appear on TestReport.run_steps. Parent is an ID; exact Rust sources only for explicit user steps, automatic sources use enclosing test definition. No JS stack data.')
 put('TestStepInfo','attach','TestInfo.attach','Attachments inside an awaited user step associate with that step and its attempt. Page.step_with passes a live StepContext; attachments still use TestInfo.attach and associate with the active scope. Detached Tokio tasks do not inherit parent scope.')
@@ -329,7 +329,7 @@ for c in ['TestInfoError','TestError']:
  put(c,'message','TestError.message','Structured Rust diagnostics carry message, code, phase and optional source; no JavaScript stack/cause/snippet object.')
 put('TestError','location','TestError.location','Optional Rust source location; exact user-step call site, test definition for runner phase errors, not a JS throw-site location.')
 for m,t in {'attachments':'attachments','annotations':'annotations','duration':'duration_ms','errors':'errors','startTime':'start_time_ms','status':'status','steps':'steps'}.items():
- put('TestResult',m,'AttemptResult.'+t,'Each attempt is retained in TestResult.attempt_results and JSON/HTML; raw status includes timeout/interruption, errors include phase/code and steps include user/action/assertion/hook/fixture trees. Different Rust schema, no stdout/stderr capture.')
+ put('TestResult',m,'AttemptResult.'+t,'Each attempt is retained in TestResult.attempt_results and JSON/HTML; raw status includes timeout/interruption, errors include phase/code and steps include user/action/assertion/hook/fixture trees; soft_assertions retains contextual mismatch source and step paths with serde defaults. Different Rust schema, no stdout/stderr capture.')
 for m,t in {'retry':'retry','workerIndex':'worker_index'}.items():
  put('TestResult',m,'AttemptInfo.'+t,'Per-attempt identity on AttemptResult.info; logical Tokio workers, not process-worker IDs.')
 put('TestCase','results','TestResult.attempt_results','Full attempt history retained under the aggregate test result; no upstream TestCase/Suite graph.')

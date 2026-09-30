@@ -12,7 +12,8 @@
     "reference:popups": "node popup-reference.mjs",
     "reference:console": "node console-reference.mjs",
     "reference:ownership": "node ownership-reference.mjs",
-    "reference:locator-descriptions": "node locator-description-reference.mjs"
+    "reference:locator-descriptions": "node locator-description-reference.mjs",
+    "reference:soft-assertions": "node soft-assertion-reference.mjs"
   },
   "devDependencies": {
     "playwright": "1.63.0"

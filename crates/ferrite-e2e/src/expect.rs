@@ -15,8 +15,9 @@ use crate::snapshot::{
 };
 
 /// Collect assertion failures without stopping at the first one
-/// (Playwright `expect.soft` equivalent): feed each assertion result to
+/// outside the runner: feed each assertion result to
 /// [`SoftAsserts::check`], then fail once via [`SoftAsserts::assert_all`].
+/// Use [`SoftAsserts::for_attempt`] for automatic runner-owned failure reporting.
 #[derive(Debug, Default)]
 pub struct SoftAsserts {
     failures: Vec<String>,
@@ -27,6 +28,24 @@ impl SoftAsserts {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A collector bound to this attempt; failures automatically affect its result.
+    #[must_use]
+    pub fn for_attempt(info: &crate::TestInfo) -> crate::AttemptSoftAsserts {
+        info.soft_asserts()
+    }
+
+    /// Record a standalone result with an optional contextual message.
+    pub fn check_with_message(&mut self, result: E2eResult<()>, message: impl Into<String>) {
+        if let Err(error) = result {
+            let message = message.into();
+            self.failures.push(if message.is_empty() {
+                error.to_string()
+            } else {
+                format!("{message}: {error}")
+            });
+        }
     }
 
     /// Record an assertion result, keeping its failure message.
