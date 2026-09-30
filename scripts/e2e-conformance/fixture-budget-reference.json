@@ -1,0 +1,182 @@
+{
+  "playwright": "1.63.0",
+  "testTimeoutMs": 200,
+  "cases": [
+    {
+      "name": "default-setup-timeout",
+      "options": {
+        "name": "default-setup-timeout",
+        "setup": 450,
+        "teardown": 0,
+        "scope": "test",
+        "status": "timedOut"
+      },
+      "status": "timedOut",
+      "events": [
+        "dependency setup",
+        "probe setup",
+        "dependency teardown"
+      ],
+      "dependencyDisposed": true,
+      "errors": [
+        "Test timeout of 200ms exceeded while setting up \"probe\"."
+      ]
+    },
+    {
+      "name": "explicit-setup-and-teardown",
+      "options": {
+        "name": "explicit-setup-and-teardown",
+        "setup": 350,
+        "teardown": 350,
+        "timeout": 1100,
+        "scope": "test",
+        "status": "passed"
+      },
+      "status": "passed",
+      "events": [
+        "dependency setup",
+        "probe setup",
+        "probe ready",
+        "body",
+        "probe teardown",
+        "probe disposed",
+        "dependency teardown"
+      ],
+      "dependencyDisposed": true,
+      "errors": []
+    },
+    {
+      "name": "explicit-limit-shared-between-setup-and-teardown",
+      "options": {
+        "name": "explicit-limit-shared-between-setup-and-teardown",
+        "setup": 350,
+        "teardown": 350,
+        "timeout": 600,
+        "scope": "test",
+        "status": "timedOut"
+      },
+      "status": "timedOut",
+      "events": [
+        "dependency setup",
+        "probe setup",
+        "probe ready",
+        "body",
+        "probe teardown",
+        "dependency teardown"
+      ],
+      "dependencyDisposed": true,
+      "errors": [
+        "Fixture \"probe\" timeout of 600ms exceeded during teardown.\n\n  3 |  const event=value=>fs.appendFileSync(\"<reference>/events.jsonl\",JSON.stringify(value)+'\\n');\n  4 |  const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));\n> 5 |  const test=base.extend({\n    |                  ^\n  6 |    dependency:[async ({},use)=>{event('dependency setup');await use(42);event('dependency teardown');},{scope:\"test\"}],\n  7 |    probe:[async ({dependency},use)=>{\n  8 |      event('probe setup');await sleep(350);\n    at <reference>/budgets.spec.cjs:5:18"
+      ]
+    },
+    {
+      "name": "zero-fixture-limit",
+      "options": {
+        "name": "zero-fixture-limit",
+        "setup": 350,
+        "teardown": 350,
+        "timeout": 0,
+        "scope": "test",
+        "status": "passed"
+      },
+      "status": "passed",
+      "events": [
+        "dependency setup",
+        "probe setup",
+        "probe ready",
+        "body",
+        "probe teardown",
+        "probe disposed",
+        "dependency teardown"
+      ],
+      "dependencyDisposed": true,
+      "errors": []
+    },
+    {
+      "name": "worker-default-setup-timeout",
+      "options": {
+        "name": "worker-default-setup-timeout",
+        "setup": 450,
+        "teardown": 0,
+        "scope": "worker",
+        "status": "timedOut"
+      },
+      "status": "timedOut",
+      "events": [
+        "dependency setup",
+        "probe setup",
+        "dependency teardown"
+      ],
+      "dependencyDisposed": true,
+      "errors": [
+        "Fixture \"probe\" timeout of 200ms exceeded during setup.\n\n  3 |  const event=value=>fs.appendFileSync(\"<reference>/events.jsonl\",JSON.stringify(value)+'\\n');\n  4 |  const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));\n> 5 |  const test=base.extend({\n    |                  ^\n  6 |    dependency:[async ({},use)=>{event('dependency setup');await use(42);event('dependency teardown');},{scope:\"worker\"}],\n  7 |    probe:[async ({dependency},use)=>{\n  8 |      event('probe setup');await sleep(450);\n    at <reference>/budgets.spec.cjs:5:18"
+      ]
+    },
+    {
+      "name": "worker-explicit-limit",
+      "options": {
+        "name": "worker-explicit-limit",
+        "setup": 350,
+        "teardown": 350,
+        "timeout": 1100,
+        "scope": "worker",
+        "status": "passed"
+      },
+      "status": "passed",
+      "events": [
+        "dependency setup",
+        "probe setup",
+        "probe ready",
+        "body",
+        "probe teardown",
+        "probe disposed",
+        "dependency teardown"
+      ],
+      "dependencyDisposed": true,
+      "errors": []
+    },
+    {
+      "name": "failed-setup-releases-dependency",
+      "options": {
+        "name": "failed-setup-releases-dependency",
+        "setup": 0,
+        "teardown": 0,
+        "failSetup": true,
+        "scope": "test",
+        "status": "failed"
+      },
+      "status": "failed",
+      "events": [
+        "dependency setup",
+        "probe setup",
+        "dependency teardown"
+      ],
+      "dependencyDisposed": true,
+      "errors": [
+        "Error: fixture setup failure\n\n   7 |    probe:[async ({dependency},use)=>{\n   8 |      event('probe setup');await sleep(0);\n>  9 |      throw Error('fixture setup failure');\n     |            ^\n  10 |      event('probe ready');await use(dependency);\n  11 |      event('probe teardown');await sleep(0);event('probe disposed');\n  12 |    },{\"scope\":\"test\"}]\n    at Object.base.extend.probe.scope (<reference>/budgets.spec.cjs:9:12)"
+      ]
+    },
+    {
+      "name": "teardown-timeout-dependency-accounting",
+      "options": {
+        "name": "teardown-timeout-dependency-accounting",
+        "setup": 0,
+        "teardown": 450,
+        "scope": "test",
+        "status": "timedOut"
+      },
+      "status": "timedOut",
+      "events": [
+        "dependency setup",
+        "probe setup",
+        "probe ready",
+        "body",
+        "probe teardown"
+      ],
+      "dependencyDisposed": false,
+      "errors": [
+        "Tearing down \"probe\" exceeded the test timeout of 200ms."
+      ]
+    }
+  ]
+}

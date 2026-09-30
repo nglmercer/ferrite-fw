@@ -231,7 +231,7 @@ put('TestOptions','testIdAttribute','set_test_id_attribute','Process-global sett
 put('TestOptions','trace','BrowserContext.start_tracing','Manual custom JSON traces plus runner JSON; no trace mode policy or Trace Viewer compatibility.')
 for m in ['colorScheme','reducedMotion']:put('TestOptions',m,'Page.emulate_media','Chromium page-level manual emulation; no context/test option binding.')
 # Practical parity implementation updates (2026-09-29).
-put('Page','close','Page.close','Closes the target and its owning convenience context; no runBeforeUnload/reason options.',kind='method')
+put('Page','close','Page.close','Closes the target and its owning convenience context through once-only background disposal; dropped waits do not abandon it and repeated calls await its result. No runBeforeUnload/reason options.',kind='method')
 put('BrowserContext','browser','BrowserContext.browser','Option<Browser> upgrades the actual weak shared owner for explicit, convenience, default/persistent and attached contexts. Retrieved handles retain the process; None after its last owner drops. No Android/Electron contexts or JavaScript identity semantics.')
 put('BrowserContext','isClosed','BrowserContext.is_closed','Tracks explicit context disposal, shared browser shutdown, last-owner drop and native transport loss. Enum event waits distinguish disconnect errors from observed native events; no full upstream emitter/reason surface.')
 put('Browser','isConnected','Browser.is_connected','Shared owner shutdown and actual transport reader/writer state. Clones share one process/profile/context registry; closing any handle shuts down all. Remote attachment closes Ferrite without killing the source process.')
@@ -294,6 +294,7 @@ for m,t in {'page':'Page','console':'Console','weberror':'PageError','request':'
 for c in ['FullConfig','TestConfig']:
  for m,t in {'globalTimeout':'global_timeout_ms','maxFailures':'max_failures'}.items():
   put(c,m,'E2eConfig.'+t,'Consumed by Runner and CLI; global cancellation with bounded teardown and final unexpected-failure scheduling limit. Active workers finish on maxFailures; no process-worker orchestration.')
+put('BrowserContext','close','BrowserContext.close','Once-only background cleanup survives dropped waits and repeated calls await completion. Live disposal errors are aggregated; an already-lost transport permits idempotent local cleanup without native release confirmation. No reason option.',kind='method')
 # Scoped fixtures, suites and native network lifecycle events.
 for c in ['Page', 'BrowserContext']:
  for m,t in {'requestFinished':'RequestFinished','requestFailed':'RequestFailed'}.items():
@@ -308,7 +309,7 @@ for m,t in {'fail':'fail','skip':'skip','slow':'slow','setTimeout':'set_timeout'
  put('Test',m,'TestInfo.'+t,'Static Test builders plus runtime TestInfo controls; use Rust conditionals and skip(reason)? for immediate closure exit. No JavaScript overload inference.')
 for m,t in {'beforeEach':'before_each_with_context','afterEach':'after_each_with_context','beforeAll':'before_all_with_context','afterAll':'after_all_with_context'}.items():
  put('Test',m,'Suite.'+t,'ContextHook explicitly declares lazy fixture roots; WorkerHook permits only worker roots. Nested lifecycle ordering; no process workers or callback parameter inference.')
-put('Test','extend','Runner.fixture_definition','Typed lazy dependencies including built-in page/context/request/TestInfo and browser/WorkerInfo, test/worker scopes and reverse teardown. No named overrides or callback parameter inference.')
+put('Test','extend','Runner.fixture_definition','Typed lazy built-in/user dependencies, test/worker scopes and reverse teardown. Separate Fixture.setup_timeout/teardown_timeout limits are capped by enclosing clocks; cleanup shares one scope budget, unlike upstream separate fixture accounting. No named overrides or callback parameter inference.')
 for m,t in {'page':'page','context':'context','request':'request'}.items():
  put('Fixtures',m,'TestContext.'+t,'Fresh per-attempt resource, usable as a typed fixture dependency. request is isolated from browser cookies; context.request() shares cookies.')
 for m,t in {'onBegin':'on_begin','onEnd':'on_end','onError':'on_error','onTestBegin':'on_test_begin','onTestEnd':'on_test_end','onStepBegin':'on_step_begin','onStepEnd':'on_step_end'}.items():

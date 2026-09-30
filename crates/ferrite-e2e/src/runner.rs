@@ -1102,6 +1102,8 @@ struct FixtureDef {
     dependencies: Vec<TypeId>,
     scope: FixtureScope,
     automatic: bool,
+    setup_timeout: Option<Duration>,
+    teardown_timeout: Option<Duration>,
     setup: Arc<dyn Fn(FixtureMap) -> SetupFuture + Send + Sync>,
     teardown: Option<TeardownFn>,
 }
@@ -1136,6 +1138,8 @@ impl<T: Send + Sync + 'static> Fixture<T> {
                 dependencies: Vec::new(),
                 scope: FixtureScope::Test,
                 automatic: false,
+                setup_timeout: None,
+                teardown_timeout: None,
                 setup: Arc::new(move |map| {
                     let future = setup(map);
                     Box::pin(async move {
@@ -1162,6 +1166,18 @@ impl<T: Send + Sync + 'static> Fixture<T> {
     /// Set up automatically even when no test explicitly requests this fixture.
     pub fn automatic(mut self, enabled: bool) -> Self {
         self.def.automatic = enabled;
+        self
+    }
+    /// Limit this fixture's setup. The enclosing hook/test budget still applies;
+    /// zero disables this local limit without disabling a finite outer budget.
+    pub fn setup_timeout(mut self, timeout: Duration) -> Self {
+        self.def.setup_timeout = Some(timeout);
+        self
+    }
+    /// Limit this fixture's teardown within the shared cleanup budget. Zero
+    /// disables only the local limit; it does not renew the enclosing clock.
+    pub fn teardown_timeout(mut self, timeout: Duration) -> Self {
+        self.def.teardown_timeout = Some(timeout);
         self
     }
     /// Cleanup runs after dependents, including after failures or cancellation.
@@ -1262,13 +1278,21 @@ impl SuiteState {
         }
         Ok(())
     }
+    #[cfg(test)]
     async fn cleanup(
         &mut self,
         runner: &Runner,
         fixtures: &mut FixtureState,
         project: Option<&str>,
     ) -> Vec<TestResult> {
-        self.cleanup_finished(runner, fixtures, project, &[]).await
+        self.cleanup_finished(
+            runner,
+            fixtures,
+            project,
+            &[],
+            crate::operation::Deadline::cleanup(runner.cleanup_timeout),
+        )
+        .await
     }
 
     async fn cleanup_finished(
@@ -1277,6 +1301,7 @@ impl SuiteState {
         fixtures: &mut FixtureState,
         project: Option<&str>,
         remaining: &[Arc<Suite>],
+        deadline: crate::operation::Deadline,
     ) -> Vec<TestResult> {
         let mut results = Vec::new();
         let mut finished = Vec::new();
@@ -1290,22 +1315,17 @@ impl SuiteState {
         });
         for (suite, _) in finished.into_iter().rev() {
             for hook in &suite.after_all {
-                if let Err(error) = bounded(
-                    crate::operation::Deadline::new(runner.cleanup_timeout),
-                    None,
-                    "suite after_all",
-                    async {
-                        hook.run(
-                            runner,
-                            fixtures,
-                            &self.worker.clone().unwrap_or(WorkerInfo {
-                                worker_index: 0,
-                                project: project.map(str::to_string),
-                            }),
-                        )
-                        .await
-                    },
-                )
+                if let Err(error) = bounded(deadline, None, "suite after_all", async {
+                    hook.run(
+                        runner,
+                        fixtures,
+                        &self.worker.clone().unwrap_or(WorkerInfo {
+                            worker_index: 0,
+                            project: project.map(str::to_string),
+                        }),
+                    )
+                    .await
+                })
                 .await
                 {
                     results.push(runner.report_failure(
@@ -1325,13 +1345,31 @@ async fn retire_worker_resources(
     fixtures: &mut FixtureState,
     project: Option<&str>,
 ) -> Vec<String> {
+    retire_worker_resources_with_deadline(
+        runner,
+        suites,
+        fixtures,
+        project,
+        crate::operation::Deadline::cleanup(runner.cleanup_timeout),
+    )
+    .await
+}
+
+async fn retire_worker_resources_with_deadline(
+    runner: &Runner,
+    suites: &mut SuiteState,
+    fixtures: &mut FixtureState,
+    project: Option<&str>,
+    deadline: crate::operation::Deadline,
+) -> Vec<String> {
     let mut errors: Vec<_> = suites
-        .cleanup(runner, fixtures, project)
+        .cleanup_finished(runner, fixtures, project, &[], deadline)
         .await
         .into_iter()
         .filter_map(|result| result.error)
         .collect();
-    if let Some(error) = teardown_fixtures(runner, &fixtures.built).await {
+    let built = std::mem::take(&mut fixtures.built);
+    if let Some(error) = teardown_fixtures_with_info(runner, &built, None, deadline).await {
         errors.push(error);
     }
     *fixtures = FixtureState::default();
@@ -1446,7 +1484,13 @@ async fn setup_fixtures(
             None,
             format!("fixture setup {}", def.name),
             crate::StepCategory::Fixture,
-            async { (def.setup)(dependencies).await },
+            async {
+                crate::operation::Deadline::new(def.setup_timeout.unwrap_or(Duration::ZERO))
+                    .run(format!("fixture {} setup", def.name), async {
+                        (def.setup)(dependencies).await
+                    })
+                    .await
+            },
         )
         .await
         .map_err(|error| {
@@ -2346,7 +2390,10 @@ impl Runner {
         self.max_failures = count;
         self
     }
-    /// Independent deadline for each cleanup callback or browser operation.
+    /// One enclosing deadline per attempt, worker retirement or run-final
+    /// cleanup scope. Local fixture limits can shorten it; zero disables it.
+    /// Ready cleanup is still polled after exhaustion; pending work reports a
+    /// timeout. Blocking synchronous Rust work cannot be preempted.
     pub fn cleanup_timeout(mut self, timeout: Duration) -> Self {
         self.cleanup_timeout = timeout;
         self
@@ -2370,7 +2417,18 @@ impl Runner {
             None
         })
     }
-    async fn finish_run(&self, mut report: TestReport) -> TestReport {
+    async fn finish_run(&self, report: TestReport) -> TestReport {
+        self.finish_run_with_deadline(
+            report,
+            crate::operation::Deadline::cleanup(self.cleanup_timeout),
+        )
+        .await
+    }
+    async fn finish_run_with_deadline(
+        &self,
+        mut report: TestReport,
+        deadline: crate::operation::Deadline,
+    ) -> TestReport {
         if let Some(config) = &report.configuration {
             self.publish_configuration(config);
         }
@@ -2379,14 +2437,7 @@ impl Runner {
             ("<global teardown>", &self.global_teardown),
         ] {
             for hook in hooks {
-                if let Err(error) = bounded(
-                    crate::operation::Deadline::new(self.cleanup_timeout),
-                    None,
-                    label,
-                    async { hook().await },
-                )
-                .await
-                {
+                if let Err(error) = bounded(deadline, None, label, async { hook().await }).await {
                     report
                         .results
                         .push(self.report_failure(label, error.to_string()));
@@ -2618,6 +2669,8 @@ impl Runner {
             dependencies: Vec::new(),
             scope: FixtureScope::Test,
             automatic: true,
+            setup_timeout: None,
+            teardown_timeout: None,
             setup,
             teardown: None,
         });
@@ -2659,6 +2712,8 @@ impl Runner {
             dependencies: Vec::new(),
             scope: FixtureScope::Test,
             automatic: true,
+            setup_timeout: None,
+            teardown_timeout: None,
             setup,
             teardown: Some(teardown),
         });
@@ -3020,6 +3075,9 @@ impl Runner {
                                             }
                                         }
                                         results.push(result);
+                                        let cleanup_deadline = crate::operation::Deadline::cleanup(
+                                            runner.cleanup_timeout,
+                                        );
                                         let remaining: Vec<_> = queue
                                             .lock()
                                             .unwrap_or_else(|e| e.into_inner())
@@ -3037,6 +3095,7 @@ impl Runner {
                                                     .or_default(),
                                                 item.project.as_deref(),
                                                 &remaining,
+                                                cleanup_deadline,
                                             )
                                             .await;
                                         failures.fetch_add(
@@ -3044,7 +3103,7 @@ impl Runner {
                                             std::sync::atomic::Ordering::SeqCst,
                                         );
                                         if !cleanup.is_empty() {
-                                            let errors = retire_worker_resources(
+                                            let errors = retire_worker_resources_with_deadline(
                                                 &runner,
                                                 suite_states
                                                     .entry(item.project.clone())
@@ -3053,6 +3112,7 @@ impl Runner {
                                                     .entry(item.project.clone())
                                                     .or_default(),
                                                 item.project.as_deref(),
+                                                cleanup_deadline,
                                             )
                                             .await;
                                             if !errors.is_empty() {
@@ -3074,25 +3134,39 @@ impl Runner {
                                     None => break,
                                 }
                             }
-                            for (project, state) in &mut suite_states {
+                            let projects: std::collections::BTreeSet<_> = suite_states
+                                .keys()
+                                .chain(fixture_states.keys())
+                                .cloned()
+                                .collect();
+                            for project in projects {
+                                let deadline =
+                                    crate::operation::Deadline::cleanup(runner.cleanup_timeout);
                                 results.extend(
-                                    state
-                                        .cleanup(
+                                    suite_states
+                                        .entry(project.clone())
+                                        .or_default()
+                                        .cleanup_finished(
                                             &runner,
                                             fixture_states.entry(project.clone()).or_default(),
                                             project.as_deref(),
+                                            &[],
+                                            deadline,
                                         )
                                         .await,
                                 );
-                            }
-                            for (project, state) in &fixture_states {
-                                if let Some(error) = teardown_fixtures(&runner, &state.built).await
+                                let state = fixture_states.entry(project.clone()).or_default();
+                                let built = std::mem::take(&mut state.built);
+                                if let Some(error) =
+                                    teardown_fixtures_with_info(&runner, &built, None, deadline)
+                                        .await
                                 {
                                     results.push(runner.report_failure(
                                         &display_name(project.as_deref(), "<worker fixtures>"),
                                         error,
                                     ));
                                 }
+                                *state = FixtureState::default();
                             }
                             Ok(results)
                         },
@@ -3147,15 +3221,11 @@ impl Runner {
                 .push(self.report_failure("<run interrupted>", reason));
         }
         drop(project_browsers);
+        let cleanup_deadline = crate::operation::Deadline::cleanup(self.cleanup_timeout);
         for browser in owned_browsers {
             if let Ok(browser) = Arc::try_unwrap(browser) {
-                if let Err(error) = bounded(
-                    crate::operation::Deadline::new(self.cleanup_timeout),
-                    None,
-                    "browser close",
-                    browser.close(),
-                )
-                .await
+                if let Err(error) =
+                    bounded(cleanup_deadline, None, "browser close", browser.close()).await
                 {
                     report
                         .results
@@ -3163,7 +3233,8 @@ impl Runner {
                 }
             }
         }
-        self.finish_run(report).await
+        self.finish_run_with_deadline(report, cleanup_deadline)
+            .await
     }
 
     /// Write file artifacts for the reporters in `spec` (comma-separated).
@@ -3218,55 +3289,75 @@ impl Drop for AbortTask {
         self.0.abort();
     }
 }
-async fn bounded_in<T>(
-    session: Option<&crate::report::StepSession>,
-    deadline: crate::operation::Deadline,
-    token: Option<&crate::CancellationToken>,
-    label: &str,
-    future: impl Future<Output = E2eResult<T>>,
-) -> E2eResult<T> {
-    match session {
-        Some(session) => session.scope(bounded(deadline, token, label, future)).await,
-        None => bounded(deadline, token, label, future).await,
+// Firefox lifecycle serialization must outlive a dropped close wait. The close
+// owner continues disposal in the background; release this guard only when that
+// same disposal settles, before another attempt starts native context creation.
+fn release_lifecycle_after_close(
+    context: crate::BrowserContext,
+    guard: Option<tokio::sync::OwnedMutexGuard<()>>,
+) {
+    if let Some(guard) = guard {
+        tokio::spawn(async move {
+            let _ = context.close().await;
+            drop(guard);
+        });
     }
 }
-async fn bounded<T>(
+fn bounded_in<'a, T: 'a>(
+    session: Option<&'a crate::report::StepSession>,
     deadline: crate::operation::Deadline,
-    token: Option<&crate::CancellationToken>,
-    label: &str,
-    future: impl Future<Output = E2eResult<T>>,
-) -> E2eResult<T> {
-    let work = async {
-        let category = if label.contains("fixture") {
-            crate::StepCategory::Fixture
-        } else {
-            crate::StepCategory::Hook
-        };
-        let instrument =
-            label.contains("before") || label.contains("after") || label.contains("global");
+    token: Option<&'a crate::CancellationToken>,
+    label: &'a str,
+    future: impl Future<Output = E2eResult<T>> + 'a,
+) -> impl Future<Output = E2eResult<T>> + 'a {
+    let future = Box::pin(future);
+    async move {
+        match session {
+            Some(session) => session.scope(bounded(deadline, token, label, future)).await,
+            None => bounded(deadline, token, label, future).await,
+        }
+    }
+}
+fn bounded<'a, T: 'a>(
+    deadline: crate::operation::Deadline,
+    token: Option<&'a crate::CancellationToken>,
+    label: &'a str,
+    future: impl Future<Output = E2eResult<T>> + 'a,
+) -> impl Future<Output = E2eResult<T>> + 'a {
+    let future = Box::pin(future);
+    async move {
         let work = async {
-            if instrument {
-                crate::report::automatic(None, label, category, future).await
+            let category = if label.contains("fixture") {
+                crate::StepCategory::Fixture
             } else {
-                future.await
+                crate::StepCategory::Hook
+            };
+            let instrument =
+                label.contains("before") || label.contains("after") || label.contains("global");
+            let work = async {
+                if instrument {
+                    crate::report::automatic(None, label, category, future).await
+                } else {
+                    future.await
+                }
+            };
+            match std::panic::AssertUnwindSafe(work).catch_unwind().await {
+                Ok(result) => result,
+                Err(panic) => Err(E2eError::Config(format!(
+                    "{label} panicked: {}",
+                    panic
+                        .downcast_ref::<String>()
+                        .map(String::as_str)
+                        .or_else(|| panic.downcast_ref::<&str>().copied())
+                        .unwrap_or("non-string panic")
+                ))),
             }
         };
-        match std::panic::AssertUnwindSafe(work).catch_unwind().await {
-            Ok(result) => result,
-            Err(panic) => Err(E2eError::Config(format!(
-                "{label} panicked: {}",
-                panic
-                    .downcast_ref::<String>()
-                    .map(String::as_str)
-                    .or_else(|| panic.downcast_ref::<&str>().copied())
-                    .unwrap_or("non-string panic")
-            ))),
+        let work = deadline.run(label, work);
+        match token {
+            Some(token) => token.run(work).await,
+            None => work.await,
         }
-    };
-    let work = deadline.run(label, work);
-    match token {
-        Some(token) => token.run(work).await,
-        None => work.await,
     }
 }
 
@@ -3683,14 +3774,19 @@ async fn run_one(
             Err(error) => {
                 info.record_error(&error, "page setup");
                 last_error = error.to_string();
-                let _ = bounded_in(
+                if let Err(cleanup) = bounded_in(
                     info.steps.as_ref(),
-                    crate::operation::Deadline::new(runner.cleanup_timeout),
+                    crate::operation::Deadline::cleanup(runner.cleanup_timeout),
                     None,
                     "context close",
-                    context.close(),
+                    context.clone().close(),
                 )
-                .await;
+                .await
+                {
+                    info.record_error(&cleanup, "context close");
+                    last_error.push_str(&format!("; context close: {cleanup}"));
+                }
+                release_lifecycle_after_close(context, lifecycle);
                 attempt_report.outcome(TestStatus::Failed, Some(last_error.clone()));
                 annotations = info.annotations();
                 continue;
@@ -3706,14 +3802,18 @@ async fn run_one(
             Err(error) => {
                 info.record_error(&error, "request setup");
                 last_error = error.to_string();
-                let _ = bounded_in(
+                if let Err(cleanup) = bounded_in(
                     info.steps.as_ref(),
-                    crate::operation::Deadline::new(runner.cleanup_timeout),
+                    crate::operation::Deadline::cleanup(runner.cleanup_timeout),
                     None,
                     "context close",
                     context.close(),
                 )
-                .await;
+                .await
+                {
+                    info.record_error(&cleanup, "context close");
+                    last_error.push_str(&format!("; context close: {cleanup}"));
+                }
                 attempt_report.outcome(TestStatus::Failed, Some(last_error.clone()));
                 annotations = info.annotations();
                 break;
@@ -3825,6 +3925,7 @@ async fn run_one(
         )
         .await;
         info.body_outcome(&outcome, if body_started { "body" } else { "test setup" });
+        let cleanup_deadline = crate::operation::Deadline::cleanup(runner.cleanup_timeout);
         let state = runtime.snapshot();
         let skipped = state.soft_assertions.is_empty()
             && (matches!(&outcome, Err(E2eError::Skipped(_)))
@@ -3861,7 +3962,7 @@ async fn run_one(
         {
             if let Err(error) = bounded_in(
                 info.steps.as_ref(),
-                crate::operation::Deadline::new(runner.cleanup_timeout),
+                cleanup_deadline,
                 None,
                 "after_each",
                 async {
@@ -3896,8 +3997,13 @@ async fn run_one(
                 expected_failure_observed = false;
             }
         }
-        if let Some(note) =
-            teardown_fixtures_with_info(runner, &attempt_fixtures.built, Some(&info)).await
+        if let Some(note) = teardown_fixtures_with_info(
+            runner,
+            &std::mem::take(&mut attempt_fixtures.built),
+            Some(&info),
+            cleanup_deadline,
+        )
+        .await
         {
             expected_failure_observed = false;
             failed = Some(match failed {
@@ -3933,7 +4039,7 @@ async fn run_one(
                     .join(format!("{slug}-attempt{attempts}.webm"));
                 match bounded_in(
                     info.steps.as_ref(),
-                    crate::operation::Deadline::new(runner.cleanup_timeout),
+                    cleanup_deadline,
                     None,
                     "stop video",
                     page.stop_video(&path),
@@ -3952,9 +4058,9 @@ async fn run_one(
                     }
                 }
             } else {
-                let _ = bounded_in(
+                if let Err(error) = bounded_in(
                     info.steps.as_ref(),
-                    crate::operation::Deadline::new(runner.cleanup_timeout),
+                    cleanup_deadline,
                     None,
                     "cancel video",
                     async {
@@ -3962,7 +4068,17 @@ async fn run_one(
                         Ok(())
                     },
                 )
-                .await;
+                .await
+                {
+                    expected_failure_observed = false;
+                    info.record_error(&error, "cancel video");
+                    let note = format!("cancel video: {error}");
+                    failed = Some(
+                        failed
+                            .map(|prior| format!("{prior}; {note}"))
+                            .unwrap_or(note),
+                    );
+                }
             }
         }
         let take_shot =
@@ -3970,48 +4086,80 @@ async fn run_one(
         if take_shot {
             let path = std::path::Path::new(&project_output_dir)
                 .join(format!("{slug}-attempt{attempts}.png"));
-            if bounded_in(
+            match bounded_in(
                 info.steps.as_ref(),
-                crate::operation::Deadline::new(runner.cleanup_timeout),
+                cleanup_deadline,
                 None,
                 "screenshot",
                 page.save_screenshot(&path, ScreenshotOptions::default()),
             )
             .await
-            .is_ok()
             {
-                screenshots.push(path.display().to_string());
+                Ok(_) => screenshots.push(path.display().to_string()),
+                Err(error) => {
+                    expected_failure_observed = false;
+                    info.record_error(&error, "screenshot");
+                    let note = format!("screenshot: {error}");
+                    failed = Some(
+                        failed
+                            .map(|prior| format!("{prior}; {note}"))
+                            .unwrap_or(note),
+                    );
+                }
             }
         }
         if runner.write_trace {
             let path = std::path::Path::new(&project_output_dir)
                 .join(format!("{slug}-attempt{attempts}.json"));
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).ok();
-            }
-            let payload = serde_json::json!({
-                "test": name,
-                "attempt": attempts,
-                "worker": worker_index,
-                "repeat": item.repeat_each_index,
-                "console": context.console_messages(),
-                "popup_diagnostics": context.popup_diagnostics(),
-                "trace": page.trace(),
-            });
-            let data = serde_json::to_string_pretty(&payload).unwrap_or_default();
-            if std::fs::write(&path, &data).is_ok() {
-                // Preserve the original latest-attempt filename for existing consumers.
-                let _ = std::fs::write(
-                    std::path::Path::new(&project_output_dir).join(format!("{slug}.json")),
-                    &data,
-                );
-                trace_path = Some(path.display().to_string());
+            let result = bounded_in(
+                info.steps.as_ref(),
+                cleanup_deadline,
+                None,
+                "trace write",
+                async {
+                    if cleanup_deadline.expired() {
+                        return Err(E2eError::Timeout(
+                            duration_ms(runner.cleanup_timeout),
+                            "trace write: cleanup budget exhausted".into(),
+                        ));
+                    }
+                    if let Some(parent) = path.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    let payload = serde_json::json!({
+                        "test": name, "attempt": attempts, "worker": worker_index,
+                        "repeat": item.repeat_each_index, "console": context.console_messages(),
+                        "popup_diagnostics": context.popup_diagnostics(), "trace": page.trace(),
+                    });
+                    let data = serde_json::to_string_pretty(&payload)?;
+                    std::fs::write(&path, &data)?;
+                    // Preserve the original latest-attempt filename for existing consumers.
+                    std::fs::write(
+                        std::path::Path::new(&project_output_dir).join(format!("{slug}.json")),
+                        &data,
+                    )?;
+                    Ok(())
+                },
+            )
+            .await;
+            match result {
+                Ok(()) => trace_path = Some(path.display().to_string()),
+                Err(error) => {
+                    expected_failure_observed = false;
+                    info.record_error(&error, "trace write");
+                    let note = format!("trace write: {error}");
+                    failed = Some(
+                        failed
+                            .map(|prior| format!("{prior}; {note}"))
+                            .unwrap_or(note),
+                    );
+                }
             }
         }
         request.dispose();
         let lifecycle = match bounded_in(
             info.steps.as_ref(),
-            crate::operation::Deadline::new(runner.cleanup_timeout),
+            cleanup_deadline,
             None,
             "context cleanup scheduling",
             runner.lifecycle_guard(browser),
@@ -4036,7 +4184,7 @@ async fn run_one(
                 "page close",
                 bounded_in(
                     info.steps.as_ref(),
-                    crate::operation::Deadline::new(runner.cleanup_timeout),
+                    cleanup_deadline,
                     None,
                     "page close",
                     page.close(),
@@ -4047,10 +4195,10 @@ async fn run_one(
                 "context close",
                 bounded_in(
                     info.steps.as_ref(),
-                    crate::operation::Deadline::new(runner.cleanup_timeout),
+                    cleanup_deadline,
                     None,
                     "context close",
-                    context.close(),
+                    context.clone().close(),
                 )
                 .await,
             ),
@@ -4066,7 +4214,7 @@ async fn run_one(
                 );
             }
         }
-        drop(lifecycle);
+        release_lifecycle_after_close(context, lifecycle);
         // Retire logical worker resources after an unexpected failure, so
         // retries and subsequent tests cannot inherit failed fixture/suite state.
         if failed.is_some() && !expected_failure_observed {
@@ -4074,11 +4222,12 @@ async fn run_one(
                 .steps
                 .as_ref()
                 .unwrap()
-                .scope(retire_worker_resources(
+                .scope(retire_worker_resources_with_deadline(
                     runner,
                     suites,
                     worker_fixtures,
                     item.project.as_deref(),
+                    cleanup_deadline,
                 ))
                 .await;
             if !notes.is_empty() {
@@ -4189,26 +4338,34 @@ async fn run_one(
     }
 }
 
+#[cfg(test)]
 async fn teardown_fixtures(
     runner: &Runner,
     built: &[(usize, Arc<dyn Any + Send + Sync>)],
 ) -> Option<String> {
-    teardown_fixtures_with_info(runner, built, None).await
+    teardown_fixtures_with_info(
+        runner,
+        built,
+        None,
+        crate::operation::Deadline::cleanup(runner.cleanup_timeout),
+    )
+    .await
 }
 
 async fn teardown_fixtures_with_info(
     runner: &Runner,
     built: &[(usize, Arc<dyn Any + Send + Sync>)],
     info: Option<&TestInfo>,
+    deadline: crate::operation::Deadline,
 ) -> Option<String> {
     let mut errors = Vec::new();
     for (index, value) in built.iter().rev() {
         let def = &runner.fixtures[*index];
         if let Some(teardown) = &def.teardown {
             if let Err(error) = bounded(
-                crate::operation::Deadline::new(runner.cleanup_timeout),
+                deadline.with_limit(def.teardown_timeout),
                 None,
-                "fixture teardown",
+                &format!("fixture {} teardown", def.name),
                 crate::report::automatic(
                     info.and_then(|i| i.steps.clone()),
                     format!("fixture teardown {}", def.name),
@@ -4769,6 +4926,163 @@ mod fixture_scope_tests {
 mod suite_lifecycle_tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    #[tokio::test]
+    async fn final_run_hooks_share_one_cleanup_clock_and_report_each_pending_hook() {
+        let dir = tempfile::tempdir().unwrap();
+        let cleaned = Arc::new(AtomicUsize::new(0));
+        let count = cleaned.clone();
+        let runner = Runner::default()
+            .output_dir(dir.path().display().to_string())
+            .cleanup_timeout(Duration::from_millis(20))
+            .after_all(|| async { std::future::pending::<E2eResult<()>>().await })
+            .after_all(|| async { std::future::pending::<E2eResult<()>>().await })
+            .global_teardown(|| async { std::future::pending::<E2eResult<()>>().await })
+            .global_teardown(move || {
+                let count = count.clone();
+                async move {
+                    count.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }
+            });
+        let started = Instant::now();
+        let report = runner.finish_run(TestReport::default()).await;
+        assert_eq!(report.failed(), 3, "{}", report.to_list());
+        assert_eq!(
+            report
+                .results
+                .iter()
+                .filter(|result| result.name == "<after_all>")
+                .count(),
+            2
+        );
+        assert_eq!(
+            report
+                .results
+                .iter()
+                .filter(|result| result.name == "<global teardown>")
+                .count(),
+            1
+        );
+        assert!(report.results.iter().all(|result| result
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("20ms")));
+        assert_eq!(cleaned.load(Ordering::SeqCst), 1);
+        assert!(started.elapsed() < Duration::from_millis(200));
+    }
+
+    #[tokio::test]
+    async fn finite_enclosing_setup_clock_caps_default_zero_and_larger_fixture_limits() {
+        for timeout in [None, Some(Duration::ZERO), Some(Duration::from_secs(1))] {
+            let cleaned = Arc::new(AtomicUsize::new(0));
+            let count = cleaned.clone();
+            let mut fixture =
+                Fixture::<u64>::new(|_| async { std::future::pending::<E2eResult<u64>>().await })
+                    .dependency::<u32>();
+            if let Some(timeout) = timeout {
+                fixture = fixture.setup_timeout(timeout);
+            }
+            let runner = Runner::default()
+                .fixture_definition(Fixture::<u32>::new(|_| async { Ok(1) }).teardown(move |_| {
+                    let count = count.clone();
+                    async move {
+                        count.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    }
+                }))
+                .fixture_definition(fixture);
+            let mut worker = FixtureState::default();
+            let mut attempt = FixtureState::default();
+            let result = bounded(
+                crate::operation::Deadline::new(Duration::from_millis(20)),
+                None,
+                "enclosing setup",
+                setup_fixtures(
+                    &runner.fixtures,
+                    &[TypeId::of::<u64>()],
+                    &mut worker,
+                    &mut attempt,
+                ),
+            )
+            .await;
+            assert!(matches!(result, Err(E2eError::Timeout(20, _))));
+            assert_eq!(attempt.built.len(), 1);
+            assert!(teardown_fixtures(&runner, &attempt.built).await.is_none());
+            assert_eq!(cleaned.load(Ordering::SeqCst), 1);
+        }
+    }
+    #[tokio::test]
+    async fn suite_and_worker_fixture_cleanup_share_one_budget_and_retirement_is_once() {
+        let cleaned = Arc::new(AtomicUsize::new(0));
+        let count = cleaned.clone();
+        let runner = Runner::default()
+            .cleanup_timeout(Duration::from_millis(20))
+            .fixture_definition(
+                Fixture::<u32>::new(|_| async { Ok(1) })
+                    .scope(FixtureScope::Worker)
+                    .teardown(move |_| {
+                        let count = count.clone();
+                        async move {
+                            count.fetch_add(1, Ordering::SeqCst);
+                            Ok(())
+                        }
+                    }),
+            )
+            .fixture_definition(
+                Fixture::<u64>::new(|_| async { Ok(2) })
+                    .scope(FixtureScope::Worker)
+                    .dependency::<u32>()
+                    .teardown_timeout(Duration::from_secs(1))
+                    .teardown(|_| async { std::future::pending::<E2eResult<()>>().await }),
+            );
+        let tests = Suite::new("outer")
+            .after_all(|| async { std::future::pending::<E2eResult<()>>().await })
+            .tests(
+                Suite::new("inner")
+                    .after_all(|| async { std::future::pending::<E2eResult<()>>().await })
+                    .tests(vec![test("body", |_| async { Ok(()) })]),
+            );
+        let mut worker = FixtureState::default();
+        setup_fixtures(
+            &runner.fixtures,
+            &[TypeId::of::<u64>()],
+            &mut worker,
+            &mut FixtureState::default(),
+        )
+        .await
+        .unwrap();
+        let mut suites = SuiteState::default();
+        suites
+            .setup(
+                &tests[0],
+                &runner,
+                &mut worker,
+                WorkerInfo {
+                    worker_index: 0,
+                    project: None,
+                },
+                crate::operation::Deadline::new(Duration::ZERO),
+                &crate::CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        let started = Instant::now();
+        let errors = retire_worker_resources(&runner, &mut suites, &mut worker, None).await;
+        assert_eq!(errors.len(), 3, "{errors:?}");
+        assert!(errors[0].contains("suite after_all"));
+        assert!(errors[1].contains("suite after_all"));
+        assert!(errors[2].contains("u64 teardown"));
+        assert!(started.elapsed() < Duration::from_millis(200));
+        assert_eq!(cleaned.load(Ordering::SeqCst), 1);
+        assert!(
+            retire_worker_resources(&runner, &mut suites, &mut worker, None)
+                .await
+                .is_empty()
+        );
+        assert_eq!(cleaned.load(Ordering::SeqCst), 1);
+        assert!(worker.built.is_empty() && worker.values.inner.is_empty());
+    }
     #[tokio::test]
     async fn suite_setup_timeout_and_cleanup_failures_are_bounded_and_continue() {
         let cleaned = Arc::new(AtomicUsize::new(0));

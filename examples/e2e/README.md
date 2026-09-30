@@ -25,8 +25,8 @@ cleanup_timeout_ms = 5000
 
 The corresponding flags are `--global-timeout`, `--max-failures` and
 `--cleanup-timeout` (timeouts are milliseconds). Zero disables each limit.
-The runner bounds setup/hooks/fixtures/body together, then gives each cleanup
-operation its own budget. Already active tests finish when max failures is
+The runner bounds setup/hooks/fixtures/body together, then shares one cleanup
+budget across each cleanup scope. Already active tests finish when max failures is
 reached; global timeout interrupts them and still runs cleanup.
 
 Named project configuration is carried into `Runner::default()` by the CLI:
@@ -220,6 +220,7 @@ Define fixtures with explicit Rust dependencies and scopes:
 
 ```rust
 use ferrite_e2e::*;
+use std::time::Duration;
 
 struct Token(String);
 struct Profile(String);
@@ -233,7 +234,10 @@ let runner = Runner::default()
         Fixture::<Profile>::new(|dependencies| async move {
             Ok(Profile(dependencies.require::<Token>()?.0.clone()))
         })
-        .dependency::<Token>(),
+        .dependency::<Token>()
+        .setup_timeout(Duration::from_secs(2))
+        .teardown_timeout(Duration::from_secs(1))
+        .teardown(|_| async { Ok(()) }),
     );
 let tests = Suite::new("account")
     .retries(1)
@@ -253,6 +257,23 @@ Worker fixtures are shared within one worker/project. Test fixtures rebuild on
 retries. Unexpected failures retire logical worker fixture and suite state before
 reuse. Dependencies must be registered and worker fixtures cannot depend on test
 fixtures. `.teardown(...)` cleans dependents first, including after partial setup.
+
+Fixture setup and teardown limits are optional and separate. Without a local
+limit, setup uses its enclosing hook/test budget and teardown uses the shared
+cleanup budget. Explicit limits can shorten those clocks; they cannot extend
+them. Zero disables only the selected limit, so a finite outer budget still
+applies. Playwright's separate fixture accounting differs; Ferrite does not
+pause the test clock during an explicit fixture setup.
+
+An attempt shares cleanup time across afterEach hooks, reverse fixture teardown,
+artifacts and native close, including worker retirement after an unexpected
+failure. Suite completion/worker retirement and final run cleanup each use
+their own enclosing clock. After exhaustion, immediately ready cleanup still
+gets one poll; pending operations receive individual timeout errors. A dropped
+page/context close wait leaves one disposal owner running, and a repeated close
+waits for that same work. Firefox lifecycle serialization stays held until native
+context disposal settles. Synchronous Rust hooks and filesystem writes remain
+cooperative: blocking code cannot be preempted by an async deadline.
 
 Nest suites by passing an inner `Suite::tests(...)` result into the outer suite.
 Timeouts, retries, context options and tags inherit, with descendant overrides

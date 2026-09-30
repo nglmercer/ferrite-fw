@@ -39,6 +39,29 @@ FERRITE_E2E_REQUIRE_BOTH_BROWSERS=1 cargo test -p ferrite-e2e --test core_confor
 Node/Playwright are optional development tooling and are not dependencies of
 Ferrite's library or its normal Rust test command.
 
+`fixture-budget-reference.mjs` / `fixture-budget-reference.json` run eight
+actual pinned test-runner cases without launching a browser: ordinary/explicit/
+zero fixture limits, worker setup, shared explicit setup/teardown accounting,
+failed setup and dependency teardown after exhaustion. Regenerate with
+`npm run reference:fixture-budgets` or the external installation above and
+`node scripts/e2e-conformance/fixture-budget-reference.mjs`.
+
+The reference records observed statuses, ordering, dependency disposal and errors;
+it does not assume every dependency was disposed. The default teardown timeout
+case has no observed dependency teardown. Explicit Playwright limits can run
+outside the test clock and count setup plus teardown together. Rust fixture
+limits are separate and capped by the enclosing clock; this difference is
+intentional and must not be presented as identical accounting.
+
+`cargo test -p ferrite-e2e --test fixture_budgets` covers six native groups on
+both engines: actual context release after dropped/repeated page/context closes,
+setup-limit failure with dependency release, shared cleanup exhaustion, zero and
+shorter teardown limits, worker rebuilds/retry with dynamic zero and soft errors,
+and setup cancellation. Units additionally verify one-poll ready release,
+deadline intersections, disposal error replay/owner release, and once-only
+suite-plus-worker retirement. As with other async deadlines, synchronous
+blocking Rust code cannot be preempted.
+
 `configuration-reference.mjs` / `configuration-reference.json` run actual pinned
 project selection, inclusion/exclusion, repetition, viewport, retry and timeout
 cases through the Playwright test runner. Three initial observations and one

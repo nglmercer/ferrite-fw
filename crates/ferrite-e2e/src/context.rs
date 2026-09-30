@@ -401,6 +401,7 @@ impl ContextEvent {
 pub struct BrowserContext {
     pub(crate) callbacks: crate::callbacks::ExposedState,
     closed: Arc<std::sync::atomic::AtomicBool>,
+    close_task: crate::operation::SharedClose,
     cancellation: crate::CancellationToken,
     events: tokio::sync::broadcast::Sender<ContextEvent>,
     backend: Backend,
@@ -449,6 +450,7 @@ impl BrowserContext {
         Self {
             callbacks: crate::callbacks::ExposedState::default(),
             closed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            close_task: crate::operation::SharedClose::default(),
             cancellation: crate::CancellationToken::new(),
             events: tokio::sync::broadcast::channel(512).0,
             backend,
@@ -1707,11 +1709,26 @@ impl BrowserContext {
         Ok(())
     }
 
-    /// Close the context and all its pages.
+    /// Close the context and all its pages. Once started, native cleanup
+    /// continues if this wait is dropped; repeated calls await the same cleanup.
     pub async fn close(self) -> E2eResult<()> {
-        if self.closed.swap(true, std::sync::atomic::Ordering::AcqRel) {
-            return Ok(());
-        }
+        let close_task = self.close_task.clone();
+        close_task
+            .run(async move { self.finish_close().await })
+            .await
+    }
+
+    async fn finish_close(self) -> E2eResult<()> {
+        let mut errors = Vec::new();
+        // Preserve idempotent local cleanup after an already-lost transport.
+        // There is no native command to await in that state. Losing a live
+        // transport during disposal still reports the command failure below.
+        let native_open = match &self.backend {
+            Backend::Cdp(connection) => connection.is_open(),
+            Backend::Bidi { conn, .. } => conn.is_open(),
+        };
+        self.closed
+            .store(true, std::sync::atomic::Ordering::Release);
         let _ = self.events.send(ContextEvent::Closed);
         self.cancellation
             .cancel_with_reason("browser context closed");
@@ -1737,8 +1754,10 @@ impl BrowserContext {
             .filter_map(|r| r.preload.clone())
             .collect();
         self.callbacks.stop();
-        for id in preloads {
-            let _ = self.remove_callback_preload(&id).await;
+        for id in preloads.into_iter().filter(|_| native_open) {
+            if let Err(error) = self.remove_callback_preload(&id).await {
+                errors.push(format!("callback preload {id}: {error}"));
+            }
         }
 
         if let Some(registry) = self.registry.upgrade() {
@@ -1748,32 +1767,42 @@ impl BrowserContext {
                 .retain(|context| context.id != self.id);
         }
         for page in self.pages() {
-            page.close_target().await.ok();
+            if let Err(error) = page.close_target().await {
+                errors.push(format!("page {}: {error}", page.target_id()));
+            }
         }
         self.pages.lock().unwrap_or_else(|e| e.into_inner()).clear();
-        match (&self.backend, self.id) {
-            (Backend::Cdp(cdp), Some(id)) => {
-                let _ = cdp
-                    .call(
-                        None,
-                        "Target.disposeBrowserContext",
-                        serde_json::json!({ "browserContextId": id }),
-                        self.timeout,
-                    )
-                    .await;
-            }
-            (Backend::Bidi { conn, .. }, Some(id)) => {
-                let _ = conn
-                    .call(
-                        "browser.removeUserContext",
-                        serde_json::json!({ "userContext": id }),
-                        self.timeout,
-                    )
-                    .await;
-            }
-            _ => {}
+        let native = match (&self.backend, self.id.filter(|_| native_open)) {
+            (Backend::Cdp(cdp), Some(id)) => cdp
+                .call(
+                    None,
+                    "Target.disposeBrowserContext",
+                    serde_json::json!({ "browserContextId": id }),
+                    self.timeout,
+                )
+                .await
+                .map(|_| ()),
+            (Backend::Bidi { conn, .. }, Some(id)) => conn
+                .call(
+                    "browser.removeUserContext",
+                    serde_json::json!({ "userContext": id }),
+                    self.timeout,
+                )
+                .await
+                .map(|_| ()),
+            _ => Ok(()),
+        };
+        if let Err(error) = native {
+            errors.push(format!("native context disposal: {error}"));
         }
-        Ok(())
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(E2eError::Config(format!(
+                "context cleanup failures: {}",
+                errors.join("; ")
+            )))
+        }
     }
 }
 

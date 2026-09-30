@@ -437,7 +437,8 @@ pub struct E2eConfig {
     pub global_timeout_ms: u64,
     /// Stop scheduling after this many unexpected failures (zero disables it).
     pub max_failures: usize,
-    /// Independent timeout for cleanup operations (zero disables it).
+    /// Shared timeout per attempt, worker retirement or run-final cleanup scope
+    /// (zero disables it; local fixture limits cannot extend it).
     pub cleanup_timeout_ms: u64,
     /// Default assertion retry window in milliseconds.
     pub expect_timeout_ms: u64,

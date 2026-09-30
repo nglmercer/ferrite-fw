@@ -1658,6 +1658,8 @@ pub struct Page {
     /// Tracing session shared with the owning context (screenshots on steps).
     tracing: Arc<Mutex<Option<TracingState>>>,
     closed: Arc<Mutex<bool>>,
+    close_task: crate::operation::SharedClose,
+    owner_close_task: crate::operation::SharedClose,
     /// Opener page's target id (`None` unless opened as a popup).
     opener_target: Arc<Mutex<Option<String>>>,
     /// Locator handlers, run before element actions.
@@ -1772,6 +1774,8 @@ impl Page {
             download_dir,
             tracing,
             closed: Arc::new(Mutex::new(false)),
+            close_task: crate::operation::SharedClose::default(),
+            owner_close_task: crate::operation::SharedClose::default(),
             opener_target: Arc::new(Mutex::new(None)),
             locator_handlers: Arc::new(Mutex::new(Vec::new())),
             handlers_running: Arc::new(Mutex::new(false)),
@@ -5370,24 +5374,40 @@ impl Page {
             .await
     }
 
-    /// Close the page target.
+    /// Close the page target and its owned convenience context. Cleanup
+    /// continues after a dropped wait; repeated calls await the same disposal.
     pub async fn close(&self) -> E2eResult<()> {
-        if self.is_closed() {
-            return Ok(());
-        }
-        let context = if self.owns_context {
-            self.context()
-        } else {
-            None
-        };
-        let result = self.close_target().await;
-        if let Some(context) = context {
-            context.close().await?;
-        }
-        result
+        let page = self.clone();
+        self.owner_close_task
+            .run(async move {
+                let context = if page.owns_context {
+                    page.context()
+                } else {
+                    None
+                };
+                let result = page.close_target().await;
+                if let Some(context) = context {
+                    if let Err(error) = context.close().await {
+                        return match result {
+                            Ok(()) => Err(error),
+                            Err(target) => Err(target
+                                .with_context(&format!("context cleanup also failed: {error}"))),
+                        };
+                    }
+                }
+                result
+            })
+            .await
     }
 
     pub(crate) async fn close_target(&self) -> E2eResult<()> {
+        let page = self.clone();
+        self.close_task
+            .run(async move { page.finish_close_target().await })
+            .await
+    }
+
+    async fn finish_close_target(&self) -> E2eResult<()> {
         if self.is_closed() {
             return Ok(());
         }

@@ -14,7 +14,8 @@
     "reference:ownership": "node ownership-reference.mjs",
     "reference:locator-descriptions": "node locator-description-reference.mjs",
     "reference:soft-assertions": "node soft-assertion-reference.mjs",
-    "reference:configuration": "node configuration-reference.mjs"
+    "reference:configuration": "node configuration-reference.mjs",
+    "reference:fixture-budgets": "node fixture-budget-reference.mjs"
   },
   "devDependencies": {
     "playwright": "1.63.0"

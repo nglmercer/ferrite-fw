@@ -55,7 +55,7 @@ implementation.
 | Projects and scheduling | Independent project browsers/launch/context settings; parallel Tokio tasks, retries, repetition, filters and named resource locks | No process workers, project dependency graph or distributed locks |
 | Artifacts | Per-attempt output directories, validated paths, unique attachment files, screenshots/video, live Reporter callbacks and portable HTML/JSON/JUnit bundles | Synchronous callbacks; no complete upstream reporter graph, stdout capture or status override |
 | Step controls | Local timeout, skip with reason, live annotations/title paths and automatic action/assertion/hook/fixture trees | Explicit user steps have exact sources; automatic sources use test definitions; boxing and some Page/protocol actions remain absent |
-| Runtime test controls | Shared TestInfo skip, expected failure, slow, annotations and timeout changes affect running attempts and final results | Result propagation for immediate skip; cooperative async cancellation and independent cleanup budgets |
+| Runtime test controls | Shared TestInfo skip, expected failure, slow, annotations and timeout changes affect running attempts and final results | Result propagation for immediate skip; cooperative async cancellation and separate setup/cleanup scopes |
 | Locator selection | Strict single-target operations, genuine first/last/nth slicing, relative has/hasNot filters, exact/regex/visibility builders | No complete Playwright selector extension/custom-engine surface |
 | Locator descriptions | Optional labels with pinned derivation rules; calling actions/assertions retain them in errors, steps, retry histories and owned traces | Automatic sources remain test definitions; Rust labeled errors differ from the pinned upstream timeout |
 | Semantic locators | Associated labels target controls; roles and accessible names use shared DOM helpers; open shadow-root traversal | Full accessible-name specification and closed shadow roots remain outside this implementation |
@@ -126,8 +126,9 @@ presence does not establish full Playwright behavior:
   Cancellation drops the outstanding wait; already issued browser commands or
   JavaScript may still finish remotely. It is cooperative and cannot interrupt
   blocking synchronous Rust code.
-  Cleanup has an independent per-operation budget rather than Playwright's shared
-  afterEach/fixture-teardown budget.
+  Cleanup has one independent enclosing budget per cleanup scope. Fixture setup
+  and teardown have separate optional limits capped by their enclosing clock;
+  this differs from Playwright's separate fixture accounting.
 - Nested suites scope hooks and inherit settings. Workers remain Tokio tasks,
   with logical fixture/suite state retired after unexpected failures; no process
   restart. Runtime TestInfo controls use shared state; Rust fixture requests/dependencies
@@ -254,7 +255,7 @@ that a dedicated feature was implemented.
 - `Runner::global_timeout`, `max_failures`, `cleanup_timeout` and cancellation.
   A single attempt budget covers context/page setup, beforeEach, fixture setup
   and the test body. Teardown runs after setup/body timeout or panic; callbacks
-  and artifact/close operations are bounded separately. Final unexpected failures
+  and artifact/close operations share the attempt cleanup deadline. Final unexpected failures
   count after retries, pending tests are reported skipped, and already active
   workers finish on maxFailures. Global interruption still produces failure.
 - `BrowserContext::subscribe`, enum event kinds, `wait_for_event` and options.
@@ -274,7 +275,7 @@ the protected lifecycle.
 Configuration/CLI additions: `global_timeout_ms` / `--global-timeout`,
 `max_failures` / `--max-failures`, and `cleanup_timeout_ms` /
 `--cleanup-timeout`. Global timeout and maxFailures default to zero (disabled);
-cleanup defaults to 5 seconds per operation.
+cleanup defaults to 5 seconds per cleanup scope.
 
 ## Context-aware fixtures, live reporters and runtime controls
 
@@ -774,7 +775,7 @@ also exercise downloads, credentials, routing, snapshots, input and reports.
   same worker/project and cleaned up after dependent test values. Unexpected
   attempt failures retire logical worker resources before reuse; the Tokio
   worker index stays stable. Teardowns run in reverse dependency order, even
-  after partial setup, errors or cancellation, with independent cleanup budgets.
+  after partial setup, errors or cancellation, with one enclosing budget per cleanup scope.
 - `Suite::tests` preserves nested identity. `beforeAll` runs once per participating
   worker/project; `afterAll` runs after its remaining descendants, inner suites
   first. Per-attempt hooks run outer-to-inner before the body and inner-to-outer
@@ -1265,3 +1266,58 @@ run/attempt settings reports from both engines were visually inspected, all 12
 artifact links per preview bundle resolved, and native relocated bundles retained
 configuration paths as execution metadata. Regenerated matrix inventory is
 73 classes/1,018 members: Partial630/Missing332/Equivalent15/Idiomatic41.
+
+
+## Fixture limits and shared cleanup accounting (B13)
+
+`Fixture::setup_timeout` and `teardown_timeout` provide separate optional limits.
+Unset setup limits use the enclosing hook/test clock; unset teardown limits use
+its cleanup scope. A local zero disables only the local limit. A finite outer
+clock always applies, including runtime changes to the test timeout. Worker
+setup and suite beforeAll retain their existing separate setup budgets.
+
+The configured `cleanup_timeout_ms` now covers a cleanup scope rather than
+renewing for every operation: attempt afterEach/fixtures/artifacts/native close
+and failure-triggered worker retirement; suite completion and any resulting
+retirement; final worker/project retirement; and dedicated-browser shutdown plus
+run afterAll/global teardown. Defaults remain 5 seconds, with zero unlimited.
+Immediately ready cleanup may complete in one poll after exhaustion; every
+pending operation receives its own timeout error. Reverse teardown still
+releases ready dependencies. Retired fixture state is drained before reuse.
+
+Page and context disposal have one background owner once started. Dropping a
+close wait cannot abandon disposal; concurrent/repeated calls await the same
+result. Native page error kinds are replayed; context close aggregates callback,
+page and native disposal failures into a configuration error. A timeout reports
+unfinished cleanup, not completed native disposal. Firefox lifecycle ownership
+stays held until its background context close settles. Native protocol limits
+still apply. Closing after an already-lost transport remains idempotent local
+cleanup; it does not confirm native release of a remote context. Synchronous Rust
+callbacks and filesystem operations cannot be preempted; trace writing refuses to start after budget exhaustion and reports
+serialization/filesystem errors. Screenshot/video cleanup errors also affect the
+attempt instead of being silently discarded.
+
+The eight actual pinned runner observations in
+[fixture-budget-reference.json](scripts/e2e-conformance/fixture-budget-reference.json)
+show material differences: Playwright's explicit fixture limit can run outside
+the test clock and covers setup plus teardown together; Ferrite uses separate
+local limits capped by the enclosing clock. In the pinned ordinary teardown
+exhaustion case, the completed dependency's teardown was not observed. Ferrite
+intentionally attempts every remaining cleanup and preserves its diagnostics.
+This is practical bounded Rust behavior, not a claim of identical accounting.
+
+The native `fixture_budgets` target exercises dropped/repeated close waits with
+actual user-context release, explicit setup limits and partial setup, shared
+cleanup exhaustion, zero/shorter limits, worker rebuilds on retry, dynamic zero
+and soft-error retention, and cancellation during fixture setup. Lifecycle units
+cover one-poll exhaustion, local deadline intersections, error replay/owner
+release and suite-plus-worker retirement without repeating cleanup.
+
+Verification: all 377 E2E checks (170 units, 203 integrations across all 30
+targets and four doctests) and 27 CLI/configuration checks passed. Runner/native
+B13 cases used full Chrome 153 and Firefox 157; core/browser/routing batches
+used matching Headless Shell 153 and Firefox 157. Final units and six native
+B13 groups reran after adding actual target-ID and run-final clock checks.
+Strict all-target E2E/CLI/config Clippy, package formatting, regenerated matrix
+and local evidence links passed. Initial stack growth, lost-transport idempotence
+and worker-fixture report labels were corrected before final verification.
