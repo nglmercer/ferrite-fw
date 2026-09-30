@@ -395,3 +395,18 @@ The default polling mode follows native animation frames. Frame waits return
 JSON values; live frame handles and remote handle arguments are unsupported.
 Predicates/promises can fail directly. Cancellation removes the owned poller,
 while user-created asynchronous work retains normal JavaScript behavior.
+
+Lookup frame handles using the current native tree:
+
+```rust,no_run
+let main = page.main_frame().await?;
+if let Some(frame) = page.frame_by_url_matching(&ferrite_e2e::UrlMatcher::glob("**/account")?).await? {
+    let current = frame.current_url().await?;
+    frame.get_by_role("button", "Save").click().await?;
+}
+let frame = page.frame_by_url_where(|url| url.contains("/checkout?")).await?;
+```
+
+Lookups return the first match, or None. Frame identity survives navigation but
+never retargets a replacement iframe. `url()` is its lookup snapshot, while
+`current_url()` is live. Firefox frame name metadata is empty.

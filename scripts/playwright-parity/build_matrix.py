@@ -268,6 +268,11 @@ put('Page','ariaSnapshot','Page.aria_snapshot','Structured role/name/state DOM a
 put('Page','ariaSnapshotJSON','Page.aria_snapshot_json','Nested role/name/state DOM tree without name/node truncation; not the complete accessibility algorithm.')
 put('Page','addLocatorHandler','Page.add_locator_handler_with','Visibility-based overlay handlers run before actions and state/custom assertions; no full dismissal/noWaitAfter semantics.')
 put('Page','waitForFunction','Page.wait_for_function_handle','JSON argument, native animation-frame/interval polling and retained truthy result; JSON helper supports frames. Frame remote handles and arbitrary argument serialization remain unsupported. Legacy expression helper returns unit.')
+put('Page','mainFrame','Page.main_frame','Dedicated asynchronous native root lookup; closed/disconnected pages fail, no fabricated root. Selector-free OOPIF traversal remains deferred.')
+put('Page','frame','Page.frame_by_url_matching','Exact/contains/glob/regex or URL predicate snapshot lookup, plus existing name/substring helpers; relative matchers resolve base URL. Native Firefox frame names remain empty.')
+put('Frame','url','Frame.current_url','current_url() reads live URL; url() retains lookup snapshot. Native realm/tree errors propagate after detach.')
+put('Frame','isDetached','Frame.is_detached','Asynchronous native tree identity check; explicit page closure is detached, disconnection errors propagate. No replacement retargeting.')
+put('Frame','name','Frame.name','Native lookup name snapshot; Chromium reports names, Firefox metadata is empty. No inferred name.')
 # Reliability, API authentication state, frame helpers, limits and context events.
 for m,t in {'page':'page','setContent':'set_content','waitForFunction':'wait_for_function','waitForURL':'wait_for_url','waitForLoadState':'wait_for_load_state','waitForSelector':'wait_for_selector'}.items():
  put('Frame',m,'Frame.'+t,'Frame-scoped counterpart; unit-returning waits, fewer predicate/options modes; frame NetworkIdle remains unsupported. current_url() reads navigation updates.')

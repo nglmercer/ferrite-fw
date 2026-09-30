@@ -426,7 +426,7 @@ pub(crate) struct FrameInfo {
     pub parent_id: Option<String>,
     /// Frame name (`<iframe name>`; empty on Firefox).
     pub name: String,
-    /// Frame document URL.
+    /// Document URL at lookup time; use `current_url()` after navigation.
     pub url: String,
 }
 
@@ -578,7 +578,7 @@ impl Frame {
         &self.name
     }
 
-    /// Frame document URL.
+    /// Snapshot URL when this handle was obtained; use `current_url()` after navigation.
     #[must_use]
     pub fn url(&self) -> &str {
         &self.url
@@ -617,8 +617,12 @@ impl Frame {
             .collect())
     }
 
-    /// Whether the frame is detached from the document.
+    /// Whether the identity is absent from the current native frame tree.
+    /// Explicit page closure is detached; protocol/disconnection errors propagate.
     pub async fn is_detached(&self) -> E2eResult<bool> {
+        if self.page.is_closed() {
+            return Ok(true);
+        }
         Ok(!self
             .page
             .document_frames()
@@ -4457,6 +4461,41 @@ impl Page {
                     .collect())
             })
             .await
+    }
+
+    /// Current top-level native frame. The identity survives same-target navigation.
+    /// Closed/disconnected pages fail rather than returning a fabricated handle.
+    pub async fn main_frame(&self) -> E2eResult<Frame> {
+        self.document_frames()
+            .await?
+            .into_iter()
+            .find(|frame| frame.parent_id.is_none())
+            .ok_or_else(|| E2eError::Config("native page frame tree has no main frame".into()))
+    }
+
+    /// First current frame whose full URL matches. Relative exact/glob matchers
+    /// resolve against the page base URL. This is a snapshot lookup, not a wait.
+    pub async fn frame_by_url_matching(
+        &self,
+        matcher: &crate::UrlMatcher,
+    ) -> E2eResult<Option<Frame>> {
+        let matcher = matcher.resolved(|url| self.resolve_url(url))?;
+        self.frame_by_url_where(move |url| matcher.matches(url))
+            .await
+    }
+
+    /// First frame matching a current URL predicate, in native tree order.
+    /// No match returns None; native errors propagate. Handles keep their identity
+    /// after detachment and never silently retarget a replacement iframe.
+    pub async fn frame_by_url_where<F>(&self, mut predicate: F) -> E2eResult<Option<Frame>>
+    where
+        F: FnMut(&str) -> bool,
+    {
+        Ok(self
+            .document_frames()
+            .await?
+            .into_iter()
+            .find(|frame| predicate(&frame.url)))
     }
 
     /// First frame with exactly `name`.

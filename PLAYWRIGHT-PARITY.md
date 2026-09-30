@@ -563,7 +563,8 @@ Validation for URL/network matching, generated uploads and browser diagnostics:
   groups, 4 step-control/bundle groups, 5 wait/upload/console groups,
   3 core conformance/capability groups, 4 callback lifecycle groups,
   1 daily API group, 2 action option groups, 3 URL readiness groups,
-  2 shared URL matching groups and 2 doctests** (283 checks total).
+  2 shared URL matching groups, 3 function wait groups, 1 frame lookup group
+  and 2 doctests** (287 checks total).
   Headless Shell and Firefox were installed and exercised; unsupported-engine branches remain explicit.
 - The five new groups additionally passed with full Chrome and Firefox, covering
   exact/glob/regex and predicate URL matching, frame history, request-start and
@@ -589,7 +590,7 @@ Validation for URL/network matching, generated uploads and browser diagnostics:
 - Existing trace and first-attachment names remain compatible; retry trace files
   and repeated attachment names preserve their individual contents.
 - CLI/configuration checks passed again: 5 CLI tests, 17 configuration tests and
-  1 doctest (306 checks across E2E/CLI/configuration). This change adds no CLI
+  1 doctest (310 checks across E2E/CLI/configuration). This change adds no CLI
   options. A real portable HTML report with expanded automatic/user/hook trees,
   skipped steps, annotations and run lifecycle was rendered in Chromium and
   visually inspected. The console section was also rendered and visually
@@ -670,3 +671,19 @@ The legacy unit-returning expression waits retain their existing 50ms behavior.
 The [official contract](https://playwright.dev/docs/api/class-page#page-wait-for-function)
 and pinned five-case Playwright 1.63.0 corpus cover JSON arguments, promise
 results, JavaScript falsy values and both scheduling modes.
+
+### Native frame lookup
+
+`Page::main_frame()` returns the current native root handle.
+`frame_by_url_matching(&UrlMatcher)` and `frame_by_url_where(predicate)` search
+the current native frame tree in tree order and return the first match or None.
+Exact/relative glob patterns use the configured base URL; the existing substring
+and name helpers preserve their contracts. Lookups are snapshots, not waits.
+
+Frame identities survive navigation of the same native frame, and never retarget
+a removed/replaced iframe. `Frame::url()` retains its lookup URL; `current_url()`
+reads navigation updates. `is_detached()` checks identity in the current tree
+and returns true after explicit owning-page closure; native disconnection errors
+propagate. Firefox names remain empty because its native tree supplies no names.
+Same-origin nested/replacement cases have native regressions on both engines.
+Selector-free OOPIF traversal remains deferred.
