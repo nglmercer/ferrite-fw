@@ -9,6 +9,8 @@ ferrite-core = { workspace = true }
 ferrite-config = { workspace = true }
 base64 = { workspace = true }
 futures = { workspace = true }
+http-body-util = "0.1"
+hyper = "1"
 globset = { workspace = true }
 image = { workspace = true }
 regex = { workspace = true }

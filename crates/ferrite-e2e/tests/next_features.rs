@@ -87,7 +87,10 @@ async fn api_deadlines_cancellation_disposal_and_authentication_state() {
             },
         )
         .await;
-    assert!(matches!(retried, Err(E2eError::Timeout(..))));
+    assert!(
+        matches!(retried, Err(E2eError::Http(error)) if error.is_connect()),
+        "refused connections are not reset retries"
+    );
     assert!(started.elapsed() < Duration::from_secs(2));
     assert_eq!(
         client

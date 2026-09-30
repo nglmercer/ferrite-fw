@@ -34,6 +34,32 @@ restore through `ContextOptions::storage_state`, or configure a standalone
 `ApiClientOptions::storage_state`. Context clients inherit transport defaults
 and share cookies across browser requests and HTTP redirects.
 
+For challenge-only API credentials and a per-request redirect limit:
+
+```rust
+let api = ApiClient::with_options(ApiClientOptions {
+    base_url: Some("https://example.test".into()),
+    credentials: Some(HttpCredentials::new("user", "password")),
+    credential_origin: Some("https://example.test".into()),
+    credential_send: ApiCredentialsSend::Unauthorized,
+    ..Default::default()
+})?;
+let response = api.fetch_with("GET", "/resource", ApiRequestOptions {
+    max_redirects: Some(0), // inspect a redirect instead of following it
+    max_retries: 1, // peer resets before headers; HTTP error statuses are not retried
+    ..Default::default()
+}).await?;
+```
+
+The existing preemptive Basic default remains `ApiCredentialsSend::Always`;
+explicit Authorization headers take precedence. Cross-origin redirects strip
+Authorization, and every redirect recomputes cookies from the shared jar.
+Binary/multipart bodies replay through 307/308 and Basic challenges. Retries,
+redirects and body reads share the total timeout/cancellation budget. New
+`ApiClientOptions` credential fields and `ApiRequestOptions::max_redirects`
+require updating exhaustive struct literals; `..Default::default()` preserves
+existing defaults. TLS opt-out remains a client/context option.
+
 Subscribe with `context.subscribe()` before triggering an action. Context events
 include new pages/popups, console/errors, network, completed downloads and closure,
 with source page IDs. `wait_for_event` provides a timed filter;

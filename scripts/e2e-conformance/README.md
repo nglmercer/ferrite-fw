@@ -83,3 +83,20 @@ are recorded or suppressed according to policy. Wait mode preserves and awaits
 the decision. Explicit Cancel is a Rust extension. Rust registration order stays
 page-first/context-fallback and first-registered-first; this corpus does not
 claim equivalence to Playwright's newest-route-first priority.
+
+`api-reference.mjs` / `api-reference.json` record 19 actual Playwright 1.63.0
+HTTP cases: POST/PUT across 301/302/303/307/308, disabled redirects, reset-only
+retries, HTTP status failures and preemptive/challenge/origin-scoped credentials.
+Regenerate using `npm run reference:api`, or the external installation above
+with `node scripts/e2e-conformance/api-reference.mjs`. This reference uses the
+standalone Playwright request client and requires no browser installation.
+
+`cargo test -p ferrite-e2e --test api_fidelity` compares these cases and verifies
+binary/multipart replay, conflicting payloads, cookie updates at failed hops,
+redirect header stripping, disposal, cancellation and enclosing runner retries.
+Native context-linked checks require both installed engines. Its local HTTPS
+fixture requires `openssl` on PATH, generates an ephemeral self-signed certificate,
+and verifies TLS rejection/explicit opt-out without contacting an external host.
+Fixture processes/listeners are released when the owning test future is dropped.
+Ferrite retains its preemptive authentication default; explicitly choose
+`ApiCredentialsSend::Unauthorized` for the pinned Playwright default behavior.

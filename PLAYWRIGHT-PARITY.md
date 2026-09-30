@@ -66,7 +66,7 @@ implementation.
 | Assertions | Exact/regex page title/URL, raw regex/normalized or rendered text options, mixed lists, ordered text subsets, exact classes/class tokens, values, state/indeterminate options, native intersection ratios, accessible regex, custom predicates and `expect_to_pass` | Rust regex syntax; accessibility approximation; no custom matcher registry/asymmetric matchers or full options parity |
 | Accessibility snapshots | Structured DOM role/name/state tree and locator/page exact snapshot assertions | Approximation, without complete ARIA/YAML matching or all upstream modes |
 | Clock | Separate fixed Date/system time, run-for/fast-forward, promise/timer ordering, pause-at/resume and installation time | Page-local; navigation reinstalls initial state; idle callbacks approximate browser behavior |
-| API testing | Query/headers/JSON/form/raw/multipart, cookies, TLS/proxy/auth, timeout, redirects, status checks and connect retries | IndexedDB state and all redirect/retry semantics remain deferred; returned response buffers are independently owned |
+| API testing | Query/headers/JSON/form/raw/multipart, hop cookies, TLS/proxy, scoped preemptive/challenge Basic auth, bounded manual redirects, reset retries and status checks | Legacy preemptive default; client-scoped TLS settings, no automatic compression decoding or full upstream option surface; returned buffers are independently owned |
 | Browser/API storage | Context-linked cookies in both directions; isolated protocol cookie partitions; Playwright cookies/origins localStorage JSON; Page/context API clients inherit transport defaults at creation | Redirect/partition/SameSite details remain narrower; no IndexedDB/OPFS snapshots |
 | HTTP credentials | Browser challenge authentication on Chromium, preserving extra headers; explicit preemptive Basic helper | Firefox challenge credentials unsupported; cached-auth clearing is approximate |
 | Callbacks and buffers | Page/context sync/async functions and bindings, startup preloads, navigation/removal lifecycle; console/error metadata and attempt history | JSON arguments, polled bounded dispatch and main/same-origin frames; no cross-origin/worker/handle dispatch |
@@ -155,6 +155,36 @@ without treating raw CDP, arbitrary evaluation or Rust assertions as evidence
 that a dedicated feature was implemented.
 
 ## Reliability and API additions
+
+- API redirects use explicit 301/302 POST and 303 method-to-GET transitions;
+  307/308 replay owned binary/multipart payloads. Client/request redirect limits
+  default to 20; zero returns the redirect response. Cross-origin Authorization
+  is stripped and Cookie is recomputed on every hop. Hop cookies synchronize
+  with the browser before a later redirect, TLS or body failure.
+- `ApiRequestOptions::max_retries` retries peer resets before response headers,
+  including an incomplete HTTP message before headers, with 250 ms doubling
+  backoff. Refused connections, TLS certificate errors, failed body reads and
+  HTTP statuses are not retried. Redirects, preparation, retries and body reads
+  remain bounded by the enclosing request/runner deadline and cancellation.
+  `fail_on_status_code` rejects outside 2xx/3xx with a bounded diagnostic preview.
+- `ApiCredentialsSend::Unauthorized` matches the pinned challenge-only default.
+  Ferrite preserves its existing `Always` default and explicit Authorization
+  header precedence. Credential origins validate HTTP(S) scheme/host/port and
+  use URL origin normalization (host case/default ports/root slash), rather than
+  Playwright's raw origin-string comparison. Exhaustive client/request option
+  literals need the new credential fields / `max_redirects`, or struct defaults.
+  Returned Rust response buffers remain owned after client disposal; explicit
+  response disposal releases their bytes. TLS opt-out remains client-scoped;
+  compressed response decoding and arbitrary request streams are not added.
+- API evidence: 19 actual pinned Playwright 1.63.0 HTTP cases and five
+  [API fidelity groups](crates/ferrite-e2e/tests/api_fidelity.rs), including native
+  full Chrome 153 / Firefox 157 context-cookie and TLS checks. All 307 E2E checks
+  and 23 CLI/configuration checks were verified, with strict Clippy, formatting
+  and regenerated matrix links. The final broad run recorded 300 passing checks
+  before process termination; the remaining five integration checks and two
+  doctests passed separately. An initial pointer-cleanup timeout passed isolated
+  rechecking and the final broad run. No HTTP implementation change was needed
+  for that timing failure.
 
 - `CancellationToken`, `OperationOptions`, page/locator clones with cancellation
   and timeout overrides, and cancellation on page/context/client disposal.

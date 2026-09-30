@@ -74,7 +74,9 @@ mod video;
 mod webserver;
 
 pub use action_options::{ActionOptions, ActionPosition, DragOptions, KeyboardModifier};
-pub use api::{ApiClient, ApiClientOptions, ApiRequestOptions, ApiResponse, MultipartField};
+pub use api::{
+    ApiClient, ApiClientOptions, ApiCredentialsSend, ApiRequestOptions, ApiResponse, MultipartField,
+};
 pub use assertion_options::{
     CheckedOptions, MatchOptions, StateAssertion, TextAssertionOptions, TextMatcher,
 };

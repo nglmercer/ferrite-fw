@@ -926,6 +926,8 @@ dependencies = [
  "ferrite-core",
  "futures",
  "globset",
+ "http-body-util",
+ "hyper",
  "image",
  "md-5",
  "regex",

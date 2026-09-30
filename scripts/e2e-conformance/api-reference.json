@@ -1,0 +1,139 @@
+{
+  "playwright": "1.63.0",
+  "cases": [
+    {
+      "name": "POST-301",
+      "result": {
+        "method": "GET",
+        "body": "",
+        "authorization": null
+      }
+    },
+    {
+      "name": "POST-302",
+      "result": {
+        "method": "GET",
+        "body": "",
+        "authorization": null
+      }
+    },
+    {
+      "name": "POST-303",
+      "result": {
+        "method": "GET",
+        "body": "",
+        "authorization": null
+      }
+    },
+    {
+      "name": "POST-307",
+      "result": {
+        "method": "POST",
+        "body": "abc",
+        "authorization": null
+      }
+    },
+    {
+      "name": "POST-308",
+      "result": {
+        "method": "POST",
+        "body": "abc",
+        "authorization": null
+      }
+    },
+    {
+      "name": "PUT-301",
+      "result": {
+        "method": "PUT",
+        "body": "abc",
+        "authorization": null
+      }
+    },
+    {
+      "name": "PUT-302",
+      "result": {
+        "method": "PUT",
+        "body": "abc",
+        "authorization": null
+      }
+    },
+    {
+      "name": "PUT-303",
+      "result": {
+        "method": "GET",
+        "body": "",
+        "authorization": null
+      }
+    },
+    {
+      "name": "PUT-307",
+      "result": {
+        "method": "PUT",
+        "body": "abc",
+        "authorization": null
+      }
+    },
+    {
+      "name": "PUT-308",
+      "result": {
+        "method": "PUT",
+        "body": "abc",
+        "authorization": null
+      }
+    },
+    {
+      "name": "no-redirect",
+      "status": 302,
+      "body": "redirect"
+    },
+    {
+      "name": "retry-reset",
+      "requests": 2,
+      "status": 200
+    },
+    {
+      "name": "no-http-status-retry",
+      "requests": 1,
+      "status": 503
+    },
+    {
+      "name": "auth-default-echo",
+      "result": {
+        "method": "GET",
+        "body": "",
+        "authorization": null
+      }
+    },
+    {
+      "name": "auth-default-challenge",
+      "status": 200,
+      "body": "{\"method\":\"GET\",\"body\":\"\",\"authorization\":\"Basic dXNlcjpwYXNz\"}"
+    },
+    {
+      "name": "auth-always-echo",
+      "result": {
+        "method": "GET",
+        "body": "",
+        "authorization": "Basic dXNlcjpwYXNz"
+      }
+    },
+    {
+      "name": "auth-always-challenge",
+      "status": 200,
+      "body": "{\"method\":\"GET\",\"body\":\"\",\"authorization\":\"Basic dXNlcjpwYXNz\"}"
+    },
+    {
+      "name": "auth-origin-mismatch-echo",
+      "result": {
+        "method": "GET",
+        "body": "",
+        "authorization": null
+      }
+    },
+    {
+      "name": "auth-origin-mismatch-challenge",
+      "status": 401,
+      "body": "challenge"
+    }
+  ]
+}
