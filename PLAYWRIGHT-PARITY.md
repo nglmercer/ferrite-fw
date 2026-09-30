@@ -1674,7 +1674,7 @@ generation and parity-document links passed. This remains focused evidence;
 the expanded full integration inventory is not yet a completed B10 phase gate.
 
 
-### B10 draft: actual downloadable fonts and native animations
+### B10 draft: actual downloadable fonts and native animations (`e81d744`)
 
 The [font/animation tests](crates/ferrite-e2e/tests/snapshot_fonts_and_animations.rs)
 use an [original reproducible font](crates/ferrite-e2e/tests/fixtures/README.md)

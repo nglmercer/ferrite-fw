@@ -88,7 +88,7 @@ I/O failures and cancellation/restoration. Generic retry probes suppress interme
 report images; final-only deferred publication for a failed outer poll remains
 an audit item.
 
-Seven native font/animation groups now verify page/locator captures in the main
+Verified native font/animation increment `e81d744`: seven groups now verify page/locator captures in the main
 document, open roots and same-origin frames, fallback opt-out, timeout/cancellation/
 disposal, native finite/infinite/zero-rate animation behavior and finish/resume errors.
 The original reproducible font fixture is independent of installed system fonts.
@@ -866,7 +866,7 @@ their dependencies are ready. References include
   assertion precedence, frozen metadata, CLI/env and TestInfo access (`b34174d`); two native
   groups and 36 pinned path-only cases verify them. Attempt/step-owned expected/
   actual/diff and last-pair stability attachments (`b826c56`) now preserve immutable retry
-  evidence and portable links, with four native diagnostic groups. Seven additional
+  evidence and portable links, with four native diagnostic groups. `e81d744` adds seven additional
   native font/animation groups use real held HTTP fonts and native animation
   objects, including late CSS animation cancellation/resumption and visible
   finish/resume errors and the 4,096/4,097-object limit boundary. Final-only
