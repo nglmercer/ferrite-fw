@@ -1,7 +1,8 @@
 # Ferrite E2E implementation TODO
 
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
-Session plan refreshed: 2026-09-30, from verified B01 implementation `f8c12de`.
+Session plan refreshed: 2026-09-30, from verified B01 implementation `f8c12de`
+and the current uncommitted B04 draft.
 Uncommitted implementations are not counted complete.
 
 Implement **G, then A, then B**, followed by the supported C extensions. This
@@ -19,7 +20,7 @@ limits remain in [PLAYWRIGHT-PARITY.md](PLAYWRIGHT-PARITY.md).
 
 ## Recommended next implementation
 
-Start with **B04 — earliest popup diagnostics**, followed by
+Finish **B04 — earliest popup diagnostics**, followed by
 **B19 — structured errors/console data**. B01 is verified in `f8c12de`:
 native frame/navigation/readiness/dialog-close observations preserve source
 identity and forward once to the context. B06 remains verified in `c88c14b`;
@@ -33,16 +34,24 @@ The complete inventory is 149 units, 173 integrations across all 23 targets,
 three doctests and 23 CLI/configuration checks. Completed network/routing,
 callback, popup, download and closure features remain regression requirements.
 
-**Current handoff:** B01 is committed. Begin B04 by auditing the browser popup
-pump and `ConsoleSink::forward_context`: listeners currently start during driver
-setup, and forwarding binds during `finish_page`, leaving earlier observations
-outside that ownership window. Firefox popup adoption awaits a native tree query;
-an immediately closed popup must retain its observations even if setup cannot
-finish. Capture source identity before awaiting adoption, bound pending buffers,
-forward each observation once and release failed/closed adoption state. Preserve
-the new native event graph and existing callback/dialog/download behavior. B19
-must retain optional native data through every attempt report. Keep each new
-task unchecked until its acceptance criteria pass.
+**Current handoff:** B01 is committed. B04 already has an uncommitted draft:
+transport-ingress popup capture, bounded context diagnostics, request completion
+retention, attempt/trace/HTML integration, four native regression groups and a
+two-case pinned Playwright reference. Preserve and finish this work rather than
+starting a second implementation. Earlier focused runs passed 152 unit checks
+and all four popup groups on full Chrome/Firefox, but subsequent edits still
+need verification. These draft runs do not replace the committed baseline above
+or establish task completion.
+
+Before checking B04, resolve the pending-capture overflow case: eviction must
+not leave diagnostics reporting failed adoption if a queued adopter later
+succeeds. Verify failed driver initialization followed by more native logs and
+closure, request settlement after observation-budget exhaustion, cancellation,
+and resource release. Complete public API/examples and serialization migration
+notes, document capture limits, register the reference script, inspect the
+expanded portable HTML report, then run the required regression gates and commit.
+Keep B04 unchecked until these checks pass. B19 follows and must retain optional
+native data through every attempt report.
 
 The scope of the longer session is **all 18 open tasks below**. Completed tasks
 remain regression requirements. The deferred projects are future work; completing
@@ -295,6 +304,9 @@ Work in [the audit generator](scripts/playwright-parity/build_matrix.py),
   Include native event-channel lag/listener exit, partial page/popup setup,
   detached-frame in-flight requests and empty-context disconnect. Waiters must
   settle explicitly when their observation source is lost.
+  Audit popup-pump lag and pending-capture eviction as well: every paused Chromium
+  target must be resumed or closed, and retained adoption outcomes must agree
+  with actual setup results. A bounded buffer must not create an unbounded wait.
 
 ## A — Core features to implement first
 
@@ -490,6 +502,9 @@ their dependencies are ready. References include
   concurrent popups and cancellation/disposal, including page/context history
   and attempt-report retention. B01's event graph/forwarding is the baseline;
   do not replace missing native data with DOM-derived guesses.
+  Draft handoff: `popup_capture.rs`, `tests/popup_diagnostics.rs` and
+  `scripts/e2e-conformance/popup-reference.{mjs,json}` exist uncommitted. Finish
+  the verification and documentation listed above before recording evidence.
 - [x] **B05 — Route removal and in-flight handler behavior (L).** Extend existing
   unroute/unroute-all with documented wait/ignore-error behavior. Done when active
   async handlers settle or cancel according to policy, request ordering remains
