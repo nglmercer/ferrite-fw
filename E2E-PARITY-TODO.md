@@ -1,15 +1,15 @@
 # Ferrite E2E implementation TODO
 
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
-Session plan refreshed: 2026-09-30, from verified B12 implementation `0ee8245`.
-Expanded on request for a longer implementation session; B14 remains a draft.
+Session plan refreshed: 2026-09-30, from verified B14 implementation `a7f1e45`.
+Expanded on request for a longer implementation session; B14 is now verified.
 Uncommitted implementations are not counted complete.
 
 The initial G/A foundations are complete except for the final G04 audit. Follow
 the remaining-work index below through B/D improvements and supported C extensions.
-This backlog contains **51 tasks (32 complete, 19 remaining)**: four foundations,
+This backlog contains **51 tasks (33 complete, 18 remaining)**: four foundations,
 16 core tasks, 19 follow-ups, six optional extensions and six practical additions.
-All A tasks and B01–B08/B12/B15/B16/B17/B19 are now verified; continue with
+All A tasks and B01–B08/B12/B14/B15/B16/B17/B19 are now verified; continue with
 configuration and runner budgets, then captures, reports and supported C extensions. The ordering and effort
 assessments are recommendations based on the current source and parity audit.
 D01–D06 add bounded improvements found in the missing/partial member inventory;
@@ -23,54 +23,48 @@ limits remain in [PLAYWRIGHT-PARITY.md](PLAYWRIGHT-PARITY.md).
 
 ## Recommended next implementation
 
-Start **B14 — effective project/configuration metadata**, followed by
-**B13 — fixture budgets and shared teardown accounting**. B12 is verified in
-`0ee8245`: weak attempt-owned soft collectors, contextual assertion steps,
-automatic failure classification, cleanup visibility, retry isolation and atomic
-sealing. Preserve the verified browser, event/routing, popup, console and labeled
-locator behavior.
+Start **B13 — fixture budgets and shared teardown accounting**, followed by
+**D01 — CI flaky-test policy** and **D02 — assertion polling options**. B14 is
+verified in `a7f1e45`: named shared/library project configuration, CLI forwarding,
+resolved run/project/attempt settings, actual native owner identity, precedence,
+project output/snapshot paths and captured environment fallbacks.
 
-The soft phase passed all 355 E2E and 23 CLI/configuration checks, with strict
-Clippy, package formatting and regenerated matrix links. The complete inventory
-is 160 units, 192 integrations across all 28 targets and three doctests, plus
-23 CLI/configuration checks. The 53-check runner/diagnostics batch ran on full
-Chrome 153/Firefox 157; core183/browser93/routing23 used Headless Shell/Firefox.
-Five actual pinned runner cases and five native groups cover continuation,
-retries, expected failure, cleanup and parallel isolation; exact collection/
-wrapper sources, step paths, retained handles, failed setup/dependency release,
-operational timeouts/cancellation, JSON defaults and escaped HTML. Three units
-cover local/zero/control cases, concurrent sealing/weak ownership and interruption.
-Final units additionally verify accepted concurrent writes reach classification
-and late futures are never polled. Expanded retry bundles were inspected and all
-three links per relocated engine bundle resolved. Clippy initially caught a
-test-only guard across shutdown; releasing it before await fixed it, and the
-native group and strict check passed afterward.
+The configuration phase passed **365 E2E and 27 CLI/configuration checks**:
+164 units, 197 integrations across all 29 targets and four doctests. The 58-check
+runner batch ran on full Chrome 153/Firefox 157; core187/browser93/routing23
+used Headless Shell/Firefox. Strict all-target E2E/CLI/config Clippy, package
+formatting and regenerated matrix links passed. Five native groups compare four
+actual pinned runner observations and exercise suite/test/project precedence,
+zero values, tag exclusion, repetition/sharding, runtime timeouts/retries,
+dedicated owner identity/release, artifact/snapshot seeds, early setup and old
+JSON. An isolated child verifies environment resolution before hooks without
+parent-environment races. Final units were rerun after preserving empty legacy
+filter behavior. Expanded run/attempt reports from both engines were inspected;
+all 12 artifact links per preview resolved and relocated bundles kept valid links.
+Initial missing literal fields/two test borrows and the invalid-shard test setup
+were corrected before final verification. The first shard test used a builder
+that intentionally panics; the corrected test supplies invalid shared config.
 
-**Current handoff:** finish the uncommitted B14 draft in `Project`, `WorkItem`,
-`build_work_items`, `Runner::from_config`/`run_inner`, `TestInfo`, report metadata, shared E2eConfig
-and the CLI `src/cmds/e2e.rs` bridge. At the last verified commit, Project had
-grep/retries/timeout but lacked grep-invert, repetition and output/snapshot paths.
-Shared E2eConfig lacked those project settings and global repetition/filter/
-snapshot-directory fields; Runner::from_config started projects/filters empty
-and repetition at one. The working tree now contains draft configuration DTOs,
-project/CLI fields, resolution and report wiring. The last recorded compile
-check failed on report test literals missing the new configuration field;
-B14 has no new verified native evidence. Repair compilation, review precedence
-and add the required checks before counting or committing that implementation.
-Extend existing settings rather than creating a disconnected second
-configuration path. Resolve global/project/suite/test values once for actual
-work items, preserve explicit overrides and define when legacy environment
-filters, project selection and snapshot-directory overrides are applied.
+**Current handoff:** start B13 in `FixtureDef`/`Fixture<T>`, `setup_fixtures`,
+`teardown_fixtures_with_info`, `SuiteState` setup/cleanup, worker retirement,
+`bounded`/`bounded_in`, `run_one` and `finish_run`, with shared Deadline/runtime
+helpers in `operation.rs`. Fixture definitions currently have no explicit
+setup/teardown timeouts. Cleanup currently creates a fresh cleanup_timeout
+for each hook, fixture and resource operation, including worker/suite teardown.
+Add fixture overrides and one enclosing deadline per cleanup scope; per-operation
+limits cannot extend it. Preserve zero-as-unlimited subject to finite enclosing
+limits, reverse dependency teardown, completed dependency release after failed
+setup, worker retry isolation and all phase-specific diagnostics. Exhaustion
+must be reported explicitly for remaining cleanup work, not silently omitted.
 
-Expose read-only effective run/project/attempt configuration which describes
-actual launches, selection, repetition, timeout/retry/context and resolved paths;
-report callbacks/JSON must agree with scheduling and TestInfo output paths.
-Verify defaults, zero/inheritance, exclusion/tag filters, repetition and sharding,
-project browser isolation, portable output bundles and snapshot directory seeds.
-CLI JSON/legacy forwarding must match the library; avoid global-environment test
-races. Add serde defaults and document public struct-literal migrations.
-Project dependency scheduling remains deferred. Stable snapshot/update semantics
-are B10, so B14 should provide their usable path/settings inputs.
+Test slow hooks/fixtures together, failed setup, runtime timeout changes,
+cancellation, repeated teardown and native context/browser release. Retain B12
+soft-error visibility/classification while cleanup errors accumulate. Compare
+pinned fixture accounting before claiming upstream semantics; document Rust's
+setup/body/cleanup defaults and any explicit differences. Extend the existing
+fixtures rather than creating a disconnected fixture API. Keep B14 configuration
+snapshots/callbacks, output paths, serialized settings and CLI forwarding aligned
+if the budget model adds effective settings.
 
 Preserve B12's only-Expect soft collection, body-only expected-failure handling,
 setup/cleanup visibility, atomic sealing before artifact/context cleanup, weak
@@ -80,7 +74,7 @@ outer label/error/step/trace and Diagnostic typed causes, and B16's shared owner
 weak context graph and owned base_url getter. G04 remains open for channel lag,
 partial setup, detached in-flight requests and the final cross-feature audit.
 
-The scope of the longer session is **all 19 open tasks below**. Completed tasks
+The scope of the longer session is **all 18 open tasks below**. Completed tasks
 remain regression requirements. The deferred projects are future work; completing
 this checklist means practical parity within the stated engine capabilities,
 not complete Playwright compatibility.
@@ -93,27 +87,26 @@ there. G04 applies during every phase and closes after the final audit.
 
 | Order | Task | Implementation result | Dependency or capability gate |
 |---|---|---|---|
-| 1 | B14 | Effective project settings and read-only resolved configuration | Finish existing draft; library/CLI precedence and serialization |
-| 2 | B13 | Fixture timeouts and one shared teardown budget | Runner cancellation, failed setup and reverse teardown |
-| 3 | D01 | Optional CI failure on flaky tests and consistent focus protection | B14; existing retry/flaky classification |
-| 4 | D02 | Configurable assertion polling and retry intervals | Existing polling helpers, B12 and B13 budgets |
-| 5 | B09 | Supported screenshot options with reversible temporary changes | Native capture capabilities on each engine |
-| 6 | B10 | Stable screenshot comparisons, paths and update modes | B09; project/path settings from B14 |
-| 7 | B18 | Bounded ARIA snapshots with optional boxes and state | Existing DOM approximation; no full ARIA/YAML implementation |
-| 8 | B11 | Searchable portable reports with per-attempt network diagnostics | B02/B03/B19 complete; browser visual inspection |
-| 9 | D03 | Explicit artifact retention policies with valid report links | B14/B11; final attempt classification and bundle export |
-| 10 | D04 | Run/project metadata and configurable slow-test summaries | B14/B11; existing live/JSON/JUnit/HTML reporters |
-| 11 | D05 | Local/session storage enumeration and typed bulk helpers | Existing page storage APIs on both engines |
-| 12 | D06 | Socket identity, errors, closed state and bounded typed waits | Existing Chromium socket events; Firefox unsupported |
-| 13 | C01 | Validated PDF options | Chromium; explicit Firefox unsupported result |
-| 14 | C02 | Bounded captured-body bytes, text and JSON helpers | B02/B03 complete; Chromium body capture |
-| 15 | C03 | Coverage navigation/source options and restart lifecycle | Chromium JS/CSS coverage |
-| 16 | C04 | HAR matching, not-found and supported content options | A14/B06 complete; engine body/rewrite capabilities |
-| 17 | C05 | Supported media/device emulation options and resets | Chromium native capabilities |
-| 18 | C06 | Independently detachable CDP target sessions | Chromium transport and session ownership |
-| 19 | G04 | Final lifecycle, compatibility and resource-release audit | Evidence from every completed phase |
+| 1 | B13 | Fixture timeouts and one shared teardown budget | Runner cancellation, failed setup and reverse teardown |
+| 2 | D01 | Optional CI failure on flaky tests and consistent focus protection | B14; existing retry/flaky classification |
+| 3 | D02 | Configurable assertion polling and retry intervals | Existing polling helpers, B12 and B13 budgets |
+| 4 | B09 | Supported screenshot options with reversible temporary changes | Native capture capabilities on each engine |
+| 5 | B10 | Stable screenshot comparisons, paths and update modes | B09; project/path settings from B14 |
+| 6 | B18 | Bounded ARIA snapshots with optional boxes and state | Existing DOM approximation; no full ARIA/YAML implementation |
+| 7 | B11 | Searchable portable reports with per-attempt network diagnostics | B02/B03/B19 complete; browser visual inspection |
+| 8 | D03 | Explicit artifact retention policies with valid report links | B14/B11; final attempt classification and bundle export |
+| 9 | D04 | Run/project metadata and configurable slow-test summaries | B14/B11; existing live/JSON/JUnit/HTML reporters |
+| 10 | D05 | Local/session storage enumeration and typed bulk helpers | Existing page storage APIs on both engines |
+| 11 | D06 | Socket identity, errors, closed state and bounded typed waits | Existing Chromium socket events; Firefox unsupported |
+| 12 | C01 | Validated PDF options | Chromium; explicit Firefox unsupported result |
+| 13 | C02 | Bounded captured-body bytes, text and JSON helpers | B02/B03 complete; Chromium body capture |
+| 14 | C03 | Coverage navigation/source options and restart lifecycle | Chromium JS/CSS coverage |
+| 15 | C04 | HAR matching, not-found and supported content options | A14/B06 complete; engine body/rewrite capabilities |
+| 16 | C05 | Supported media/device emulation options and resets | Chromium native capabilities |
+| 17 | C06 | Independently detachable CDP target sessions | Chromium transport and session ownership |
+| 18 | G04 | Final lifecycle, compatibility and resource-release audit | Evidence from every completed phase |
 
-Immediate delivery: finish **B14**, then **B13**. D01/D02 strengthen CI and
+Immediate delivery: **B13**; B14 is complete. D01/D02 strengthen CI and
 assertions without adding a browser backend. Capture/report work comes next;
 D03/D04 consume its final artifact/report behavior. D05/D06 and the supported C
 extensions can then proceed independently. G04 is applied throughout and closed last.
@@ -153,7 +146,7 @@ contracts and pinned behavior; prefer extending existing options and helpers.
 | G04 | `operation.rs`, affected tests and parity documents | Audit every new API's deadlines/cancellation/disposal/retries, resource release and serialization; reconcile the complete test inventory and matrix. |
 
 The diagnostics group **B01/B04/B19**, ownership **B16** and locator labels
-**B17** and soft assertions **B12** are complete. The next delivery is the runner group **B14/B13**, and the capture/report
+**B17** and soft assertions **B12** are complete. B14 is complete; the next delivery is **B13**, then D01/D02 and the capture/report
 group **B09/B10/B18/B11**, with D01–D06 placed as in the remaining-work index.
 Implement the six C extensions after checking native
 capabilities, and finish with G04. Each delivery should have usable public APIs,
@@ -357,6 +350,15 @@ they do not constitute differential Playwright conformance coverage.
   expanded reports inspected and all three links per relocated engine resolved.
   Combined inventory: 378 checks. B14 is next; B13/G04 remain open.
 - G04 remains open until lifecycle coverage across all additions is complete.
+
+- `a7f1e45`: B14. All 365 E2E checks and 27 CLI/configuration checks passed,
+  with strict E2E/CLI/config Clippy, package formatting and generated matrix links.
+  Five native groups on full Chrome/Firefox compare four pinned runner observations
+  and verify effective configuration, actual owner identity, precedence, artifacts,
+  snapshot seeds, environment freezing, retries and backward-compatible report JSON.
+  Expanded reports and relocated bundles inspected; final units reran after the
+  empty legacy filter compatibility correction. Inventory: 164 units, 197
+  integrations/all 29 targets and four doctests; combined total 392 checks.
 
 ## G — Foundations for the larger session
 
@@ -740,11 +742,23 @@ their dependencies are ready. References include
   operation overrides bounded by it. Done when slow hooks/fixtures, failed setup,
   reverse teardown and cancellation produce all relevant errors without silently
   skipping cleanup. Preserve zero-timeout semantics and test existing defaults.
-- [ ] **B14 — Effective project/configuration metadata (M).** Extend Project and
+- [x] **B14 — Effective project/configuration metadata (M).** Extend Project and
   report metadata with missing per-project grep-invert, output/snapshot paths and
   repetition settings; expose resolved configuration read-only. Done when global/
   project/suite/test precedence, defaults and explicit overrides are tested and
   CLI forwarding matches library configuration. Project dependency scheduling is deferred.
+  Evidence: `a7f1e45`; five native `effective_configuration.rs` groups on full
+  Chrome/Firefox and four actual pinned runner observations. Shared TOML/JSON,
+  actual CLI child forwarding, filters/tag exclusion, zero defaults, repetition/
+  sharding, whole-context/suite/test precedence, runtime timeout/retries, actual
+  supplied/dedicated identities and released owners, project artifact/snapshot
+  paths, startup errors, historical JSON and isolated environment freezing verified.
+  Final 365 E2E/27 CLI/config checks, strict Clippy, package formatting and all
+  generated evidence links passed. Final units reran after empty legacy filter
+  compatibility was preserved. Expanded/relocated reports inspected; all 12 links
+  per preview resolve. Project dependencies and B10 path/stabilization semantics
+  remain excluded; current creation inputs are described accurately in parity notes.
+
 
 ### Useful convenience and diagnostic APIs
 
@@ -974,7 +988,7 @@ waiting for every future feature before starting independent work.
 | 1. Network observations | B02, B03 — complete | Typed per-hop request/response identity and completion independent of body capture. Verified in `1a9e875`; continue with phase 2. |
 | 2. HTTP and routing correctness | B05/B06/B07/B08 — complete | Context-linked fetch/fulfill options verified in `c88c14b`. Preserve shared HTTP, route lifecycle, duplicate-header forwarding and pinned precedence regressions. |
 | 3. Native event diagnostics | B01/B04/B19 — complete | Preserve frame/load/dialog observations (`f8c12de`), earliest popup traffic (`1ec7e3e`) and structured console/error data (`34890cc`) through ownership and runner changes. |
-| 4. Runner and developer APIs | B16/B17/B12 complete; B14, B13 remaining | Preserve shared ownership (`1e4d3bb`), labeled diagnostics (`8ae438c`) and soft collection (`0ee8245`), then add effective configuration and fixture/shared cleanup budgets. Budget changes need broader runner regressions. |
+| 4. Runner and developer APIs | B16/B17/B12/B14 complete; B13 remaining | Preserve shared ownership (`1e4d3bb`), labeled diagnostics (`8ae438c`) and soft collection (`0ee8245`), effective configuration (`a7f1e45`) is verified; add fixture/shared cleanup budgets next. Budget changes need broader runner regressions. |
 | 4a. CI and assertion reliability | D01, D02 | Extend flaky-run policy/focus wiring and generic polling options using the resolved configuration and fixture/operation budgets. |
 | 5. Captures and reports | B09, B10, B18, B11 | Implement capture options before stabilized comparisons; add bounded ARIA output and searchable per-attempt reports using the earlier network/error data. |
 | 5a. Practical storage and diagnostics | D03, D04, D05, D06 | Complete output retention, run metadata/slow summaries, typed Web Storage helpers and bounded Chromium socket diagnostics after their prerequisites. |
@@ -1050,7 +1064,7 @@ also need formatting checks for the modified packages.
 
 Copyable request for the implementation session:
 
-> Implement all 19 open tasks (B14/B13, D01/D02, B09/B10/B18/B11, D03–D06,
+> Implement all 18 open tasks (B13, D01/D02, B09/B10/B18/B11, D03–D06,
 > C01–C06 and G04) in E2E-PARITY-TODO.md using the recommended remaining
 > phases, dependencies and completion criteria. Preserve the already verified
 > features. Implement all practical
