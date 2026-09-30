@@ -47,6 +47,7 @@ mod bundle;
 mod callbacks;
 mod cdp;
 mod config;
+mod console;
 mod context;
 mod context_cookies;
 mod cookie_filter;
@@ -89,6 +90,9 @@ pub use bundle::ReportBundle;
 pub use callbacks::BindingSource;
 pub use cdp::CdpConnection;
 pub use config::config_from_env;
+pub use console::{
+    ConsoleArgument, ConsoleArgumentValue, ConsoleArguments, ErrorStackFrame, PageErrorInfo,
+};
 pub use context::{
     BrowserContext, ContextEvent, ContextEventKind, ContextOptions, ServiceWorkerMode,
     TracingOptions,
@@ -121,7 +125,7 @@ pub use page::{
     MouseButton, MouseClickOptions, NavigationOptions, NetworkRequest, Page, PageEvent,
     PageEventKind, RecordedRequest, ReducedMotion, RouteAction, RouteFromHarOptions, RouteHandler,
     RouteHandlerEntry, RouteInfo, RouteRule, ScreenshotOptions, StorageEntry, StorageOrigin,
-    StorageState, Viewport, WebSocketDirection, WebSocketEvent,
+    StorageState, TraceEntry, Viewport, WebSocketDirection, WebSocketEvent,
 };
 pub use popup_capture::{PopupAdoption, PopupDiagnostics, PopupDiagnosticsHistory};
 pub use report::{

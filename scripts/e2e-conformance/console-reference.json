@@ -1,0 +1,53 @@
+{
+  "playwright": "1.63.0",
+  "engine": "chromium",
+  "browser": "153.0.8010.12",
+  "cases": [
+    {
+      "name": "primitive-arguments",
+      "result": [
+        {
+          "kind": "string",
+          "value": "metadata"
+        },
+        {
+          "kind": "undefined"
+        },
+        {
+          "kind": "null",
+          "value": null
+        },
+        {
+          "kind": "number",
+          "special": "NaN"
+        },
+        {
+          "kind": "number",
+          "special": "Infinity"
+        },
+        {
+          "kind": "number",
+          "special": "-0"
+        },
+        {
+          "kind": "undefined"
+        },
+        {
+          "kind": "symbol"
+        },
+        {
+          "kind": "function"
+        }
+      ]
+    },
+    {
+      "name": "mutable-error-name",
+      "result": {
+        "name": "RenamedError",
+        "message": "structured error",
+        "inner": true,
+        "outer": true
+      }
+    }
+  ]
+}

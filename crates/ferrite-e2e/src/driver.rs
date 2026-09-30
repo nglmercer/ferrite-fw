@@ -534,7 +534,11 @@ impl ConsoleSink {
                     .push(message.clone());
             }
         }
-        self.record("console", format!("{}: {}", message.kind, message.text));
+        self.record_with_console(
+            "console",
+            format!("{}: {}", message.kind, message.text),
+            Some(Box::new(message.clone())),
+        );
         self.emit(PageEvent::Console(message));
     }
 
@@ -592,6 +596,14 @@ impl ConsoleSink {
 
     /// Record a trace entry.
     pub fn record(&self, kind: &str, detail: String) {
+        self.record_with_console(kind, detail, None);
+    }
+    fn record_with_console(
+        &self,
+        kind: &str,
+        detail: String,
+        console: Option<Box<ConsoleMessage>>,
+    ) {
         let ts_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis().min(u128::from(u64::MAX)) as u64)
@@ -601,6 +613,7 @@ impl ConsoleSink {
                 ts_ms,
                 kind: kind.to_string(),
                 detail,
+                console,
             });
         }
     }
@@ -5443,6 +5456,8 @@ fn console_metadata(
         location,
         timestamp_ms,
         page_id: None,
+        arguments: None,
+        error: None,
     }
 }
 fn console_location(value: &Value) -> Option<crate::ConsoleLocation> {
@@ -5484,12 +5499,14 @@ fn handle_bidi_event(event: &BidiEvent, sink: &ConsoleSink) {
             } else {
                 text.to_string()
             };
-            sink.push_console(console_metadata(
-                kind,
-                text,
-                &event.params,
-                &event.params["timestamp"],
-            ));
+            let mut message =
+                console_metadata(kind, text, &event.params, &event.params["timestamp"]);
+            if entry_type == "console" {
+                message.arguments = crate::console::arguments(&event.params["args"], true);
+            } else if entry_type == "javascript" {
+                message.error = Some(Box::new(crate::console::error(&event.params, true)));
+            }
+            sink.push_console(message);
         }
         "network.beforeRequestSent" => {
             if event.params["redirectCount"].as_u64().unwrap_or(0) > 0 {
@@ -6186,12 +6203,10 @@ fn handle_cdp_event(event: &CdpEvent, sink: &ConsoleSink) {
                         .join(" ")
                 })
                 .unwrap_or_default();
-            sink.push_console(console_metadata(
-                kind,
-                args,
-                &event.params,
-                &event.params["timestamp"],
-            ));
+            let mut message =
+                console_metadata(kind, args, &event.params, &event.params["timestamp"]);
+            message.arguments = crate::console::arguments(&event.params["args"], false);
+            sink.push_console(message);
         }
         "Runtime.exceptionThrown" => {
             let details = &event.params["exceptionDetails"];
@@ -6200,18 +6215,22 @@ fn handle_cdp_event(event: &CdpEvent, sink: &ConsoleSink) {
                 .or_else(|| details["text"].as_str())
                 .unwrap_or("page exception")
                 .to_owned();
-            sink.push_console(console_metadata(
+            let mut message = console_metadata(
                 "exception".into(),
                 text,
                 details,
                 &event.params["timestamp"],
-            ));
+            );
+            message.error = Some(Box::new(crate::console::error(details, false)));
+            sink.push_console(message);
         }
         "Log.entryAdded" => {
             let entry = &event.params["entry"];
             let kind = entry["level"].as_str().unwrap_or("log").to_string();
             let text = entry["text"].as_str().unwrap_or_default().to_string();
-            sink.push_console(console_metadata(kind, text, entry, &entry["timestamp"]));
+            let mut message = console_metadata(kind, text, entry, &entry["timestamp"]);
+            message.arguments = crate::console::arguments(&entry["args"], false);
+            sink.push_console(message);
         }
         "Network.requestWillBeSent" => {
             let id = event.params["requestId"].as_str().unwrap_or_default();

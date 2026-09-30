@@ -1,0 +1,153 @@
+[
+  {
+    "type": "event",
+    "method": "log.entryAdded",
+    "params": {
+      "type": "console",
+      "method": "log",
+      "source": {
+        "realm": "native-reference-1",
+        "context": "native-reference-2",
+        "userContext": "native-reference-3"
+      },
+      "args": [
+        {
+          "type": "string",
+          "value": "metadata"
+        },
+        {
+          "type": "undefined"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "number",
+          "value": "NaN"
+        },
+        {
+          "type": "number",
+          "value": "Infinity"
+        },
+        {
+          "type": "number",
+          "value": "-0"
+        },
+        {
+          "type": "bigint",
+          "value": "12"
+        },
+        {
+          "type": "symbol"
+        },
+        {
+          "type": "function"
+        },
+        {
+          "type": "object",
+          "internalId": "native-reference-4",
+          "value": [
+            [
+              "answer",
+              {
+                "type": "number",
+                "value": 42
+              }
+            ],
+            [
+              "self",
+              {
+                "type": "object",
+                "internalId": "native-reference-4"
+              }
+            ]
+          ]
+        },
+        {
+          "type": "object",
+          "value": [
+            [
+              "array",
+              {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "number",
+                    "value": 1
+                  },
+                  {
+                    "type": "string",
+                    "value": "x"
+                  }
+                ]
+              }
+            ],
+            [
+              "obj",
+              {
+                "type": "object",
+                "value": [
+                  [
+                    "nested",
+                    {
+                      "type": "boolean",
+                      "value": true
+                    }
+                  ]
+                ]
+              }
+            ]
+          ]
+        },
+        {
+          "type": "error",
+          "value": {}
+        }
+      ],
+      "level": "info",
+      "text": "metadata undefined null NaN Infinity -0 12 symbol function Object(2) Object(2) Error: console error",
+      "timestamp": 1,
+      "stackTrace": {
+        "callFrames": [
+          {
+            "columnNumber": 53,
+            "functionName": "",
+            "lineNumber": 0,
+            "url": "metadata-fixture.js"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "event",
+    "method": "log.entryAdded",
+    "params": {
+      "type": "javascript",
+      "level": "error",
+      "source": {
+        "realm": "native-reference-1",
+        "context": "native-reference-2",
+        "userContext": "native-reference-3"
+      },
+      "text": "RenamedError: structured error",
+      "timestamp": 1,
+      "stackTrace": {
+        "callFrames": [
+          {
+            "columnNumber": 242,
+            "functionName": "",
+            "lineNumber": 0,
+            "url": "metadata-fixture.js"
+          },
+          {
+            "columnNumber": 228,
+            "functionName": "",
+            "lineNumber": 0,
+            "url": "metadata-fixture.js"
+          }
+        ]
+      }
+    }
+  }
+]

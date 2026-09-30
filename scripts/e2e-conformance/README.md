@@ -39,6 +39,29 @@ FERRITE_E2E_REQUIRE_BOTH_BROWSERS=1 cargo test -p ferrite-e2e --test core_confor
 Node/Playwright are optional development tooling and are not dependencies of
 Ferrite's library or its normal Rust test command.
 
+`console-reference.mjs` / `console-reference.json` record two actual Playwright
+1.63.0 Chromium cases: typed primitive console arguments and an uncaught TypeError
+whose mutable name differs from its constructor. Regenerate with
+`npm run reference:console`, or the external installation above and
+`node scripts/e2e-conformance/console-reference.mjs`.
+
+`cargo test -p ferrite-e2e --test structured_console` compares shared primitive
+semantics on Chromium/Firefox and the available native error name/message on
+Chromium. Firefox supplies text/frames without separate name/message fields;
+these remain unavailable. The pinned Playwright console bigint handle evaluates
+as undefined in this run. Ferrite deliberately retains the native bigint value
+from CDP/BiDi; the comparison records this difference rather than replacing its
+reference result. Complex native previews do not claim full JSHandle.jsonValue()
+or remote argument-handle parity.
+
+The three native groups additionally verify source identity, forwarding, stack
+frames, null roundtrip, argument caps, closure/disposal and popup retry/trace/report
+retention. `tests/fixtures/console-{cdp,bidi}.json` are actual Chrome 153/Firefox 157
+wire observations with timestamps and ownership IDs normalized. Their unit checks
+verify field absence, mutable error names, cycle references, Unicode-safe limits,
+async supplied stacks and older JSON. Native remote references are never retained
+in Ferrite's serialized previews.
+
 `popup-reference.mjs` / `popup-reference.json` record two actual Playwright
 1.63.0 Chromium cases: initial-script console/error/fetch observations and four
 concurrent popups that synchronously dispatch an HTTP request before immediate

@@ -1147,6 +1147,71 @@ fn render_console(out: &mut String, messages: &[crate::ConsoleMessage]) {
         if let Some(page) = &message.page_id {
             out.push_str(&format!("<div>page: {}</div>", xml_escape(page)));
         }
+        if let Some(error) = &message.error {
+            out.push_str("<details><summary>Structured page error</summary>");
+            for (label, value) in [
+                ("Name", &error.name),
+                ("Message", &error.message),
+                ("Constructor", &error.class_name),
+            ] {
+                if let Some(value) = value {
+                    out.push_str(&format!("<div>{label}: {}</div>", xml_escape(value)));
+                }
+            }
+            if let Some(stack) = &error.stack {
+                out.push_str(&format!("<pre>{}</pre>", xml_escape(stack)));
+            }
+            for frame in &error.frames {
+                out.push_str(&format!(
+                    "<div>{}{} · {}:{}:{}{}</div>",
+                    if frame.async_stack { "async " } else { "" },
+                    xml_escape(frame.function_name.as_deref().unwrap_or("unknown function")),
+                    xml_escape(frame.url.as_deref().unwrap_or("unknown source")),
+                    frame
+                        .line
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "?".into()),
+                    frame
+                        .column
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "?".into()),
+                    frame
+                        .async_description
+                        .as_ref()
+                        .map(|v| format!(" · {}", xml_escape(v)))
+                        .unwrap_or_default()
+                ));
+            }
+            if let Some(thrown) = &error.thrown {
+                out.push_str(&format!(
+                    "<pre>Thrown value: {}</pre>",
+                    xml_escape(&serde_json::to_string(thrown).unwrap_or_default())
+                ));
+            }
+            if error.truncated {
+                out.push_str("<div>Error metadata truncated</div>");
+            }
+            out.push_str("</details>");
+        }
+        if let Some(arguments) = &message.arguments {
+            out.push_str(&format!(
+                "<details><summary>Console arguments: {} ({} omitted{})</summary><ol>",
+                arguments.values.len(),
+                arguments.dropped_arguments,
+                if arguments.truncated {
+                    "; truncated"
+                } else {
+                    ""
+                }
+            ));
+            for argument in &arguments.values {
+                out.push_str(&format!(
+                    "<li><pre>{}</pre></li>",
+                    xml_escape(&serde_json::to_string_pretty(argument).unwrap_or_default())
+                ));
+            }
+            out.push_str("</ol></details>");
+        }
         out.push_str("</li>");
     }
     out.push_str("</ul></details>");

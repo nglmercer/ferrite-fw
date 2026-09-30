@@ -506,6 +506,56 @@ loss independently of eventual adoption success. No Page/context/remote handles
 are retained in returned snapshots. Exhaustive `AttemptResult` literals need
 `popup_diagnostics: Default::default()`; older JSON without that field still loads.
 
+`ConsoleMessage::arguments` contains owned native previews with explicit value
+states, and `error` contains optional native page-error metadata:
+
+```rust,ignore
+use ferrite_e2e::ConsoleArgumentValue;
+for message in ctx.context.console_messages() {
+    if let Some(error) = &message.error {
+        println!("name={:?}, constructor={:?}, message={:?}",
+            error.name, error.class_name, error.message);
+        for frame in &error.frames {
+            println!("{:?} {:?}:{:?}:{:?}",
+                frame.function_name, frame.url, frame.line, frame.column);
+        }
+    }
+    if let Some(arguments) = &message.arguments {
+        for argument in &arguments.values {
+            match &argument.value {
+                ConsoleArgumentValue::Json(value) => println!("JSON: {value}"),
+                ConsoleArgumentValue::Preview(value) => println!("Native preview: {value}"),
+                ConsoleArgumentValue::Unserializable(value) => println!("Special: {value}"),
+                ConsoleArgumentValue::Unavailable => println!("No native by-value data"),
+            }
+        }
+    }
+}
+```
+
+JSON null has its own tagged value and survives roundtrips. Undefined, nonfinite
+numbers, negative zero and bigints retain native special-value spelling. Function/
+symbol or object references can be unavailable; object previews are partial native
+CDP property lists or BiDi typed values, not live handles or complete JSON objects.
+Remote ownership identifiers are removed, with `remote_reference` recording their
+presence. Native object keys named `handle` remain intact when they are ordinary
+by-value JSON data.
+
+Argument previews retain at most 64 arguments and 32 KiB per message. Strings
+are capped at 4 KiB, containers at 32 entries and traversal at 256 nodes. JSON
+depth is capped at six; native encoding permits 24 levels to accommodate BiDi's
+typed mapping wrappers. Truncation and omitted-argument counts are explicit. Error metadata has
+an independent 32 KiB bound and at most 64 frames/eight supplied async stack
+segments. Missing name/message fields stay None: Firefox currently supplies
+uncaught-error text/frames rather than separate name/message fields. Chrome's
+constructor class is not substituted for the mutable Error.name.
+
+Page/context events, popup history, per-attempt JSON/HTML and console trace entries
+retain the same structured data after closure and retries. The existing `text`
+field keeps its rendering contract. Exhaustive `ConsoleMessage` literals need
+`arguments: None, error: None`, and `TraceEntry` literals need `console: None`;
+older console JSON omitting the new fields loads with None.
+
 Typed synthetic events and richer assertions are available through explicit
 options APIs:
 

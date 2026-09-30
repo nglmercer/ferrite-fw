@@ -20,7 +20,7 @@ Partial means the listed limitation must be retained in API/docs/test evidence.
 | Typed request/response metadata and completion | Supported | Supported | Per-hop identity, page/frame ownership, bounded weak redirect history; completion independent of body capture |
 | Native headers and request POST text | Partial | Partial | Chromium extra headers require native hop flags; Firefox can fold repeated fields and omit POST text/resource destination; completeness remains optional |
 | API/header lookup and route fulfillment pairs | Supported | Supported | Case-insensitive lookup and duplicate-preserving serialized arrays; acknowledged route headers have an explicit source flag when native events omit/fold them. Firefox 156/157 omits first-hop synthetic redirect response/completion events; that observation settles unavailable. |
-| Console/error metadata and attempt history | Supported | Supported | Unknown source/timestamp fields remain None; page identity retained |
+| Console/error metadata and attempt history | Supported | Supported | Source/timestamp/page identity, bounded tagged native argument previews and owned stack frames retained through attempts/traces. Unknown fields remain None; Firefox uncaught logs provide no separate error name/message. Chrome constructor class is not Error.name; remote argument handles/IDs are excluded. |
 | In-memory/path uploads | Supported | Supported | DOM File/DataTransfer injection, 64 MiB total; no chooser/directories |
 | Page/context functions and bindings | Supported | Supported | JSON sync/async callbacks; main/same-origin frames; startup preload and named removal; cross-origin/handles excluded |
 | Page clocks | Partial | Partial | Document-local virtual-time semantics documented in parity audit |

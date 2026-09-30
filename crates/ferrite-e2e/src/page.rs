@@ -85,6 +85,12 @@ pub struct ConsoleMessage {
     /// Owning page target/context ID, matching ContextEvent.page_id.
     #[serde(default)]
     pub page_id: Option<String>,
+    /// Bounded native argument data. None means the event supplied no arguments.
+    #[serde(default)]
+    pub arguments: Option<crate::ConsoleArguments>,
+    /// Optional native uncaught-error metadata; constructor class is not Error.name.
+    #[serde(default)]
+    pub error: Option<Box<crate::PageErrorInfo>>,
 }
 
 /// HTTP credentials for basic and digest auth challenges.
@@ -1417,7 +1423,7 @@ impl RouteRule {
 }
 
 /// One recorded trace entry (actions, navigations, console).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TraceEntry {
     /// Milliseconds since the Unix epoch.
     pub ts_ms: u64,
@@ -1425,6 +1431,9 @@ pub struct TraceEntry {
     pub kind: String,
     /// Human-readable detail.
     pub detail: String,
+    /// Owned structured console/error payload for console entries.
+    #[serde(default)]
+    pub console: Option<Box<ConsoleMessage>>,
 }
 
 /// Element state snapshot for one selector.

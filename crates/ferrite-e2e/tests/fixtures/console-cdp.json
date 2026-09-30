@@ -1,0 +1,194 @@
+[
+  {
+    "method": "Runtime.consoleAPICalled",
+    "params": {
+      "type": "log",
+      "args": [
+        {
+          "type": "string",
+          "value": "metadata"
+        },
+        {
+          "type": "undefined"
+        },
+        {
+          "type": "object",
+          "subtype": "null",
+          "value": null
+        },
+        {
+          "type": "number",
+          "unserializableValue": "NaN",
+          "description": "NaN"
+        },
+        {
+          "type": "number",
+          "unserializableValue": "Infinity",
+          "description": "Infinity"
+        },
+        {
+          "type": "number",
+          "unserializableValue": "-0",
+          "description": "-0"
+        },
+        {
+          "type": "bigint",
+          "unserializableValue": "12n",
+          "description": "12n"
+        },
+        {
+          "type": "symbol",
+          "description": "Symbol(mark)",
+          "objectId": "native-reference-1"
+        },
+        {
+          "type": "function",
+          "className": "Function",
+          "description": "function named(){}",
+          "objectId": "native-reference-2"
+        },
+        {
+          "type": "object",
+          "className": "Object",
+          "description": "Object",
+          "objectId": "native-reference-3",
+          "preview": {
+            "type": "object",
+            "description": "Object",
+            "overflow": false,
+            "properties": [
+              {
+                "name": "answer",
+                "type": "number",
+                "value": "42"
+              },
+              {
+                "name": "self",
+                "type": "object",
+                "value": "Object"
+              }
+            ]
+          }
+        },
+        {
+          "type": "object",
+          "className": "Object",
+          "description": "Object",
+          "objectId": "native-reference-4",
+          "preview": {
+            "type": "object",
+            "description": "Object",
+            "overflow": false,
+            "properties": [
+              {
+                "name": "array",
+                "type": "object",
+                "value": "Array(2)",
+                "subtype": "array"
+              },
+              {
+                "name": "obj",
+                "type": "object",
+                "value": "Object"
+              }
+            ]
+          }
+        },
+        {
+          "type": "object",
+          "subtype": "error",
+          "className": "Error",
+          "description": "Error: console error\n    at metadata-fixture.js:1:190",
+          "objectId": "native-reference-5",
+          "preview": {
+            "type": "object",
+            "subtype": "error",
+            "description": "Error: console error\n    at metadata-fixture.js:1:190",
+            "overflow": false,
+            "properties": [
+              {
+                "name": "stack",
+                "type": "string",
+                "value": "Error: console error\n    at metadata-fixture.js:1:190"
+              },
+              {
+                "name": "message",
+                "type": "string",
+                "value": "console error"
+              }
+            ]
+          }
+        }
+      ],
+      "executionContextId": 1,
+      "timestamp": 1,
+      "stackTrace": {
+        "callFrames": [
+          {
+            "functionName": "",
+            "scriptId": "3",
+            "url": "metadata-fixture.js",
+            "lineNumber": 0,
+            "columnNumber": 53
+          }
+        ]
+      }
+    }
+  },
+  {
+    "method": "Runtime.exceptionThrown",
+    "params": {
+      "timestamp": 1,
+      "exceptionDetails": {
+        "exceptionId": 1,
+        "text": "Uncaught",
+        "lineNumber": 0,
+        "columnNumber": 242,
+        "scriptId": "3",
+        "url": "metadata-fixture.js",
+        "stackTrace": {
+          "callFrames": [
+            {
+              "functionName": "",
+              "scriptId": "3",
+              "url": "metadata-fixture.js",
+              "lineNumber": 0,
+              "columnNumber": 242
+            }
+          ]
+        },
+        "exception": {
+          "type": "object",
+          "subtype": "error",
+          "className": "TypeError",
+          "description": "RenamedError: structured error\n    at metadata-fixture.js:1:243",
+          "objectId": "native-reference-6",
+          "preview": {
+            "type": "object",
+            "subtype": "error",
+            "description": "RenamedError: structured error\n    at metadata-fixture.js:1:243",
+            "overflow": false,
+            "properties": [
+              {
+                "name": "name",
+                "type": "string",
+                "value": "RenamedError"
+              },
+              {
+                "name": "stack",
+                "type": "string",
+                "value": "RenamedError: structured error\n    at metadata-fixture.js:1:243"
+              },
+              {
+                "name": "message",
+                "type": "string",
+                "value": "structured error"
+              }
+            ]
+          }
+        },
+        "executionContextId": 1
+      }
+    }
+  }
+]

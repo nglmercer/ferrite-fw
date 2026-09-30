@@ -19,9 +19,9 @@ reporter, Android and Electron APIs:
 | Classification | Members | Meaning |
 |---|---:|---|
 | Equivalent | 15 | Counterpart for the basic operation/value, without full options or engine compatibility |
-| Partial | 613 | Related exposed operation with material semantic, option or engine differences |
+| Partial | 617 | Related exposed operation with material semantic, option or engine differences |
 | Idiomatic | 41 | Comparable operation through Rust language/library facilities |
-| Missing | 349 | No dedicated public counterpart |
+| Missing | 345 | No dedicated public counterpart |
 
 These counts describe an inventory, **not a behavioral compatibility
 percentage**. The earlier inventory had 458 Partial and 503 Missing members.
@@ -70,7 +70,7 @@ implementation.
 | API testing | Query/headers/JSON/form/raw/multipart, hop cookies, TLS/proxy, scoped preemptive/challenge Basic auth, bounded manual redirects, reset retries and status checks | Legacy preemptive default; client-scoped TLS settings, no automatic compression decoding or full upstream option surface; returned buffers are independently owned |
 | Browser/API storage | Context-linked cookies in both directions; isolated protocol cookie partitions; Playwright cookies/origins localStorage JSON; Page/context API clients inherit transport defaults at creation | Redirect/partition/SameSite details remain narrower; no IndexedDB/OPFS snapshots |
 | HTTP credentials | Browser challenge authentication on Chromium, preserving extra headers; explicit preemptive Basic helper | Firefox challenge credentials unsupported; cached-auth clearing is approximate |
-| Callbacks and buffers | Page/context sync/async functions and bindings, startup preloads, navigation/removal lifecycle; console/error metadata and attempt history | JSON arguments, polled bounded dispatch and main/same-origin frames; no cross-origin/worker/handle dispatch |
+| Callbacks and buffers | Page/context sync/async functions and bindings, startup preloads, navigation/removal lifecycle; structured console/error metadata and attempt history | JSON callbacks, polled bounded dispatch and main/same-origin frames; bounded native argument previews, optional error fields; no cross-origin/worker/handle dispatch |
 | Downloads | Chromium download behavior/cancellation scoped to the owning context; completed-file deduplication | File-based lifecycle, limited Firefox URL/failure/cancellation metadata |
 | Coverage | Dedicated Chromium JS/CSS coverage controller with sources and usage ranges | Native V8/CSS ranges, without Playwright flattening/navigation options; Firefox unsupported |
 
@@ -932,6 +932,64 @@ the broad browser/routing/core batches used Chrome Headless Shell and Firefox.
 Strict E2E/CLI Clippy, formatting and regenerated source links passed. The actual
 pinned reference reproduced exactly. Expanded native retry reports were visually
 inspected for both engines; all seven artifact links per relocated bundle resolved.
+
+### Structured errors and console values
+
+`ConsoleMessage::arguments` exposes up to 64 owned `ConsoleArgument` records.
+The value enum distinguishes tagged JSON (including null), partial native previews,
+unserializable primitive spelling and unavailable by-value data. CDP supplies
+property previews; BiDi supplies typed nested values. These are not complete
+JSHandle.jsonValue() results. Remote ownership identifiers are stripped, with a
+boolean recording reference presence; cyclic references remain explicit partial
+typed previews. Ordinary by-value JSON keys are preserved.
+
+The argument payload has a 32 KiB serialized bound, with 4 KiB strings, 32-entry
+containers and 256 traversed nodes. JSON depth is capped at six; native encoding
+permits 24 levels for typed BiDi wrappers. Truncation/omitted arguments are
+explicit. Existing rendered console text remains unchanged. Native bigints retain
+their spelling (CDP `12n`, BiDi `12`): actual pinned Playwright 1.63 instead returned
+an undefined console argument handle for this value. The corpus records that
+difference and compares the remaining primitive values directly.
+
+Uncaught errors expose boxed `PageErrorInfo` with optional own native name/message/
+stack, constructor class, description, supplied stack frames and a thrown-value
+preview when available. Constructor class is never substituted for Error.name.
+Firefox's uncaught log supplies text/frames without separate name/message or thrown
+object fields; these remain None. Error data has an independent 32 KiB bound and
+at most 64 frames/eight supplied async stack segments; positions remain zero-based
+and unavailable coordinates remain optional. No property getter/evaluation or
+remote-handle lifetime is introduced to fill unavailable fields.
+
+The WebError mapping also recognizes existing native page identity/source location
+fields on ConsoleMessage; the prior Missing location label was an audit omission.
+These optional snapshots remain narrower than upstream's live WebError/Page/Error
+objects and always-present location accessor.
+
+The owned payload forwards once through Page/context events, Page/context/popup
+history, attempt reports and trace JSON. Console `TraceEntry` records also retain
+the full message; other entries keep None. Portable HTML expands structured errors
+and console arguments with escaped diagnostic text. Returned snapshots remain
+usable after Page/context/browser disposal and retries retain separate source IDs.
+
+Migration: exhaustive `ConsoleMessage` literals require `arguments: None` and
+`error: None`; exhaustive `TraceEntry` literals require `console: None`. TraceEntry
+is now exported and deserializable for typed consumers. Older console/trace JSON
+missing the added fields deserializes with None. The [native regressions](crates/ferrite-e2e/tests/structured_console.rs)
+compare the pinned corpus, forwarding/trace identity, live caps, closure/disposal
+and popup retry/report retention. Actual normalized CDP/BiDi wire fixtures cover
+null roundtrip, mutable error names, field absence, Unicode limits and async stacks.
+
+Validation: all 338 E2E checks passed (155 units, 180 integrations across all
+25 targets and three doctests), plus 23 CLI/configuration checks. Three structured
+console groups and the runner/report/popup batch ran on full Chrome 153/Firefox
+157; broad browser/core/routing batches used Headless Shell/Firefox. Strict Clippy,
+formatting and regenerated matrix links passed. The two actual pinned cases compare
+shared primitives and available Chromium error fields, with the observed bigint
+handle difference explicit. Expanded reports/argument sections were inspected on
+both engines and all seven artifact links per relocated retry bundle resolved.
+Visual inspection exposed overly strict counting of BiDi encoding wrappers;
+the adjusted native-depth limit preserves ordinary nested values, with final unit
+and live-browser regressions verifying the byte/node/container limits and JSON.
 
 ### Completed download I/O
 
