@@ -571,8 +571,7 @@ impl LocatorExpect {
         Fut: std::future::Future<Output = E2eResult<bool>>,
     {
         self.locator
-            .page()
-            .auto_step_local(
+            .diagnostic_step_local(
                 format!("expect.satisfies {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 async {
@@ -593,8 +592,7 @@ impl LocatorExpect {
     /// Assert normalized text with a Rust regular expression.
     pub async fn text_matches(&self, pattern: &str) -> E2eResult<()> {
         self.locator
-            .page()
-            .auto_step(
+            .diagnostic_step(
                 format!("expect.text_matches {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 async {
@@ -613,8 +611,7 @@ impl LocatorExpect {
     /// Assert an attribute with a Rust regular expression.
     pub async fn attribute_matches(&self, name: &str, pattern: &str) -> E2eResult<()> {
         self.locator
-            .page()
-            .auto_step(
+            .diagnostic_step(
                 format!("expect.attribute_matches {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 async {
@@ -638,8 +635,7 @@ impl LocatorExpect {
     /// Assert the exact class attribute.
     pub async fn class(&self, expected: &str) -> E2eResult<()> {
         self.locator
-            .page()
-            .auto_step(
+            .diagnostic_step(
                 format!("expect.class {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 async { self.attribute("class", expected).await },
@@ -650,8 +646,7 @@ impl LocatorExpect {
     /// Assert all selected values of a multiple select.
     pub async fn values(&self, expected: &[&str]) -> E2eResult<()> {
         self.locator
-            .page()
-            .auto_step(
+            .diagnostic_step(
                 format!("expect.values {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 async {
@@ -667,8 +662,7 @@ impl LocatorExpect {
     /// Assert normalized text contents for the complete ordered element list.
     pub async fn texts(&self, expected: &[&str]) -> E2eResult<()> {
         self.locator
-            .page()
-            .auto_step(
+            .diagnostic_step(
                 format!("expect.texts {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 async {
@@ -697,8 +691,7 @@ impl LocatorExpect {
     /// Assert the computed ARIA role.
     pub async fn role(&self, expected: &str) -> E2eResult<()> {
         self.locator
-            .page()
-            .auto_step(
+            .diagnostic_step(
                 format!("expect.role {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 async {
@@ -714,8 +707,7 @@ impl LocatorExpect {
     /// Assert the associated ARIA error message.
     pub async fn accessible_error_message(&self, expected: &str) -> E2eResult<()> {
         self.locator
-            .page()
-            .auto_step(
+            .diagnostic_step(
                 format!(
                     "expect.accessible_error_message {}",
                     self.locator.selector()
@@ -734,8 +726,7 @@ impl LocatorExpect {
     /// Assert the element's indented accessibility tree.
     pub async fn aria_snapshot(&self, expected: &str) -> E2eResult<()> {
         self.locator
-            .page()
-            .auto_step(
+            .diagnostic_step(
                 format!("expect.aria_snapshot {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 async {
@@ -766,8 +757,7 @@ impl LocatorExpect {
     /// Assert the element is visible.
     pub async fn visible(&self) -> E2eResult<()> {
         self.locator
-            .page()
-            .auto_step(
+            .diagnostic_step(
                 format!("expect.visible {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 async {
@@ -803,8 +793,7 @@ impl LocatorExpect {
     /// Assert the element is hidden or absent.
     pub async fn hidden(&self) -> E2eResult<()> {
         self.locator
-            .page()
-            .auto_step(
+            .diagnostic_step(
                 format!("expect.hidden {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 async {
@@ -837,8 +826,7 @@ impl LocatorExpect {
     /// Assert the exact trimmed text.
     pub async fn text(&self, expected: &str) -> E2eResult<()> {
         self.locator
-            .page()
-            .auto_step(
+            .diagnostic_step(
                 format!("expect.text {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 async {
@@ -879,8 +867,7 @@ impl LocatorExpect {
     /// Assert the text contains a fragment.
     pub async fn contains_text(&self, fragment: &str) -> E2eResult<()> {
         self.locator
-            .page()
-            .auto_step(
+            .diagnostic_step(
                 format!("expect.contains_text {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 async {
@@ -921,8 +908,7 @@ impl LocatorExpect {
     /// Assert the form value.
     pub async fn value(&self, expected: &str) -> E2eResult<()> {
         self.locator
-            .page()
-            .auto_step(
+            .diagnostic_step(
                 format!("expect.value {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 async {
@@ -961,8 +947,7 @@ impl LocatorExpect {
     /// Assert the match count.
     pub async fn count(&self, expected: usize) -> E2eResult<()> {
         self.locator
-            .page()
-            .auto_step(
+            .diagnostic_step(
                 format!("expect.count {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 async {
@@ -999,8 +984,7 @@ impl LocatorExpect {
     /// Assert the element is checked.
     pub async fn checked(&self) -> E2eResult<()> {
         self.locator
-            .page()
-            .auto_step(
+            .diagnostic_step(
                 format!("expect.checked {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 async { self.checked_state(true).await },
@@ -1011,8 +995,7 @@ impl LocatorExpect {
     /// Assert the element is unchecked.
     pub async fn unchecked(&self) -> E2eResult<()> {
         self.locator
-            .page()
-            .auto_step(
+            .diagnostic_step(
                 format!("expect.unchecked {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 async { self.checked_state(false).await },
@@ -1051,8 +1034,7 @@ impl LocatorExpect {
     /// Assert the element is enabled.
     pub async fn enabled(&self) -> E2eResult<()> {
         self.locator
-            .page()
-            .auto_step(
+            .diagnostic_step(
                 format!("expect.enabled {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 async {
@@ -1085,8 +1067,7 @@ impl LocatorExpect {
     /// Assert the element is disabled.
     pub async fn disabled(&self) -> E2eResult<()> {
         self.locator
-            .page()
-            .auto_step(
+            .diagnostic_step(
                 format!("expect.disabled {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 async {
@@ -1119,8 +1100,7 @@ impl LocatorExpect {
     /// Assert the element is editable (enabled input/textarea/select or contenteditable).
     pub async fn editable(&self) -> E2eResult<()> {
         self.locator
-            .page()
-            .auto_step(
+            .diagnostic_step(
                 format!("expect.editable {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 async {
@@ -1156,8 +1136,7 @@ impl LocatorExpect {
     /// Assert the element is empty (no text and no form value).
     pub async fn empty(&self) -> E2eResult<()> {
         self.locator
-            .page()
-            .auto_step(
+            .diagnostic_step(
                 format!("expect.empty {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 async {
@@ -1196,8 +1175,7 @@ impl LocatorExpect {
     /// Assert the element is focused.
     pub async fn focused(&self) -> E2eResult<()> {
         self.locator
-            .page()
-            .auto_step(
+            .diagnostic_step(
                 format!("expect.focused {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 async {
@@ -1230,8 +1208,7 @@ impl LocatorExpect {
     /// Assert the element is attached to the DOM.
     pub async fn attached(&self) -> E2eResult<()> {
         self.locator
-            .page()
-            .auto_step(
+            .diagnostic_step(
                 format!("expect.attached {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 async {
@@ -1264,8 +1241,7 @@ impl LocatorExpect {
     /// Assert an attribute value (exact match).
     pub async fn attribute(&self, name: &str, expected: &str) -> E2eResult<()> {
         self.locator
-            .page()
-            .auto_step(
+            .diagnostic_step(
                 format!("expect.attribute {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 async {
@@ -1306,8 +1282,7 @@ impl LocatorExpect {
     /// Assert the element has a CSS class.
     pub async fn contains_class(&self, class: &str) -> E2eResult<()> {
         self.locator
-            .page()
-            .auto_step(
+            .diagnostic_step(
                 format!("expect.contains_class {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 async {
@@ -1351,8 +1326,7 @@ impl LocatorExpect {
     /// Assert the element id (exact match).
     pub async fn id(&self, expected: &str) -> E2eResult<()> {
         self.locator
-            .page()
-            .auto_step(
+            .diagnostic_step(
                 format!("expect.id {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 async { self.attribute("id", expected).await },
@@ -1363,8 +1337,7 @@ impl LocatorExpect {
     /// Assert a computed CSS property value (exact match).
     pub async fn css(&self, property: &str, expected: &str) -> E2eResult<()> {
         self.locator
-            .page()
-            .auto_step(
+            .diagnostic_step(
                 format!("expect.css {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 async {
@@ -1405,8 +1378,7 @@ impl LocatorExpect {
     /// Assert a DOM property value (JSON equality).
     pub async fn js_property<T: Serialize>(&self, name: &str, expected: &T) -> E2eResult<()> {
         self.locator
-            .page()
-            .auto_step_local(
+            .diagnostic_step_local(
                 format!("expect.js_property {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 async {
@@ -1446,14 +1418,19 @@ impl LocatorExpect {
 
     /// Assert the element intersects the viewport.
     pub async fn in_viewport(&self) -> E2eResult<()> {
-        self.in_viewport_with(0.0).await
+        self.locator
+            .diagnostic_step(
+                format!("expect.in_viewport {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async { self.in_viewport_with(0.0).await },
+            )
+            .await
     }
 
     /// Assert the accessible name (exact match).
     pub async fn accessible_name(&self, expected: &str) -> E2eResult<()> {
         self.locator
-            .page()
-            .auto_step(
+            .diagnostic_step(
                 format!("expect.accessible_name {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 async {
@@ -1492,8 +1469,7 @@ impl LocatorExpect {
     /// Assert the accessible description (exact match).
     pub async fn accessible_description(&self, expected: &str) -> E2eResult<()> {
         self.locator
-            .page()
-            .auto_step(
+            .diagnostic_step(
                 format!("expect.accessible_description {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 async {
@@ -1532,8 +1508,7 @@ impl LocatorExpect {
     /// Assert an element screenshot matches the named snapshot (retries until match).
     pub async fn screenshot(&self, name: &str) -> E2eResult<()> {
         self.locator
-            .page()
-            .auto_step(
+            .diagnostic_step(
                 format!("expect.screenshot {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 async {
@@ -1550,8 +1525,7 @@ impl LocatorExpect {
     /// otherwise captures are compared until they match or the timeout expires.
     pub async fn screenshot_with(&self, name: &str, opts: &SnapshotOptions) -> E2eResult<()> {
         self.locator
-            .page()
-            .auto_step(
+            .diagnostic_step(
                 format!("expect.screenshot_with {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 async {
@@ -1639,22 +1613,42 @@ impl Locator {
 
     /// Assert visibility (default window).
     pub async fn expect_visible(&self) -> E2eResult<()> {
-        self.expect().visible().await
+        self.diagnostic_step(
+            format!("locator.expect_visible {}", self.selector()),
+            crate::StepCategory::Assertion,
+            async { self.expect().visible().await },
+        )
+        .await
     }
 
     /// Assert hidden/absent (default window).
     pub async fn expect_hidden(&self) -> E2eResult<()> {
-        self.expect().hidden().await
+        self.diagnostic_step(
+            format!("locator.expect_hidden {}", self.selector()),
+            crate::StepCategory::Assertion,
+            async { self.expect().hidden().await },
+        )
+        .await
     }
 
     /// Assert exact trimmed text (default window).
     pub async fn expect_text(&self, expected: &str) -> E2eResult<()> {
-        self.expect().text(expected).await
+        self.diagnostic_step(
+            format!("locator.expect_text {}", self.selector()),
+            crate::StepCategory::Assertion,
+            async { self.expect().text(expected).await },
+        )
+        .await
     }
 
     /// Assert the text contains a fragment (default window).
     pub async fn expect_contains_text(&self, fragment: &str) -> E2eResult<()> {
-        self.expect().contains_text(fragment).await
+        self.diagnostic_step(
+            format!("locator.expect_contains_text {}", self.selector()),
+            crate::StepCategory::Assertion,
+            async { self.expect().contains_text(fragment).await },
+        )
+        .await
     }
 }
 

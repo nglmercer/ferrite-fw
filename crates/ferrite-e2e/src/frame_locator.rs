@@ -9,11 +9,21 @@ use crate::{GetByRoleOptions, Locator, Page, Selector};
 pub struct FrameLocator {
     page: Page,
     selector: Selector,
+    owner_description: Option<String>,
 }
 
 impl FrameLocator {
     pub(crate) fn new(page: Page, selector: Selector) -> Self {
-        Self { page, selector }
+        Self {
+            page,
+            selector,
+            owner_description: None,
+        }
+    }
+
+    pub(crate) fn with_owner_description(mut self, description: Option<String>) -> Self {
+        self.owner_description = description;
+        self
     }
 
     fn content_page(&self) -> Page {
@@ -24,7 +34,11 @@ impl FrameLocator {
 
     /// Locator for the iframe element in its parent document.
     pub fn owner(&self) -> Locator {
-        Locator::new(self.page.clone(), self.selector.clone())
+        let owner = Locator::new(self.page.clone(), self.selector.clone());
+        match &self.owner_description {
+            Some(description) => owner.describe(description),
+            None => owner,
+        }
     }
 
     pub fn first(&self) -> Self {

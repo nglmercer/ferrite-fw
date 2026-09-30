@@ -151,8 +151,7 @@ impl LocatorExpect {
         Fut: Future<Output = E2eResult<Option<String>>>,
     {
         self.locator
-            .page()
-            .auto_step_local(
+            .diagnostic_step_local(
                 format!("expect {label} {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 self.locator.page().run_operation(crate::expect::poll(
@@ -207,14 +206,26 @@ impl LocatorExpect {
         expected: &TextMatcher,
         options: TextAssertionOptions,
     ) -> E2eResult<()> {
-        self.match_text(expected, options, false).await
+        self.locator
+            .diagnostic_step(
+                format!("expect.text_with {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async { self.match_text(expected, options, false).await },
+            )
+            .await
     }
     pub async fn contains_text_with(
         &self,
         expected: &TextMatcher,
         options: TextAssertionOptions,
     ) -> E2eResult<()> {
-        self.match_text(expected, options, true).await
+        self.locator
+            .diagnostic_step(
+                format!("expect.contains_text_with {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async { self.match_text(expected, options, true).await },
+            )
+            .await
     }
     async fn match_texts(
         &self,
@@ -264,51 +275,83 @@ impl LocatorExpect {
         expected: &[TextMatcher],
         options: TextAssertionOptions,
     ) -> E2eResult<()> {
-        self.match_texts(expected, options, false).await
+        self.locator
+            .diagnostic_step(
+                format!("expect.texts_with {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async { self.match_texts(expected, options, false).await },
+            )
+            .await
     }
     pub async fn contains_texts_with(
         &self,
         expected: &[TextMatcher],
         options: TextAssertionOptions,
     ) -> E2eResult<()> {
-        self.match_texts(expected, options, true).await
+        self.locator
+            .diagnostic_step(
+                format!("expect.contains_texts_with {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async { self.match_texts(expected, options, true).await },
+            )
+            .await
     }
     pub async fn class_with(&self, expected: &TextMatcher, options: MatchOptions) -> E2eResult<()> {
-        let expected = expected.prepared(options)?;
-        self.observe(format!("class {expected:?}"), || async {
-            let actual = self.locator.attribute("class").await?.unwrap_or_default();
-            Ok(self.mismatch(expected.matches_class(&actual, options), actual))
-        })
-        .await
+        self.locator
+            .diagnostic_step(
+                format!("expect.class_with {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async {
+                    let expected = expected.prepared(options)?;
+                    self.observe(format!("class {expected:?}"), || async {
+                        let actual = self.locator.attribute("class").await?.unwrap_or_default();
+                        Ok(self.mismatch(expected.matches_class(&actual, options), actual))
+                    })
+                    .await
+                },
+            )
+            .await
     }
     pub async fn classes_with(
         &self,
         expected: &[TextMatcher],
         options: MatchOptions,
     ) -> E2eResult<()> {
-        let expected: Vec<_> = expected
-            .iter()
-            .map(|m| m.prepared(options))
-            .collect::<E2eResult<_>>()?;
-        self.observe(format!("element classes {expected:?}"), || async {
-            let actual: Vec<String> = self
-                .locator
-                .evaluate_all("els => els.map(el => el.getAttribute('class') || '')")
-                .await?;
-            let matched = actual.len() == expected.len()
-                && actual
-                    .iter()
-                    .zip(&expected)
-                    .all(|(a, e)| e.matches_class(a, options));
-            Ok(self.mismatch(matched, actual))
-        })
-        .await
+        self.locator
+            .diagnostic_step(
+                format!("expect.classes_with {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async {
+                    let expected: Vec<_> = expected
+                        .iter()
+                        .map(|m| m.prepared(options))
+                        .collect::<E2eResult<_>>()?;
+                    self.observe(format!("element classes {expected:?}"), || async {
+                        let actual: Vec<String> = self
+                            .locator
+                            .evaluate_all("els => els.map(el => el.getAttribute('class') || '')")
+                            .await?;
+                        let matched = actual.len() == expected.len()
+                            && actual
+                                .iter()
+                                .zip(&expected)
+                                .all(|(a, e)| e.matches_class(a, options));
+                        Ok(self.mismatch(matched, actual))
+                    })
+                    .await
+                },
+            )
+            .await
     }
     pub async fn values_with(
         &self,
         expected: &[TextMatcher],
         options: MatchOptions,
     ) -> E2eResult<()> {
+        self.locator.diagnostic_step(
+            format!("expect.values_with {}", self.locator.selector()),
+            crate::StepCategory::Assertion,
+            async {
         let expected: Vec<_> = expected
             .iter()
             .map(|m| m.prepared(options))
@@ -318,44 +361,70 @@ impl LocatorExpect {
             let matched = actual.len() == expected.len() && actual.iter().zip(&expected).all(|(a,e)| e.matches(a, false, false, options));
             Ok(self.mismatch(matched, actual))
         }).await
+
+            },
+        ).await
     }
 
     /// Require every expected class token on a single element; order is ignored.
     pub async fn contains_class_tokens(&self, expected: &[&str]) -> E2eResult<()> {
-        self.observe(format!("class tokens {expected:?}"), || async {
-            let actual: Vec<String> = self
-                .locator
-                .evaluate("el => Array.from(el.classList)")
-                .await?;
-            let matched = expected
-                .iter()
-                .flat_map(|value| value.split(is_js_whitespace))
-                .filter(|token| !token.is_empty())
-                .all(|token| actual.iter().any(|class| class == token));
-            Ok(self.mismatch(matched, actual))
-        })
-        .await
+        self.locator
+            .diagnostic_step(
+                format!("expect.contains_class_tokens {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async {
+                    self.observe(format!("class tokens {expected:?}"), || async {
+                        let actual: Vec<String> = self
+                            .locator
+                            .evaluate("el => Array.from(el.classList)")
+                            .await?;
+                        let matched = expected
+                            .iter()
+                            .flat_map(|value| value.split(is_js_whitespace))
+                            .filter(|token| !token.is_empty())
+                            .all(|token| actual.iter().any(|class| class == token));
+                        Ok(self.mismatch(matched, actual))
+                    })
+                    .await
+                },
+            )
+            .await
     }
 
     /// Require class tokens for the complete ordered element list.
     pub async fn contains_class_tokens_list(&self, expected: &[&str]) -> E2eResult<()> {
-        self.observe(format!("element class tokens {expected:?}"), || async {
-            let actual: Vec<Vec<String>> = self
-                .locator
-                .evaluate_all("els => els.map(el => Array.from(el.classList))")
-                .await?;
-            let matched = actual.len() == expected.len()
-                && actual.iter().zip(expected).all(|(tokens, expected)| {
-                    expected
-                        .split(is_js_whitespace)
-                        .filter(|token| !token.is_empty())
-                        .all(|token| tokens.iter().any(|class| class == token))
-                });
-            Ok(self.mismatch(matched, actual))
-        })
-        .await
+        self.locator
+            .diagnostic_step(
+                format!(
+                    "expect.contains_class_tokens_list {}",
+                    self.locator.selector()
+                ),
+                crate::StepCategory::Assertion,
+                async {
+                    self.observe(format!("element class tokens {expected:?}"), || async {
+                        let actual: Vec<Vec<String>> = self
+                            .locator
+                            .evaluate_all("els => els.map(el => Array.from(el.classList))")
+                            .await?;
+                        let matched = actual.len() == expected.len()
+                            && actual.iter().zip(expected).all(|(tokens, expected)| {
+                                expected
+                                    .split(is_js_whitespace)
+                                    .filter(|token| !token.is_empty())
+                                    .all(|token| tokens.iter().any(|class| class == token))
+                            });
+                        Ok(self.mismatch(matched, actual))
+                    })
+                    .await
+                },
+            )
+            .await
     }
     pub async fn checked_with(&self, options: CheckedOptions) -> E2eResult<()> {
+        self.locator.diagnostic_step(
+            format!("expect.checked_with {}", self.locator.selector()),
+            crate::StepCategory::Assertion,
+            async {
         if options.checked.is_some() && options.indeterminate.is_some() {
             return Err(E2eError::Config(
                 "checked and indeterminate options cannot be combined".into(),
@@ -367,8 +436,15 @@ impl LocatorExpect {
                 else { actual["checked"] == options.checked.unwrap_or(true) };
             Ok(self.mismatch(matched, actual))
         }).await
+
+            },
+        ).await
     }
     pub async fn state_with(&self, state: StateAssertion, expected: bool) -> E2eResult<()> {
+        self.locator.diagnostic_step(
+            format!("expect.state_with {}", self.locator.selector()),
+            crate::StepCategory::Assertion,
+            async {
         self.observe(format!("{state:?} == {expected}"), || async {
             let observed = self.locator.state().await?;
             if observed.count > 1 { return Err(E2eError::Locator { selector: self.locator.selector().into(), message: "strict mode violation: multiple elements match".into() }); }
@@ -385,29 +461,40 @@ impl LocatorExpect {
             };
             Ok(self.mismatch(actual == expected, actual))
         }).await
+
+            },
+        ).await
     }
     pub async fn in_viewport_with(&self, ratio: f64) -> E2eResult<()> {
-        if !ratio.is_finite() || !(0.0..=1.0).contains(&ratio) {
-            return Err(E2eError::Config(
-                "viewport ratio must be finite and between 0 and 1".into(),
-            ));
-        }
-        self.observe(format!("viewport intersection >= {ratio}"), || async {
-            let count = self.locator.state().await?.count;
-            if count > 1 {
-                return Err(E2eError::Locator {
-                    selector: self.locator.selector().into(),
-                    message: "strict mode violation: multiple elements match".into(),
-                });
-            }
-            let actual = if count == 0 {
-                0.0
-            } else {
-                self.locator.intersection_ratio().await?
-            };
-            Ok(self.mismatch(actual > 0.0 && actual + 1e-9 >= ratio, actual))
-        })
-        .await
+        self.locator
+            .diagnostic_step(
+                format!("expect.in_viewport_with {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async {
+                    if !ratio.is_finite() || !(0.0..=1.0).contains(&ratio) {
+                        return Err(E2eError::Config(
+                            "viewport ratio must be finite and between 0 and 1".into(),
+                        ));
+                    }
+                    self.observe(format!("viewport intersection >= {ratio}"), || async {
+                        let count = self.locator.state().await?.count;
+                        if count > 1 {
+                            return Err(E2eError::Locator {
+                                selector: self.locator.selector().into(),
+                                message: "strict mode violation: multiple elements match".into(),
+                            });
+                        }
+                        let actual = if count == 0 {
+                            0.0
+                        } else {
+                            self.locator.intersection_ratio().await?
+                        };
+                        Ok(self.mismatch(actual > 0.0 && actual + 1e-9 >= ratio, actual))
+                    })
+                    .await
+                },
+            )
+            .await
     }
     async fn accessible_with(
         &self,
@@ -436,21 +523,47 @@ impl LocatorExpect {
         expected: &TextMatcher,
         options: MatchOptions,
     ) -> E2eResult<()> {
-        self.accessible_with("name", expected, options).await
+        self.locator
+            .diagnostic_step(
+                format!("expect.accessible_name_with {}", self.locator.selector()),
+                crate::StepCategory::Assertion,
+                async { self.accessible_with("name", expected, options).await },
+            )
+            .await
     }
     pub async fn accessible_description_with(
         &self,
         expected: &TextMatcher,
         options: MatchOptions,
     ) -> E2eResult<()> {
-        self.accessible_with("description", expected, options).await
+        self.locator
+            .diagnostic_step(
+                format!(
+                    "expect.accessible_description_with {}",
+                    self.locator.selector()
+                ),
+                crate::StepCategory::Assertion,
+                async { self.accessible_with("description", expected, options).await },
+            )
+            .await
     }
     pub async fn accessible_error_message_with(
         &self,
         expected: &TextMatcher,
         options: MatchOptions,
     ) -> E2eResult<()> {
-        self.accessible_with("error message", expected, options)
+        self.locator
+            .diagnostic_step(
+                format!(
+                    "expect.accessible_error_message_with {}",
+                    self.locator.selector()
+                ),
+                crate::StepCategory::Assertion,
+                async {
+                    self.accessible_with("error message", expected, options)
+                        .await
+                },
+            )
             .await
     }
 }

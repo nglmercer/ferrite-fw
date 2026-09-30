@@ -3282,6 +3282,10 @@ impl Page {
             result
         }
     }
+    pub(crate) fn record_locator_diagnostic(&self, detail: String) {
+        self.sink.record("locator-operation", detail);
+    }
+
     pub(crate) fn auto_step<'a, T: Send + 'a>(
         &self,
         title: impl Into<String>,

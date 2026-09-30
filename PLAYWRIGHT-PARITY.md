@@ -19,9 +19,9 @@ reporter, Android and Electron APIs:
 | Classification | Members | Meaning |
 |---|---:|---|
 | Equivalent | 15 | Counterpart for the basic operation/value, without full options or engine compatibility |
-| Partial | 618 | Related exposed operation with material semantic, option or engine differences |
+| Partial | 620 | Related exposed operation with material semantic, option or engine differences |
 | Idiomatic | 41 | Comparable operation through Rust language/library facilities |
-| Missing | 344 | No dedicated public counterpart |
+| Missing | 342 | No dedicated public counterpart |
 
 These counts describe an inventory, **not a behavioral compatibility
 percentage**. The earlier inventory had 458 Partial and 503 Missing members.
@@ -57,6 +57,7 @@ implementation.
 | Step controls | Local timeout, skip with reason, live annotations/title paths and automatic action/assertion/hook/fixture trees | Explicit user steps have exact sources; automatic sources use test definitions; boxing and some Page/protocol actions remain absent |
 | Runtime test controls | Shared TestInfo skip, expected failure, slow, annotations and timeout changes affect running attempts and final results | Result propagation for immediate skip; cooperative async cancellation and independent cleanup budgets |
 | Locator selection | Strict single-target operations, genuine first/last/nth slicing, relative has/hasNot filters, exact/regex/visibility builders | No complete Playwright selector extension/custom-engine surface |
+| Locator descriptions | Optional labels with pinned derivation rules; calling actions/assertions retain them in errors, steps, retry histories and owned traces | Automatic sources remain test definitions; Rust labeled errors differ from the pinned upstream timeout |
 | Semantic locators | Associated labels target controls; roles and accessible names use shared DOM helpers; open shadow-root traversal | Full accessible-name specification and closed shadow roots remain outside this implementation |
 | Actions | Retry readiness and requested-point hit testing, trusted input, positions/modifiers/trial/scoped timeouts for click/hover/check/drag; delayed fill/select and contenteditable support | Same-origin offsets and positive axis scaling; rotated/perspective frames and cross-origin coordinates unsupported. Some actions use DOM setters/events |
 | Uploads | Path and in-memory filename/MIME/binary payloads, multiple/empty batches and input/change events on both engines | DOM injection, 64 MiB total cap; native chooser and directory uploads remain deferred |
@@ -1061,3 +1062,50 @@ A final full-Chrome/Firefox check additionally verified an attached client's
 unexpected source-browser disconnect. Strict E2E/CLI Clippy, formatting,
 regenerated matrix links and local evidence links passed. B16 is complete;
 G04 remains open for the final cross-feature lifecycle audit.
+
+### Locator descriptions and operation diagnostics
+
+`Locator::describe`, `description` and `clear_description` keep user labels
+separate from DOM selectors. `describe` returns a new handle; empty labels clear
+it. Cloning and timeout/cancellation decorators retain labels. Derived picks,
+filters, scoped/combined selectors and matching builders clear them. Describe
+after the last selector change. Content-frame conversion/owner retains its
+iframe label; frame picks and child locators start unlabeled. Rust Display/
+`to_string()` returns the label or raw selector; `selector()` remains raw.
+
+The outer calling action/assertion includes its label once in operation errors,
+automatic/live steps, attempt histories and owned `locator-operation` trace
+entries, including errors raised by options validation. Automatic-step
+suppression and user-step parent identity remain intact. Existing automatic
+source locations point at the test definition; explicit user steps retain their
+caller location. This does not add exact async Rust call-site attribution or
+Playwright Trace Viewer compatibility. No report JSON schema changed.
+
+Timeout/cancellation/locator/CDP errors retain their variants, codes and native
+identity fields. Test/step skip reasons remain unchanged. Migration: the new
+`E2eError::Diagnostic { context, source }` variant annotates opaque I/O, HTTP or
+JSON failures while preserving their typed cause and machine code. Exhaustive
+matches need this additional variant; inspect `source` or the standard error
+chain for the original error. Typed JSON results/arguments and local assertion
+callbacks retain their existing non-Send support.
+
+The actual [pinned reference](scripts/e2e-conformance/locator-description-reference.json)
+records three Playwright 1.63.0/Chrome 153 cases. Derived-label and DOM-resolution
+rules agree. Its timeout error contains the operation and selector but omits
+the label; Rust deliberately includes it. This observed difference is covered,
+not claimed as equivalent. Three [native groups](crates/ferrite-e2e/tests/locator_descriptions.rs)
+passed on Chrome 153/Firefox 157, covering derivation/frame owners, early
+validation, typed causes, cancellation, assertions and non-Send values/callbacks,
+plus retry/live reporter/source metadata, trace deduplication, JSON and escaped
+HTML. Two unit groups verify error identity, codes, typed causes and skip control.
+
+Validation: all 347 E2E checks passed (157 units, 187 integrations across all
+27 targets and three doctests), plus 23 CLI/configuration checks. The 48-check
+runner/diagnostics batch ran on full Chrome 153/Firefox 157; the 93 browser,
+180 core and 23 routing checks used Headless Shell/Firefox. Strict E2E/CLI
+all-target Clippy, E2E/CLI/config package formatting, generated symbol anchors
+and local links passed. Expanded retry bundles from both engines were visually
+inspected; all three artifact links per relocated bundle resolved and label text
+remained escaped. An additional whole-workspace formatting probe reports
+pre-existing formatting differences in unrelated crates; it is not counted as
+a pass. B17 is complete; B12 is next and G04 remains open.

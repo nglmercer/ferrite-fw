@@ -10,6 +10,7 @@ Partial means the listed limitation must be retained in API/docs/test evidence.
 | Launch, fresh/persistent contexts, native input | Supported | Supported | Stock browser ownership; no managed installer/channels |
 | Context browser owner and connection state | Supported | Supported | Weak context-to-owner access; retrieved/cloned Browser handles share one process, profile, defaults and registry. Context/page state reflects native disconnects; attached Chromium close leaves the remote process running. |
 | Strict locators and same-origin frame locators | Supported | Supported | Cross-origin/OOPIF lazy traversal excluded |
+| Locator descriptions and operation diagnostics | Supported | Supported | Label is separate from selector; derived selectors clear it. Actions/assertions retain labels in errors, steps and owned traces; automatic source locations remain test definitions. Opaque failures retain their typed cause via E2eError::Diagnostic. |
 | Raw/rendered text, list/class/state assertions | Supported | Supported | Rust regex syntax; accessibility remains a DOM approximation |
 | Typed synthetic event dispatch | Supported | Supported | JSON initialization; synthetic events are untrusted; live handle arguments excluded |
 | Native intersection ratios | Supported | Supported | Owning-document IntersectionObserver and native clipping |
@@ -63,6 +64,12 @@ shared defaults, failed storage setup cleanup, final-owner release, persistent
 profiles, canceled/concurrent shutdown and actual transport loss. Linux checks
 the launched process and temporary profile are released. Remote Chromium owner
 close leaves its source process running; weak contexts do not retain a browser.
+
+[locator_descriptions.rs](crates/ferrite-e2e/tests/locator_descriptions.rs) compares
+three actual pinned description/resolution/error cases on both engines. It also
+checks native early validation, typed JSON causes, cancellation and local values/
+callbacks, retry/live/source metadata, owned traces, JSON and escaped reports.
+The pinned timeout omits the user label; richer Rust errors deliberately differ.
 
 [lifecycle_events.rs](crates/ferrite-e2e/tests/lifecycle_events.rs) compares four
 pinned frame/readiness/dialog cases and verifies stable native identity,

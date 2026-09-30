@@ -1,0 +1,47 @@
+{
+  "playwright": "1.63.0",
+  "engine": "chromium",
+  "browser": "153.0.8010.12",
+  "cases": [
+    {
+      "name": "description-chaining",
+      "result": {
+        "original": null,
+        "labeled": "Checkout",
+        "replaced": "Replacement",
+        "empty": null,
+        "removed": null,
+        "first": null,
+        "last": null,
+        "nth": null,
+        "filter": null,
+        "visible": null,
+        "scoped": null,
+        "role": null,
+        "union": null,
+        "intersection": null,
+        "all": null,
+        "frameOwner": "Payment frame",
+        "framePick": null,
+        "frameChild": null
+      }
+    },
+    {
+      "name": "same-resolution",
+      "result": {
+        "original": 1,
+        "labeled": 1,
+        "child": 2,
+        "unchanged": true
+      }
+    },
+    {
+      "name": "action-error",
+      "result": {
+        "operation": true,
+        "description": false,
+        "selector": true
+      }
+    }
+  ]
+}

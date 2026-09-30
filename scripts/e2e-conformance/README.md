@@ -39,6 +39,28 @@ FERRITE_E2E_REQUIRE_BOTH_BROWSERS=1 cargo test -p ferrite-e2e --test core_confor
 Node/Playwright are optional development tooling and are not dependencies of
 Ferrite's library or its normal Rust test command.
 
+`locator-description-reference.mjs` / `locator-description-reference.json`
+record three actual Playwright 1.63.0 Chromium cases: description replacement/
+removal and derived selectors, unchanged DOM resolution, and timeout diagnostics.
+Regenerate with `npm run reference:locator-descriptions` or the external install
+above and `node scripts/e2e-conformance/locator-description-reference.mjs`.
+Upstream clears labels on picks, filters, scoped/combined locators and frame
+children, while content-frame owner conversion retains the original owner label.
+The actual pinned timeout includes the operation and selector but **omits the
+label**. Ferrite deliberately includes the label in errors; the corpus records
+that difference instead of asserting upstream error-message equivalence.
+
+`cargo test -p ferrite-e2e --test locator_descriptions` verifies three native
+groups on both engines: these derivation/resolution rules; early validation,
+typed JSON causes, cancellation and labeled assertions; and retry/live-step/
+trace/JSON/escaped-HTML diagnostics without duplicate automatic steps. Native
+checks also retain non-Send JSON results/arguments and local assertion callbacks.
+Two error-model unit tests check stable codes, identity fields, original typed
+causes and unchanged test/step skip reasons. Existing source-location semantics
+remain: automatic steps use the test-definition location, explicit user steps
+retain their caller location. This is Ferrite's owned trace format, not the
+Playwright Trace Viewer format.
+
 `ownership-reference.mjs` / `ownership-reference.json` record two actual
 Playwright 1.63.0 Chromium ownership cases: explicit/convenience/closed contexts
 and a persistent context's browser connection after shutdown. Regenerate with

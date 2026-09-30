@@ -713,3 +713,31 @@ can change safely through another handle. Replace
 `browser.base_url().map(str::to_string)` with `browser.base_url()`; bind the owned
 value before using `as_deref()` when a borrowed string is needed. Setting the base
 URL changes future contexts across handles; existing contexts keep their seed.
+
+Describe the final locator to make its actions and assertions recognizable:
+
+```rust,no_run
+let checkout = page.get_by_role("button", "Checkout").first().describe("Checkout button");
+assert_eq!(checkout.description(), Some("Checkout button"));
+checkout.click().await?;
+checkout.expect().text("Checkout").await?;
+let selector = checkout.selector(); // Raw selector remains available.
+let unlabeled = checkout.clear_description();
+assert!(unlabeled.description().is_none());
+```
+
+`describe` returns a clone without changing the original or DOM resolution.
+An empty description clears the label. Cloning and timeout/cancellation decorators
+retain it; picks, filters, scoped/combined locators and matching builders clear
+it, so describe after the final selector change. Content-frame conversion and
+its `owner()` retain the iframe label; frame picks/children start unlabeled.
+Rust Display/`to_string()` returns the description or raw selector.
+
+Labels accompany the calling operation in action/assertion errors, live steps,
+retry histories and owned trace entries without duplicate steps. Automatic step
+locations remain the test definition; explicit user steps keep their caller
+location. Timeout/cancellation/locator error variants and machine codes stay
+intact. Typed I/O, HTTP or JSON failures from labeled operations use the new
+`E2eError::Diagnostic { context, source }` variant, retaining the original typed
+cause and code. Update exhaustive enum matches accordingly and inspect `source`
+or the standard error chain when needed. Skip-control reasons remain unchanged.
