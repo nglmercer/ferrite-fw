@@ -183,6 +183,7 @@ where
                 .map_err(|error| error.with_context(&context))?;
             let deadline = crate::operation::Deadline::new(options.timeout);
             let mut last = None;
+            let mut last_images = None;
             // Keep probe failures inside a successful outer result. This separates
             // their Timeout errors from expiration of our one polling deadline.
             let work = deadline.run(context.clone(), async {
@@ -191,11 +192,17 @@ where
                     if deadline.expired() {
                         std::future::pending::<()>().await;
                     }
-                    match crate::report::retry_probe(async { check().await }).await {
+                    let (probe, images) =
+                        crate::snapshot_artifacts::retry_probe(async { check().await }).await;
+                    match probe {
                         Ok(Some(value)) => return Ok(Ok(value)),
-                        Ok(None) => last = Some("pending".to_string()),
+                        Ok(None) => {
+                            last = Some("pending".to_string());
+                            last_images = None;
+                        }
                         Err(error) if error.code() == "FERRITE_E2E_EXPECT" => {
-                            last = Some(error.to_string())
+                            last = Some(error.to_string());
+                            last_images = images;
                         }
                         Err(error) => return Ok(Err(error)),
                     }
@@ -207,14 +214,15 @@ where
                 Some(token) => token.run(work).await,
                 None => work.await,
             };
-            match result {
+            let result = match result {
                 Ok(result) => result.map_err(|error| error.with_context(&context)),
                 Err(E2eError::Timeout(..)) => Err(E2eError::Expect(format!(
                     "{context} (last: {})",
                     last.as_deref().unwrap_or("no data yet")
                 ))),
                 Err(error) => Err(error.with_context(&context)),
-            }
+            };
+            crate::snapshot_artifacts::finish(result, last_images)
         },
     )
     .await

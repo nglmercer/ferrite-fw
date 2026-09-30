@@ -936,6 +936,17 @@ failures are isolated by test retry as usual. Use `?` to propagate probe results
 intentionally discarded Results cannot drive retries. This differs from pinned
 Playwright nested soft checks, which record a first-probe failure immediately.
 
+Screenshot mismatches inside generic probes defer report images. A failed outer
+assertion publishes the last screenshot mismatch from its last completed failing
+probe into that outer step and attempt. Expected/actual and any unstable previous
+image are frozen; nested polls transfer images to their enclosing probe. Successful
+results, typed operational/control errors and a later completed pending result
+discard retained images. An unfinished probe discards its own images and leaves
+the earlier completed candidate available for final outer failure. Only one screenshot mismatch is retained per invocation,
+replaced by a later screenshot mismatch. Baseline-adjacent `.actual.png` files
+retain their earlier behavior. Publication I/O/encoding errors preserve the final
+Expect code and add diagnostic context.
+
 `expect_poll` and `expect_to_pass` keep their original signatures and 50 ms
 cadence. Their callbacks now propagate operational errors immediately; use None
 or Expect to signal "not yet", rather than Config/transport errors. Options

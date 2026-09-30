@@ -48,15 +48,15 @@ Partial means the listed limitation must be retained in API/docs/test evidence.
 | Fixture limits and shared cleanup clocks | Supported | Supported | Separate local setup/teardown limits capped by enclosing budgets; ready release after exhaustion, explicit pending errors and disposal surviving dropped waits. Rust accounting differs from upstream separate fixture budgets. |
 | CI flaky policy and focus protection | Supported | Supported | Opt-in aggregate failure preserves actual attempt outcomes; registered focus checked before filters/shards, including skipped descendants. CI forces existing focus protection. JSON/live/HTML aggregate status and explicit JUnit policy markers; upstream filtering/JUnit differences documented. |
 | Screenshot options and reversible preparation | Supported | Supported with limits | Viewport/document clips, full-page masks/colors/styles, locator companions and shared capture clocks. Device/Css output; Firefox Css uses raster normalization. Transparent default canvas is Chromium PNG only. Owned bounded restoration, visible errors and preserved metrics; native finite finish/infinite cancel-resume, zero-rate preservation and late CSS listeners. Application-realm helpers and root traversal remain narrower. |
-| Stable screenshot assertions (B10 in progress) | Partial | Partial | Successive PNG comparison and font readiness after owned style preparation; typed errors and changed update mode. Attempt/step-owned expected/actual/diff copies and last-pair stability diagnostics survive portable export. Per-channel comparator/update policy differs; real-font/animation evidence is verified; CPU-budget work remains open. |
+| Stable screenshot assertions (B10 in progress) | Partial | Partial | Successive PNG comparison and font readiness after owned style preparation; typed errors and changed update mode. Attempt/step-owned expected/actual/diff copies, last-pair stability diagnostics and last-completed outer-poll images survive portable export. Per-channel comparator/update policy differs; real-font/animation evidence is verified; CPU-budget work remains open. |
 | Snapshot path templates (B10 in progress) | Supported with differences | Supported with differences | Global/project/explicit templates and frozen TestInfo metadata; CLI/config/env plumbing, PNG/text paths and no-write path access. Additional browser token, lowercase slugs, nested names and legacy layout differ from upstream; no anonymous/ARIA kinds. |
 | Generic assertion polling options | Supported | Supported | Immediate probes, validated interval sequences with last-value reuse, messages and explicit cancellation/context tokens. Shared local/enclosing budgets, non-Send companions, typed operational errors and final-only soft collection/steps. Rust defaults and upstream nested-soft/step/cutoff differences documented. |
 | Portable reports, runner/fixtures/retries | Supported | Supported | Tokio workers, cooperative cancellation, current artifact formats |
 
 ## Evidence and validation gates
 
-The latest B10 increment passed 194 units, 49 native integration checks/twelve targets,
-four doctests and 28 CLI/configuration checks (275 focused checks), with final
+The latest B10 increment passed 195 units, 30 native integration checks/six targets,
+four doctests and 28 CLI/configuration checks (257 focused checks), with final
 strict Clippy, package formatting and regenerated links/matrix. All native checks
 required full Chrome 153 and Firefox 157. The
 [snapshot stability tests](crates/ferrite-e2e/tests/snapshot_stability.rs) cover
@@ -82,8 +82,20 @@ verify immutable expected/actual/diff copies, previous/stability images, soft/
 retry ownership, visible I/O failures, cancellation/restoration and portable
 bundle relocation after deleting source output. The existing D02 native polling
 groups also pass; intermediate generic retry probes publish no report images.
-Final-only deferred image publication when an enclosing generic poll fails is
-still an audit item, alongside decode/encode/filesystem bounds.
+Four additional diagnostic groups cover final-completed candidates, nested/
+control/pending/unfinished behavior, soft/parallel/retry/export ownership and
+publication I/O failures. A wrapper-size/drop unit guards the native soft-poll
+stack-overflow regression fixed by boxing inputs before async construction.
+Final-only deferred publication now attaches the last completed failing probe
+to its outer step, including nested transfer and retry/soft/parallel ownership.
+Success, operational/control errors and completed pending results discard
+retained images; unfinished probes drop their own images and preserve the prior
+completed candidate; publication failures preserve Expect. Decode/encode/filesystem
+bounds remain under audit. The
+[12 screenshot/toPass observations](scripts/e2e-conformance/snapshot-poll-reference.json)
+show upstream intermediate images retained after eventual/nested success and
+expected-only missing-target images; Rust final-only publication remains a
+documented difference.
 
 
 [screenshot_options.rs](crates/ferrite-e2e/tests/screenshot_options.rs) verifies

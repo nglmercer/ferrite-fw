@@ -1648,9 +1648,8 @@ available, including on standalone pages; standalone text/PNG helpers retain the
 existing explicit attachment boundary.
 
 Generic retry probes suppress intermediate report images because their enclosing
-assertion can later pass; their legacy actual path is still retained. Deferred
-final-only publication for a failing enclosing generic poll remains part of the
-cross-feature audit. Synchronous decode/diff/encode/file work also still needs
+assertion can later pass; their legacy actual path is still retained. The follow-up
+below adds final-only publication from a completed failing outer probe. Synchronous decode/diff/encode/file work also still needs
 the B10 clock/resource audit. This increment does not close B10.
 
 The [native diagnostic groups](crates/ferrite-e2e/tests/snapshot_artifacts.rs)
@@ -1705,8 +1704,8 @@ upstream uses its utility realm and suppresses some animation-method exceptions.
 Closed roots, cross-origin frame traversal and newly inserted roots remain outside
 the owned preparation surface. The distinct-animation limit does not preempt
 blocking browser JavaScript or establish a complete CPU bound. CPU/decode/encode/
-filesystem budget work, failed outer-poll final diagnostics and final broad gates
-still keep B10 open.
+filesystem budget work and final broad gates still keep B10 open. Failed outer-
+poll final diagnostics are implemented in the follow-up below.
 
 Focused final-source validation combines 194 unit tests, 49 native integration
 checks across twelve targets, four doctests and 28 CLI/configuration checks
@@ -1730,3 +1729,61 @@ reference records a successful finite locator and an infinite locator timeout,
 while both Firefox locators succeeded. Page clips retain strict pixel checks,
 and caught locator outcomes must identify that native wait. These timeouts are
 recorded without claiming a root cause or universal Chromium limitation.
+
+
+### B10 draft: final screenshot images for failed generic polls
+
+Generic `expect_poll_with`/`expect_to_pass_with` invocations now own a task-local
+collector for the last screenshot mismatch within each probe. Only a completed
+assertion mismatch replaces the retained candidate. A final outer Expect failure
+publishes its frozen expected/actual and any previous/stability-diff images into
+that outer assertion step and attempt. Nested failed polls transfer their images
+into the parent probe rather than publishing early. Success, typed operational/
+control errors and a later completed pending result discard the retained images.
+An unfinished probe drops its own images without replacing the earlier completed
+candidate.
+Each invocation retains one screenshot mismatch, replacing earlier mismatches;
+there is no accumulated per-probe attachment history. The earlier baseline-adjacent
+`.actual.png` behavior is preserved. Deferred publication errors add context to
+the final Expect code, and no new capture or baseline read occurs on publication.
+
+The [native diagnostic tests](crates/ferrite-e2e/tests/snapshot_artifacts.rs)
+now include four additional groups: frozen last-completed images after a pending
+probe replaces the baseline, immutable retry/export/live-event/step ownership,
+nested success/failure and typed controls, pending/unfinished probes, deferred I/O
+failures, final unstable soft images and independent parallel poll attempts. One
+fixture initially treated TestInfo's intentionally shared attachment history as
+an empty per-attempt list; the corrected test verifies both shared history and
+separate AttemptResult images. A parallel RAF fixture produced a stable capture;
+its scheduling cause was not established. Stable color mismatches now test parallel
+ownership, and a sequential RAF case tests unstable-pair retention without
+relaxing their pixel checks.
+
+Broader generic-poll validation exposed a stack overflow from the new wrapper's
+inline callback future in the large native soft-poll fixture. The wrapper now
+boxes its generic input before constructing the async state, and also boxes the
+retained payload. A unit regression asserts a small pre-poll wrapper around a
+64-KiB future and verifies completion/drop release and scope restoration. The
+previously overflowing two-engine native soft-poll target passed afterward.
+CPU/decode/encode/filesystem clock work and final broad gates still keep B10 open.
+
+Final focused gates passed 195 unit tests, 30 native integrations/six targets,
+four doctests and 28 CLI/configuration checks (257 combined). Native scope is
+snapshot_artifacts8, polling_options4, effective_configuration5,
+runtime_and_reporters4, soft_assertions5 and step_controls_and_bundles4. All
+native groups required full Chrome 153 and Firefox 157. The eight artifact groups
+and broader native scopes reran after the wrapper-size fix, with final strict
+all-target E2E/CLI/config Clippy and package formatting. These are focused current-
+source gates, not complete verification of the expanded integration inventory.
+
+The [12 actual public screenshot/toPass observations](scripts/e2e-conformance/snapshot-poll-reference.json)
+record an intentional upstream difference. Both engines retain three intermediate
+images after eventual success and nine after caught inner failure followed by
+outer success in this run. Failed stable/nested blocks accumulate multiple image
+sets; missing-target calls attach expected images without an actual capture.
+Rust's one-candidate, final-only policy publishes no images for eventual success
+or typed native no-capture errors. The reference freezes probe metadata at outer
+settlement and separately records disposal-time observations: incomplete upstream
+callbacks cannot mutate the earlier observation or contaminate a later case's
+attachment list. This evidence describes the measured pinned behavior rather than
+claiming universal counts/timing or complete snapshot matcher equivalence.

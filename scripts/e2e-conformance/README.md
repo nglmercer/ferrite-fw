@@ -446,3 +446,37 @@ timeout. It never treats an arbitrary exception as a valid result. No cause or
 universal engine limitation is inferred from these timeouts. These observations
 and Ferrite's application-realm helpers remain documented differences, not full
 screenshot parity.
+
+
+### Screenshot attachment behavior inside generic retry blocks
+
+`reference:snapshot-polls` records 12 actual pinned public screenshot/`toPass`
+cases on Chromium 153.0.8010.12 and Firefox 157 through `moz-firefox`. Each engine
+covers stable failure, eventual success, nested failure/success, RAF-changing
+content and a missing capture target. Baselines are seeded with actual page
+screenshots; `updateSnapshots: none` preserves them. The script checks assertion
+outcomes, unchanged baselines, actual PNG existence/dimensions and missing-target
+expected-only images. The [recorded observations](snapshot-poll-reference.json)
+retain probe counts, attachment metadata/hashes, final errors and disposal-time
+observations. Probe records are copied when the outer helper settles, rather than
+sharing a mutable array with JavaScript callbacks that may finish afterward.
+Names filter attachments by their case prefix to keep such late callbacks from
+contaminating another case's metadata.
+
+Both engines retain intermediate expected/actual/diff images when a retry block
+later succeeds: eventual success retains three images, and caught inner failure
+followed by outer success retains nine in this run. Failing stable/nested blocks
+accumulate images from multiple failed screenshot calls. Missing-target calls
+attach expected images despite producing no actual capture. Some probes are
+unfinished when the outer helper settles; the separate `afterDisposal` snapshot
+records what has completed by context disposal without claiming all JavaScript
+callbacks have stopped. Counts and timings are observations, not universal constants.
+
+Ferrite intentionally retains one screenshot mismatch per completed failing probe
+and publishes only the last completed candidate on final outer Expect failure.
+Success, operational/control errors and completed pending results discard retained
+images. An unfinished probe drops its own data and does not replace the prior
+completed mismatch. Nested failures transfer to their parent's collector, and
+report copies belong to the final outer step/attempt. Native timeout/no-capture
+errors attach no failure images. This bounded final-only policy differs from the
+pinned upstream attachment history; its mappings remain Partial.

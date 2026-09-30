@@ -1,7 +1,7 @@
 # Ferrite E2E implementation TODO
 
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
-Session plan refreshed: 2026-09-30, with verified B10 capture, path, diagnostic and native font/animation increments.
+Session plan refreshed: 2026-09-30, with verified B10 capture, path, diagnostic and native font/animation and final-poll diagnostic increments.
 Expanded on request for a longer implementation session; B09/B13/B14 and D01/D02 are verified.
 Uncommitted implementations are not counted complete.
 
@@ -58,8 +58,8 @@ batch; its cause remains an explicit G04 audit item.
 
 The matrix remains 73 classes/1,018 members: Partial635/Missing327/Equivalent15/
 Idiomatic41. Capture mappings now describe these options and engine differences;
-they do not imply full compatibility. Current matrix generation, 753 parity-document/fixture local links and 655
-source anchors passed for the native font/animation increment.
+they do not imply full compatibility. Current matrix generation, 757 parity-document/fixture local links and 655
+source anchors passed for the final-poll diagnostic increment.
 
 **Current handoff:** B10 is in progress. The verified increment `499c274` in
 `snapshot.rs`,
@@ -85,8 +85,12 @@ assertion-step attachments, retains previous/stability-diff images for unstable
 content and preserves portability after baseline updates/source removal. Native
 groups cover retry/soft ownership, exact pixels/dimensions, live events, visible
 I/O failures and cancellation/restoration. Generic retry probes suppress intermediate
-report images; final-only deferred publication for a failed outer poll remains
-an audit item.
+report images. Final-only deferred publication now retains the last screenshot
+mismatch from the last completed failing outer probe; nested polls transfer
+images. Success/control errors and completed pending results discard retained
+images; unfinished probes drop their own images without replacing the earlier
+completed candidate. Weak attempt ownership and one retained mismatch per invocation
+keep deferred retry history from accumulating.
 
 Verified native font/animation increment `e81d744`: seven groups now verify page/locator captures in the main
 document, open roots and same-origin frames, fallback opt-out, timeout/cancellation/
@@ -97,7 +101,11 @@ finite/infinite/zero-rate pixels, stronger same-origin page font waits in Rust
 and observed upstream Chromium locator-stability timeouts.
 
 Continue B10 with CPU/decode/encode/filesystem bounds under the shared assertion
-clock and final-only deferred diagnostics for failing outer generic polls.
+clock. Final-only deferred diagnostics for failing outer generic polls are now
+implemented, including retry/soft/nested/parallel ownership and visible I/O failures.
+The 12 actual pinned screenshot/toPass cases document upstream intermediate image
+history, including eventual/nested success and expected-only missing-target images,
+which differs from the Rust final-only policy.
 Run final complete phase gates, update matrix/capability evidence and commit only
 verified work before checking B10. Preserve entry points and document input-struct
 migration. B18/B11 follow after B10 is complete.
@@ -867,13 +875,15 @@ their dependencies are ready. References include
   groups and 36 pinned path-only cases verify them. Attempt/step-owned expected/
   actual/diff and last-pair stability attachments (`b826c56`) now preserve immutable retry
   evidence and portable links, with four native diagnostic groups. `e81d744` adds seven additional
-  native font/animation groups use real held HTTP fonts and native animation
+  native font/animation groups using real held HTTP fonts and native animation
   objects, including late CSS animation cancellation/resumption and visible
   finish/resume errors and the 4,096/4,097-object limit boundary. Final-only
-  outer-poll diagnostics, resource/clock audits and final complete phase gates
-  are still required.
-  Latest focused increment gates passed: 194 units, 49 native integrations/twelve
-  targets, four doctests and 28 CLI/configuration checks (275 combined), strict
+  outer-poll diagnostics now publish the last completed failing probe only,
+  with four additional native diagnostic groups verifying nested/control/pending/
+  unfinished/soft/parallel/retry/export and publication I/O behavior. Resource/
+  clock audits and final complete phase gates are still required.
+  Latest focused increment gates passed: 195 units, 30 native integrations/six
+  targets, four doctests and 28 CLI/configuration checks (257 combined), strict
   Clippy, formatting, regenerated matrix and local links. Font waits now follow
   owned style preparation across reachable same-origin documents, with real-
   font HTTP delivery, cancellation/restoration and animation-boundary coverage.

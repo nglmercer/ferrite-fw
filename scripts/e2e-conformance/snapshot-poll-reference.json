@@ -1,0 +1,2074 @@
+{
+  "playwright": "1.63.0",
+  "engines": [
+    {
+      "name": "chromium",
+      "version": "153.0.8010.12",
+      "cases": [
+        {
+          "name": "stable-failure",
+          "outcome": "caught",
+          "error": "expect(page).toHaveScreenshot(expected) failed\n\n  1200 pixels (ratio 1.00 of all image pixels) are different.\n\n  Snapshot: chromium-stable-failure.png\n\nCall log:\n  - Expect \"toHaveScreenshot(chromium-stable-failure.png)\" with timeout 250ms\n    - verifying given screenshot expectation\n  - taking page screenshot\n  - waiting for fonts to load...\n  - fonts loaded\n  - 1200 pixels (ratio 1.00 of all image pixels) are different.\n  - waiting 100ms before taking screenshot\n  - taking page screenshot\n  - waiting for fonts to load...\n  - fonts loaded\n  - captured a stable screenshot\n  - 1200 pixels (ratio 1.00 of all image pixels) are different.\n\n\nCall Log:\n- Timeout 1000ms exceeded while waiting on the predicate",
+          "durationMs": 1004,
+          "baselineChanged": false,
+          "calls": 6,
+          "unfinishedAtSettlement": 1,
+          "probes": [
+            {
+              "call": 0,
+              "outcome": "caught",
+              "attachmentCount": 3
+            },
+            {
+              "call": 1,
+              "outcome": "caught",
+              "attachmentCount": 6
+            },
+            {
+              "call": 2,
+              "outcome": "caught",
+              "attachmentCount": 9
+            },
+            {
+              "call": 3,
+              "outcome": "caught",
+              "attachmentCount": 12
+            },
+            {
+              "call": 4,
+              "outcome": "caught",
+              "attachmentCount": 15
+            }
+          ],
+          "attachments": [
+            {
+              "name": "chromium-stable-failure-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-stable-failure.png",
+              "sha256": "fa24dc88bcf75234571e89057c2578fb897def788252f62b4df8ad2d78be880d",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-stable-failure-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-stable-failure-actual.png",
+              "sha256": "0fea276250d03113530626a40b5dacffdea637dc5a2dd24564db96cc34122009",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-stable-failure-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-stable-failure-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-stable-failure-1-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-stable-failure.png",
+              "sha256": "fa24dc88bcf75234571e89057c2578fb897def788252f62b4df8ad2d78be880d",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-stable-failure-1-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-stable-failure-1-actual.png",
+              "sha256": "0fea276250d03113530626a40b5dacffdea637dc5a2dd24564db96cc34122009",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-stable-failure-1-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-stable-failure-1-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-stable-failure-2-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-stable-failure.png",
+              "sha256": "fa24dc88bcf75234571e89057c2578fb897def788252f62b4df8ad2d78be880d",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-stable-failure-2-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-stable-failure-2-actual.png",
+              "sha256": "0fea276250d03113530626a40b5dacffdea637dc5a2dd24564db96cc34122009",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-stable-failure-2-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-stable-failure-2-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-stable-failure-3-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-stable-failure.png",
+              "sha256": "fa24dc88bcf75234571e89057c2578fb897def788252f62b4df8ad2d78be880d",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-stable-failure-3-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-stable-failure-3-actual.png",
+              "sha256": "0fea276250d03113530626a40b5dacffdea637dc5a2dd24564db96cc34122009",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-stable-failure-3-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-stable-failure-3-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-stable-failure-4-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-stable-failure.png",
+              "sha256": "fa24dc88bcf75234571e89057c2578fb897def788252f62b4df8ad2d78be880d",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-stable-failure-4-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-stable-failure-4-actual.png",
+              "sha256": "0fea276250d03113530626a40b5dacffdea637dc5a2dd24564db96cc34122009",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-stable-failure-4-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-stable-failure-4-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            }
+          ],
+          "afterDisposal": {
+            "calls": 6,
+            "probes": [
+              {
+                "call": 0,
+                "outcome": "caught",
+                "attachmentCount": 3
+              },
+              {
+                "call": 1,
+                "outcome": "caught",
+                "attachmentCount": 6
+              },
+              {
+                "call": 2,
+                "outcome": "caught",
+                "attachmentCount": 9
+              },
+              {
+                "call": 3,
+                "outcome": "caught",
+                "attachmentCount": 12
+              },
+              {
+                "call": 4,
+                "outcome": "caught",
+                "attachmentCount": 15
+              }
+            ],
+            "attachmentCount": 15
+          }
+        },
+        {
+          "name": "eventual-success",
+          "outcome": "passed",
+          "durationMs": 228,
+          "baselineChanged": false,
+          "calls": 2,
+          "unfinishedAtSettlement": 0,
+          "probes": [
+            {
+              "call": 0,
+              "outcome": "caught",
+              "attachmentCount": 3
+            },
+            {
+              "call": 1,
+              "outcome": "passed",
+              "attachmentCount": 3
+            }
+          ],
+          "attachments": [
+            {
+              "name": "chromium-eventual-success-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-eventual-success.png",
+              "sha256": "fa24dc88bcf75234571e89057c2578fb897def788252f62b4df8ad2d78be880d",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-eventual-success-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-eventual-success-actual.png",
+              "sha256": "0fea276250d03113530626a40b5dacffdea637dc5a2dd24564db96cc34122009",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-eventual-success-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-eventual-success-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            }
+          ],
+          "afterDisposal": {
+            "calls": 2,
+            "probes": [
+              {
+                "call": 0,
+                "outcome": "caught",
+                "attachmentCount": 3
+              },
+              {
+                "call": 1,
+                "outcome": "passed",
+                "attachmentCount": 3
+              }
+            ],
+            "attachmentCount": 3
+          }
+        },
+        {
+          "name": "nested-failure",
+          "outcome": "caught",
+          "error": "expect(page).toHaveScreenshot(expected) failed\n\n  1200 pixels (ratio 1.00 of all image pixels) are different.\n\n  Snapshot: chromium-nested-failure.png\n\nCall log:\n  - Expect \"toHaveScreenshot(chromium-nested-failure.png)\" with timeout 250ms\n    - verifying given screenshot expectation\n  - taking page screenshot\n  - waiting for fonts to load...\n  - fonts loaded\n  - 1200 pixels (ratio 1.00 of all image pixels) are different.\n  - waiting 100ms before taking screenshot\n  - taking page screenshot\n  - waiting for fonts to load...\n  - fonts loaded\n  - captured a stable screenshot\n  - 1200 pixels (ratio 1.00 of all image pixels) are different.\n\n\nCall Log:\n- Timeout 550ms exceeded while waiting on the predicate\n\nCall Log:\n- Timeout 1400ms exceeded while waiting on the predicate",
+          "durationMs": 1401,
+          "baselineChanged": false,
+          "calls": 9,
+          "unfinishedAtSettlement": 1,
+          "probes": [
+            {
+              "call": 0,
+              "outcome": "caught",
+              "attachmentCount": 3
+            },
+            {
+              "call": 1,
+              "outcome": "caught",
+              "attachmentCount": 6
+            },
+            {
+              "call": 2,
+              "outcome": "caught",
+              "attachmentCount": 9
+            },
+            {
+              "call": 3,
+              "outcome": "caught",
+              "attachmentCount": 12
+            },
+            {
+              "call": 4,
+              "outcome": "caught",
+              "attachmentCount": 15
+            },
+            {
+              "call": 5,
+              "outcome": "caught",
+              "attachmentCount": 18
+            },
+            {
+              "call": 6,
+              "outcome": "caught",
+              "attachmentCount": 21
+            },
+            {
+              "call": 7,
+              "outcome": "caught",
+              "attachmentCount": 24
+            }
+          ],
+          "attachments": [
+            {
+              "name": "chromium-nested-failure-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-nested-failure.png",
+              "sha256": "fa24dc88bcf75234571e89057c2578fb897def788252f62b4df8ad2d78be880d",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-nested-failure-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-nested-failure-actual.png",
+              "sha256": "0fea276250d03113530626a40b5dacffdea637dc5a2dd24564db96cc34122009",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-nested-failure-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-nested-failure-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-nested-failure-1-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-nested-failure.png",
+              "sha256": "fa24dc88bcf75234571e89057c2578fb897def788252f62b4df8ad2d78be880d",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-nested-failure-1-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-nested-failure-1-actual.png",
+              "sha256": "0fea276250d03113530626a40b5dacffdea637dc5a2dd24564db96cc34122009",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-nested-failure-1-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-nested-failure-1-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-nested-failure-2-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-nested-failure.png",
+              "sha256": "fa24dc88bcf75234571e89057c2578fb897def788252f62b4df8ad2d78be880d",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-nested-failure-2-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-nested-failure-2-actual.png",
+              "sha256": "0fea276250d03113530626a40b5dacffdea637dc5a2dd24564db96cc34122009",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-nested-failure-2-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-nested-failure-2-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-nested-failure-3-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-nested-failure.png",
+              "sha256": "fa24dc88bcf75234571e89057c2578fb897def788252f62b4df8ad2d78be880d",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-nested-failure-3-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-nested-failure-3-actual.png",
+              "sha256": "0fea276250d03113530626a40b5dacffdea637dc5a2dd24564db96cc34122009",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-nested-failure-3-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-nested-failure-3-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-nested-failure-4-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-nested-failure.png",
+              "sha256": "fa24dc88bcf75234571e89057c2578fb897def788252f62b4df8ad2d78be880d",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-nested-failure-4-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-nested-failure-4-actual.png",
+              "sha256": "0fea276250d03113530626a40b5dacffdea637dc5a2dd24564db96cc34122009",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-nested-failure-4-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-nested-failure-4-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-nested-failure-5-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-nested-failure.png",
+              "sha256": "fa24dc88bcf75234571e89057c2578fb897def788252f62b4df8ad2d78be880d",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-nested-failure-5-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-nested-failure-5-actual.png",
+              "sha256": "0fea276250d03113530626a40b5dacffdea637dc5a2dd24564db96cc34122009",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-nested-failure-5-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-nested-failure-5-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-nested-failure-6-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-nested-failure.png",
+              "sha256": "fa24dc88bcf75234571e89057c2578fb897def788252f62b4df8ad2d78be880d",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-nested-failure-6-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-nested-failure-6-actual.png",
+              "sha256": "0fea276250d03113530626a40b5dacffdea637dc5a2dd24564db96cc34122009",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-nested-failure-6-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-nested-failure-6-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-nested-failure-7-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-nested-failure.png",
+              "sha256": "fa24dc88bcf75234571e89057c2578fb897def788252f62b4df8ad2d78be880d",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-nested-failure-7-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-nested-failure-7-actual.png",
+              "sha256": "0fea276250d03113530626a40b5dacffdea637dc5a2dd24564db96cc34122009",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-nested-failure-7-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-nested-failure-7-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            }
+          ],
+          "afterDisposal": {
+            "calls": 9,
+            "probes": [
+              {
+                "call": 0,
+                "outcome": "caught",
+                "attachmentCount": 3
+              },
+              {
+                "call": 1,
+                "outcome": "caught",
+                "attachmentCount": 6
+              },
+              {
+                "call": 2,
+                "outcome": "caught",
+                "attachmentCount": 9
+              },
+              {
+                "call": 3,
+                "outcome": "caught",
+                "attachmentCount": 12
+              },
+              {
+                "call": 4,
+                "outcome": "caught",
+                "attachmentCount": 15
+              },
+              {
+                "call": 5,
+                "outcome": "caught",
+                "attachmentCount": 18
+              },
+              {
+                "call": 6,
+                "outcome": "caught",
+                "attachmentCount": 21
+              },
+              {
+                "call": 7,
+                "outcome": "caught",
+                "attachmentCount": 24
+              }
+            ],
+            "attachmentCount": 24
+          }
+        },
+        {
+          "name": "nested-success",
+          "outcome": "passed",
+          "durationMs": 522,
+          "baselineChanged": false,
+          "calls": 3,
+          "unfinishedAtSettlement": 0,
+          "probes": [
+            {
+              "call": 0,
+              "outcome": "caught",
+              "attachmentCount": 3
+            },
+            {
+              "call": 1,
+              "outcome": "caught",
+              "attachmentCount": 6
+            },
+            {
+              "call": 2,
+              "outcome": "caught",
+              "attachmentCount": 9
+            }
+          ],
+          "attachments": [
+            {
+              "name": "chromium-nested-success-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-nested-success.png",
+              "sha256": "fa24dc88bcf75234571e89057c2578fb897def788252f62b4df8ad2d78be880d",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-nested-success-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-nested-success-actual.png",
+              "sha256": "0fea276250d03113530626a40b5dacffdea637dc5a2dd24564db96cc34122009",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-nested-success-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-nested-success-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-nested-success-1-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-nested-success.png",
+              "sha256": "fa24dc88bcf75234571e89057c2578fb897def788252f62b4df8ad2d78be880d",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-nested-success-1-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-nested-success-1-actual.png",
+              "sha256": "0fea276250d03113530626a40b5dacffdea637dc5a2dd24564db96cc34122009",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-nested-success-1-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-nested-success-1-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-nested-success-2-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-nested-success.png",
+              "sha256": "fa24dc88bcf75234571e89057c2578fb897def788252f62b4df8ad2d78be880d",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-nested-success-2-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-nested-success-2-actual.png",
+              "sha256": "0fea276250d03113530626a40b5dacffdea637dc5a2dd24564db96cc34122009",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-nested-success-2-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-nested-success-2-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            }
+          ],
+          "afterDisposal": {
+            "calls": 3,
+            "probes": [
+              {
+                "call": 0,
+                "outcome": "caught",
+                "attachmentCount": 3
+              },
+              {
+                "call": 1,
+                "outcome": "caught",
+                "attachmentCount": 6
+              },
+              {
+                "call": 2,
+                "outcome": "caught",
+                "attachmentCount": 9
+              }
+            ],
+            "attachmentCount": 9
+          }
+        },
+        {
+          "name": "changing-failure",
+          "outcome": "caught",
+          "error": "expect(page).toHaveScreenshot(expected) failed\n\nTimeout: 250ms\n  Timeout 250ms exceeded.\n\n  Snapshot: chromium-changing-failure.png\n\nCall log:\n  - Expect \"toHaveScreenshot(chromium-changing-failure.png)\" with timeout 250ms\n    - verifying given screenshot expectation\n  - taking page screenshot\n  - waiting for fonts to load...\n  - fonts loaded\n  - Timeout 250ms exceeded.\n\n\nCall Log:\n- Timeout 1000ms exceeded while waiting on the predicate",
+          "durationMs": 1001,
+          "baselineChanged": false,
+          "calls": 4,
+          "unfinishedAtSettlement": 1,
+          "probes": [
+            {
+              "call": 0,
+              "outcome": "caught",
+              "attachmentCount": 4
+            },
+            {
+              "call": 1,
+              "outcome": "caught",
+              "attachmentCount": 5
+            },
+            {
+              "call": 2,
+              "outcome": "caught",
+              "attachmentCount": 6
+            }
+          ],
+          "attachments": [
+            {
+              "name": "chromium-changing-failure-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-changing-failure.png",
+              "sha256": "fa24dc88bcf75234571e89057c2578fb897def788252f62b4df8ad2d78be880d",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-changing-failure-previous.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-changing-failure-previous.png",
+              "sha256": "b3dc3a36ba643b530000ce00e8553b462b0b21e70ae82133dcd8a28faa419438",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-changing-failure-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-changing-failure-actual.png",
+              "sha256": "33135eef61c22f1c5424036968be91a33e5ae4cbe1e869fa61bf19ed342f96f3",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-changing-failure-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-changing-failure-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-changing-failure-1-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-changing-failure.png",
+              "sha256": "fa24dc88bcf75234571e89057c2578fb897def788252f62b4df8ad2d78be880d",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-changing-failure-2-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-changing-failure.png",
+              "sha256": "fa24dc88bcf75234571e89057c2578fb897def788252f62b4df8ad2d78be880d",
+              "dimensions": [
+                40,
+                30
+              ]
+            }
+          ],
+          "afterDisposal": {
+            "calls": 4,
+            "probes": [
+              {
+                "call": 0,
+                "outcome": "caught",
+                "attachmentCount": 4
+              },
+              {
+                "call": 1,
+                "outcome": "caught",
+                "attachmentCount": 5
+              },
+              {
+                "call": 2,
+                "outcome": "caught",
+                "attachmentCount": 6
+              },
+              {
+                "call": 3,
+                "outcome": "caught",
+                "attachmentCount": 6
+              }
+            ],
+            "attachmentCount": 6
+          }
+        },
+        {
+          "name": "missing-target-failure",
+          "outcome": "caught",
+          "error": "expect(locator).toHaveScreenshot(expected) failed\n\nLocator: locator('#missing')\nTimeout: 250ms\n  Timeout 250ms exceeded.\n\n  Snapshot: chromium-missing-target-failure.png\n\nCall log:\n  - Expect \"toHaveScreenshot(chromium-missing-target-failure.png)\" locator('#missing') with timeout 250ms\n    - verifying given screenshot expectation\n  - waiting for locator('#missing')\n  - Timeout 250ms exceeded.\n\n\nCall Log:\n- Timeout 1000ms exceeded while waiting on the predicate",
+          "durationMs": 1001,
+          "baselineChanged": false,
+          "calls": 4,
+          "unfinishedAtSettlement": 1,
+          "probes": [
+            {
+              "call": 0,
+              "outcome": "caught",
+              "attachmentCount": 1
+            },
+            {
+              "call": 1,
+              "outcome": "caught",
+              "attachmentCount": 2
+            },
+            {
+              "call": 2,
+              "outcome": "caught",
+              "attachmentCount": 3
+            }
+          ],
+          "attachments": [
+            {
+              "name": "chromium-missing-target-failure-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-missing-target-failure.png",
+              "sha256": "fa24dc88bcf75234571e89057c2578fb897def788252f62b4df8ad2d78be880d",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-missing-target-failure-1-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-missing-target-failure.png",
+              "sha256": "fa24dc88bcf75234571e89057c2578fb897def788252f62b4df8ad2d78be880d",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "chromium-missing-target-failure-2-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "chromium-missing-target-failure.png",
+              "sha256": "fa24dc88bcf75234571e89057c2578fb897def788252f62b4df8ad2d78be880d",
+              "dimensions": [
+                40,
+                30
+              ]
+            }
+          ],
+          "afterDisposal": {
+            "calls": 4,
+            "probes": [
+              {
+                "call": 0,
+                "outcome": "caught",
+                "attachmentCount": 1
+              },
+              {
+                "call": 1,
+                "outcome": "caught",
+                "attachmentCount": 2
+              },
+              {
+                "call": 2,
+                "outcome": "caught",
+                "attachmentCount": 3
+              },
+              {
+                "call": 3,
+                "outcome": "caught",
+                "attachmentCount": 3
+              }
+            ],
+            "attachmentCount": 3
+          }
+        }
+      ]
+    },
+    {
+      "name": "firefox",
+      "version": "157.0",
+      "cases": [
+        {
+          "name": "stable-failure",
+          "outcome": "caught",
+          "error": "expect(page).toHaveScreenshot(expected) failed\n\nTimeout: 250ms\n  Timeout 250ms exceeded.\n\n  Snapshot: firefox-stable-failure.png\n\nCall log:\n  - Expect \"toHaveScreenshot(firefox-stable-failure.png)\" with timeout 250ms\n    - verifying given screenshot expectation\n  - taking page screenshot\n  - waiting for fonts to load...\n  - fonts loaded\n  - 1200 pixels (ratio 1.00 of all image pixels) are different.\n  - waiting 100ms before taking screenshot\n  - taking page screenshot\n  - waiting for fonts to load...\n  - Timeout 250ms exceeded.\n\n\nCall Log:\n- Timeout 1000ms exceeded while waiting on the predicate",
+          "durationMs": 1001,
+          "baselineChanged": false,
+          "calls": 5,
+          "unfinishedAtSettlement": 1,
+          "probes": [
+            {
+              "call": 0,
+              "outcome": "caught",
+              "attachmentCount": 3
+            },
+            {
+              "call": 1,
+              "outcome": "caught",
+              "attachmentCount": 6
+            },
+            {
+              "call": 2,
+              "outcome": "caught",
+              "attachmentCount": 9
+            },
+            {
+              "call": 3,
+              "outcome": "caught",
+              "attachmentCount": 12
+            }
+          ],
+          "attachments": [
+            {
+              "name": "firefox-stable-failure-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-stable-failure.png",
+              "sha256": "5c7931e7ef8d9525151f08df67dc0fb674927ac0a008ad8270a5fd78ffd73791",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-stable-failure-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-stable-failure-actual.png",
+              "sha256": "a73f98898a1ff9abf5375febbcef4a4f0cf2ec6d47281f72682c8314487a91ce",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-stable-failure-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-stable-failure-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-stable-failure-1-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-stable-failure.png",
+              "sha256": "5c7931e7ef8d9525151f08df67dc0fb674927ac0a008ad8270a5fd78ffd73791",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-stable-failure-1-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-stable-failure-1-actual.png",
+              "sha256": "a73f98898a1ff9abf5375febbcef4a4f0cf2ec6d47281f72682c8314487a91ce",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-stable-failure-1-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-stable-failure-1-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-stable-failure-2-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-stable-failure.png",
+              "sha256": "5c7931e7ef8d9525151f08df67dc0fb674927ac0a008ad8270a5fd78ffd73791",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-stable-failure-2-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-stable-failure-2-actual.png",
+              "sha256": "a73f98898a1ff9abf5375febbcef4a4f0cf2ec6d47281f72682c8314487a91ce",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-stable-failure-2-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-stable-failure-2-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-stable-failure-3-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-stable-failure.png",
+              "sha256": "5c7931e7ef8d9525151f08df67dc0fb674927ac0a008ad8270a5fd78ffd73791",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-stable-failure-3-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-stable-failure-3-actual.png",
+              "sha256": "a73f98898a1ff9abf5375febbcef4a4f0cf2ec6d47281f72682c8314487a91ce",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-stable-failure-3-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-stable-failure-3-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            }
+          ],
+          "afterDisposal": {
+            "calls": 5,
+            "probes": [
+              {
+                "call": 0,
+                "outcome": "caught",
+                "attachmentCount": 3
+              },
+              {
+                "call": 1,
+                "outcome": "caught",
+                "attachmentCount": 6
+              },
+              {
+                "call": 2,
+                "outcome": "caught",
+                "attachmentCount": 9
+              },
+              {
+                "call": 3,
+                "outcome": "caught",
+                "attachmentCount": 12
+              }
+            ],
+            "attachmentCount": 12
+          }
+        },
+        {
+          "name": "eventual-success",
+          "outcome": "passed",
+          "durationMs": 249,
+          "baselineChanged": false,
+          "calls": 2,
+          "unfinishedAtSettlement": 0,
+          "probes": [
+            {
+              "call": 0,
+              "outcome": "caught",
+              "attachmentCount": 3
+            },
+            {
+              "call": 1,
+              "outcome": "passed",
+              "attachmentCount": 3
+            }
+          ],
+          "attachments": [
+            {
+              "name": "firefox-eventual-success-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-eventual-success.png",
+              "sha256": "5c7931e7ef8d9525151f08df67dc0fb674927ac0a008ad8270a5fd78ffd73791",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-eventual-success-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-eventual-success-actual.png",
+              "sha256": "a73f98898a1ff9abf5375febbcef4a4f0cf2ec6d47281f72682c8314487a91ce",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-eventual-success-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-eventual-success-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            }
+          ],
+          "afterDisposal": {
+            "calls": 2,
+            "probes": [
+              {
+                "call": 0,
+                "outcome": "caught",
+                "attachmentCount": 3
+              },
+              {
+                "call": 1,
+                "outcome": "passed",
+                "attachmentCount": 3
+              }
+            ],
+            "attachmentCount": 3
+          }
+        },
+        {
+          "name": "nested-failure",
+          "outcome": "caught",
+          "error": "expect(page).toHaveScreenshot(expected) failed\n\n  1200 pixels (ratio 1.00 of all image pixels) are different.\n\n  Snapshot: firefox-nested-failure.png\n\nCall log:\n  - Expect \"toHaveScreenshot(firefox-nested-failure.png)\" with timeout 250ms\n    - verifying given screenshot expectation\n  - taking page screenshot\n  - waiting for fonts to load...\n  - fonts loaded\n  - 1200 pixels (ratio 1.00 of all image pixels) are different.\n  - waiting 100ms before taking screenshot\n  - taking page screenshot\n  - waiting for fonts to load...\n  - fonts loaded\n  - captured a stable screenshot\n  - 1200 pixels (ratio 1.00 of all image pixels) are different.\n\n\nCall Log:\n- Timeout 550ms exceeded while waiting on the predicate\n\nCall Log:\n- Timeout 1400ms exceeded while waiting on the predicate",
+          "durationMs": 1401,
+          "baselineChanged": false,
+          "calls": 9,
+          "unfinishedAtSettlement": 1,
+          "probes": [
+            {
+              "call": 0,
+              "outcome": "caught",
+              "attachmentCount": 3
+            },
+            {
+              "call": 1,
+              "outcome": "caught",
+              "attachmentCount": 6
+            },
+            {
+              "call": 2,
+              "outcome": "caught",
+              "attachmentCount": 9
+            },
+            {
+              "call": 3,
+              "outcome": "caught",
+              "attachmentCount": 12
+            },
+            {
+              "call": 4,
+              "outcome": "caught",
+              "attachmentCount": 15
+            },
+            {
+              "call": 5,
+              "outcome": "caught",
+              "attachmentCount": 18
+            },
+            {
+              "call": 6,
+              "outcome": "caught",
+              "attachmentCount": 21
+            },
+            {
+              "call": 7,
+              "outcome": "caught",
+              "attachmentCount": 24
+            }
+          ],
+          "attachments": [
+            {
+              "name": "firefox-nested-failure-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-nested-failure.png",
+              "sha256": "5c7931e7ef8d9525151f08df67dc0fb674927ac0a008ad8270a5fd78ffd73791",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-nested-failure-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-nested-failure-actual.png",
+              "sha256": "a73f98898a1ff9abf5375febbcef4a4f0cf2ec6d47281f72682c8314487a91ce",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-nested-failure-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-nested-failure-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-nested-failure-1-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-nested-failure.png",
+              "sha256": "5c7931e7ef8d9525151f08df67dc0fb674927ac0a008ad8270a5fd78ffd73791",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-nested-failure-1-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-nested-failure-1-actual.png",
+              "sha256": "a73f98898a1ff9abf5375febbcef4a4f0cf2ec6d47281f72682c8314487a91ce",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-nested-failure-1-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-nested-failure-1-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-nested-failure-2-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-nested-failure.png",
+              "sha256": "5c7931e7ef8d9525151f08df67dc0fb674927ac0a008ad8270a5fd78ffd73791",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-nested-failure-2-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-nested-failure-2-actual.png",
+              "sha256": "a73f98898a1ff9abf5375febbcef4a4f0cf2ec6d47281f72682c8314487a91ce",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-nested-failure-2-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-nested-failure-2-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-nested-failure-3-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-nested-failure.png",
+              "sha256": "5c7931e7ef8d9525151f08df67dc0fb674927ac0a008ad8270a5fd78ffd73791",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-nested-failure-3-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-nested-failure-3-actual.png",
+              "sha256": "a73f98898a1ff9abf5375febbcef4a4f0cf2ec6d47281f72682c8314487a91ce",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-nested-failure-3-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-nested-failure-3-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-nested-failure-4-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-nested-failure.png",
+              "sha256": "5c7931e7ef8d9525151f08df67dc0fb674927ac0a008ad8270a5fd78ffd73791",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-nested-failure-4-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-nested-failure-4-actual.png",
+              "sha256": "a73f98898a1ff9abf5375febbcef4a4f0cf2ec6d47281f72682c8314487a91ce",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-nested-failure-4-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-nested-failure-4-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-nested-failure-5-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-nested-failure.png",
+              "sha256": "5c7931e7ef8d9525151f08df67dc0fb674927ac0a008ad8270a5fd78ffd73791",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-nested-failure-5-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-nested-failure-5-actual.png",
+              "sha256": "a73f98898a1ff9abf5375febbcef4a4f0cf2ec6d47281f72682c8314487a91ce",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-nested-failure-5-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-nested-failure-5-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-nested-failure-6-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-nested-failure.png",
+              "sha256": "5c7931e7ef8d9525151f08df67dc0fb674927ac0a008ad8270a5fd78ffd73791",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-nested-failure-6-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-nested-failure-6-actual.png",
+              "sha256": "a73f98898a1ff9abf5375febbcef4a4f0cf2ec6d47281f72682c8314487a91ce",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-nested-failure-6-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-nested-failure-6-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-nested-failure-7-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-nested-failure.png",
+              "sha256": "5c7931e7ef8d9525151f08df67dc0fb674927ac0a008ad8270a5fd78ffd73791",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-nested-failure-7-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-nested-failure-7-actual.png",
+              "sha256": "a73f98898a1ff9abf5375febbcef4a4f0cf2ec6d47281f72682c8314487a91ce",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-nested-failure-7-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-nested-failure-7-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            }
+          ],
+          "afterDisposal": {
+            "calls": 9,
+            "probes": [
+              {
+                "call": 0,
+                "outcome": "caught",
+                "attachmentCount": 3
+              },
+              {
+                "call": 1,
+                "outcome": "caught",
+                "attachmentCount": 6
+              },
+              {
+                "call": 2,
+                "outcome": "caught",
+                "attachmentCount": 9
+              },
+              {
+                "call": 3,
+                "outcome": "caught",
+                "attachmentCount": 12
+              },
+              {
+                "call": 4,
+                "outcome": "caught",
+                "attachmentCount": 15
+              },
+              {
+                "call": 5,
+                "outcome": "caught",
+                "attachmentCount": 18
+              },
+              {
+                "call": 6,
+                "outcome": "caught",
+                "attachmentCount": 21
+              },
+              {
+                "call": 7,
+                "outcome": "caught",
+                "attachmentCount": 24
+              }
+            ],
+            "attachmentCount": 24
+          }
+        },
+        {
+          "name": "nested-success",
+          "outcome": "passed",
+          "durationMs": 551,
+          "baselineChanged": false,
+          "calls": 4,
+          "unfinishedAtSettlement": 1,
+          "probes": [
+            {
+              "call": 0,
+              "outcome": "caught",
+              "attachmentCount": 3
+            },
+            {
+              "call": 1,
+              "outcome": "caught",
+              "attachmentCount": 6
+            },
+            {
+              "call": 2,
+              "outcome": "caught",
+              "attachmentCount": 9
+            }
+          ],
+          "attachments": [
+            {
+              "name": "firefox-nested-success-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-nested-success.png",
+              "sha256": "5c7931e7ef8d9525151f08df67dc0fb674927ac0a008ad8270a5fd78ffd73791",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-nested-success-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-nested-success-actual.png",
+              "sha256": "a73f98898a1ff9abf5375febbcef4a4f0cf2ec6d47281f72682c8314487a91ce",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-nested-success-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-nested-success-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-nested-success-1-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-nested-success.png",
+              "sha256": "5c7931e7ef8d9525151f08df67dc0fb674927ac0a008ad8270a5fd78ffd73791",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-nested-success-1-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-nested-success-1-actual.png",
+              "sha256": "a73f98898a1ff9abf5375febbcef4a4f0cf2ec6d47281f72682c8314487a91ce",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-nested-success-1-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-nested-success-1-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-nested-success-2-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-nested-success.png",
+              "sha256": "5c7931e7ef8d9525151f08df67dc0fb674927ac0a008ad8270a5fd78ffd73791",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-nested-success-2-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-nested-success-2-actual.png",
+              "sha256": "a73f98898a1ff9abf5375febbcef4a4f0cf2ec6d47281f72682c8314487a91ce",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-nested-success-2-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-nested-success-2-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            }
+          ],
+          "afterDisposal": {
+            "calls": 4,
+            "probes": [
+              {
+                "call": 0,
+                "outcome": "caught",
+                "attachmentCount": 3
+              },
+              {
+                "call": 1,
+                "outcome": "caught",
+                "attachmentCount": 6
+              },
+              {
+                "call": 2,
+                "outcome": "caught",
+                "attachmentCount": 9
+              }
+            ],
+            "attachmentCount": 9
+          }
+        },
+        {
+          "name": "changing-failure",
+          "outcome": "caught",
+          "error": "expect(page).toHaveScreenshot(expected) failed\n\nTimeout: 250ms\n  Failed to take two consecutive stable screenshots.\n\n  Snapshot: firefox-changing-failure.png\n\nCall log:\n  - Expect \"toHaveScreenshot(firefox-changing-failure.png)\" with timeout 250ms\n    - verifying given screenshot expectation\n  - taking page screenshot\n  - waiting for fonts to load...\n  - fonts loaded\n  - 1200 pixels (ratio 1.00 of all image pixels) are different.\n  - waiting 100ms before taking screenshot\n  - taking page screenshot\n  - waiting for fonts to load...\n  - fonts loaded\n  - 1200 pixels (ratio 1.00 of all image pixels) are different.\n  - waiting 250ms before taking screenshot\n  - Timeout 250ms exceeded.\n\n\nCall Log:\n- Timeout 1000ms exceeded while waiting on the predicate",
+          "durationMs": 1002,
+          "baselineChanged": false,
+          "calls": 4,
+          "unfinishedAtSettlement": 1,
+          "probes": [
+            {
+              "call": 0,
+              "outcome": "caught",
+              "attachmentCount": 4
+            },
+            {
+              "call": 1,
+              "outcome": "caught",
+              "attachmentCount": 8
+            },
+            {
+              "call": 2,
+              "outcome": "caught",
+              "attachmentCount": 12
+            }
+          ],
+          "attachments": [
+            {
+              "name": "firefox-changing-failure-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-changing-failure.png",
+              "sha256": "5c7931e7ef8d9525151f08df67dc0fb674927ac0a008ad8270a5fd78ffd73791",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-changing-failure-previous.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-changing-failure-previous.png",
+              "sha256": "1884aba75281d5e5772f5afb0b4c8b572515c105f47ba2845d7156d6691e750a",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-changing-failure-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-changing-failure-actual.png",
+              "sha256": "d219279e19987828214a44a6c77889d3671a13f7762aa6382a85f6fd0419e879",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-changing-failure-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-changing-failure-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-changing-failure-1-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-changing-failure.png",
+              "sha256": "5c7931e7ef8d9525151f08df67dc0fb674927ac0a008ad8270a5fd78ffd73791",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-changing-failure-1-previous.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-changing-failure-1-previous.png",
+              "sha256": "7506d3753c3b7c3761027e8a149c0423a8b147933892ef8a33a574e0cfca1f9a",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-changing-failure-1-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-changing-failure-1-actual.png",
+              "sha256": "5f888470cf1788033a9900cbe7b43250fda5d8af066615eb2e3e70e03f0cbaa8",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-changing-failure-1-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-changing-failure-1-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-changing-failure-2-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-changing-failure.png",
+              "sha256": "5c7931e7ef8d9525151f08df67dc0fb674927ac0a008ad8270a5fd78ffd73791",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-changing-failure-2-previous.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-changing-failure-2-previous.png",
+              "sha256": "9182db4df8a1d28a80e0e32098022c117d9fa987e8249aad4c5d41684a3bb272",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-changing-failure-2-actual.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-changing-failure-2-actual.png",
+              "sha256": "62ec6c407db12c3e94cdcda56dc1371948a2c1b27173062a748654e35c7b6ddb",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-changing-failure-2-diff.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-changing-failure-2-diff.png",
+              "sha256": "ed3a09c47805a5aafd8693ee2d15ba7d98dcb6e2dec8d223a861fe53a6f70207",
+              "dimensions": [
+                40,
+                30
+              ]
+            }
+          ],
+          "afterDisposal": {
+            "calls": 4,
+            "probes": [
+              {
+                "call": 0,
+                "outcome": "caught",
+                "attachmentCount": 4
+              },
+              {
+                "call": 1,
+                "outcome": "caught",
+                "attachmentCount": 8
+              },
+              {
+                "call": 2,
+                "outcome": "caught",
+                "attachmentCount": 12
+              }
+            ],
+            "attachmentCount": 12
+          }
+        },
+        {
+          "name": "missing-target-failure",
+          "outcome": "caught",
+          "error": "expect(locator).toHaveScreenshot(expected) failed\n\nLocator: locator('#missing')\nTimeout: 250ms\n  Timeout 250ms exceeded.\n\n  Snapshot: firefox-missing-target-failure.png\n\nCall log:\n  - Expect \"toHaveScreenshot(firefox-missing-target-failure.png)\" locator('#missing') with timeout 250ms\n    - verifying given screenshot expectation\n  - waiting for locator('#missing')\n  - Timeout 250ms exceeded.\n\n\nCall Log:\n- Timeout 1000ms exceeded while waiting on the predicate",
+          "durationMs": 1001,
+          "baselineChanged": false,
+          "calls": 4,
+          "unfinishedAtSettlement": 1,
+          "probes": [
+            {
+              "call": 0,
+              "outcome": "caught",
+              "attachmentCount": 1
+            },
+            {
+              "call": 1,
+              "outcome": "caught",
+              "attachmentCount": 2
+            },
+            {
+              "call": 2,
+              "outcome": "caught",
+              "attachmentCount": 3
+            }
+          ],
+          "attachments": [
+            {
+              "name": "firefox-missing-target-failure-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-missing-target-failure.png",
+              "sha256": "5c7931e7ef8d9525151f08df67dc0fb674927ac0a008ad8270a5fd78ffd73791",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-missing-target-failure-1-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-missing-target-failure.png",
+              "sha256": "5c7931e7ef8d9525151f08df67dc0fb674927ac0a008ad8270a5fd78ffd73791",
+              "dimensions": [
+                40,
+                30
+              ]
+            },
+            {
+              "name": "firefox-missing-target-failure-2-expected.png",
+              "contentType": "image/png",
+              "exists": true,
+              "file": "firefox-missing-target-failure.png",
+              "sha256": "5c7931e7ef8d9525151f08df67dc0fb674927ac0a008ad8270a5fd78ffd73791",
+              "dimensions": [
+                40,
+                30
+              ]
+            }
+          ],
+          "afterDisposal": {
+            "calls": 4,
+            "probes": [
+              {
+                "call": 0,
+                "outcome": "caught",
+                "attachmentCount": 1
+              },
+              {
+                "call": 1,
+                "outcome": "caught",
+                "attachmentCount": 2
+              },
+              {
+                "call": 2,
+                "outcome": "caught",
+                "attachmentCount": 3
+              }
+            ],
+            "attachmentCount": 3
+          }
+        }
+      ]
+    }
+  ]
+}

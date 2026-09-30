@@ -441,3 +441,473 @@ async fn diagnostic_io_preserves_mismatches_and_control_errors_publish_no_failur
         browser.close().await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn failed_outer_poll_publishes_only_the_last_completed_probe_into_its_attempt_and_step() {
+    for browser in browsers().await {
+        let dir = tempfile::tempdir().unwrap();
+        let events = Events::default();
+        let observed = events.clone();
+        let report = runner(&dir)
+            .retries(1)
+            .custom_reporter(events.clone())
+            .run(
+                &browser,
+                vec![test_with_context("deferred <retry>&", move |ctx| {
+                    let events = observed.clone();
+                    async move {
+                        ctx.page
+                            .set_viewport(Viewport {
+                                width: 40,
+                                height: 30,
+                            })
+                            .await?;
+                        ctx.page
+                            .set_content(
+                                "<style>html,body{height:100%;margin:0;background:red}</style>",
+                            )
+                            .await?;
+                        let options = SnapshotOptions {
+                            update: Some(SnapshotUpdate::All),
+                            ..Default::default()
+                        };
+                        ctx.page
+                            .expect()
+                            .screenshot_with("<card>&", &options)
+                            .await?;
+                        if ctx.info.retry > 0 {
+                            // TestInfo intentionally exposes the shared attachment history.
+                            assert_eq!(ctx.info.attachments().len(), 3);
+                            return Ok(());
+                        }
+                        let baseline = ctx
+                            .info
+                            .snapshot_path("<card>&", SnapshotKind::Screenshot)?;
+                        let mut calls = 0;
+                        let error = expect_to_pass_with(
+                            "outer <poll>&",
+                            &PollingOptions::default()
+                                .timeout(Duration::from_secs(2))
+                                .intervals([Duration::from_millis(10)]),
+                            || {
+                                let call = calls;
+                                calls += 1;
+                                let page = ctx.page.clone();
+                                let info = ctx.info.clone();
+                                let events = events.clone();
+                                let baseline = baseline.clone();
+                                async move {
+                                    assert!(info.attachments().is_empty());
+                                    assert!(events.0.lock().unwrap().is_empty());
+                                    if call >= 2 {
+                                        // An unfinished probe must not replace the last completed mismatch.
+                                        // Changing the baseline also proves that expected bytes were frozen.
+                                        page.evaluate_value(
+                                            "document.body.style.background='purple';true",
+                                        )
+                                        .await?;
+                                        std::fs::write(
+                                            baseline,
+                                            page.screenshot(ScreenshotOptions::default()).await?,
+                                        )?;
+                                        return std::future::pending::<E2eResult<()>>().await;
+                                    }
+                                    page.evaluate_value(if call == 0 {
+                                        "document.body.style.background='blue';true"
+                                    } else {
+                                        "document.body.style.background='lime';true"
+                                    })
+                                    .await?;
+                                    page.expect()
+                                        .timeout(Duration::from_millis(350))
+                                        .screenshot("<card>&")
+                                        .await
+                                }
+                            },
+                        )
+                        .await
+                        .unwrap_err();
+                        assert_eq!(error.code(), "FERRITE_E2E_EXPECT");
+                        assert_eq!(calls, 3);
+                        let attachments = ctx.info.attachments();
+                        assert_eq!(attachments.len(), 3);
+                        assert_eq!(
+                            image(&attachment(&attachments, "<card>&-expected").path)
+                                .get_pixel(5, 5)
+                                .0,
+                            [255, 0, 0, 255]
+                        );
+                        assert_eq!(
+                            image(&attachment(&attachments, "<card>&-actual").path)
+                                .get_pixel(5, 5)
+                                .0,
+                            [0, 255, 0, 255]
+                        );
+                        assert_eq!(
+                            image(&attachment(&attachments, "<card>&-diff").path)
+                                .get_pixel(5, 5)
+                                .0,
+                            [255, 0, 0, 255]
+                        );
+                        assert_eq!(image(baseline).get_pixel(5, 5).0, [128, 0, 128, 255]);
+                        Err(error)
+                    }
+                })],
+            )
+            .await;
+        assert!(report.ok(), "{}", report.to_list());
+        let result = &report.results[0];
+        assert!(result.flaky);
+        assert_eq!(result.attempt_results.len(), 2);
+        let failed = &result.attempt_results[0];
+        assert_eq!(failed.attachments.len(), 3);
+        assert!(result.attempt_results[1].attachments.is_empty());
+        let steps = flatten(&failed.steps);
+        let outer = steps
+            .iter()
+            .find(|step| step.title == "expect outer <poll>&")
+            .unwrap();
+        assert_eq!(outer.status, StepStatus::Failed);
+        assert_eq!(outer.attachments.len(), 3);
+        assert_eq!(
+            steps
+                .iter()
+                .filter(|step| !step.attachments.is_empty())
+                .count(),
+            1
+        );
+        assert!(outer.attachments.iter().all(|item| failed
+            .attachments
+            .iter()
+            .any(|attempt| item.path == attempt.path)));
+        assert_eq!(events.0.lock().unwrap().len(), 3);
+        assert!(events
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(retry, _)| *retry == 0));
+        assert!(report.to_html().contains("&lt;card&gt;&amp;-diff"));
+        let export = tempfile::tempdir().unwrap();
+        let bundle = report.write_bundle(export.path().join("bundle")).unwrap();
+        std::fs::remove_dir_all(dir.path().join("output")).unwrap();
+        let metadata: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(bundle.html.parent().unwrap().join("results.json")).unwrap(),
+        )
+        .unwrap();
+        for item in metadata["results"][0]["attempt_results"][0]["attachments"]
+            .as_array()
+            .unwrap()
+        {
+            assert!(bundle
+                .html
+                .parent()
+                .unwrap()
+                .join(item["path"].as_str().unwrap())
+                .is_file());
+        }
+        browser.close().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn nested_poll_failure_defers_images_and_success_controls_pending_and_incomplete_probes_discard_them(
+) {
+    for browser in browsers().await {
+        let dir = tempfile::tempdir().unwrap();
+        let mut tests = Vec::new();
+        for mode in [
+            "nested-failure",
+            "nested-success",
+            "publication-io",
+            "cancel",
+            "operational",
+            "pending",
+            "unfinished",
+        ] {
+            tests.push(test_with_context(mode, move |ctx| async move {
+                ctx.page
+                    .set_viewport(Viewport {
+                        width: 40,
+                        height: 30,
+                    })
+                    .await?;
+                ctx.page
+                    .set_content("<style>html,body{height:100%;margin:0;background:red}</style>")
+                    .await?;
+                let name = ctx.info.title.clone();
+                ctx.page
+                    .expect()
+                    .screenshot_with(
+                        &name,
+                        &SnapshotOptions {
+                            update: Some(SnapshotUpdate::All),
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+                ctx.page
+                    .evaluate_value("document.body.style.background='blue';true")
+                    .await?;
+                if mode == "publication-io" {
+                    std::fs::create_dir_all(&ctx.info.output_dir)?;
+                    std::fs::write(
+                        Path::new(&ctx.info.output_dir).join("attachments"),
+                        b"occupied",
+                    )?;
+                }
+                let token = CancellationToken::new();
+                let controls = PollingOptions::default()
+                    .timeout(Duration::from_millis(1800))
+                    .intervals([Duration::from_millis(10)])
+                    .cancellation(token.clone());
+                let mut calls = 0;
+                let result = expect_poll_with::<(), _, _>(mode, &controls, || {
+                    let call = calls;
+                    calls += 1;
+                    let page = ctx.page.clone();
+                    let name = name.clone();
+                    let info = ctx.info.clone();
+                    let token = token.clone();
+                    async move {
+                        assert!(info.attachments().is_empty());
+                        if call == 0 {
+                            let result = if mode.starts_with("nested") {
+                                expect_to_pass_with(
+                                    "inner",
+                                    &PollingOptions::default().timeout(Duration::from_millis(900)),
+                                    || {
+                                        let page = page.clone();
+                                        let name = name.clone();
+                                        async move {
+                                            page.expect()
+                                                .timeout(Duration::from_millis(350))
+                                                .screenshot(&name)
+                                                .await
+                                        }
+                                    },
+                                )
+                                .await
+                            } else {
+                                page.expect()
+                                    .timeout(Duration::from_millis(350))
+                                    .screenshot(&name)
+                                    .await
+                            };
+                            assert_eq!(result.as_ref().unwrap_err().code(), "FERRITE_E2E_EXPECT");
+                            assert!(info.attachments().is_empty());
+                            if mode == "nested-success" {
+                                return Ok(Some(()));
+                            }
+                            if mode == "unfinished" {
+                                return std::future::pending::<E2eResult<Option<()>>>().await;
+                            }
+                            return result.map(|()| Some(()));
+                        }
+                        if mode == "cancel" {
+                            token.cancel_with_reason("discard deferred images");
+                        }
+                        if mode == "operational" {
+                            return Err(E2eError::Cdp {
+                                method: "probe".into(),
+                                message: "operational failure".into(),
+                            });
+                        }
+                        if mode == "pending" && call == 1 {
+                            return Ok(None);
+                        }
+                        std::future::pending::<E2eResult<Option<()>>>().await
+                    }
+                })
+                .await;
+                if mode == "nested-failure" {
+                    assert_eq!(result.as_ref().unwrap_err().code(), "FERRITE_E2E_EXPECT");
+                    let attachments = ctx.info.attachments();
+                    assert_eq!(attachments.len(), 3);
+                    assert_eq!(
+                        image(&attachment(&attachments, "nested-failure-actual").path)
+                            .get_pixel(5, 5)
+                            .0,
+                        [0, 0, 255, 255]
+                    );
+                } else {
+                    assert!(ctx.info.attachments().is_empty());
+                    match mode {
+                        "nested-success" => {
+                            result.as_ref().unwrap();
+                        }
+                        "cancel" => {
+                            assert_eq!(result.as_ref().unwrap_err().code(), "FERRITE_E2E_CANCELLED")
+                        }
+                        "operational" => assert!(matches!(&result, Err(E2eError::Cdp { .. }))),
+                        "publication-io" => {
+                            let error = result.as_ref().unwrap_err();
+                            assert_eq!(error.code(), "FERRITE_E2E_EXPECT");
+                            assert!(error.to_string().contains("diagnostics also failed"));
+                        }
+                        _ => assert_eq!(result.as_ref().unwrap_err().code(), "FERRITE_E2E_EXPECT"),
+                    }
+                }
+                result
+            }));
+        }
+        let report = runner(&dir).run(&browser, tests).await;
+        assert_eq!(report.results.len(), 7);
+        for result in &report.results {
+            let attempt = &result.attempt_results[0];
+            let expected = if result.name == "nested-failure" {
+                3
+            } else {
+                0
+            };
+            assert_eq!(attempt.attachments.len(), expected, "{}", result.name);
+            assert_eq!(
+                flatten(&attempt.steps)
+                    .iter()
+                    .filter(|step| !step.attachments.is_empty())
+                    .count(),
+                usize::from(expected > 0)
+            );
+        }
+        browser.close().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn failed_soft_polls_retain_their_final_unstable_pair_without_extra_capture() {
+    for browser in browsers().await {
+        let dir = tempfile::tempdir().unwrap();
+        let tests = ["first", "second"].into_iter().map(|name| test_with_context(name, move |ctx| async move {
+            ctx.page.set_content("<style>body{margin:0}#patch{width:20px;height:10px;background:red}</style><div id=patch></div>").await?;
+            let patch = ctx.page.locator("#patch");
+            patch.expect().screenshot(name).await?;
+            ctx.page.evaluate_value("globalThis.animating=true;globalThis.paint=0;globalThis.draw=()=>{if(!animating)return;paint++;document.getElementById('patch').style.background=`rgb(${paint&255},${(paint>>8)&255},${(paint>>16)&255})`;requestAnimationFrame(draw)};draw();true").await?;
+            let mut calls = 0;
+            let soft = ctx.info.soft_asserts();
+            soft.run(format!("soft {name}"), expect_to_pass_with(name, &PollingOptions::default().timeout(Duration::from_secs(2)), || {
+                let call = calls; calls += 1;
+                let patch = patch.clone(); let info = ctx.info.clone();
+                async move {
+                    assert!(info.attachments().is_empty());
+                    if call > 0 { return std::future::pending::<E2eResult<()>>().await; }
+                    patch.expect().timeout(Duration::from_millis(650)).screenshot_with(name, &SnapshotOptions { update: Some(SnapshotUpdate::All), ..Default::default() }).await
+                }
+            })).await?;
+            assert_eq!(calls, 2);
+            assert_eq!(soft.failures()?.len(), 1);
+            let attachments = ctx.info.attachments();
+            assert_eq!(attachments.len(), 5);
+            assert!(attachments.iter().all(|item| item.name.starts_with(&format!("{name}-"))));
+            let actual = &attachment(&attachments, &format!("{name}-actual")).path;
+            let previous = &attachment(&attachments, &format!("{name}-previous")).path;
+            assert!(compare_png(&std::fs::read(actual)?, &std::fs::read(previous)?, 0)?.diff_pixels > 0);
+            assert_eq!(image(&attachment(&attachments, &format!("{name}-stability-diff")).path).get_pixel(5,5).0, [255,0,0,255]);
+            assert_eq!(image(ctx.info.snapshot_path(name, SnapshotKind::Screenshot)?).get_pixel(5,5).0, [255,0,0,255]);
+            ctx.page.evaluate_value("globalThis.animating=false;true").await?;
+            Ok(())
+        })).collect();
+        let report = runner(&dir)
+            .snapshot_path_template("{snapshotDir}/{browserName}/{testName}/{arg}{ext}")
+            .run(&browser, tests)
+            .await;
+        assert_eq!(report.results.len(), 2);
+        for result in &report.results {
+            let attempt = &result.attempt_results[0];
+            assert_eq!(attempt.status, AttemptStatus::Failed);
+            assert_eq!(attempt.soft_assertions.len(), 1);
+            assert_eq!(attempt.attachments.len(), 5);
+            let steps = flatten(&attempt.steps);
+            let owning = steps
+                .iter()
+                .find(|step| step.title == format!("expect.soft soft {}", result.name))
+                .unwrap();
+            assert_eq!(owning.status, StepStatus::Failed);
+            assert_eq!(owning.attachments.len(), 5);
+            assert_eq!(
+                steps
+                    .iter()
+                    .filter(|step| !step.attachments.is_empty())
+                    .count(),
+                1
+            );
+        }
+        browser.close().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn parallel_generic_polls_publish_into_only_their_own_attempts() {
+    for browser in browsers().await {
+        let dir = tempfile::tempdir().unwrap();
+        let tests = [("blue", [0, 0, 255, 255]), ("lime", [0, 255, 0, 255])]
+            .into_iter()
+            .map(|(color, pixel)| {
+                test_with_context(color, move |ctx| async move {
+                    ctx.page
+                        .set_viewport(Viewport {
+                            width: 40,
+                            height: 30,
+                        })
+                        .await?;
+                    ctx.page
+                        .set_content(
+                            "<style>html,body{height:100%;margin:0;background:red}</style>",
+                        )
+                        .await?;
+                    ctx.page.expect().screenshot("card").await?;
+                    ctx.page
+                        .evaluate_value(&format!("document.body.style.background='{color}';true"))
+                        .await?;
+                    let mut calls = 0;
+                    let error = expect_to_pass_with(
+                        color,
+                        &PollingOptions::default().timeout(Duration::from_secs(2)),
+                        || {
+                            let call = calls;
+                            calls += 1;
+                            let page = ctx.page.clone();
+                            let info = ctx.info.clone();
+                            async move {
+                                assert!(info.attachments().is_empty());
+                                if call > 0 {
+                                    return std::future::pending::<E2eResult<()>>().await;
+                                }
+                                page.expect()
+                                    .timeout(Duration::from_millis(650))
+                                    .screenshot("card")
+                                    .await
+                            }
+                        },
+                    )
+                    .await
+                    .unwrap_err();
+                    assert_eq!(error.code(), "FERRITE_E2E_EXPECT");
+                    assert_eq!(calls, 2);
+                    let attachments = ctx.info.attachments();
+                    assert_eq!(attachments.len(), 3);
+                    assert_eq!(
+                        image(&attachment(&attachments, "card-actual").path)
+                            .get_pixel(5, 5)
+                            .0,
+                        pixel
+                    );
+                    assert!(attachments
+                        .iter()
+                        .all(|item| Path::new(&item.path).starts_with(&ctx.info.output_dir)));
+                    Err(error)
+                })
+            })
+            .collect();
+        let report = runner(&dir)
+            .workers(2)
+            .snapshot_path_template("{snapshotDir}/{browserName}/{testName}/{arg}{ext}")
+            .run(&browser, tests)
+            .await;
+        assert_eq!(report.results.len(), 2);
+        assert!(report
+            .results
+            .iter()
+            .all(|result| result.attempt_results[0].attachments.len() == 3));
+        browser.close().await.unwrap();
+    }
+}
