@@ -3,9 +3,9 @@
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
 
 Implement **G, then A, then B**, followed by the supported C extensions. This
-backlog contains **45 tasks (18 complete, 27 remaining)**: four foundations, 16 core tasks, 19 follow-ups
-and six optional extensions. Start the feature work with typed DOM events,
-richer assertions and exposed callbacks. The ordering and effort assessments
+backlog contains **45 tasks (19 complete, 26 remaining)**: four foundations, 16 core tasks, 19 follow-ups
+and six optional extensions. All A tasks are now verified; continue with network
+metadata/events and independent B conveniences, then supported C extensions. The ordering and effort assessments
 are recommendations based on the current source and parity audit.
 
 The target is a useful, reliable Rust API on the existing Chromium/CDP and
@@ -88,6 +88,11 @@ they do not constitute differential Playwright conformance coverage.
   Combined verified inventory: 286 E2E plus 23 CLI/configuration checks. Native
   promise-return truthiness, polling cadence, cyclic live handles, frame JSON,
   cancellation/drop cleanup, navigation and enclosing runner retries verified.
+- `fd55008`: A16. Native frame lookup regression passed on full Chrome/Firefox,
+  with strict E2E/CLI Clippy, formatting and generated evidence links. Main/native
+  tree identities, nested frames, base URL matching, predicates, navigation,
+  replacement/detachment, closed-page errors and Firefox name absence verified.
+  Combined verified inventory: 287 E2E plus 23 CLI/configuration checks.
 - G04 remains open until callback and stream lifecycle coverage is complete.
 
 ## G — Foundations for the larger session
@@ -254,11 +259,14 @@ The existing synchronous Page callback survives navigation; extend it.
   verifies native RAF/interval scheduling, concurrent results, errors and lifecycle.
   Page handle/Frame JSON companions preserve legacy unit expression helpers.
   User-created promises/side effects cannot be force-canceled; owned pollers stop.
-- [ ] **A16 — Frame lookup conveniences (S).** Add a dedicated main-frame helper
+- [x] **A16 — Frame lookup conveniences (S).** Add a dedicated main-frame helper
   and URL matcher/predicate lookup over existing frame handles. Done when no
   match, navigation and detached frames have explicit behavior, and same-origin
   nested/replacement cases work on both engines. Check native name availability;
   selector-free OOPIF traversal stays deferred.
+  Evidence: `fd55008`; `frame_lookup.rs` verifies dedicated main-frame and shared
+  matcher/predicate helpers. Lookups are snapshots; existing current_url and
+  is_detached semantics are explicit. Firefox supplies no native name metadata.
 
 ## B — Broader follow-ups on the existing backends
 
