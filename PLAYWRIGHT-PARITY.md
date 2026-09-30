@@ -1790,7 +1790,7 @@ claiming universal counts/timing or complete snapshot matcher equivalence.
 
 ### B10 active image work and baseline reads
 
-The private [snapshot worker](crates/ferrite-e2e/src/snapshot_work.rs) now runs
+Increment `92b5a66` adds the private [snapshot worker](crates/ferrite-e2e/src/snapshot_work.rs), which runs
 successive/baseline PNG validation and comparison, Css normalization and initial
 baseline reads outside the async runtime. Process-wide admission allows two
 active callbacks. Comparison uses immutable shared encoded buffers, validates a

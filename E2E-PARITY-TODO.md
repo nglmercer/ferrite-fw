@@ -101,7 +101,7 @@ The 32 checked actual pinned font/animation observations document matching
 finite/infinite/zero-rate pixels, stronger same-origin page font waits in Rust
 and observed upstream Chromium locator-stability timeouts.
 
-The active image/read increment moves comparison, Css normalization and baseline
+Verified active image/read increment `92b5a66` moves comparison, Css normalization and baseline
 reads off the async runtime with two active callbacks, cooperative cancellation,
 shared immutable buffers and encoded/raster/intermediate-size guards. Five added
 unit regressions bring the unit inventory to 200, including retaining the last
@@ -497,6 +497,22 @@ they do not constitute differential Playwright conformance coverage.
   same-URL redirect header failure passed isolated/full routing repeats and
   remains unresolved under G04. Matrix and 735 links/652 source anchors passed.
   B10 is next; 14 tasks remain open.
+
+- `92b5a66`: B10 active image/read work. Two active data-only callbacks, dropped-
+  wait cancellation, shared encoded buffers, single-decode validation, bounded
+  regular baseline reads and PNG/JPEG/resize guards. Five added unit regressions
+  cover runtime progress, admission/input release, file/header bounds and expiry
+  during pending validation. The current-source native gate exposed premature
+  stability reset; the last completed assessment is now retained until the next
+  pair is assessed. Its original outer-poll native assertions passed afterward.
+  The 4,096/4,097-animation fixture now uses separate hidden native targets after
+  its earlier stacked-target basic recovery capture hit a restoration timeout;
+  limits, restoration assertions and budgets remain unchanged. Final focused
+  gates: 200 units, 53 native integrations/12 targets, four doctests and 28 CLI/
+  config checks (285 combined), full Chrome/Firefox required. Strict all-target
+  Clippy, package formatting, matrix generation, 726 Markdown links and 655
+  source anchors passed. B10 remains open for success commits, diagnostics and
+  complete phase verification; 14 tasks remain open.
 
 ## G — Foundations for the larger session
 
@@ -897,7 +913,7 @@ their dependencies are ready. References include
   outer-poll diagnostics (`0509518`) now publish the last completed failing probe only,
   with four additional native diagnostic groups verifying nested/control/pending/
   unfinished/soft/parallel/retry/export and publication I/O behavior. Active
-  image/read work now has two callback slots, cooperative cancellation, immutable
+  image/read work (`92b5a66`) now has two callback slots, cooperative cancellation, immutable
   buffers, bounded regular baseline reads and PNG/JPEG/resize input guards, with
   five additional unit regressions. Success baseline commits and diagnostic work
   still need the clock/filesystem audit; opaque phases and queued input memory
