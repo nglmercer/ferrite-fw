@@ -344,8 +344,8 @@ pub enum ContextEventKind {
     PageClose,
     WebSocket,
 }
-/// A context event with its source page identity. New pages and popups are
-/// adopted into the context before their events are emitted.
+/// A context event with its native source page identity. Popup startup events
+/// can precede adoption; immediately closed popups may have no usable Page.
 #[derive(Debug, Clone)]
 pub enum ContextEvent {
     Page(Box<Page>),
@@ -425,6 +425,7 @@ pub struct BrowserContext {
     /// Active tracing session (shared with every page).
     tracing: Arc<Mutex<Option<TracingState>>>,
     console: Arc<Mutex<Vec<crate::ConsoleMessage>>>,
+    pub(crate) popup_history: Arc<Mutex<crate::popup_capture::PopupHistory>>,
 }
 
 impl BrowserContext {
@@ -463,6 +464,7 @@ impl BrowserContext {
             download_dir,
             tracing: Arc::new(Mutex::new(None)),
             console: Arc::new(Mutex::new(Vec::new())),
+            popup_history: Arc::new(Mutex::new(crate::popup_capture::PopupHistory::default())),
         }
     }
 
@@ -480,6 +482,27 @@ impl BrowserContext {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clear();
+    }
+    /// Bounded startup diagnostics, including popups which could not be adopted.
+    /// Retains the last 64 popups; eviction and native capture truncation are explicit.
+    pub fn popup_diagnostics(&self) -> crate::PopupDiagnosticsHistory {
+        self.popup_history
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .snapshot()
+    }
+    /// Clear startup history independently of page/context console buffers.
+    pub fn clear_popup_diagnostics(&self) {
+        self.popup_history
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+    }
+    pub(crate) fn lifecycle_cancellation(&self) -> crate::CancellationToken {
+        self.cancellation.clone()
+    }
+    pub(crate) fn bind_popup_sink(&self, sink: &ConsoleSink, page_id: &str) {
+        sink.forward_context(&self.events, page_id, &self.console);
     }
 
     /// Subscribe before triggering an action to observe context and page events.
@@ -684,6 +707,10 @@ impl BrowserContext {
         );
         page.context_registry = self.registry.clone();
         page.context_id = self.id.clone();
+        if page.is_closed() || self.is_closed() {
+            page.mark_closed();
+            return Err(E2eError::Cancelled("popup closed during adoption".into()));
+        }
         if let Some(viewport) = self.options.viewport {
             page.set_viewport(viewport).await?;
         }
@@ -769,6 +796,10 @@ impl BrowserContext {
             } else {
                 page.remember_download_dir(dir);
             }
+        }
+        if page.is_closed() || self.is_closed() {
+            page.mark_closed();
+            return Err(E2eError::Cancelled("page closed during adoption".into()));
         }
         self.pages
             .lock()
@@ -1106,6 +1137,7 @@ impl BrowserContext {
             "started_ms": state.started_ms,
             "screenshots_enabled": state.screenshots,
             "pages": pages,
+            "popup_diagnostics": self.popup_diagnostics(),
             "screenshots": shots,
         });
         std::fs::write(path.as_ref(), serde_json::to_string_pretty(&trace)?)?;
@@ -1655,6 +1687,10 @@ impl BrowserContext {
         let _ = self.events.send(ContextEvent::Closed);
         self.cancellation
             .cancel_with_reason("browser context closed");
+        match &self.backend {
+            Backend::Cdp(connection) => connection.release_popup_context(self.id.as_deref()),
+            Backend::Bidi { conn, .. } => conn.release_popup_context(self.id.as_deref()),
+        }
         self.routes
             .lock()
             .unwrap_or_else(|e| e.into_inner())

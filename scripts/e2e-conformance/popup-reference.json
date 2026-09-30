@@ -1,0 +1,56 @@
+{
+  "playwright": "1.63.0",
+  "engine": "chromium",
+  "browser": "153.0.8010.12",
+  "unavailableNavigationFrames": 5,
+  "cases": [
+    {
+      "name": "live-startup",
+      "result": {
+        "console": 1,
+        "contextConsole": 1,
+        "errors": 1,
+        "ping": 1,
+        "closed": 1,
+        "opener": true
+      }
+    },
+    {
+      "name": "concurrent-immediate-close",
+      "result": [
+        {
+          "case": "close-0",
+          "console": 1,
+          "contextConsole": 1,
+          "ping": 1,
+          "closed": 1,
+          "opener": true
+        },
+        {
+          "case": "close-1",
+          "console": 1,
+          "contextConsole": 1,
+          "ping": 1,
+          "closed": 1,
+          "opener": true
+        },
+        {
+          "case": "close-2",
+          "console": 1,
+          "contextConsole": 1,
+          "ping": 1,
+          "closed": 1,
+          "opener": true
+        },
+        {
+          "case": "close-3",
+          "console": 1,
+          "contextConsole": 1,
+          "ping": 1,
+          "closed": 1,
+          "opener": true
+        }
+      ]
+    }
+  ]
+}

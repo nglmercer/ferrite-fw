@@ -55,6 +55,7 @@ struct Inner {
     tx: mpsc::UnboundedSender<Outbound>,
     pending: Mutex<HashMap<u64, oneshot::Sender<E2eResult<Value>>>>,
     events: broadcast::Sender<CdpEvent>,
+    popup_captures: Mutex<Option<Arc<crate::popup_capture::PopupCaptures>>>,
     downloads: Mutex<VecDeque<DownloadRecord>>,
     next_id: AtomicU64,
 }
@@ -91,6 +92,7 @@ impl CdpConnection {
         let inner = Arc::new(Inner {
             closed: crate::CancellationToken::new(),
             tx,
+            popup_captures: Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
             events,
             downloads: Mutex::new(VecDeque::new()),
@@ -150,6 +152,26 @@ impl CdpConnection {
             .lock()
             .map(|records| records.iter().cloned().collect())
             .unwrap_or_default()
+    }
+
+    pub(crate) fn set_popup_captures(&self, captures: Arc<crate::popup_capture::PopupCaptures>) {
+        *self
+            .inner
+            .popup_captures
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(captures);
+    }
+    pub(crate) fn popup_captures(&self) -> Option<Arc<crate::popup_capture::PopupCaptures>> {
+        self.inner
+            .popup_captures
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+    pub(crate) fn release_popup_context(&self, id: Option<&str>) {
+        if let Some(captures) = self.popup_captures() {
+            captures.release_context(id);
+        }
     }
 
     pub(crate) fn disconnection(&self) -> crate::CancellationToken {
@@ -260,6 +282,14 @@ fn handle_frame(inner: &Arc<Inner>, text: &str) {
             method: method.to_string(),
             params: frame.get("params").cloned().unwrap_or(Value::Null),
         };
+        let captures = inner
+            .popup_captures
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(captures) = captures {
+            captures.cdp(&event, text.len());
+        }
         let _ = inner.events.send(event);
     }
 }
@@ -305,6 +335,14 @@ fn track_download(inner: &Arc<Inner>, method: &str, frame: &Value) {
 }
 
 fn fail_all(inner: &Arc<Inner>, reason: &str) {
+    let captures = inner
+        .popup_captures
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take();
+    if let Some(captures) = captures {
+        captures.disconnect(reason);
+    }
     inner.closed.cancel_with_reason(reason);
     let senders = inner
         .pending
@@ -326,6 +364,7 @@ mod tests {
         let inner = Arc::new(Inner {
             closed: crate::CancellationToken::new(),
             tx,
+            popup_captures: Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
             events,
             next_id: AtomicU64::new(1),
@@ -363,6 +402,7 @@ mod tests {
         let inner = Arc::new(Inner {
             closed: crate::CancellationToken::new(),
             tx,
+            popup_captures: Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
             events,
             downloads: Mutex::new(VecDeque::new()),

@@ -63,7 +63,7 @@ implementation.
 | URL/network waits | Exact/glob/regex, predicates, URL document readiness and typed per-hop Request/Response companions; async snapshot predicates | Optional native metadata, bounded redirect history; frame network idle, URLPattern and full body/worker graph unsupported |
 | DOM access | Separate textContent/innerText, arrays, evaluate-all/JSON arguments, highlight removal; single-target getters wait and enforce strictness | JSON values only, without arbitrary JS/JSHandle argument serialization |
 | Frames and handles | Same-origin lazy/nested/replacement `FrameLocator`, frame ownership, content/function/URL/load/selector helpers, remote handle evaluation/properties | Cross-origin/OOPIF lazy selection and ElementHandle are deferred |
-| Native lifecycle events | Frame attach/navigation/detach with native identities, main DOM/load readiness, dialog closure and single context forwarding | Owned metadata snapshots; optional native fields/subscriptions; Chromium current target only, with OOPIF adoption and earliest popup diagnostics deferred |
+| Native lifecycle events | Frame attach/navigation/detach with native identities, main DOM/load readiness, dialog closure and single context forwarding; bounded earliest popup diagnostics | Owned metadata snapshots; optional native fields/subscriptions; Chromium current target only, with OOPIF adoption deferred; popup observation loss is explicit |
 | Assertions | Exact/regex page title/URL, raw regex/normalized or rendered text options, mixed lists, ordered text subsets, exact classes/class tokens, values, state/indeterminate options, native intersection ratios, accessible regex, custom predicates and `expect_to_pass` | Rust regex syntax; accessibility approximation; no custom matcher registry/asymmetric matchers or full options parity |
 | Accessibility snapshots | Structured DOM role/name/state tree and locator/page exact snapshot assertions | Approximation, without complete ARIA/YAML matching or all upstream modes |
 | Clock | Separate fixed Date/system time, run-for/fast-forward, promise/timer ordering, pause-at/resume and installation time | Page-local; navigation reinstalls initial state; idle callbacks approximate browser behavior |
@@ -870,7 +870,8 @@ Waiting for navigation or closure fails explicitly when its required native
 subscription is unavailable; older engines can lack particular same-document
 events. Firefox frame names remain unavailable. Chromium observes its current
 target session: OOPIF session adoption is deferred, and a native `swap` detach
-means leaving that session. Startup popup adoption gaps remain B04.
+means leaving that session. Early popup observations use the ingress capture
+described below.
 
 Page/context event waits retain zero/caller/enclosing deadlines, disposal and
 transport wake-up. Context waits use live action-timeout defaults. Interrupted
@@ -879,6 +880,58 @@ transport. The [native regressions](crates/ferrite-e2e/tests/lifecycle_events.rs
 compare four actual pinned Playwright cases on both engines, with separate
 checks for identity, forwarding, metadata absence and wait/resource lifecycle.
 Exhaustive matches on public event enums must handle the six new variants.
+
+### Earliest popup diagnostics
+
+Popup creation binds native source ownership at transport ingress before the
+asynchronous adopter starts. Native console/errors, requests and lifecycle events
+forward once to the context even when an immediately closed popup cannot produce
+a usable Page. Successful Page adoption shares that observation state; its driver
+listener handles its own runtime/download state without replaying general events.
+Failed initialization releases the driver listener while bounded ingress capture
+can retain later logs and native destruction.
+
+`BrowserContext::popup_diagnostics()` returns owned metadata and startup history.
+Adoption status, optional error, observed native closure and capture truncation
+are separate facts. A setup failure does not imply native closure. Context history
+holds 64 popups and reports evictions; the connection holds at most 64 strong
+pending captures, then weakly observes adopted captures. Pending-slot eviction
+settles observed in-flight requests unavailable, records truncation and preserves
+the real adoption outcome if the queued adopter resumes. Retained history still
+records destruction after its ingress slot is evicted.
+
+Each projection is bounded to 1,024 native observation events and 2 MiB. It includes
+all pre-adoption observations and the initial main document, then stops growing
+after successful adoption and a later main-document commit. Captured requests
+remain independently owned and can acquire completion afterward. Adopted Page
+observation continues when this diagnostic projection reaches its limit. Clearing
+popup history releases its records independently of context console history and
+does not cancel live observation. Context disposal/transport loss settles pending
+requests explicitly; if capture stops before destruction, `closed` can remain false.
+
+Attempt results, traces and portable reports retain the owned history across
+cleanup and retries. Migration: exhaustive `AttemptResult` literals require
+`popup_diagnostics: Default::default()`; omitted fields in older JSON deserialize
+as an empty history. This is a Rust diagnostic extension, not a live upstream
+Popup/Page/Request object graph or complete remote value serialization.
+
+The [native popup regressions](crates/ferrite-e2e/tests/popup_diagnostics.rs)
+compare two actual pinned Chromium reference cases on both engines and exercise
+retry/trace/report retention, independent clearing, cancellation/disposal and
+disconnect. Deterministic wire fixtures additionally verify bursts before any
+adopter subscribes, failed initialization followed by logs/closure, capture limits
+and eviction/recovery. The immediate-close fixture dispatches a synchronous HTTP
+request before closure; an aborted fetch with no native request event is not
+fabricated. Upstream's earliest navigation `Request.frame()` can itself throw
+before a frame exists, as recorded in the pinned reference.
+
+Validation: all 332 E2E checks passed (152 units, 177 integrations across all
+24 targets and three doctests), plus 23 CLI/configuration checks. The four popup
+groups and seven runner/report targets ran on full Chrome 153 and Firefox 157;
+the broad browser/routing/core batches used Chrome Headless Shell and Firefox.
+Strict E2E/CLI Clippy, formatting and regenerated source links passed. The actual
+pinned reference reproduced exactly. Expanded native retry reports were visually
+inspected for both engines; all seven artifact links per relocated bundle resolved.
 
 ### Completed download I/O
 

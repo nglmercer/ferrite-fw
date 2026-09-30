@@ -241,6 +241,9 @@ pub struct AttemptResult {
     /// Console output and JavaScript errors across all pages of this attempt.
     #[serde(default)]
     pub console: Vec<crate::ConsoleMessage>,
+    /// Popup startup observations, including failed or immediately closed adoption.
+    #[serde(default)]
+    pub popup_diagnostics: crate::PopupDiagnosticsHistory,
     pub info: AttemptInfo,
     pub status: AttemptStatus,
     pub expected_status: AttemptStatus,
@@ -1042,6 +1045,7 @@ impl TestReport {
                 }
                 render_steps(&mut out, &attempt.steps);
                 render_console(&mut out, &attempt.console);
+                render_popup_diagnostics(&mut out, &attempt.popup_diagnostics);
                 for path in &attempt.screenshots {
                     render_link(&mut out, path, "screenshot");
                 }
@@ -1090,6 +1094,33 @@ fn render_error(out: &mut String, error: &TestError) {
             location.column
         ));
     }
+}
+fn render_popup_diagnostics(out: &mut String, history: &crate::PopupDiagnosticsHistory) {
+    if history.entries.is_empty() && history.dropped_popups == 0 {
+        return;
+    }
+    out.push_str(&format!(
+        "<details><summary>Popup startup diagnostics: {} ({} evicted)</summary>",
+        history.entries.len(),
+        history.dropped_popups
+    ));
+    for popup in &history.entries {
+        out.push_str(&format!("<details><summary>{}: {:?}</summary><div>Opener: {} · native closed: {} · document replaced: {} · truncated: {} · dropped events: {}</div>", xml_escape(&popup.page_id), popup.adoption, xml_escape(&popup.opener_id), popup.closed, popup.initial_document_replaced, popup.truncated, popup.dropped_events));
+        if let Some(error) = &popup.error {
+            out.push_str(&format!("<pre>{}</pre>", xml_escape(error)));
+        }
+        for request in &popup.requests {
+            out.push_str(&format!(
+                "<div>{} {} · {} · {}</div>",
+                xml_escape(&request.recorded.method),
+                xml_escape(&request.recorded.url),
+                request.recorded.status,
+                xml_escape(&format!("{:?}", request.completion))
+            ));
+        }
+        out.push_str("</details>");
+    }
+    out.push_str("</details>");
 }
 fn render_console(out: &mut String, messages: &[crate::ConsoleMessage]) {
     if messages.is_empty() {
@@ -1359,6 +1390,7 @@ mod tests {
             .await;
         let attempt = AttemptResult {
             console: Vec::new(),
+            popup_diagnostics: Default::default(),
             info: session.attempt.clone(),
             status: AttemptStatus::Failed,
             expected_status: AttemptStatus::Passed,

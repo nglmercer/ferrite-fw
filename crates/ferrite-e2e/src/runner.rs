@@ -2595,6 +2595,11 @@ impl Drop for AttemptGuard {
             .skip(self.attachments_start)
             .collect();
         let attempt = AttemptResult {
+            popup_diagnostics: self
+                .context
+                .as_ref()
+                .map(|context| context.popup_diagnostics())
+                .unwrap_or_default(),
             console: self
                 .context
                 .as_ref()
@@ -3187,6 +3192,7 @@ async fn run_one(
                 "worker": worker_index,
                 "repeat": item.repeat_each_index,
                 "console": context.console_messages(),
+                "popup_diagnostics": context.popup_diagnostics(),
                 "trace": page.trace(),
             });
             let data = serde_json::to_string_pretty(&payload).unwrap_or_default();

@@ -470,6 +470,42 @@ epoch-ms timestamp and owning page ID. `ctx.context.console_messages()` also
 retains closed-page/popup output, independently of Page buffers. Attempt JSON,
 HTML, trace and `on_test_end` preserve this history across cleanup and retries.
 
+Popup startup observations are captured at transport ingress before asynchronous
+page adoption. This also retains diagnostics for a popup that closes before a
+usable Page exists:
+
+```rust,ignore
+ctx.page.evaluate("window.open('/popup'); true").await?;
+// Read after the expected event/request has arrived; this accessor does not wait.
+let history = ctx.context.popup_diagnostics();
+for popup in &history.entries {
+    println!("{} from {}: {:?}, {} console messages, {} requests",
+        popup.page_id, popup.opener_id, popup.adoption,
+        popup.console.len(), popup.requests.len());
+    if popup.truncated {
+        eprintln!("startup capture truncated: {:?}", popup.error);
+    }
+}
+ctx.context.clear_popup_diagnostics();
+```
+
+Each attempt's `popup_diagnostics` and trace JSON retain the same owned history;
+portable HTML lists popup ownership, adoption/closure and native requests. Normal
+context console history retains startup logs exactly once. Clearing popup history
+does not clear console history or stop live observation. History holds 64 entries
+per context, with `dropped_popups` counting evictions; pending ingress captures are
+bounded to 64 across the connection. Each projection permits 1,024 native events
+and 2 MiB before it reports truncation. It covers all pre-adoption observations
+and the initial document, then freezes after adoption and a later document commit.
+Existing captured requests can still acquire completion after that point.
+
+`closed` records actual native destruction. Setup failure and context disposal
+can stop capture without proving native closure; inspect `adoption`, `error` and
+request completion for those cases. Pending-slot eviction reports observation
+loss independently of eventual adoption success. No Page/context/remote handles
+are retained in returned snapshots. Exhaustive `AttemptResult` literals need
+`popup_diagnostics: Default::default()`; older JSON without that field still loads.
+
 Typed synthetic events and richer assertions are available through explicit
 options APIs:
 

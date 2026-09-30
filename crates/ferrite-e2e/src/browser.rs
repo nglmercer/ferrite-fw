@@ -13,7 +13,7 @@ use serde_json::Value;
 use crate::bidi::BidiConnection;
 use crate::cdp::CdpConnection;
 use crate::context::{BrowserContext, ContextOptions};
-use crate::driver::{BidiDriver, CdpDriver, ConsoleSink, Driver};
+use crate::driver::{BidiDriver, CdpDriver, Driver};
 use crate::error::{E2eError, E2eResult};
 use crate::page::{Page, PageEvent};
 
@@ -300,7 +300,7 @@ fn is_known_page(contexts: &Weak<Mutex<Vec<BrowserContext>>>, target_id: &str) -
 }
 
 /// Find the page with `target_id` and its owning context.
-fn find_owner(
+pub(crate) fn find_owner(
     contexts: &Weak<Mutex<Vec<BrowserContext>>>,
     target_id: &str,
 ) -> Option<(BrowserContext, Page)> {
@@ -755,6 +755,13 @@ impl Browser {
     /// Our own `new_page` targets carry no opener/parent, so they are never
     /// double-adopted; popups without a tracked opener are left alone.
     async fn spawn_popup_pump(&self) -> E2eResult<()> {
+        let captures = Arc::new(crate::popup_capture::PopupCaptures::new(Arc::downgrade(
+            &self.contexts,
+        )));
+        match &self.backend {
+            Backend::Cdp(connection) => connection.set_popup_captures(captures.clone()),
+            Backend::Bidi { conn, .. } => conn.set_popup_captures(captures.clone()),
+        }
         let mut cdp_events = None;
         if let Backend::Cdp(cdp) = &self.backend {
             cdp_events = Some(cdp.subscribe());
@@ -777,8 +784,11 @@ impl Browser {
                         .take()
                         .expect("CDP subscription created before enabling attachment");
                     loop {
-                        let event = match events.recv().await {
+                        let disconnected = cdp.disconnection();
+                        let event = match tokio::select! {biased; _=disconnected.cancelled()=>break, event=events.recv()=>event}
+                        {
                             Ok(event) => event,
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                             Err(_) => break,
                         };
                         if event.method == "Target.targetDestroyed" {
@@ -810,6 +820,12 @@ impl Browser {
                             || is_known_page(&contexts, target)
                             || owner.is_none()
                         {
+                            if owner.is_none() {
+                                if let Some(capture) = captures.get(target) {
+                                    capture.failed("popup opener could not be adopted");
+                                    captures.discard_closed(target);
+                                }
+                            }
                             let _ = cdp
                                 .call(
                                     Some(&session),
@@ -821,17 +837,17 @@ impl Browser {
                             continue;
                         }
                         let (owner, opener) = owner.expect("owner checked");
-                        let sink = ConsoleSink::new();
-                        let spawned = CdpDriver::spawn(
-                            cdp.clone(),
-                            session.clone(),
-                            target.to_string(),
-                            timeout,
-                            sink.clone(),
-                            owner.id().map(str::to_string),
-                        )
-                        .await;
-                        let Ok(driver) = spawned else {
+                        let capture = captures.for_adoption(
+                            target,
+                            opener.target_id(),
+                            Some(session.clone()),
+                            true,
+                        );
+                        if capture
+                            .as_ref()
+                            .is_some_and(|capture| capture.sink.native_closed())
+                        {
+                            captures.discard_closed(target);
                             let _ = cdp
                                 .call(
                                     Some(&session),
@@ -841,11 +857,56 @@ impl Browser {
                                 )
                                 .await;
                             continue;
+                        }
+                        let sink = capture
+                            .as_ref()
+                            .map(|capture| capture.sink())
+                            .unwrap_or_default();
+                        let spawned = CdpDriver::spawn(
+                            cdp.clone(),
+                            session.clone(),
+                            target.to_string(),
+                            timeout,
+                            sink.clone(),
+                            owner.id().map(str::to_string),
+                        )
+                        .await;
+                        let driver = match spawned {
+                            Ok(driver) => driver,
+                            Err(error) => {
+                                if let Some(capture) = &capture {
+                                    capture.failed(&error.to_string());
+                                }
+                                captures.discard_closed(target);
+                                let _ = cdp
+                                    .call(
+                                        Some(&session),
+                                        "Runtime.runIfWaitingForDebugger",
+                                        Value::Null,
+                                        timeout,
+                                    )
+                                    .await;
+                                continue;
+                            }
                         };
-                        if let Ok(page) = owner.finish_page(Driver::Cdp(driver), sink, false).await
-                        {
-                            page.set_opener_target(opener.target_id());
-                            opener.emit(PageEvent::Popup(Box::new(page)));
+                        let driver = Driver::Cdp(driver);
+                        let control = driver.clone();
+                        match owner.finish_page(driver, sink, false).await {
+                            Ok(page) => {
+                                if let Some(capture) = &capture {
+                                    capture.adopted();
+                                }
+                                captures.adopted(target);
+                                page.set_opener_target(opener.target_id());
+                                opener.emit(PageEvent::Popup(Box::new(page)));
+                            }
+                            Err(error) => {
+                                control.cancel_lifecycle();
+                                if let Some(capture) = &capture {
+                                    capture.failed(&error.to_string());
+                                }
+                                captures.discard_closed(target);
+                            }
                         }
                         let _ = cdp
                             .call(
@@ -863,8 +924,11 @@ impl Browser {
                 } => {
                     let mut events = conn.subscribe();
                     loop {
-                        let event = match events.recv().await {
+                        let disconnected = conn.disconnection();
+                        let event = match tokio::select! {biased; _=disconnected.cancelled()=>break, event=events.recv()=>event}
+                        {
                             Ok(event) => event,
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                             Err(_) => break,
                         };
                         if event.method == "browsingContext.contextDestroyed" {
@@ -898,13 +962,29 @@ impl Browser {
                         let Some((owner, opener)) =
                             find_owner(&contexts, opener.unwrap_or_default())
                         else {
+                            if let Some(capture) = captures.get(context_id) {
+                                capture.failed("popup opener could not be adopted");
+                                captures.discard_closed(context_id);
+                            }
                             continue;
                         };
                         if is_known_page(&contexts, context_id) {
                             continue;
                         }
-                        let sink = ConsoleSink::new();
-                        let Ok(driver) = BidiDriver::spawn(
+                        let capture =
+                            captures.for_adoption(context_id, opener.target_id(), None, false);
+                        if capture
+                            .as_ref()
+                            .is_some_and(|capture| capture.sink.native_closed())
+                        {
+                            captures.discard_closed(context_id);
+                            continue;
+                        }
+                        let sink = capture
+                            .as_ref()
+                            .map(|capture| capture.sink())
+                            .unwrap_or_default();
+                        let driver = match BidiDriver::spawn(
                             conn.clone(),
                             context_id.to_string(),
                             timeout,
@@ -913,13 +993,34 @@ impl Browser {
                             owner.id().map(str::to_string),
                         )
                         .await
-                        else {
-                            continue;
+                        {
+                            Ok(driver) => driver,
+                            Err(error) => {
+                                if let Some(capture) = &capture {
+                                    capture.failed(&error.to_string());
+                                }
+                                captures.discard_closed(context_id);
+                                continue;
+                            }
                         };
                         let driver = Driver::Bidi(driver);
-                        if let Ok(page) = owner.finish_page(driver, sink, true).await {
-                            page.set_opener_target(opener.target_id());
-                            opener.emit(PageEvent::Popup(Box::new(page)));
+                        let control = driver.clone();
+                        match owner.finish_page(driver, sink, true).await {
+                            Ok(page) => {
+                                if let Some(capture) = &capture {
+                                    capture.adopted();
+                                }
+                                captures.adopted(context_id);
+                                page.set_opener_target(opener.target_id());
+                                opener.emit(PageEvent::Popup(Box::new(page)));
+                            }
+                            Err(error) => {
+                                control.cancel_lifecycle();
+                                if let Some(capture) = &capture {
+                                    capture.failed(&error.to_string());
+                                }
+                                captures.discard_closed(context_id);
+                            }
                         }
                     }
                 }

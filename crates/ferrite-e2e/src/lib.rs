@@ -65,6 +65,7 @@ mod locator;
 mod network;
 mod operation;
 mod page;
+mod popup_capture;
 mod report;
 mod route_options;
 mod routing;
@@ -122,6 +123,7 @@ pub use page::{
     RouteHandlerEntry, RouteInfo, RouteRule, ScreenshotOptions, StorageEntry, StorageOrigin,
     StorageState, Viewport, WebSocketDirection, WebSocketEvent,
 };
+pub use popup_capture::{PopupAdoption, PopupDiagnostics, PopupDiagnosticsHistory};
 pub use report::{
     Attachment, AttemptInfo, AttemptResult, AttemptStatus, Reporter, SourceLocation,
     StepAnnotation, StepCategory, StepContext, StepInfo, StepOptions, StepOutcome, StepStatus,

@@ -39,6 +39,28 @@ FERRITE_E2E_REQUIRE_BOTH_BROWSERS=1 cargo test -p ferrite-e2e --test core_confor
 Node/Playwright are optional development tooling and are not dependencies of
 Ferrite's library or its normal Rust test command.
 
+`popup-reference.mjs` / `popup-reference.json` record two actual Playwright
+1.63.0 Chromium cases: initial-script console/error/fetch observations and four
+concurrent popups that synchronously dispatch an HTTP request before immediate
+closure. Regenerate with `npm run reference:popups`, or the external installation
+above with `node scripts/e2e-conformance/popup-reference.mjs`.
+
+`cargo test -p ferrite-e2e --test popup_diagnostics` compares source attribution,
+console/request/closure counts and opener ownership on both installed engines.
+It additionally verifies retained request completion, independent history clearing,
+retry/trace/JSON/HTML retention, cancellation, disposal and unexpected disconnect.
+The unit transport-burst fixture emits observations before any adopter subscribes,
+and injects initialization failure, late logs, closure and bounded-slot eviction;
+these deterministic protocol fixtures supplement the actual browser runs.
+
+The pinned reference also records five initial navigation requests whose
+`Request.frame()` is unavailable before the frame is created. Its listener catches
+that specific case rather than guessing a page from the URL. Those unavailable
+frames are evidence of an upstream timing limit, not an assertion that Ferrite's
+optional native frame metadata must reproduce the same count. The immediate-close
+case uses a dispatched synchronous request: JavaScript calling fetch immediately
+before closure does not guarantee the browser emits a native request event.
+
 `url-reference.mjs` / `url-reference.json` add 22 pinned URL cases spanning base
 paths, escaped/literal glob characters, brace alternatives, zero-segment double
 stars, case-sensitive paths and anchored/unanchored regexes. Native Playwright

@@ -8,7 +8,8 @@
     "reference:routes": "node route-reference.mjs",
     "reference:api": "node api-reference.mjs",
     "reference:route-options": "node route-options-reference.mjs",
-    "reference:events": "node event-reference.mjs"
+    "reference:events": "node event-reference.mjs",
+    "reference:popups": "node popup-reference.mjs"
   },
   "devDependencies": {
     "playwright": "1.63.0"

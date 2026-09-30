@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -45,6 +45,11 @@ impl Drop for PageInitialization {
 }
 impl Drop for NetworkListenerGuard {
     fn drop(&mut self) {
+        // Popup observation belongs to transport ingress and can outlive a
+        // failed driver initialization. Ingress closes its independent state.
+        if self.0.popup_capture.is_some() {
+            return;
+        }
         self.0.close_network("native event listener ended");
         self.0
             .frame_events
@@ -89,6 +94,9 @@ pub struct ConsoleSink {
     context_events: Arc<Mutex<Option<ContextEventForwarding>>>,
     page_id: Arc<Mutex<Option<String>>>,
     frame_events: Arc<Mutex<crate::lifecycle_events::FrameEvents>>,
+    native_closed: Arc<AtomicBool>,
+    pub(crate) popup_capture: Option<Arc<crate::popup_capture::PopupCapture>>,
+    pub(crate) popup_diagnostics: Option<std::sync::Weak<Mutex<crate::popup_capture::PopupRecord>>>,
 }
 
 /// Maximum recorded requests per page (oldest dropped first).
@@ -122,6 +130,9 @@ impl ConsoleSink {
             context_events: Arc::new(Mutex::new(None)),
             page_id: Arc::new(Mutex::new(None)),
             frame_events: Arc::new(Mutex::new(crate::lifecycle_events::FrameEvents::default())),
+            native_closed: Arc::new(AtomicBool::new(false)),
+            popup_capture: None,
+            popup_diagnostics: None,
             download_dir: Arc::new(Mutex::new(None)),
             downloads_emitted: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -156,7 +167,8 @@ impl ConsoleSink {
         self.network_events.subscribe()
     }
     fn observe_request(&self, request: RecordedRequest, details: crate::network::RequestDetails) {
-        self.network_log
+        let state = self
+            .network_log
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .start(
@@ -167,6 +179,16 @@ impl ConsoleSink {
                     .unwrap_or_else(|e| e.into_inner())
                     .clone(),
             );
+        if let Some(record) = self
+            .popup_diagnostics
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+        {
+            record
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .request(state);
+        }
         if let Some(id) = &request.request_id {
             self.observed_network
                 .lock()
@@ -267,7 +289,7 @@ impl ConsoleSink {
         }
     }
 
-    fn close_network(&self, reason: &str) {
+    pub(crate) fn close_network(&self, reason: &str) {
         self.network_log
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -370,7 +392,7 @@ impl ConsoleSink {
         }
     }
 
-    fn contains_frame(&self, id: &str) -> bool {
+    pub(crate) fn contains_frame(&self, id: &str) -> bool {
         self.frame_events
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -379,6 +401,9 @@ impl ConsoleSink {
 
     /// Emit a page event (dropped when nobody listens).
     pub(crate) fn emit(&self, event: PageEvent) {
+        if matches!(event, PageEvent::Closed) && self.native_closed.swap(true, Ordering::AcqRel) {
+            return;
+        }
         if let PageEvent::Download(path) = &event {
             if let Ok(meta) = path.metadata() {
                 let stamp = (meta.len(), meta.modified().unwrap_or(UNIX_EPOCH));
@@ -423,6 +448,34 @@ impl ConsoleSink {
             Arc::downgrade(console),
         ));
     }
+    pub(crate) fn native_closed(&self) -> bool {
+        self.native_closed.load(Ordering::Acquire)
+    }
+    pub(crate) fn seed_popup_closed(&self) {
+        self.native_closed.store(true, Ordering::Release);
+    }
+    pub(crate) fn seed_popup(&self, id: &str, cdp: bool) {
+        *self.page_id.lock().unwrap_or_else(|e| e.into_inner()) = Some(id.into());
+        if !cdp {
+            self.frame_events
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .seed_bidi(id);
+        }
+    }
+    pub(crate) fn observe_popup_cdp(&self, event: &CdpEvent) {
+        handle_cdp_event(event, self);
+    }
+    pub(crate) fn observe_popup_bidi(&self, event: &BidiEvent) {
+        handle_bidi_event(event, self);
+    }
+    pub(crate) fn stop_popup_observation(&self, reason: &str) {
+        self.close_network(reason);
+        self.frame_events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+    }
     fn completed_download(&self, filename: &str, filepath: Option<&str>) {
         let path = filepath.map(PathBuf::from).or_else(|| {
             self.download_dir
@@ -455,6 +508,16 @@ impl ConsoleSink {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
+        if let Some(record) = self
+            .popup_diagnostics
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+        {
+            record
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .console(message.clone());
+        }
         self.console
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -797,6 +860,9 @@ impl CdpDriver {
             lifecycle: driver.lifecycle.clone(),
             complete: false,
         };
+        if let Some(capture) = &driver.sink.popup_capture {
+            capture.bind_lifecycle(driver.lifecycle.clone());
+        }
         driver.spawn_listener();
         let initialized = async {
             let tree = driver.call("Page.getFrameTree", Value::Null).await?;
@@ -888,7 +954,9 @@ impl CdpDriver {
                     }
                     _ => {}
                 }
-                handle_cdp_event(&event, &sink);
+                if sink.popup_capture.is_none() {
+                    handle_cdp_event(&event, &sink);
+                }
             }
         });
     }
@@ -929,6 +997,9 @@ impl BidiDriver {
             lifecycle: driver.lifecycle.clone(),
             complete: false,
         };
+        if let Some(capture) = &driver.sink.popup_capture {
+            capture.bind_lifecycle(driver.lifecycle.clone());
+        }
         driver.spawn_listener();
         let tree = driver
             .call(
@@ -994,7 +1065,9 @@ impl BidiDriver {
                         .unwrap_or_default();
                     sink.completed_download(&filename, event.params["filepath"].as_str());
                 }
-                handle_bidi_event(&event, &sink);
+                if sink.popup_capture.is_none() {
+                    handle_bidi_event(&event, &sink);
+                }
             }
         });
     }
