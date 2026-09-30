@@ -60,7 +60,8 @@ Idiomatic41. Capture mappings now describe these options and engine differences;
 they do not imply full compatibility. Matrix generation, 735 local evidence
 links and 652 source anchors passed before the B09 implementation commit.
 
-**Current handoff:** B10 is in progress. The working draft in `snapshot.rs`,
+**Current handoff:** B10 is in progress. The verified increment `499c274` in
+`snapshot.rs`,
 `snapshot_capture.rs` and `expect.rs` implements successive captures, bounded font
 readiness waits, typed control failures, retained last-image artifacts and
 `Changed` update mode. Page/locator capture defaults use B09 Css scale, animation
@@ -836,9 +837,9 @@ their dependencies are ready. References include
   project/platform path templates and clearly defined update modes. Done when
   delayed fonts/animations, never-stable content, dimension differences and
   baseline changes are bounded and diagnosed; attach expected/actual/diff artifacts.
-  Draft progress: successive stable capture and typed deadline/error handling,
+  Draft progress: `499c274`; successive stable capture and typed deadline/error handling,
   font readiness, `Changed` mode, PNG/ratio validation and last-image failures are
-  implemented in the working tree. The 56-case actual pinned reference verifies
+  implemented in this increment. The 56-case actual pinned reference verifies
   mode/negation/stability differences; three required two-engine groups and
   virtual-time checks cover the draft. Path templates, report diff attachments,
   real font/animation cases and final complete phase gates are still required.
