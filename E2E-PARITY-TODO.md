@@ -3,7 +3,7 @@
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
 
 Implement **G, then A, then B**, followed by the supported C extensions. This
-backlog contains **45 tasks (17 complete, 28 remaining)**: four foundations, 16 core tasks, 19 follow-ups
+backlog contains **45 tasks (18 complete, 27 remaining)**: four foundations, 16 core tasks, 19 follow-ups
 and six optional extensions. Start the feature work with typed DOM events,
 richer assertions and exposed callbacks. The ordering and effort assessments
 are recommendations based on the current source and parity audit.
@@ -82,6 +82,12 @@ they do not constitute differential Playwright conformance coverage.
   140 unit checks and related conformance/readiness/wait groups passed; strict
   E2E/CLI Clippy and formatting passed. Combined verified inventory: 283 E2E
   plus 23 CLI/configuration checks. Legacy string glob contracts remain intact.
+- `c433d07`: A15. Five actual pinned Playwright function cases and three native
+  function-wait groups passed on full Chrome/Firefox, along with the three core
+  conformance groups. Strict E2E/CLI Clippy, formatting and generated links passed.
+  Combined verified inventory: 286 E2E plus 23 CLI/configuration checks. Native
+  promise-return truthiness, polling cadence, cyclic live handles, frame JSON,
+  cancellation/drop cleanup, navigation and enclosing runner retries verified.
 - G04 remains open until callback and stream lifecycle coverage is complete.
 
 ## G — Foundations for the larger session
@@ -239,11 +245,15 @@ The existing synchronous Page callback survives navigation; extend it.
   corpus checks base paths, escaping, braces, double-stars and regex anchors.
   Relative matchers require a base URL; Rust regex and strict malformed-glob
   differences are documented. In-flight removal policy remains B05.
-- [ ] **A15 — Function-wait arguments, polling and results (M).** Extend existing
+- [x] **A15 — Function-wait arguments, polling and results (M).** Extend existing
   function waits with JSON arguments and interval/animation-frame polling; add a
   result helper where existing handle support permits it. Done when promises,
   falsy-to-truthy transitions, returned values and cancellation are tested.
   Frame-scoped remote handles remain a capability-dependent extension.
+  Evidence: `c433d07`; `function_wait.rs` compares the five recorded cases and
+  verifies native RAF/interval scheduling, concurrent results, errors and lifecycle.
+  Page handle/Frame JSON companions preserve legacy unit expression helpers.
+  User-created promises/side effects cannot be force-canceled; owned pollers stop.
 - [ ] **A16 — Frame lookup conveniences (S).** Add a dedicated main-frame helper
   and URL matcher/predicate lookup over existing frame handles. Done when no
   match, navigation and detached frames have explicit behavior, and same-origin
