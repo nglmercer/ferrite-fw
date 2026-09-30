@@ -1,5 +1,6 @@
 //! Bounded active image/read work with cancellation on dropped waits. No
-//! browser, context or filesystem mutation is captured by these jobs.
+//! browser or context is captured by image/read jobs. Baseline staging jobs
+//! write only temporary files; their caller owns foreground installation.
 //! The admission limit bounds active callbacks, not Tokio's blocking threads
 //! or queued input bytes. Codec, resize and OS calls are opaque phases; a
 //! dropped wait stops subsequent phases and discards their eventual results.

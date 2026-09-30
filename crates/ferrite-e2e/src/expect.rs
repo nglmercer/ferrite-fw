@@ -8,9 +8,7 @@ use serde::Serialize;
 use crate::error::{E2eError, E2eResult};
 use crate::locator::Locator;
 use crate::page::{Page, ScreenshotOptions};
-use crate::snapshot::{
-    assert_snapshot_png, resolve_update, snap_path_for, SnapshotOptions, SnapshotUpdate,
-};
+use crate::snapshot::{resolve_update, snap_path_for, SnapshotOptions, SnapshotUpdate};
 
 /// Collect assertion failures without stopping at the first one
 /// outside the runner: feed each assertion result to
@@ -1761,14 +1759,20 @@ where
         .await;
         let result = match comparison.result {
             Ok(()) if negated => Ok(()),
-            Ok(()) => assert_snapshot_png(
-                name,
+            Ok(()) => crate::snapshot_commit::finish(
+                deadline,
+                path.clone(),
                 comparison
                     .actual
-                    .as_deref()
-                    .expect("successful comparison has a capture"),
+                    .as_ref()
+                    .expect("successful comparison has a capture")
+                    .clone(),
+                expected.clone(),
+                mode,
                 &options,
-            ),
+            )
+            .await
+            .map_err(|error| error.with_context(&description)),
             Err(error) => Err(error),
         };
         result.map_err(|error| {

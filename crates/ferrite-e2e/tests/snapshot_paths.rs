@@ -50,6 +50,147 @@ fn runner(dir: &tempfile::TempDir) -> Runner {
     .list_progress(false)
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn atomic_page_locator_updates_preserve_aliases_and_parallel_missing_baselines() {
+    use std::{io::Read, os::unix::fs::symlink};
+    for browser in browsers().await {
+        let root = tempfile::tempdir().unwrap();
+        let aliases = root.path().join("aliases");
+        let target = root.path().join("targets/expected.png");
+        std::fs::create_dir_all(&aliases).unwrap();
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        let page = browser.new_page().await.unwrap();
+        page.set_viewport(Viewport {
+            width: 40,
+            height: 30,
+        })
+        .await
+        .unwrap();
+        page.set_content("<style>html,body{height:100%;margin:0;background:red}</style>")
+            .await
+            .unwrap();
+        page.expect()
+            .screenshot_with(
+                "Expected",
+                &SnapshotOptions {
+                    dir: Some(target.parent().unwrap().to_path_buf()),
+                    update: Some(SnapshotUpdate::All),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let red = std::fs::read(&target).unwrap();
+        let alias = aliases.join("alias.png");
+        symlink("../targets/expected.png", &alias).unwrap();
+        let options = SnapshotOptions {
+            dir: Some(aliases.clone()),
+            update: Some(SnapshotUpdate::Missing),
+            ..Default::default()
+        };
+        page.expect()
+            .screenshot_with("Alias", &options)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), red);
+        let mut old_reader = std::fs::File::open(&target).unwrap();
+        page.evaluate_value("document.body.style.background='lime';true")
+            .await
+            .unwrap();
+        page.expect()
+            .screenshot_with(
+                "Alias",
+                &SnapshotOptions {
+                    update: Some(SnapshotUpdate::Changed),
+                    ..options.clone()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(std::fs::symlink_metadata(&alias).unwrap().is_symlink());
+        let color = |path: &std::path::Path| {
+            image::load_from_memory(&std::fs::read(path).unwrap())
+                .unwrap()
+                .into_rgba8()
+                .get_pixel(5, 5)
+                .0
+        };
+        assert_eq!(color(&target), [0, 255, 0, 255]);
+        let mut old = Vec::new();
+        old_reader.read_to_end(&mut old).unwrap();
+        assert_eq!(old, red);
+        page.evaluate_value("document.body.style.background='blue';true")
+            .await
+            .unwrap();
+        page.expect()
+            .screenshot_with(
+                "Alias",
+                &SnapshotOptions {
+                    update: Some(SnapshotUpdate::All),
+                    ..options.clone()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(std::fs::symlink_metadata(&alias).unwrap().is_symlink());
+        assert_eq!(color(&alias), [0, 0, 255, 255]);
+        let dangling = aliases.join("dangling.png");
+        symlink("../new/nested/expected.png", &dangling).unwrap();
+        page.expect()
+            .screenshot_with("Dangling", &options)
+            .await
+            .unwrap();
+        assert!(std::fs::symlink_metadata(&dangling).unwrap().is_symlink());
+        assert_eq!(color(&dangling), [0, 0, 255, 255]);
+        page.set_content("<style>body{margin:0}#patch{width:20px;height:20px;background:red}</style><div id=patch></div>").await.unwrap();
+        page.locator("#patch")
+            .expect()
+            .screenshot_with(
+                "Alias",
+                &SnapshotOptions {
+                    update: Some(SnapshotUpdate::Changed),
+                    ..options.clone()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(std::fs::symlink_metadata(&alias).unwrap().is_symlink());
+        assert_eq!(color(&alias), [255, 0, 0, 255]);
+        assert_eq!(
+            image::load_from_memory(&std::fs::read(&target).unwrap())
+                .unwrap()
+                .dimensions(),
+            (20, 20)
+        );
+        let peer = browser.new_page().await.unwrap();
+        peer.set_viewport(Viewport {
+            width: 40,
+            height: 30,
+        })
+        .await
+        .unwrap();
+        let blue = "<style>html,body{height:100%;margin:0;background:blue}</style>";
+        page.set_content(blue).await.unwrap();
+        peer.set_content(blue).await.unwrap();
+        let first = page.expect();
+        let second = peer.expect();
+        let (first, second) = tokio::join!(
+            first.screenshot_with("Shared", &options),
+            second.screenshot_with("Shared", &options)
+        );
+        first.unwrap();
+        second.unwrap();
+        assert_eq!(color(&aliases.join("shared.png")), [0, 0, 255, 255]);
+        assert_eq!(std::fs::read_dir(&aliases).unwrap().count(), 3);
+        assert_eq!(
+            std::fs::read_dir(target.parent().unwrap()).unwrap().count(),
+            1
+        );
+        browser.close().await.unwrap();
+    }
+}
+
 #[tokio::test]
 async fn project_page_locator_and_text_paths_follow_effective_and_explicit_settings() {
     for browser in browsers().await {

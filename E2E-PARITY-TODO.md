@@ -58,9 +58,9 @@ batch; its cause remains an explicit G04 audit item.
 
 The matrix remains 73 classes/1,018 members: Partial635/Missing327/Equivalent15/
 Idiomatic41. Capture mappings now describe these options and engine differences;
-they do not imply full compatibility. Current matrix generation, 726 local
+they do not imply full compatibility. Current matrix generation, 727 local
 Markdown links across the three parity documents and two reference/fixture
-READMEs, and 655 source anchors passed for the active image/read increment.
+READMEs, and 655 source anchors passed for the staged baseline increment.
 
 **Current handoff:** B10 is in progress. The verified increment `499c274` in
 `snapshot.rs`,
@@ -108,13 +108,17 @@ unit regressions bring the unit inventory to 200, including retaining the last
 completed stability assessment while a newer native image awaits CPU work.
 Opaque codec/resize/OS phases
 are not hard-preempted, and admission does not bound queued bytes or blocking
-threads. Continue B10 with the synchronous success baseline comparison/write
-path and diagnostic rendering/publication under the shared assertion clock;
-stage data work without allowing detached late baseline commits or sealed-attempt images.
-For success, compare `Changed` against the frozen expected bytes using scalar
-tolerances, stage a temporary regular file, and keep the deadline-checked atomic
-commit in the owning foreground operation. Do not capture whole SnapshotOptions
-in workers: its capture masks can own locators/pages. For diagnostics, separate
+threads. The success baseline path now compares `Changed` against frozen expected
+bytes using scalar tolerances and stages chunked temporary files. The foreground
+owner checks the shared deadline before installing; `Missing` cannot overwrite
+a competing file; a matching winner is accepted after bounded validation.
+Existing/dangling symlink aliases and writable permissions are preserved.
+Six added unit groups bring the unit inventory to 206. The 54 focused native
+groups passed, including page/locator alias and parallel Missing generation;
+22 font/path/artifact/polling groups replayed on final source. Workers never
+capture whole SnapshotOptions, whose masks
+can own locators/pages. Continue B10 with diagnostic rendering/publication and
+final complete phase verification. For diagnostics, separate
 data rendering/staging from current-step and weak-attempt publication; the
 existing attachment lifecycle guard must not block attempt sealing on worker I/O.
 Final-only deferred diagnostics for failing outer generic polls are now
@@ -915,11 +919,15 @@ their dependencies are ready. References include
   unfinished/soft/parallel/retry/export and publication I/O behavior. Active
   image/read work (`92b5a66`) now has two callback slots, cooperative cancellation, immutable
   buffers, bounded regular baseline reads and PNG/JPEG/resize input guards, with
-  five additional unit regressions. Success baseline commits and diagnostic work
-  still need the clock/filesystem audit; opaque phases and queued input memory
+  five additional unit regressions. Success baseline commits now stage data-only
+  temporary files and install in the foreground under the shared clock. Frozen
+  Changed comparisons, non-overwriting Missing generation/matching race winners,
+  writable permissions and existing/dangling aliases are verified by six more
+  unit groups and one added page/locator/parallel native path group. Diagnostic
+  work still needs the clock/filesystem audit; opaque phases and queued input memory
   are not hard bounded. Final complete phase gates are still required.
-  Latest focused increment gates passed: 200 units, 53 native integrations/12
-  targets, four doctests and 28 CLI/configuration checks (285 combined), strict
+  Latest focused increment gates passed: 206 units, 54 native integrations/12
+  targets, four doctests and 28 CLI/configuration checks (292 combined), strict
   Clippy, formatting, regenerated matrix and local links. Font waits now follow
   owned style preparation across reachable same-origin documents, with real-
   font HTTP delivery, cancellation/restoration and animation-boundary coverage.

@@ -1797,8 +1797,9 @@ active callbacks. Comparison uses immutable shared encoded buffers, validates a
 single buffer with one decode, and consumes decoded rasters without keeping an
 extra conversion copy. Cancellation checks separate decoding, resizing and
 encoding phases and occur every 4,096 comparison pixels. Dropping a wait aborts
-queued tasks and signals already-started work. Jobs own data and read handles;
-they retain no page, browser, context or report owner and perform no file writes.
+queued tasks and signals already-started work. Image/read jobs own data and read
+handles; they retain no page, browser, context or report owner and perform no
+file writes. The later baseline staging jobs are described below.
 
 The assertion's existing clock covers the initial baseline read as well as
 capture and comparison. Expired comparisons cannot be accepted as matches; the
@@ -1858,3 +1859,68 @@ and package formatting. Regenerated matrix counts remain unchanged; 726 local
 Markdown links across the three parity documents and two reference/fixture
 READMEs and 655 source anchors validate. These are focused increment gates;
 success commits, diagnostics and complete phase verification still keep B10 open.
+
+### B10 staged baseline installation
+
+Page/locator screenshot assertions now finish through the private
+[baseline commit helper](crates/ferrite-e2e/src/snapshot_commit.rs). They reuse the
+validated stable native bytes and frozen expected baseline instead of calling
+the synchronous helper to read/decode both images again. `None` and existing
+`Missing` baselines need no further file work. `Changed` compares the frozen
+buffers in a worker with scalar tolerance settings, retains a matching baseline,
+and replaces mismatches/dimension changes; malformed expected PNGs still fail.
+`All` replaces the baseline after capture stability, including corrupt old PNGs.
+Negation bypasses baseline installation entirely.
+
+Writes stage in a named temporary file in the destination directory, with stop
+checks between 64-KiB chunks and metadata/permission phases. Workers own bytes,
+paths and temporary handles, never native owners or mask-bearing capture options.
+Only the foreground assertion installs the completed file, after checking the
+original shared deadline. Replacement uses the tempfile library's atomic
+persist operation. `Missing` uses non-overwriting persistence. A competing file
+is exceptionally read/validated within the same clock: matching pixels pass,
+different contents fail, and corrupt/invalid input keeps its typed error. The
+winner is never overwritten, so identical concurrent generation can succeed.
+The library does not
+guarantee atomic cleanup of the temporary name on every platform/filesystem;
+normal Linux behavior is verified here. This is content replacement, not an
+fsync/crash-durability contract, and existing open readers retain the old file.
+
+Terminal symlink targets are resolved during staging, with cancellation checks
+and a 64-hop cap; existing and dangling aliases remain symlinks. Parent aliases
+use normal OS path semantics. Writable existing permissions are preserved;
+new Unix files use ordinary 0666-with-umask creation permissions. Read-only
+destinations refuse replacement, while matching `Missing` winners require no
+write access to the file or parent directory; non-file destinations fail without
+changing their contents. Concurrent alias/
+parent replacement is not a filesystem transaction or path-identity guarantee.
+Directories created for staging may remain after interruption. Dropping a wait
+discards queued/completed temporary results; a running OS call can finish its
+temporary work, but cannot install the baseline. Foreground rename and temporary
+cleanup are opaque OS operations, not forcibly preemptible syscalls.
+
+Six added unit groups verify frozen-read/update/tolerance decisions, matching
+file identity, open-reader replacement, corrupt/invalid/read-only destinations,
+permission and alias preservation, missing-target races, expired installation,
+owner cancellation before foreground installation, and interruption after a
+real first 64-KiB write with eventual temporary-file removal. All 206 unit tests
+passed with default parallel execution. Diagnostic rendering/publication and
+the final complete phase gates still keep B10 open; standalone synchronous
+text/PNG helper entry points retain their existing synchronous contracts.
+
+The added required-two-engine path group verifies page `Changed`/`All`, locator
+dimension-change updates, existing/dangling aliases, preserved open-reader bytes
+and concurrent first-time `Missing` generation on separate native pages. Both
+generators pass without overwriting a matching winner; actual pixels, dimensions,
+alias types and absence of temporary names are checked.
+
+Combined focused gates passed: 206 units, 54 native integrations/12 targets,
+four doctests and 28 CLI/configuration checks (292 combined), strict all-target
+E2E/CLI/config Clippy and package formatting. Every native gate required full
+Chrome 153 and Firefox 157. After the final preparation/race changes, all 22
+font/animation, artifact, polling and path groups replayed successfully on final
+source. Stability3, browser snapshots3 and the 26 related capture/runner groups
+also passed. Matrix counts remain unchanged; 727 local Markdown links across
+the three parity documents and two reference/fixture READMEs and 655 source
+anchors validate. This is focused increment evidence, not complete phase
+verification or completed B10 parity.

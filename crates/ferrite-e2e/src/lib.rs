@@ -76,6 +76,7 @@ mod screenshot;
 mod snapshot;
 mod snapshot_artifacts;
 mod snapshot_capture;
+mod snapshot_commit;
 mod snapshot_path;
 mod snapshot_work;
 mod url_matcher;
