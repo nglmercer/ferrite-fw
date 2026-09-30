@@ -56,3 +56,13 @@ Run `cargo test -p ferrite-e2e --test shared_url_matching` with both browsers
 required. It compares waits, explicit matcher assertions and routes, plus context
 match limits/removal, future pages and HAR filters. Legacy string routing/HAR
 retains globset semantics; the explicit matcher follows the pinned corpus.
+
+`function-reference.mjs` / `function-reference.json` record five function wait
+cases with JSON arguments, awaited promises, falsy transitions, expression
+results and animation-frame/interval scheduling. Regenerate with the same
+external-install environment above, replacing `url-reference.mjs` with
+`function-reference.mjs` (or run `npm run reference:functions`).
+`cargo test -p ferrite-e2e --test function_wait` additionally verifies interval
+cadence, retained cyclic-object identity, predicate errors, frames, disposal,
+zero deadlines, cancellation/drop cleanup, document replacement and runner retries
+on installed Chromium and Firefox.

@@ -641,3 +641,32 @@ and Firefox. Chromium launch now disables popup blocking, matching
 so context popup event waits also work in full Chrome.
 The IndexedDB regression closes its setup connection before clearing storage,
 preventing a live connection from blocking deletion.
+
+### Function wait arguments and results
+
+`Page::wait_for_function_value` and its Frame counterpart accept a function or
+expression string, a JSON-serializable argument and `FunctionWaitOptions`.
+Rust source strings representing functions receive the argument; other expressions
+are evaluated as written. Playwright distinguishes JavaScript function objects
+from expression strings; the reference passes function objects for function cases. JavaScript truthiness of the immediate predicate return controls success. A
+returned promise is truthy and is awaited for its result, even if that result is
+false, as in pinned Playwright. The JSON result is
+captured at success without re-running the predicate. JSON uses native
+`JSON.stringify` rules; cyclic/BigInt/top-level nonserializable values fail.
+`Page::wait_for_function_handle` retains the actual successful value, including
+objects that cannot serialize. Dispose the returned handle after use.
+
+The default schedules in native `requestAnimationFrame`; interval polling uses
+whole milliseconds in 1..=2147483647. Background/hidden document animation-frame
+throttling is native behavior. Rust reads completion independently of scheduling.
+Page action timeout defaults apply; zero disables the local budget, with enclosing
+runner deadlines and cancellation preserved. Predicate errors fail directly.
+Document replacement restarts polling within the same budget; detached frames
+fail. Success, timeout, cancellation and dropped Rust futures reclaim owned
+timers and result state. User-created promises/side effects cannot be canceled
+by the library. Frame remote handles and handle arguments remain unsupported.
+The legacy unit-returning expression waits retain their existing 50ms behavior.
+
+The [official contract](https://playwright.dev/docs/api/class-page#page-wait-for-function)
+and pinned five-case Playwright 1.63.0 corpus cover JSON arguments, promise
+results, JavaScript falsy values and both scheduling modes.

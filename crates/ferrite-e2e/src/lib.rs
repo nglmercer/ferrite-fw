@@ -57,6 +57,7 @@ mod event;
 mod expect;
 mod file_payload;
 mod frame_locator;
+mod function_wait;
 mod har;
 mod jshandle;
 mod locator;
@@ -93,6 +94,7 @@ pub use event::{DispatchEventOptions, DomEventKind};
 pub use expect::{expect_poll, expect_to_pass, LocatorExpect, PageExpect, SoftAsserts, Timeout};
 pub use file_payload::FilePayload;
 pub use frame_locator::FrameLocator;
+pub use function_wait::{FunctionPolling, FunctionWaitOptions};
 pub use har::{HarContentMode, HarFile, HarReplayEntry};
 pub use jshandle::JSHandle;
 pub use locator::{

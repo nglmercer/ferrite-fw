@@ -373,3 +373,25 @@ context.clear_cookies_with(
 
 Filters are ANDed. Linked API clients observe the deletion on their next request.
 An empty filter clears all, retaining the existing clear-cookies behavior.
+
+Wait for application state and retain the successful result:
+
+```rust,no_run
+use ferrite_e2e::{FunctionPolling, FunctionWaitOptions};
+let state = page.wait_for_function_value(
+    "key => window.app?.ready && {value: window.app[key]}",
+    &"result",
+    FunctionWaitOptions::default()
+        .polling(FunctionPolling::Interval(std::time::Duration::from_millis(50))),
+).await?;
+let handle = page.wait_for_function_handle(
+    "() => document.querySelector('.ready')", &(), FunctionWaitOptions::default(),
+).await?;
+let text: String = handle.evaluate("node => node.textContent").await?;
+handle.dispose().await?;
+```
+
+The default polling mode follows native animation frames. Frame waits return
+JSON values; live frame handles and remote handle arguments are unsupported.
+Predicates/promises can fail directly. Cancellation removes the owned poller,
+while user-created asynchronous work retains normal JavaScript behavior.

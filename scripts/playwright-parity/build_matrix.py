@@ -267,9 +267,11 @@ put('TestOptions','contextOptions','Project.context_options','Isolated context p
 put('Page','ariaSnapshot','Page.aria_snapshot','Structured role/name/state DOM approximation, including open shadow roots; no full ARIA/YAML matching, mode/depth/boxes options.')
 put('Page','ariaSnapshotJSON','Page.aria_snapshot_json','Nested role/name/state DOM tree without name/node truncation; not the complete accessibility algorithm.')
 put('Page','addLocatorHandler','Page.add_locator_handler_with','Visibility-based overlay handlers run before actions and state/custom assertions; no full dismissal/noWaitAfter semantics.')
+put('Page','waitForFunction','Page.wait_for_function_handle','JSON argument, native animation-frame/interval polling and retained truthy result; JSON helper supports frames. Frame remote handles and arbitrary argument serialization remain unsupported. Legacy expression helper returns unit.')
 # Reliability, API authentication state, frame helpers, limits and context events.
 for m,t in {'page':'page','setContent':'set_content','waitForFunction':'wait_for_function','waitForURL':'wait_for_url','waitForLoadState':'wait_for_load_state','waitForSelector':'wait_for_selector'}.items():
  put('Frame',m,'Frame.'+t,'Frame-scoped counterpart; unit-returning waits, fewer predicate/options modes; frame NetworkIdle remains unsupported. current_url() reads navigation updates.')
+put('Frame','waitForFunction','Frame.wait_for_function_value','JSON arguments, native animation-frame/interval polling and captured JSON results; frame remote handles unsupported. Legacy expression helper returns unit.')
 for m,t in {'storageState':'storage_state','setStorageState':'apply_storage_state','dispose':'dispose'}.items():
  put('APIRequestContext',m,'ApiClient.'+t,'Enumerable cookies with domain/path/expiry/HttpOnly/Secure/SameSite state import/export; origin data retained, IndexedDB deferred. Disposal cancels clones; returned Rust response buffers remain independently owned.')
 put('APIRequest','newContext','ApiClient.with_options','Base URL, headers, TLS, proxy, timeout, redirects, Basic auth and imported storage state; no full Playwright options.')

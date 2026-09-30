@@ -1,0 +1,59 @@
+{
+  "playwright": "1.63.0",
+  "engine": "chromium",
+  "browser": "153.0.8010.12",
+  "cases": [
+    {
+      "expression": "arg => ({received:arg})",
+      "argument": {
+        "text": "quote \" backslash \\ newline\n",
+        "nested": [
+          1,
+          true,
+          null
+        ]
+      },
+      "polling": "raf",
+      "result": {
+        "received": {
+          "text": "quote \" backslash \\ newline\n",
+          "nested": [
+            1,
+            true,
+            null
+          ]
+        }
+      }
+    },
+    {
+      "expression": "arg => Promise.resolve(++window.calls < 3 ? false : {count:window.calls,arg})",
+      "argument": {
+        "name": "promise"
+      },
+      "polling": 30,
+      "result": false
+    },
+    {
+      "expression": "() => [null, false, 0, \"\", {truthy:true}][window.calls++]",
+      "argument": null,
+      "polling": "raf",
+      "result": {
+        "truthy": true
+      }
+    },
+    {
+      "expression": "++window.calls >= 3 && {expression:true}",
+      "argument": null,
+      "polling": 25,
+      "result": {
+        "expression": true
+      }
+    },
+    {
+      "expression": "() => []",
+      "argument": null,
+      "polling": "raf",
+      "result": []
+    }
+  ]
+}

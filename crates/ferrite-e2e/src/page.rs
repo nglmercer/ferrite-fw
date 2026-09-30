@@ -491,6 +491,18 @@ impl Frame {
             .await
     }
 
+    /// Frame-scoped function wait with JSON arguments, scheduling and result.
+    pub async fn wait_for_function_value<A: Serialize + Sync>(
+        &self,
+        expression: &str,
+        argument: &A,
+        options: crate::FunctionWaitOptions,
+    ) -> E2eResult<Value> {
+        self.scoped_page()
+            .wait_for_function_value(expression, argument, options)
+            .await
+    }
+
     /// Read the current URL, including navigations after this handle was created.
     pub async fn current_url(&self) -> E2eResult<String> {
         self.scoped_page().url().await
@@ -2405,7 +2417,7 @@ impl Page {
     pub async fn evaluate_handle(&self, expression: &str) -> E2eResult<JSHandle> {
         self.driver
             .run(async {
-                if self.frame_id.is_some() {
+                if self.frame_id.is_some() || !self.lazy_frames.is_empty() {
                     return Err(E2eError::Config(
                         "evaluate_handle on a frame-scoped page is not supported".to_string(),
                     ));
@@ -2449,6 +2461,56 @@ impl Page {
                     .await
             })
             .await
+    }
+
+    /// Wait for a function/expression to become truthy and return its JSON value.
+    /// The argument is JSON only; functions receive it as their single argument.
+    /// Values are captured at success without re-evaluating the predicate.
+    /// A returned promise is truthy; its resolved value may be false (Playwright semantics).
+    pub async fn wait_for_function_value<A: Serialize + Sync>(
+        &self,
+        expression: &str,
+        argument: &A,
+        options: crate::FunctionWaitOptions,
+    ) -> E2eResult<Value> {
+        let argument = serde_json::to_value(argument)?;
+        self.auto_step(
+            "page.wait_for_function",
+            crate::StepCategory::Action,
+            async {
+                match crate::function_wait::wait(self, expression, argument, options, false).await?
+                {
+                    crate::function_wait::ResultValue::Json(value) => Ok(value),
+                    _ => unreachable!(),
+                }
+            },
+        )
+        .await
+    }
+
+    /// Retain the truthy result as a live handle in the top-level document.
+    /// Frame/lazy-frame handles are unsupported; use the JSON result helper there.
+    pub async fn wait_for_function_handle<A: Serialize + Sync>(
+        &self,
+        expression: &str,
+        argument: &A,
+        options: crate::FunctionWaitOptions,
+    ) -> E2eResult<JSHandle> {
+        if self.frame_id.is_some() || !self.lazy_frames.is_empty() {
+            return Err(E2eError::Config("function wait remote handles require a top-level Page; use wait_for_function_value for frames".into()));
+        }
+        let argument = serde_json::to_value(argument)?;
+        self.auto_step(
+            "page.wait_for_function",
+            crate::StepCategory::Action,
+            async {
+                match crate::function_wait::wait(self, expression, argument, options, true).await? {
+                    crate::function_wait::ResultValue::Handle(handle) => Ok(*handle),
+                    _ => unreachable!(),
+                }
+            },
+        )
+        .await
     }
 
     /// Wait a fixed amount of time.
