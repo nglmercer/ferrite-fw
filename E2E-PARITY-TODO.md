@@ -3,8 +3,8 @@
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
 
 Implement **G, then A, then B**, followed by the supported C extensions. This
-backlog contains **45 tasks (22 complete, 23 remaining)**: four foundations, 16 core tasks, 19 follow-ups
-and six optional extensions. All A tasks and B02/B03/B15 are now verified;
+backlog contains **45 tasks (23 complete, 22 remaining)**: four foundations, 16 core tasks, 19 follow-ups
+and six optional extensions. All A tasks and B02/B03/B07/B15 are now verified;
 continue with HTTP/routing fidelity and native event diagnostics, then the
 remaining runner/capture/report work and supported C extensions. The ordering and effort assessments
 are recommendations based on the current source and parity audit.
@@ -107,6 +107,14 @@ they do not constitute differential Playwright conformance coverage.
   HTTP/transport errors, page closure, disconnect, zero/caller/enclosing deadlines
   and runner retries verified. Bounded raw-header correlation, unavailable metadata
   and weak history are explicit; bodies remain C02 and route header forwarding B07.
+- `eb14f7b`: B07. Native API/JSON/binary forwarding and same-URL synthetic
+  redirect regression passed on full Chrome and Firefox 156/157. All 143 units,
+  four metadata groups, seven legacy network groups and 16 related conformance/
+  context/matcher/wait/upload/console groups passed, with strict E2E/CLI Clippy,
+  formatting and generated links. Combined verified inventory: 297 E2E plus 23
+  CLI/configuration checks. Native acknowledgement/drop/budget/ordering covered;
+  route-provided headers have an explicit source flag and serde migration note.
+  Firefox's absent earlier synthetic redirect response settles unavailable.
 - G04 remains open until lifecycle coverage across all additions is complete.
 
 ## G — Foundations for the larger session
@@ -334,10 +342,18 @@ their dependencies are ready. References include
 
 ### API testing, captures and reports
 
-- [ ] **B07 — Header convenience APIs with duplicate preservation (S).** Add
+- [x] **B07 — Header convenience APIs with duplicate preservation (S).** Add
   headers-array, all-values and case-insensitive lookup helpers to API/network
   response types. Done when repeated Set-Cookie and other duplicate headers
   survive serialization, lookups and route forwarding. Coordinate with B02/B06.
+  Evidence: `1a9e875` adds shared header helpers; `eb14f7b` verifies API transport,
+  serialization, binary route forwarding, Set-Cookie with Expires commas and native
+  cookie storage on both engines. Acknowledged route-supplied arrays supplement
+  omitted/folded native fields with an explicit source flag; raw headers take
+  precedence. Same-URL redirect identity, rejection/drop and bounds covered.
+  Firefox 156/157 omits the earlier synthetic redirect's response/completion:
+  that request has no fabricated Response and settles unavailable. Native
+  generic comma folding remains intact; B06's fuller fetch/fulfill options stay open.
 - [ ] **B08 — API request option/redirect fidelity (M).** Extend current requests
   where the audit shows missing semantics: incompatible body options, retryable
   transport errors, credential-origin rules, redirect methods and status failure
@@ -481,7 +497,7 @@ waiting for every future feature before starting independent work.
 | Phase | Tasks | Outcome and reason for this order |
 |---|---|---|
 | 1. Network observations | B02, B03 — complete | Typed per-hop request/response identity and completion independent of body capture. Verified in `1a9e875`; continue with phase 2. |
-| 2. HTTP and routing correctness | B05, B06, B07, B08 | Define active-handler removal, fetch/fulfill overrides, duplicate header preservation and request/redirect semantics together. Verify forwarding as well as getter APIs. |
+| 2. HTTP and routing correctness | B05, B06, B08; B07 complete | Next: active-handler removal, fetch/fulfill overrides and request/redirect semantics. Header lookup/serialization/forwarding is verified in `eb14f7b`; preserve those regressions. |
 | 3. Native event diagnostics | B01, B04, B19 | Capture frame/load/dialog events, earliest popup traffic and structured error/console data with consistent ownership and ordering. |
 | 4. Runner and developer APIs | B16, B17, B12, B14, B13 | Add ownership and locator descriptions, attempt-owned soft assertions, effective configuration, then fixture/shared cleanup budgets. Changes to budgets need broader runner regressions. |
 | 5. Captures and reports | B09, B10, B18, B11 | Implement capture options before stabilized comparisons; add bounded ARIA output and searchable per-attempt reports using the earlier network/error data. |
