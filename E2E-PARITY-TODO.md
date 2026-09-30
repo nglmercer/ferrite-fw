@@ -3,7 +3,7 @@
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
 
 Implement **G, then A, then B**, followed by the supported C extensions. This
-backlog contains **45 tasks (14 complete, 31 remaining)**: four foundations, 16 core tasks, 19 follow-ups
+backlog contains **45 tasks (15 complete, 30 remaining)**: four foundations, 16 core tasks, 19 follow-ups
 and six optional extensions. Start the feature work with typed DOM events,
 richer assertions and exposed callbacks. The ordering and effort assessments
 are recommendations based on the current source and parity audit.
@@ -65,6 +65,11 @@ they do not constitute differential Playwright conformance coverage.
 - `8a47459`: A11. Native daily API group passed on full Chrome and Firefox;
   strict E2E/CLI Clippy, formatting and regenerated matrix passed. Combined
   verified regression inventory is now 274 E2E plus 23 CLI/configuration checks.
+- `bb25a52`: A12. All 276 E2E checks passed on installed Chromium Headless Shell
+  and Firefox, including action cancellation, native input, frame scaling and
+  legacy click/drag regressions. Strict E2E/CLI Clippy, formatting and regenerated
+  matrix passed; combined verified inventory is 299 checks. Transform/cross-origin
+  limits and ClickOptions literal migration are documented.
 - G04 remains open until callback and stream lifecycle coverage is complete.
   A14 has a verified zero-segment double-star correction; shared API integration
   and its remaining conformance cases are still open.
@@ -196,11 +201,15 @@ The existing synchronous Page callback survives navigation; extend it.
   stores remain synchronized. Preserve unsupported partition metadata honestly.
   Evidence: `8a47459`; `daily_api.rs` verifies native exact/regex AND filters, same-name domain/path independence, untouched attributes and linked API requests on both engines. Empty filters, zero timeout and cancellation covered. Opaque Chromium partition deletion fails explicitly; portable partition filter fields remain unsupported.
 
-- [ ] **A12 — Consistent action options (M).** Extend click/hover/check/drag
+- [x] **A12 — Consistent action options (M).** Extend click/hover/check/drag
   options with supported positions, modifiers, trial readiness and scoped
   timeout overrides. Done when trial actions produce no input, modifiers are
   released after errors/cancellation and actionability stays consistent on both
   engines. Add options to existing methods rather than recreating timeout defaults.
+  Evidence: `bb25a52`; `action_options.rs` verifies positions, modifiers, trial silence,
+  checkbox/drag state, held-key preservation, scoped timeouts and cancellation cleanup
+  on both engines. Same-origin offsets/positive axis scaling supported; cross-origin
+  and rotated/reflected/perspective frame coordinates return explicit errors.
 - [ ] **A13 — URL wait readiness options (M).** Add a wait-until option to the
   existing matching/predicate URL waits. Done when URL matching and requested
   document readiness share one budget across redirects, same-document history,
