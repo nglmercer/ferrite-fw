@@ -1,7 +1,8 @@
 # Ferrite E2E implementation TODO
 
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
-Session plan refreshed: 2026-09-29, after API implementation `ffb5147`.
+Session plan refreshed: 2026-09-30, from verified checkpoint `42e0d94` and the
+unfinished B06 working tree. Uncommitted implementations are not counted complete.
 
 Implement **G, then A, then B**, followed by the supported C extensions. This
 backlog contains **45 tasks (25 complete, 20 remaining)**: four foundations, 16 core tasks, 19 follow-ups
@@ -29,6 +30,15 @@ active callback futures, and each request dispatches independently. Default and
 ignore-errors removal release pending requests to the network; wait preserves
 their decisions. Native cleanup and re-registration races are covered. Build
 fetch/fulfill options on this verified lifecycle and the shared HTTP implementation.
+
+**Current handoff:** B06 already has draft `RouteFetchOptions`,
+`RouteFulfillOptions`, request-body availability states, weak context ownership,
+a pinned route-options reference and six regression groups in the working tree.
+Finish reviewing and verifying these changes before adding another implementation.
+The latest method normalization, relative fetch URLs, shared TLS fixture and
+TLS/proxy checks need verification against the final source. Add examples,
+migration notes and matrix mappings before marking B06 complete. Earlier focused
+results do not verify later edits.
 
 The scope of the longer session is **all 20 open tasks below**. Completed tasks
 remain regression requirements. The deferred projects are future work; completing
@@ -63,6 +73,42 @@ there. G04 applies during every phase and closes after the final audit.
 | 18 | C05 | Supported media/device emulation options and resets | Chromium native capabilities |
 | 19 | C06 | Independently detachable CDP target sessions | Chromium transport and session ownership |
 | 20 | G04 | Final lifecycle, compatibility and resource-release audit | Evidence from every completed phase |
+
+## Concrete implementation deliverables
+
+This expands the existing task IDs into implementation starting points. It adds
+no duplicate checkboxes. Paths below are relative to `crates/ferrite-e2e/src`
+unless another package is named. API names remain subject to the existing Rust
+contracts and pinned behavior; prefer extending existing options and helpers.
+
+| Task | Start in | Deliverable to review |
+|---|---|---|
+| B06 | `route_options.rs`, `routing.rs`, `api.rs`, `driver.rs` | Finish fetch overrides and inherited fulfill responses; prove payload/header/file precedence, body availability, context defaults and cancellation. Include native CORS behavior and relative URL cases in the reference/regressions before claiming equivalence. |
+| B01 | `event.rs`, `page.rs`, `context.rs`, `driver.rs` | Add supported frame/load/dialog-close event variants with stable identities; test ordering, navigation/replacement and single page-to-context forwarding. |
+| B04 | `browser.rs`, `driver.rs`, `context.rs` | Buffer and adopt earliest popup observations once, including a popup that closes immediately; bound buffers and release listeners. |
+| B19 | `event.rs`, `driver.rs`, `report.rs` | Preserve optional structured errors and bounded argument previews from native events through page/context history and every attempt report. |
+| B16 | `browser.rs`, `context.rs`, `driver.rs` | Expose context owner access using weak ownership; report unexpected transport closure accurately and verify disposal remains safe. |
+| B17 | `locator.rs`, `expect.rs`, `runner.rs` | Add locator descriptions with defined clone/chaining behavior; include labels in automatic steps and operation failures without duplicating steps. |
+| B12 | `expect.rs`, `runner.rs`, `report.rs` | Collect soft failures per attempt, fail the attempt automatically and preserve source/message metadata through retries and cleanup. |
+| B14 | `config.rs`, `runner.rs`, `report.rs`; CLI/config packages | Resolve project filters, repetition and output/snapshot paths consistently; expose immutable effective settings and verify library/CLI precedence. |
+| B13 | `runner.rs`, `operation.rs` | Bound fixture setup/teardown and share the enclosing cleanup deadline across hooks and reverse teardown; preserve all relevant failure diagnostics. |
+| B09 | `page.rs`, `locator.rs`, `driver.rs` | Validate supported clip/scale/background/mask/style options and restore temporary changes on success, failure and cancellation. |
+| B10 | `snapshot.rs`, `expect.rs`, `config.rs` | Compare successive stable captures within one budget; resolve baseline paths/update modes and attach expected/actual/diff artifacts. |
+| B18 | `dom.js`, `locator.rs`, `snapshot.rs` | Produce bounded structured ARIA snapshots with optional boxes/state and deterministic truncation; document DOM approximation limits. |
+| B11 | `report.rs`, `bundle.rs` | Add search/status/project filters and per-attempt network summaries; verify escaping, retries, large/empty reports and relocated artifact links visually. |
+| C01 | `page.rs`, `driver.rs` | Validate PDF option combinations and inspect actual generated page dimensions/content on Chromium; assert Firefox's unsupported result. |
+| C02 | `network.rs`, `driver.rs` | Expose bounded captured-body bytes/text/JSON with distinct empty, missing, truncated and failed states; retain explicit Firefox unavailability. |
+| C03 | `coverage.rs`, `driver.rs` | Define navigation reset/source options and stop/restart behavior; verify anonymous scripts and resource release on Chromium. |
+| C04 | `har.rs`, `routing.rs` | Apply shared URL matchers and explicit miss policy to supported HAR content/timing options; test duplicate URLs, redirects and binary replay. |
+| C05 | `page.rs`, `driver.rs` | Add only native supported media/metrics/user-agent options; verify observable values and resets, including explicit unsupported errors. |
+| C06 | `cdp.rs`, `driver.rs` | Own target sessions independently; detaching one must settle its pending calls while other sessions/pages keep working. |
+| G04 | `operation.rs`, affected tests and parity documents | Audit every new API's deadlines/cancellation/disposal/retries, resource release and serialization; reconcile the complete test inventory and matrix. |
+
+The first useful delivery is **B06**. Then complete the diagnostics group
+**B01/B04/B19**, the runner group **B16/B17/B12/B14/B13**, and the capture/report
+group **B09/B10/B18/B11**. Implement the six C extensions after checking native
+capabilities, and finish with G04. Each delivery should have usable public APIs,
+examples and verified behavior before its implementation commit.
 
 ## Scope and tracking
 
@@ -440,8 +486,9 @@ their dependencies are ready. References include
 - [ ] **B06 — Route fetch/fulfill option fidelity (M).** Extend supported route
   operations with method/body/header overrides and bounded fetch options using
   existing ApiClient machinery. Done when redirect limits, retries, binary bodies,
-  duplicate headers and status overrides have focused regressions. Chromium-only
-  response rewriting/URL overrides remain explicit on Firefox. Implement after
+  duplicate headers and status overrides have focused regressions. Distinguish
+  out-of-band HTTP fetch URL overrides from native intercepted-request URL
+  rewriting; Firefox's unsupported native rewriting must stay explicit. Implement after
   B08 so HTTP options share one transport contract and total operation budget.
   Verify header/body precedence, JSON content type, cookies/authentication and
   context-linked client behavior against the pinned corpus before documenting
@@ -449,6 +496,11 @@ their dependencies are ready. References include
   an ownership cycle. When Firefox does not supply the original request body,
   keep that absence explicit and distinguish a supplied body override from
   unavailable bytes; never silently replay a missing payload as empty.
+  Verify response/body/JSON/file/header precedence, inferred content types and
+  content-length behavior against actual pinned results. Invalid combinations
+  must fail before resolving the native interception. Fetch must not implicitly
+  continue or fulfill the intercepted request. Retained request descriptions
+  must not keep a disposed page/context alive.
   Preserve B07's duplicate-header and native acknowledgement tests.
   Reference: [route fetch options](https://playwright.dev/docs/api/class-route#route-fetch).
 
@@ -690,6 +742,14 @@ cargo fmt -p ferrite-e2e --check
 python3 scripts/playwright-parity/build_matrix.py
 git diff --check
 ```
+
+For long-running validation, run the same complete target inventory in bounded
+batches and retain each command's exit status and result count. Include units,
+every integration target and doctests; an interrupted command is not a pass.
+Record any initial failure and the change or repeat that resolved it. A single
+focused pass must not replace the broader checks required by a transport or
+runner change. For documentation-only checkpoints, validate task counts, local
+links and the diff; do not present historical browser runs as new verification.
 
 The generator needs its pinned upstream documents; use its documented `--fetch`
 or `--upstream` option when the cache is absent. Changes to CLI/configuration
