@@ -820,7 +820,7 @@ pub struct TestResult {
 }
 
 /// Aggregate report for a run.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct TestReport {
     /// Effective configuration used by this run; absent in historical reports.
     #[serde(default)]
@@ -830,6 +830,22 @@ pub struct TestReport {
     pub run_steps: Vec<StepInfo>,
     /// Per-test results in completion order.
     pub results: Vec<TestResult>,
+}
+
+// Derived run policy is serialized alongside the unchanged per-test outcomes.
+// Historical reports omit configuration and retain their original success rule.
+impl Serialize for TestReport {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut report = serializer.serialize_struct("TestReport", 6)?;
+        report.serialize_field("configuration", &self.configuration)?;
+        report.serialize_field("run_steps", &self.run_steps)?;
+        report.serialize_field("results", &self.results)?;
+        report.serialize_field("status", if self.ok() { "passed" } else { "failed" })?;
+        report.serialize_field("exit_code", &self.exit_code())?;
+        report.serialize_field("flaky_policy_failed", &self.flaky_policy_failed())?;
+        report.end()
+    }
 }
 
 impl TestReport {
@@ -857,10 +873,19 @@ impl TestReport {
             .count()
     }
 
-    /// True when no test failed.
+    /// Whether the configured flaky-test policy rejects this run.
+    #[must_use]
+    pub fn flaky_policy_failed(&self) -> bool {
+        self.configuration
+            .as_ref()
+            .is_some_and(|config| config.fail_on_flaky_tests)
+            && self.flaky() > 0
+    }
+
+    /// True when no test failed and the aggregate flaky policy is satisfied.
     #[must_use]
     pub fn ok(&self) -> bool {
-        self.failed() == 0
+        self.failed() == 0 && !self.flaky_policy_failed()
     }
 
     /// Process exit code (0 = all passed).
@@ -904,6 +929,9 @@ impl TestReport {
             out.push_str(&format!(", {} flaky", self.flaky()));
         }
         out.push_str(&format!(" ({} total)", self.results.len()));
+        if self.flaky_policy_failed() {
+            out.push_str("; run failed: fail_on_flaky_tests");
+        }
         out
     }
 
@@ -980,14 +1008,29 @@ impl TestReport {
         serde_json::to_string_pretty(self).unwrap_or_else(|_| "{}".to_string())
     }
 
-    /// Render the `junit` reporter output.
+    /// Render the `junit` reporter output. With fail_on_flaky_tests enabled,
+    /// recovered cases carry a FlakyTestPolicy failure for CI consumers; their
+    /// original final status/flakiness remain in properties and Rust/JSON results.
     #[must_use]
     pub fn to_junit(&self) -> String {
+        let flaky_policy_failed = self.flaky_policy_failed();
         let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
         out.push_str(&format!(
             "<testsuite name=\"ferrite-e2e\" tests=\"{}\" failures=\"{}\">\n",
             self.results.len(),
-            self.failed()
+            self.results
+                .iter()
+                .filter(|result| result.status == TestStatus::Failed
+                    || (flaky_policy_failed && result.flaky))
+                .count()
+        ));
+        out.push_str(&format!(
+            "  <properties><property name=\"ferrite.run.status\" value=\"{}\"/>\
+             <property name=\"ferrite.fail_on_flaky_tests\" value=\"{}\"/></properties>\n",
+            if self.ok() { "passed" } else { "failed" },
+            self.configuration
+                .as_ref()
+                .is_some_and(|config| config.fail_on_flaky_tests)
         ));
         for result in &self.results {
             out.push_str(&format!(
@@ -1001,19 +1044,33 @@ impl TestReport {
             }
             // Expected failures keep their message but never fail the suite.
             if result.status == TestStatus::Failed {
-                if let Some(error) = &result.error {
-                    out.push_str(&format!(
-                        "    <failure message=\"{}\"/>\n",
-                        xml_escape(&one_line(error))
-                    ));
-                }
+                out.push_str(&format!(
+                    "    <failure message=\"{}\"/>\n",
+                    xml_escape(&one_line(result.error.as_deref().unwrap_or("test failed")))
+                ));
+            } else if flaky_policy_failed && result.flaky {
+                out.push_str("    <failure type=\"FlakyTestPolicy\" message=\"fail_on_flaky_tests: test recovered after an unexpected attempt\"/>\n");
             }
+            out.push_str(&format!(
+                "    <properties><property name=\"ferrite.final_status\" value=\"{}\"/>\
+                 <property name=\"ferrite.flaky\" value=\"{}\"/>\
+                 <property name=\"ferrite.attempts\" value=\"{}\"/>",
+                match result.status {
+                    TestStatus::Passed => "passed",
+                    TestStatus::Failed => "failed",
+                    TestStatus::Skipped => "skipped",
+                    TestStatus::FailedExpected => "failedexpected",
+                },
+                result.flaky,
+                result.attempts
+            ));
             if let Some(video) = &result.video {
                 out.push_str(&format!(
-                    "    <properties><property name=\"video\" value=\"{}\"/></properties>\n",
+                    "<property name=\"video\" value=\"{}\"/>",
                     xml_escape(video)
                 ));
             }
+            out.push_str("</properties>\n");
             out.push_str("  </testcase>\n");
         }
         out.push_str("</testsuite>\n");
@@ -1037,7 +1094,9 @@ impl TestReport {
              </style></head><body>",
         );
         out.push_str(&format!(
-            "<h1>ferrite e2e</h1><p>{}</p>",
+            "<h1>ferrite e2e</h1><p><span class=\"pill {}\">run {}</span> {}</p>",
+            if self.ok() { "pass" } else { "fail" },
+            if self.ok() { "passed" } else { "failed" },
             xml_escape(&self.summary())
         ));
         out.push_str(
@@ -1844,6 +1903,62 @@ mod tests {
         let report = sample();
         let parsed: TestReport = serde_json::from_str(&report.to_json()).unwrap();
         assert_eq!(parsed.results.len(), 2);
+    }
+
+    #[test]
+    fn flaky_policy_changes_aggregate_serialization_without_fabricating_results() {
+        let mut result = sample_result("recovers <&>", TestStatus::Passed);
+        result.flaky = true;
+        result.attempts = 2;
+        let mut report = TestReport {
+            results: vec![result],
+            ..Default::default()
+        };
+        assert!(report.ok());
+        report.configuration = Some(crate::ResolvedRunConfig {
+            fail_on_flaky_tests: true,
+            ..Default::default()
+        });
+        assert!(!report.ok());
+        assert_eq!(report.exit_code(), 1);
+        assert_eq!(
+            (report.passed(), report.failed(), report.flaky()),
+            (1, 0, 1)
+        );
+        let value = serde_json::to_value(&report).unwrap();
+        assert_eq!(value["status"], "failed");
+        assert_eq!(value["exit_code"], 1);
+        assert_eq!(value["flaky_policy_failed"], true);
+        assert_eq!(value["results"][0]["status"], "passed");
+        let parsed: TestReport = serde_json::from_value(value).unwrap();
+        assert!(!parsed.ok());
+        assert_eq!(parsed.results.len(), 1);
+        assert_eq!(parsed.results[0].attempts, 2);
+        for text in [report.to_list(), report.to_dot(), report.to_html()] {
+            assert!(text.contains("run failed: fail_on_flaky_tests"));
+        }
+        let junit = report.to_junit();
+        assert!(junit.contains("tests=\"1\" failures=\"1\""));
+        assert!(junit.contains("type=\"FlakyTestPolicy\""));
+        assert!(junit.contains("name=\"ferrite.final_status\" value=\"passed\""));
+        assert!(junit.contains("recovers &lt;&amp;&gt;"));
+        report.configuration.as_mut().unwrap().fail_on_flaky_tests = false;
+        assert!(report.ok());
+        assert!(!report.to_junit().contains("<failure"));
+        let mut historical = serde_json::to_value(&report).unwrap();
+        historical.as_object_mut().unwrap().remove("configuration");
+        assert!(serde_json::from_value::<TestReport>(historical)
+            .unwrap()
+            .ok());
+        report.results[0].flaky = false;
+        report.configuration.as_mut().unwrap().fail_on_flaky_tests = true;
+        assert!(report.ok());
+        report.results[0].status = TestStatus::Failed;
+        report.results[0].error = None;
+        assert!(!report.ok());
+        assert!(report
+            .to_junit()
+            .contains("<failure message=\"test failed\""));
     }
 
     #[test]

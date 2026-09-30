@@ -46,9 +46,18 @@ Partial means the listed limitation must be retained in API/docs/test evidence.
 | Attempt-owned soft assertions | Supported | Supported | Only assertion mismatches are softened; operational/control errors propagate. Source/step/message data and failure status survive cleanup/retries. Atomic sealing rejects late writes; Rust runtime modifiers remain attempt-local. |
 | Resolved project/run/attempt configuration | Supported | Supported | Library/shared TOML/JSON/CLI selection and precedence; whole context overrides, actual owner versions, project artifact/snapshot paths, read-only TestInfo snapshots and serde-defaulted report metadata. Dedicated versions stay absent before launch; no project dependency scheduling. |
 | Fixture limits and shared cleanup clocks | Supported | Supported | Separate local setup/teardown limits capped by enclosing budgets; ready release after exhaustion, explicit pending errors and disposal surviving dropped waits. Rust accounting differs from upstream separate fixture budgets. |
+| CI flaky policy and focus protection | Supported | Supported | Opt-in aggregate failure preserves actual attempt outcomes; registered focus checked before filters/shards, including skipped descendants. CI forces existing focus protection. JSON/live/HTML aggregate status and explicit JUnit policy markers; upstream filtering/JUnit differences documented. |
 | Portable reports, runner/fixtures/retries | Supported | Supported | Tokio workers, cooperative cancellation, current artifact formats |
 
 ## Evidence and validation gates
+
+[ci_policy.rs](crates/ferrite-e2e/tests/ci_policy.rs) verifies flaky policy,
+live/serialized reports, retry/repetition/project scheduling, registered focus,
+global/user interruption and isolated child exits. Fourteen pinned runner cases
+record intentional upstream differences; twelve actual CLI cases ran across
+full Chrome 153/Firefox 157 with parsed XML and child exit checks. The current
+combined inventory is 386 E2E plus 28 CLI/config checks, with strict Clippy and
+package formatting. Native HTML previews were inspected on both engines.
 
 [fixture_budgets.rs](crates/ferrite-e2e/tests/fixture_budgets.rs) verifies six
 native groups on full Chrome/Firefox, including actual removed target and user
@@ -56,7 +65,7 @@ context IDs after dropped close waits. Six lifecycle/budget unit groups cover
 shared/intersected clocks, disposal error replay and owner release, suite/worker
 retirement, final run hooks and default/zero/larger fixture caps. Accounting
 differences are recorded by eight actual pinned runner observations. The combined
-verified inventory is 377 E2E plus 27 CLI/config checks, with strict Clippy and
+verified B13 checkpoint inventory was 377 E2E plus 27 CLI/config checks, with strict Clippy and
 package formatting. An already-lost transport permits idempotent local close;
 it does not establish release of a remote native context.
 

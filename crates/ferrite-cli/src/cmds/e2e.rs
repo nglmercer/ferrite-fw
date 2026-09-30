@@ -91,6 +91,11 @@ fn child_command(
         .env("FERRITE_E2E_REPORTER", &config.reporter)
         .env("FERRITE_E2E_WORKERS", config.workers.to_string())
         .env("FERRITE_E2E_RETRIES", config.retries.to_string())
+        .env(
+            "FERRITE_E2E_FAIL_ON_FLAKY_TESTS",
+            config.fail_on_flaky_tests.to_string(),
+        )
+        .env("FERRITE_E2E_FORBID_ONLY", config.forbid_only.to_string())
         .env("FERRITE_E2E_REPEAT_EACH", config.repeat_each.to_string())
         .env("FERRITE_E2E_OUTPUT_DIR", &config.output_dir)
         .env("FERRITE_UPDATE_SNAPSHOTS", &config.update_snapshots)
@@ -128,6 +133,12 @@ fn child_command(
 }
 
 fn apply_flag_overrides(e2e: &mut ferrite::config::E2eConfig, args: &E2eArgs) {
+    if let Some(value) = args.fail_on_flaky_tests {
+        e2e.fail_on_flaky_tests = value;
+    }
+    if let Some(value) = args.forbid_only {
+        e2e.forbid_only = value;
+    }
     if let Some(engine) = &args.engine {
         e2e.browser = engine.clone();
     }
@@ -375,6 +386,57 @@ fn test_command(root: &Path, explicit: &[String]) -> ferrite::Result<Vec<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn policy_flags_support_enable_disable_and_omitted_config_values() {
+        use clap::Parser;
+        for (flags, expected) in [
+            (vec![], true),
+            (vec!["--fail-on-flaky-tests", "--forbid-only"], true),
+            (
+                vec!["--fail-on-flaky-tests=false", "--forbid-only=false"],
+                false,
+            ),
+        ] {
+            let arguments = [
+                vec!["ferrite", "e2e", "."],
+                flags,
+                vec!["--", "cargo", "test"],
+            ]
+            .concat();
+            let crate::cli::Command::E2e(args) = crate::cli::Cli::parse_from(arguments).command
+            else {
+                panic!("e2e args")
+            };
+            assert_eq!(args.command, ["cargo", "test"]);
+            let mut config = ferrite::config::E2eConfig {
+                fail_on_flaky_tests: true,
+                forbid_only: true,
+                ..Default::default()
+            };
+            apply_flag_overrides(&mut config, &args);
+            assert_eq!(config.fail_on_flaky_tests, expected);
+            assert_eq!(config.forbid_only, expected);
+            let child = child_command(Path::new("."), &config, &["cargo".into()]).unwrap();
+            for name in ["FERRITE_E2E_FAIL_ON_FLAKY_TESTS", "FERRITE_E2E_FORBID_ONLY"] {
+                assert_eq!(
+                    child
+                        .get_envs()
+                        .find(|(key, _)| key == &name)
+                        .unwrap()
+                        .1
+                        .unwrap(),
+                    expected.to_string().as_str()
+                );
+            }
+        }
+        assert!(crate::cli::Cli::try_parse_from([
+            "ferrite",
+            "e2e",
+            "--fail-on-flaky-tests=invalid"
+        ])
+        .is_err());
+    }
 
     #[test]
     fn project_flags_override_without_mutating_parent_environment() {

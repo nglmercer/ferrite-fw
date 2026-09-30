@@ -124,6 +124,25 @@ async fn released(browser: &Browser, expected: &[String]) {
     .expect("native user contexts were not actually released");
 }
 
+async fn targets_released(browser: &Browser, targets: &[&str]) {
+    // A native close acknowledgement can precede target destruction. Require
+    // actual removal within the same finite verification budget, not one query.
+    tokio::time::timeout(BUDGET, async {
+        loop {
+            let ids = native_target_ids(browser).await;
+            if targets
+                .iter()
+                .all(|target| !ids.iter().any(|id| id == target))
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("native page targets were not actually released");
+}
+
 #[tokio::test]
 async fn native_dropped_context_page_and_convenience_close_waits_complete_once() {
     for browser in browsers().await {
@@ -147,10 +166,7 @@ async fn native_dropped_context_page_and_convenience_close_waits_complete_once()
         second.unwrap();
         assert!(page.is_closed() && sibling.is_closed() && context.is_closed());
         assert_eq!(native_context_ids(&browser).await, before);
-        let targets = native_target_ids(&browser).await;
-        assert!(!targets
-            .iter()
-            .any(|id| id == page.target_id() || id == sibling.target_id()));
+        targets_released(&browser, &[page.target_id(), sibling.target_id()]).await;
         let mut closed = 0;
         while let Ok(event) = events.try_recv() {
             if matches!(event, PageEvent::Closed) {
@@ -170,10 +186,7 @@ async fn native_dropped_context_page_and_convenience_close_waits_complete_once()
             .unwrap()
             .unwrap();
         assert!(explicit.is_closed());
-        assert!(!native_target_ids(&browser)
-            .await
-            .iter()
-            .any(|id| id == explicit.target_id()));
+        targets_released(&browser, &[explicit.target_id()]).await;
         // Explicit page closure must leave its context available.
         let next = context.new_page().await.unwrap();
         assert_eq!(next.evaluate::<Value>("6*7").await.unwrap(), json!(42));

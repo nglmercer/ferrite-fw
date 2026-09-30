@@ -20,6 +20,8 @@ Runner limits can be configured in `ferrite.toml`:
 [e2e]
 global_timeout_ms = 120000
 max_failures = 3
+fail_on_flaky_tests = false
+forbid_only = false
 cleanup_timeout_ms = 5000
 ```
 
@@ -28,6 +30,41 @@ The corresponding flags are `--global-timeout`, `--max-failures` and
 The runner bounds setup/hooks/fixtures/body together, then shares one cleanup
 budget across each cleanup scope. Already active tests finish when max failures is
 reached; global timeout interrupts them and still runs cleanup.
+
+Enable `fail_on_flaky_tests` to fail the overall run when retries recover an
+unexpected attempt. The recovered test remains passed and flaky, with its
+original attempt history. This policy does not consume `max_failures` or stop
+later tests. Expected failures and skipped tests alone do not trigger it.
+Repetitions/projects are counted separately; timeout/interruption remains a
+failure independently. `Runner::fail_on_flaky_tests(bool)` overrides the config.
+
+`forbid_only` rejects registered test/suite focus before filters, project filters
+or shards can hide it, including focused skipped/fixme/expected-failure tests.
+Focus remains separate from the run mode: `.only().skip()` still skips when
+focus is allowed. `CI=1` or `CI=true` continues to force focus protection, even
+with `forbid_only=false`. This inventory audit is stricter than Playwright's
+pinned `grep` behavior. The CLI supports `--fail-on-flaky-tests` and
+`--forbid-only`, plus `=false` to override configured true outside CI. The child
+gets the complete JSON and explicit boolean environment values; library callers
+can use `config_from_env()` / `Runner::from_env()`. Accepted legacy boolean values
+are `true`/`false` (case-insensitive) and `1`/`0`; invalid values fail validation.
+
+Live `on_end`, `TestReport::ok()` / `exit_code()`, list/dot summaries, JSON and
+HTML expose aggregate policy failure without adding tests or attempts. JSON
+adds derived `status`, `exit_code` and `flaky_policy_failed`; historical JSON
+without configuration retains its original success rule. JUnit emits a
+`FlakyTestPolicy` failure on each rejected flaky case so CI consumers also fail,
+with `ferrite.final_status`, `ferrite.flaky` and `ferrite.attempts` properties
+preserving its outcome. JUnit's failure count includes these policy violations;
+`TestReport::failed()` continues to count actual unexpected test/run failures.
+This JUnit behavior intentionally differs from pinned Playwright, which exits
+unsuccessfully for rejected flakiness while reporting zero JUnit failures.
+
+Source migration for exhaustive struct literals: add `fail_on_flaky_tests` and
+`forbid_only` to `E2eConfig`, `fail_on_flaky_tests` to `ResolvedRunConfig`, and
+`focused: false` to `Test` (legacy `mode: TestMode::Only` is still recognized).
+Prefer config defaults and `test` / `test_with_context` constructors. Existing
+serialized configuration/reports continue to deserialize with default policies.
 
 Named project configuration is carried into `Runner::default()` by the CLI:
 

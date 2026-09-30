@@ -258,6 +258,12 @@ pub(crate) struct E2eArgs {
     /// Stop scheduling after this many unexpected failures.
     #[arg(long)]
     pub(crate) max_failures: Option<usize>,
+    /// Fail the run when a test recovers on retry (optional =true/=false).
+    #[arg(long, num_args = 0..=1, default_missing_value = "true", require_equals = true)]
+    pub(crate) fail_on_flaky_tests: Option<bool>,
+    /// Reject focused tests/suites (CI also enables this policy).
+    #[arg(long, num_args = 0..=1, default_missing_value = "true", require_equals = true)]
+    pub(crate) forbid_only: Option<bool>,
     /// Cleanup timeout in milliseconds.
     #[arg(long)]
     pub(crate) cleanup_timeout: Option<u64>,

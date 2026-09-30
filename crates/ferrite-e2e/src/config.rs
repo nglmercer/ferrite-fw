@@ -32,6 +32,22 @@ fn config_from_variables(read: impl Fn(&str) -> Option<String>) -> E2eResult<E2e
     if let Some(base) = read("FERRITE_E2E_BASE_URL") {
         config.base_url = Some(base);
     }
+    for (name, field) in [
+        ("FAIL_ON_FLAKY_TESTS", &mut config.fail_on_flaky_tests),
+        ("FORBID_ONLY", &mut config.forbid_only),
+    ] {
+        if let Some(value) = read(&format!("FERRITE_E2E_{name}")) {
+            *field = match value.to_ascii_lowercase().as_str() {
+                "true" | "1" => true,
+                "false" | "0" => false,
+                _ => {
+                    return Err(E2eError::Config(format!(
+                        "invalid FERRITE_E2E_{name}: {value:?}"
+                    )))
+                }
+            };
+        }
+    }
     for name in [
         "WORKERS",
         "RETRIES",
@@ -162,6 +178,40 @@ pub(crate) fn validate_config(config: &E2eConfig) -> E2eResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ci_policy_bridge_validates_booleans_and_explicit_false_overrides_json() {
+        for (value, expected) in [
+            ("true", true),
+            ("1", true),
+            ("TRUE", true),
+            ("false", false),
+            ("0", false),
+        ] {
+            let config = config_from_variables(|name| match name {
+                "FERRITE_E2E_CONFIG" => {
+                    Some(r#"{"fail_on_flaky_tests":true,"forbid_only":true}"#.into())
+                }
+                "FERRITE_E2E_FAIL_ON_FLAKY_TESTS" | "FERRITE_E2E_FORBID_ONLY" => Some(value.into()),
+                _ => None,
+            })
+            .unwrap();
+            assert_eq!(config.fail_on_flaky_tests, expected);
+            assert_eq!(config.forbid_only, expected);
+        }
+        for name in ["FERRITE_E2E_FAIL_ON_FLAKY_TESTS", "FERRITE_E2E_FORBID_ONLY"] {
+            for value in ["", "yes", "2", " true "] {
+                let error =
+                    config_from_variables(|variable| (variable == name).then(|| value.into()))
+                        .unwrap_err();
+                assert!(error.to_string().contains(name));
+            }
+        }
+        let historical =
+            config_from_variables(|name| (name == "FERRITE_E2E_CONFIG").then(|| "{}".into()))
+                .unwrap();
+        assert!(!historical.fail_on_flaky_tests && !historical.forbid_only);
+    }
 
     #[test]
     fn project_selection_paths_and_repetitions_survive_bridge() {

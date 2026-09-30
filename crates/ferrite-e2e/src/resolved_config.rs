@@ -37,6 +37,7 @@ pub struct ResolvedRunConfig {
     pub reporter: String,
     pub list_progress: bool,
     pub forbid_only: bool,
+    pub fail_on_flaky_tests: bool,
     pub screenshot_always: bool,
     pub screenshot_on_failure: bool,
     pub trace: bool,

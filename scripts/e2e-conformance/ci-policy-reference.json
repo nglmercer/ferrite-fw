@@ -1,0 +1,551 @@
+{
+  "playwright": "1.63.0",
+  "cases": [
+    {
+      "name": "default-flaky",
+      "config": {},
+      "args": [],
+      "exitCode": 0,
+      "stats": {
+        "expected": 0,
+        "skipped": 0,
+        "unexpected": 0,
+        "flaky": 1
+      },
+      "tests": [
+        {
+          "title": "recovers",
+          "outcome": "flaky",
+          "expectedStatus": "passed",
+          "attempts": [
+            {
+              "status": "failed",
+              "retry": 0
+            },
+            {
+              "status": "passed",
+              "retry": 1
+            }
+          ]
+        }
+      ],
+      "errors": [],
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "failureElements": 0,
+        "errorElements": 0
+      }
+    },
+    {
+      "name": "reject-flaky",
+      "config": {
+        "failOnFlakyTests": true
+      },
+      "args": [],
+      "exitCode": 1,
+      "stats": {
+        "expected": 0,
+        "skipped": 0,
+        "unexpected": 0,
+        "flaky": 1
+      },
+      "tests": [
+        {
+          "title": "recovers",
+          "outcome": "flaky",
+          "expectedStatus": "passed",
+          "attempts": [
+            {
+              "status": "failed",
+              "retry": 0
+            },
+            {
+              "status": "passed",
+              "retry": 1
+            }
+          ]
+        }
+      ],
+      "errors": [],
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "failureElements": 0,
+        "errorElements": 0
+      }
+    },
+    {
+      "name": "cli-reject-flaky",
+      "config": {},
+      "args": [
+        "--fail-on-flaky-tests"
+      ],
+      "exitCode": 1,
+      "stats": {
+        "expected": 0,
+        "skipped": 0,
+        "unexpected": 0,
+        "flaky": 1
+      },
+      "tests": [
+        {
+          "title": "recovers",
+          "outcome": "flaky",
+          "expectedStatus": "passed",
+          "attempts": [
+            {
+              "status": "failed",
+              "retry": 0
+            },
+            {
+              "status": "passed",
+              "retry": 1
+            }
+          ]
+        }
+      ],
+      "errors": [],
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "failureElements": 0,
+        "errorElements": 0
+      }
+    },
+    {
+      "name": "ordinary-success",
+      "config": {
+        "failOnFlakyTests": true
+      },
+      "args": [],
+      "exitCode": 0,
+      "stats": {
+        "expected": 1,
+        "skipped": 0,
+        "unexpected": 0,
+        "flaky": 0
+      },
+      "tests": [
+        {
+          "title": "pass",
+          "outcome": "expected",
+          "expectedStatus": "passed",
+          "attempts": [
+            {
+              "status": "passed",
+              "retry": 0
+            }
+          ]
+        }
+      ],
+      "errors": [],
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "failureElements": 0,
+        "errorElements": 0
+      }
+    },
+    {
+      "name": "ordinary-failure",
+      "config": {
+        "failOnFlakyTests": true
+      },
+      "args": [],
+      "exitCode": 1,
+      "stats": {
+        "expected": 0,
+        "skipped": 0,
+        "unexpected": 1,
+        "flaky": 0
+      },
+      "tests": [
+        {
+          "title": "fail",
+          "outcome": "unexpected",
+          "expectedStatus": "passed",
+          "attempts": [
+            {
+              "status": "failed",
+              "retry": 0
+            },
+            {
+              "status": "failed",
+              "retry": 1
+            }
+          ]
+        }
+      ],
+      "errors": [],
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 1,
+        "failureElements": 0,
+        "errorElements": 1
+      }
+    },
+    {
+      "name": "expected-and-skipped",
+      "config": {
+        "failOnFlakyTests": true
+      },
+      "args": [],
+      "exitCode": 0,
+      "stats": {
+        "expected": 1,
+        "skipped": 2,
+        "unexpected": 0,
+        "flaky": 0
+      },
+      "tests": [
+        {
+          "title": "expected",
+          "outcome": "expected",
+          "expectedStatus": "failed",
+          "attempts": [
+            {
+              "status": "failed",
+              "retry": 0
+            }
+          ]
+        },
+        {
+          "title": "skip",
+          "outcome": "skipped",
+          "expectedStatus": "skipped",
+          "attempts": [
+            {
+              "status": "skipped",
+              "retry": 0
+            }
+          ]
+        },
+        {
+          "title": "fixme",
+          "outcome": "skipped",
+          "expectedStatus": "skipped",
+          "attempts": [
+            {
+              "status": "skipped",
+              "retry": 0
+            }
+          ]
+        }
+      ],
+      "errors": [],
+      "junit": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "failureElements": 0,
+        "errorElements": 0
+      }
+    },
+    {
+      "name": "expected-recovers-to-expected",
+      "config": {
+        "failOnFlakyTests": true
+      },
+      "args": [],
+      "exitCode": 1,
+      "stats": {
+        "expected": 0,
+        "skipped": 0,
+        "unexpected": 0,
+        "flaky": 1
+      },
+      "tests": [
+        {
+          "title": "expected recovery",
+          "outcome": "flaky",
+          "expectedStatus": "failed",
+          "attempts": [
+            {
+              "status": "passed",
+              "retry": 0
+            },
+            {
+              "status": "failed",
+              "retry": 1
+            }
+          ]
+        }
+      ],
+      "errors": [],
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "failureElements": 0,
+        "errorElements": 0
+      }
+    },
+    {
+      "name": "repeated-flaky",
+      "config": {
+        "failOnFlakyTests": true,
+        "repeatEach": 2
+      },
+      "args": [],
+      "exitCode": 1,
+      "stats": {
+        "expected": 0,
+        "skipped": 0,
+        "unexpected": 0,
+        "flaky": 2
+      },
+      "tests": [
+        {
+          "title": "recovers",
+          "outcome": "flaky",
+          "expectedStatus": "passed",
+          "attempts": [
+            {
+              "status": "failed",
+              "retry": 0
+            },
+            {
+              "status": "passed",
+              "retry": 1
+            }
+          ]
+        },
+        {
+          "title": "recovers",
+          "outcome": "flaky",
+          "expectedStatus": "passed",
+          "attempts": [
+            {
+              "status": "failed",
+              "retry": 0
+            },
+            {
+              "status": "passed",
+              "retry": 1
+            }
+          ]
+        }
+      ],
+      "errors": [],
+      "junit": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "failureElements": 0,
+        "errorElements": 0
+      }
+    },
+    {
+      "name": "flaky-does-not-consume-max-failures",
+      "config": {
+        "failOnFlakyTests": true,
+        "maxFailures": 1
+      },
+      "args": [],
+      "exitCode": 1,
+      "stats": {
+        "expected": 1,
+        "skipped": 0,
+        "unexpected": 0,
+        "flaky": 1
+      },
+      "tests": [
+        {
+          "title": "recovers",
+          "outcome": "flaky",
+          "expectedStatus": "passed",
+          "attempts": [
+            {
+              "status": "failed",
+              "retry": 0
+            },
+            {
+              "status": "passed",
+              "retry": 1
+            }
+          ]
+        },
+        {
+          "title": "later",
+          "outcome": "expected",
+          "expectedStatus": "passed",
+          "attempts": [
+            {
+              "status": "passed",
+              "retry": 0
+            }
+          ]
+        }
+      ],
+      "errors": [],
+      "junit": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "failureElements": 0,
+        "errorElements": 0
+      }
+    },
+    {
+      "name": "global-timeout",
+      "config": {
+        "failOnFlakyTests": true,
+        "globalTimeout": 1200,
+        "timeout": 0
+      },
+      "args": [],
+      "exitCode": 1,
+      "stats": {
+        "expected": 0,
+        "skipped": 1,
+        "unexpected": 0,
+        "flaky": 0
+      },
+      "tests": [
+        {
+          "title": "hang",
+          "outcome": "skipped",
+          "expectedStatus": "passed",
+          "attempts": [
+            {
+              "status": "skipped",
+              "retry": 0
+            }
+          ]
+        }
+      ],
+      "errors": [
+        "Timed out waiting 1.2s for the test suite to run",
+        "Timed out waiting 1.2s for the teardown for test suite to run"
+      ],
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "failureElements": 0,
+        "errorElements": 0
+      }
+    },
+    {
+      "name": "focus-rejected",
+      "config": {
+        "forbidOnly": true
+      },
+      "args": [],
+      "exitCode": 1,
+      "stats": {
+        "expected": 0,
+        "skipped": 0,
+        "unexpected": 0,
+        "flaky": 0
+      },
+      "tests": [],
+      "errors": [
+        "Error: item focused with '.only' is not allowed due to the 'forbidOnly' option in 'playwright.config.cjs': \"policy.spec.cjs focus\""
+      ],
+      "junit": {
+        "tests": 0,
+        "failures": 0,
+        "errors": 0,
+        "failureElements": 0,
+        "errorElements": 0
+      }
+    },
+    {
+      "name": "focused-skipped-suite",
+      "config": {
+        "forbidOnly": true
+      },
+      "args": [],
+      "exitCode": 1,
+      "stats": {
+        "expected": 0,
+        "skipped": 0,
+        "unexpected": 0,
+        "flaky": 0
+      },
+      "tests": [],
+      "errors": [
+        "Error: item focused with '.only' is not allowed due to the 'forbidOnly' option in 'playwright.config.cjs': \"policy.spec.cjs focus\""
+      ],
+      "junit": {
+        "tests": 0,
+        "failures": 0,
+        "errors": 0,
+        "failureElements": 0,
+        "errorElements": 0
+      }
+    },
+    {
+      "name": "focus-filtered-out",
+      "config": {
+        "forbidOnly": true,
+        "grep": "other"
+      },
+      "args": [],
+      "exitCode": 0,
+      "stats": {
+        "expected": 1,
+        "skipped": 0,
+        "unexpected": 0,
+        "flaky": 0
+      },
+      "tests": [
+        {
+          "title": "other",
+          "outcome": "expected",
+          "expectedStatus": "passed",
+          "attempts": [
+            {
+              "status": "passed",
+              "retry": 0
+            }
+          ]
+        }
+      ],
+      "errors": [],
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "failureElements": 0,
+        "errorElements": 0
+      }
+    },
+    {
+      "name": "focus-in-other-shard",
+      "config": {
+        "forbidOnly": true,
+        "shard": {
+          "current": 2,
+          "total": 2
+        }
+      },
+      "args": [],
+      "exitCode": 1,
+      "stats": {
+        "expected": 0,
+        "skipped": 0,
+        "unexpected": 0,
+        "flaky": 0
+      },
+      "tests": [],
+      "errors": [
+        "Error: item focused with '.only' is not allowed due to the 'forbidOnly' option in 'playwright.config.cjs': \"policy.spec.cjs focus\""
+      ],
+      "junit": {
+        "tests": 0,
+        "failures": 0,
+        "errors": 0,
+        "failureElements": 0,
+        "errorElements": 0
+      }
+    }
+  ]
+}

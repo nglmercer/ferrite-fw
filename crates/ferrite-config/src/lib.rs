@@ -437,6 +437,10 @@ pub struct E2eConfig {
     pub global_timeout_ms: u64,
     /// Stop scheduling after this many unexpected failures (zero disables it).
     pub max_failures: usize,
+    /// Fail the aggregate run when retries recover an unexpected attempt.
+    pub fail_on_flaky_tests: bool,
+    /// Reject registered test/suite focus before scheduling. CI also enables it.
+    pub forbid_only: bool,
     /// Shared timeout per attempt, worker retirement or run-final cleanup scope
     /// (zero disables it; local fixture limits cannot extend it).
     pub cleanup_timeout_ms: u64,
@@ -494,6 +498,8 @@ impl Default for E2eConfig {
             timeout_ms: 30_000,
             global_timeout_ms: 0,
             max_failures: 0,
+            fail_on_flaky_tests: false,
+            forbid_only: false,
             cleanup_timeout_ms: 5_000,
             expect_timeout_ms: 5_000,
             retries: 0,
@@ -788,6 +794,12 @@ fn merge_e2e(mut base: E2eConfig, over: E2eConfig) -> E2eConfig {
     }
     if over.max_failures != defaults.max_failures {
         base.max_failures = over.max_failures;
+    }
+    if over.fail_on_flaky_tests {
+        base.fail_on_flaky_tests = true;
+    }
+    if over.forbid_only {
+        base.forbid_only = true;
     }
     if over.cleanup_timeout_ms != defaults.cleanup_timeout_ms {
         base.cleanup_timeout_ms = over.cleanup_timeout_ms;
@@ -1243,10 +1255,15 @@ mod tests {
         let mut over = UserConfig::default();
         over.e2e.retries = 3;
         over.e2e.headless = false;
+        over.e2e.fail_on_flaky_tests = true;
+        over.e2e.forbid_only = true;
         let merged = merge_user_config(base, over);
         assert_eq!(merged.e2e.retries, 3);
         assert!(!merged.e2e.headless);
-        assert_eq!(merged.e2e.workers, E2eConfig::default().workers);
+        assert!(merged.e2e.fail_on_flaky_tests && merged.e2e.forbid_only);
+        let inherited = merge_user_config(merged, UserConfig::default());
+        assert!(inherited.e2e.fail_on_flaky_tests && inherited.e2e.forbid_only);
+        assert_eq!(inherited.e2e.workers, E2eConfig::default().workers);
     }
 
     #[test]

@@ -39,6 +39,25 @@ FERRITE_E2E_REQUIRE_BOTH_BROWSERS=1 cargo test -p ferrite-e2e --test core_confor
 Node/Playwright are optional development tooling and are not dependencies of
 Ferrite's library or its normal Rust test command.
 
+`ci-policy-reference.mjs` / `ci-policy-reference.json` record 14 actual pinned
+runner cases without a browser: default/config/CLI flaky policy, success/failure,
+expected failures and skip/fixme, expected-status recovery, repetition,
+max-failures, global timeout and test/suite/filter/shard focus protection.
+Regenerate with `npm run reference:ci-policy` or an external installation and
+`node scripts/e2e-conformance/ci-policy-reference.mjs`. Captured exits, attempt
+statuses, aggregate counts, errors and JUnit counts are observations, not inferred
+equivalents. Pure runner references do not establish native engine behavior.
+
+`cargo test -p ferrite-e2e --test ci_policy` checks policy on both native engines,
+live/file reports, scheduling/repetition/project isolation, hidden focused
+inventory, interruption and isolated environment child exits. Ferrite audits
+registered focus before filtering, unlike the pinned filtered-focus case that
+passes in Playwright. Ferrite exposes policy failure to JUnit consumers with an
+explicit FlakyTestPolicy marker, while the upstream rejected-flaky case has zero
+JUnit failures. Existing Rust unexpected-pass behavior fails immediately without
+retry; the pinned expected-status recovery case retries and becomes flaky.
+These differences must not be claimed as identical runner semantics.
+
 `fixture-budget-reference.mjs` / `fixture-budget-reference.json` run eight
 actual pinned test-runner cases without launching a browser: ordinary/explicit/
 zero fixture limits, worker setup, shared explicit setup/teardown accounting,

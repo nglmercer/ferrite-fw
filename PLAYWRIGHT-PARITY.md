@@ -19,9 +19,9 @@ reporter, Android and Electron APIs:
 | Classification | Members | Meaning |
 |---|---:|---|
 | Equivalent | 15 | Counterpart for the basic operation/value, without full options or engine compatibility |
-| Partial | 630 | Related exposed operation with material semantic, option or engine differences |
+| Partial | 632 | Related exposed operation with material semantic, option or engine differences |
 | Idiomatic | 41 | Comparable operation through Rust language/library facilities |
-| Missing | 332 | No dedicated public counterpart |
+| Missing | 330 | No dedicated public counterpart |
 
 These counts describe an inventory, **not a behavioral compatibility
 percentage**. The earlier inventory had 458 Partial and 503 Missing members.
@@ -1321,3 +1321,62 @@ B13 groups reran after adding actual target-ID and run-final clock checks.
 Strict all-target E2E/CLI/config Clippy, package formatting, regenerated matrix
 and local evidence links passed. Initial stack growth, lost-transport idempotence
 and worker-fixture report labels were corrected before final verification.
+
+## CI flaky policy and focus protection (D01)
+
+Shared `E2eConfig`, the Runner builder, effective run snapshots and CLI child
+forwarding support opt-in `fail_on_flaky_tests` and configurable `forbid_only`.
+Boolean flags can explicitly disable config values (`=false`); legacy environment
+values are validated. Existing automatic focus protection for `CI=1`/`true`
+remains enforced. Historical report/configuration JSON defaults both new policy
+settings to false. TestInfo's owned run configuration exposes effective policies.
+
+The flaky policy rejects aggregate success without fabricating a failed test or
+attempt. Recovered tests remain Passed/flaky and retain their successful final
+attempt; `failed()` still counts actual unexpected failures. The policy does not
+increment scheduling's max-failures counter. Repetitions and projects contribute
+separate results. Expected failures, skip/fixme and ordinary success do not
+trigger it; ordinary failures and global/user interruption remain unsuccessful
+regardless of the policy. Existing Rust unexpected passes still fail immediately
+without retry.
+
+Live `on_end`, exit status, list/dot summaries and HTML expose the aggregate
+outcome. JSON adds derived `status`, `exit_code` and `flaky_policy_failed` alongside
+unaltered results. JUnit marks each rejected flaky case as `FlakyTestPolicy` so
+CI consumers detect the policy violation, preserving final status/flakiness/
+attempt count in properties. No synthetic testcase or failed attempt is added.
+JUnit failures count policy violations; Rust `failed()` keeps its original rule.
+
+Focus is independent of skip/fixme/expected-failure modes. Registered test/suite
+focus is audited before name/tag/project filtering or sharding, including focused
+skipped descendants. Accepted focus preserves these modes during selection.
+Empty suites without registered descendants have no runnable inventory entry.
+
+[Fourteen pinned actual runner observations](scripts/e2e-conformance/ci-policy-reference.json)
+verify upstream exits, attempts, statistics, focus errors and JUnit counts.
+Material differences remain: Playwright's filtered-focus case succeeds; Ferrite
+deliberately rejects hidden registered focus. Upstream rejected flakiness exits
+1 while its JUnit failures count remains zero; Ferrite's XML explicitly reports
+the policy violation. Upstream can retry an unexpected pass to an expected
+failure and classify it flaky; Rust retains its immediate unexpected-pass rule.
+These are documented practical policies, not identical Playwright semantics.
+
+Verification: all 386 E2E checks passed (173 units, 209 integrations across all
+31 targets and four doctests), plus 28 CLI/configuration checks. Runner/native
+policy tests used full Chrome 153 and Firefox 157; core/browser/routing batches
+used matching Headless Shell 153 and Firefox 157. Twelve actual `ferrite e2e`
+process cases (six per engine) verified configured/flagged on/off policy, hidden
+focus, CI enforcement, inherited environment overrides, child exits and parsed
+JUnit counts. Fourteen actual pinned runner cases were regenerated. Native
+HTML screenshots from both engines were inspected; policy markers remain
+distinct from individual outcomes. Strict all-target Clippy, package formatting,
+matrix regeneration and local links passed. Late units/native policy and fixture
+budget checks reran after reference comparisons and legacy-focus preservation;
+the policy target reran after narrowing a test mutex's scope. The close-release
+regression now waits within its existing deadline for actual target disappearance
+instead of assuming destruction follows the acknowledgement immediately. G04
+still must audit ignored native page close/detach errors.
+
+The current matrix remains a partial inventory: 73 classes, 1,018 members,
+Partial632/Missing330/Equivalent15/Idiomatic41. Public struct-literal migration
+and backward JSON defaults are documented in the E2E example guide.

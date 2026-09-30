@@ -403,7 +403,7 @@ pub enum TestMode {
     Run,
     /// Report skipped without running.
     Skip,
-    /// Restrict the run to `Only` tests.
+    /// Legacy focus mode; focus can also coexist with other run modes.
     Only,
     /// Report skipped (known failure, tracked separately).
     Fixme,
@@ -438,6 +438,9 @@ pub struct Test {
     pub line: u32,
     /// Run mode.
     pub mode: TestMode,
+    /// Focus independently of skip/fixme/expected failure. Legacy `mode: Only`
+    /// is also recognized; enclosing focused suites focus their descendants.
+    pub focused: bool,
     /// Retry override (runner default when unset).
     pub retries: Option<u32>,
     /// Timeout override (runner default when unset).
@@ -473,20 +476,35 @@ impl Test {
     /// Skip without running (reported as skipped).
     #[must_use]
     pub fn skip(mut self) -> Self {
+        self.focused |= self.mode == TestMode::Only;
         self.mode = TestMode::Skip;
         self
     }
 
-    /// Run only `Only` tests (reported as skipped otherwise).
+    /// Focus this test without changing skip/fixme/expected-failure mode.
     #[must_use]
     pub fn only(mut self) -> Self {
-        self.mode = TestMode::Only;
+        self.focused = true;
+        if self.mode == TestMode::Run {
+            self.mode = TestMode::Only;
+        }
         self
+    }
+
+    /// Whether this test or an enclosing suite is focused.
+    pub fn is_focused(&self) -> bool {
+        self.focused
+            || self.mode == TestMode::Only
+            || self
+                .suites
+                .iter()
+                .any(|suite| suite.focused || suite.mode == Some(TestMode::Only))
     }
 
     /// Skip as a known failure (reported as skipped).
     #[must_use]
     pub fn fixme(mut self) -> Self {
+        self.focused |= self.mode == TestMode::Only;
         self.mode = TestMode::Fixme;
         self
     }
@@ -494,6 +512,7 @@ impl Test {
     /// Expect failure (a failure passes the run, a pass fails it).
     #[must_use]
     pub fn fail(mut self) -> Self {
+        self.focused |= self.mode == TestMode::Only;
         self.mode = TestMode::Fail;
         self
     }
@@ -548,6 +567,7 @@ where
         file: caller.file().to_string(),
         line: caller.line(),
         mode: TestMode::Run,
+        focused: false,
         retries: None,
         timeout: None,
         slow: false,
@@ -588,6 +608,7 @@ pub struct Suite {
     retries: Option<u32>,
     tags: Vec<String>,
     mode: Option<TestMode>,
+    focused: bool,
     slow: bool,
 }
 
@@ -639,9 +660,12 @@ impl Suite {
         self.mode = Some(TestMode::Fixme);
         self
     }
-    /// Focus runnable descendants.
+    /// Focus descendants while retaining skip/fixme/expected-failure modes.
     pub fn only(mut self) -> Self {
-        self.mode = Some(TestMode::Only);
+        self.focused = true;
+        if !matches!(self.mode, Some(TestMode::Skip | TestMode::Fixme)) {
+            self.mode = Some(TestMode::Only);
+        }
         self
     }
     /// Triple descendant timeouts.
@@ -715,7 +739,7 @@ impl Suite {
                 test.slow |= suite.slow;
                 if matches!(suite.mode, Some(TestMode::Skip | TestMode::Fixme))
                     || (suite.mode == Some(TestMode::Only)
-                        && !matches!(test.mode, TestMode::Skip | TestMode::Fixme))
+                        && !matches!(test.mode, TestMode::Skip | TestMode::Fixme | TestMode::Fail))
                 {
                     test.mode = suite.mode.unwrap();
                 }
@@ -1808,8 +1832,8 @@ pub(crate) fn select<'a>(
     shard: Option<(usize, usize)>,
 ) -> Vec<&'a Test> {
     let mut selected: Vec<&Test> = tests.iter().collect();
-    if selected.iter().any(|test| test.mode == TestMode::Only) {
-        selected.retain(|test| test.mode == TestMode::Only);
+    if selected.iter().any(|test| test.is_focused()) {
+        selected.retain(|test| test.is_focused());
     }
     for needle in filter.into_iter().chain(grep) {
         selected.retain(|test| {
@@ -2064,6 +2088,7 @@ pub struct Runner {
     projects: Vec<Project>,
     repeat_each: u32,
     forbid_only: bool,
+    fail_on_flaky_tests: bool,
     fixtures: Vec<FixtureDef>,
     snapshot_dir: Option<String>,
     snapshot_update: Option<crate::SnapshotUpdate>,
@@ -2149,7 +2174,8 @@ impl Runner {
             video_fps: config.video_fps.max(1),
             projects: projects.unwrap_or_default(),
             repeat_each: config.repeat_each.max(1),
-            forbid_only: false,
+            forbid_only: config.forbid_only,
+            fail_on_flaky_tests: config.fail_on_flaky_tests,
             fixtures: Vec::new(),
             snapshot_dir: config.snapshot_dir.clone(),
             snapshot_update: crate::SnapshotUpdate::parse(&config.update_snapshots).ok(),
@@ -2336,6 +2362,7 @@ impl Runner {
             reporter: self.reporter.clone(),
             list_progress: self.list_progress,
             forbid_only: self.forbid_only || ci_truthy(),
+            fail_on_flaky_tests: self.fail_on_flaky_tests,
             screenshot_always: self.screenshot_always,
             screenshot_on_failure: self.screenshot_on_failure,
             trace: self.write_trace,
@@ -2635,12 +2662,21 @@ impl Runner {
         self
     }
 
-    /// Fail the run when any test uses [`TestMode::Only`].
+    /// Reject any registered test/suite focus before filtering or sharding,
+    /// including focused tests that are skipped or expected to fail.
     ///
     /// Also enforced automatically when `CI` is `"1"`/`"true"`.
     #[must_use]
     pub fn forbid_only(mut self, forbid: bool) -> Self {
         self.forbid_only = forbid;
+        self
+    }
+
+    /// Fail the overall run if retries recover an unexpected attempt, without
+    /// changing individual test/attempt outcomes or the max-failures counter.
+    #[must_use]
+    pub fn fail_on_flaky_tests(mut self, fail: bool) -> Self {
+        self.fail_on_flaky_tests = fail;
         self
     }
 
@@ -2774,6 +2810,7 @@ impl Runner {
         runner.snapshot_dir = Some(config.snapshot_dir.clone());
         runner.snapshot_update = Some(config.snapshot_update);
         runner.forbid_only = config.forbid_only;
+        runner.fail_on_flaky_tests = config.fail_on_flaky_tests;
         runner.active_config = Some(Arc::new(config));
         runner.configuration_emitted = Some(Arc::new(std::sync::atomic::AtomicBool::new(false)));
         runner.run_resolved_inner(browser, tests).await
@@ -2863,6 +2900,25 @@ impl Runner {
                 return self.finish_run(report).await;
             }
         }
+        // Audit the registered inventory before filters, project selection,
+        // repetition or sharding can hide test/suite focus.
+        if self.forbid_only {
+            let focused: Vec<_> = tests
+                .iter()
+                .filter(|test| test.is_focused())
+                .map(|test| format!("{} ({}:{})", test.name, test.file, test.line))
+                .collect();
+            if !focused.is_empty() {
+                report.results.push(self.report_failure(
+                    "<forbid-only>",
+                    format!(
+                        "test/suite.only is forbidden (forbid_only/CI): {}",
+                        focused.join(", ")
+                    ),
+                ));
+                return self.finish_run(report).await;
+            }
+        }
         let filter = self.filter.clone();
         let grep = self.grep.clone();
         let grep_invert = self.grep_invert.clone();
@@ -2886,13 +2942,6 @@ impl Runner {
             self.repeat_each,
             shard,
         );
-        if self.forbid_only && runnable.iter().any(|item| item.test.mode == TestMode::Only) {
-            report.results.push(self.report_failure(
-                "<forbid-only>",
-                "test.only is forbidden (forbid_only/CI)".to_string(),
-            ));
-            return self.finish_run(report).await;
-        }
         for (test, project) in &skipped {
             let name = display_name(project.as_deref(), &test.name);
             if self.list_progress {
@@ -4510,6 +4559,49 @@ mod tests {
         let selected = select(&tests, None, None, None, None);
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].name, "b");
+    }
+
+    #[test]
+    fn focus_is_independent_of_skip_fixme_and_expected_failure() {
+        let mut legacy = named("legacy");
+        legacy.mode = TestMode::Only;
+        assert!(legacy.clone().skip().is_focused());
+        assert!(legacy.clone().fixme().is_focused());
+        assert!(legacy.fail().is_focused());
+        let tests = vec![
+            named("skip first").skip().only(),
+            named("skip last").only().skip(),
+            named("fixme").only().fixme(),
+            named("fail first").fail().only(),
+            named("fail last").only().fail(),
+            named("ordinary"),
+        ];
+        let selected = select(&tests, None, None, None, None);
+        assert_eq!(selected.len(), 5);
+        assert_eq!(
+            selected.iter().map(|test| test.mode).collect::<Vec<_>>(),
+            [
+                TestMode::Skip,
+                TestMode::Skip,
+                TestMode::Fixme,
+                TestMode::Fail,
+                TestMode::Fail
+            ]
+        );
+        for suite in [
+            Suite::new("suite").only().skip(),
+            Suite::new("suite").skip().only(),
+        ] {
+            let children = suite.tests(vec![named("skip").skip(), named("fail").fail()]);
+            assert!(children.iter().all(Test::is_focused));
+            assert!(children.iter().all(|test| test.mode == TestMode::Skip));
+        }
+        let children = Suite::new("suite")
+            .only()
+            .tests(vec![named("skip").skip(), named("fail").fail()]);
+        assert_eq!(children[0].mode, TestMode::Skip);
+        assert_eq!(children[1].mode, TestMode::Fail);
+        assert!(children.iter().all(Test::is_focused));
     }
 
     #[test]

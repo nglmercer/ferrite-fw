@@ -428,6 +428,10 @@ Work in [the audit generator](scripts/playwright-parity/build_matrix.py),
   and interrupted step reporting: preserve the control error rather than
   retrying it as an ordinary mismatch. These are audit cases, not claims that
   every suspected failure has already been reproduced.
+  D01's broad gate exposed an immediate-target-query timing assumption in B13;
+  the regression now requires actual target disappearance within its existing
+  finite budget. Audit native drivers' ignored page close/detach command errors
+  and distinguish close acknowledgement from confirmed native destruction.
 
 ## A — Core features to implement first
 
