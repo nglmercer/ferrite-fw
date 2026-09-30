@@ -3,7 +3,7 @@
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
 
 Implement **G, then A, then B**, followed by the supported C extensions. This
-backlog contains **45 tasks (15 complete, 30 remaining)**: four foundations, 16 core tasks, 19 follow-ups
+backlog contains **45 tasks (16 complete, 29 remaining)**: four foundations, 16 core tasks, 19 follow-ups
 and six optional extensions. Start the feature work with typed DOM events,
 richer assertions and exposed callbacks. The ordering and effort assessments
 are recommendations based on the current source and parity audit.
@@ -70,6 +70,12 @@ they do not constitute differential Playwright conformance coverage.
   legacy click/drag regressions. Strict E2E/CLI Clippy, formatting and regenerated
   matrix passed; combined verified inventory is 299 checks. Transform/cross-origin
   limits and ClickOptions literal migration are documented.
+- `d9d19c8`: A13. All 280 E2E checks passed on installed Chromium Headless Shell
+  and Firefox; the three readiness groups additionally passed with full Chrome
+  and Firefox. Strict E2E/CLI Clippy, formatting and regenerated evidence links
+  passed. Shared deadlines/defaults, deferred scripts, redirects/replacement,
+  frame readiness, short HTTP bursts, cancellation, disposal and runner retries
+  verified; combined regression inventory is 303 checks.
 - G04 remains open until callback and stream lifecycle coverage is complete.
   A14 has a verified zero-segment double-star correction; shared API integration
   and its remaining conformance cases are still open.
@@ -210,10 +216,15 @@ The existing synchronous Page callback survives navigation; extend it.
   checkbox/drag state, held-key preservation, scoped timeouts and cancellation cleanup
   on both engines. Same-origin offsets/positive axis scaling supported; cross-origin
   and rotated/reflected/perspective frame coordinates return explicit errors.
-- [ ] **A13 — URL wait readiness options (M).** Add a wait-until option to the
+- [x] **A13 — URL wait readiness options (M).** Add a wait-until option to the
   existing matching/predicate URL waits. Done when URL matching and requested
   document readiness share one budget across redirects, same-document history,
   hashes and supported frames. Specify NetworkIdle limits explicitly.
+  Evidence: `d9d19c8`; `url_readiness.rs` covers shared URL/readiness budgets on both
+  engines. Defaults inherit navigation settings; legacy helpers retain URL-only
+  readiness. DOMContentLoaded uses native navigation timing; NetworkIdle requires
+  Load and 500ms observed page HTTP quiet, detects short bursts and rejects frames.
+  Replaced Chromium documents leave idle accounting without fabricated terminal events.
 - [ ] **A14 — Shared URL matching across APIs (M).** Reuse UrlMatcher in page URL
   assertions, route selection and HAR filters while preserving legacy string
   contracts. Done when base-URL resolution, escaped globs, braces, zero-segment
