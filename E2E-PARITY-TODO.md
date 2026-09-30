@@ -1,13 +1,13 @@
 # Ferrite E2E implementation TODO
 
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
-Session plan refreshed: 2026-09-30, from verified checkpoint `42e0d94` and the
-unfinished B06 working tree. Uncommitted implementations are not counted complete.
+Session plan refreshed: 2026-09-30, from verified B06 implementation `c88c14b`.
+Uncommitted implementations are not counted complete.
 
 Implement **G, then A, then B**, followed by the supported C extensions. This
-backlog contains **45 tasks (25 complete, 20 remaining)**: four foundations, 16 core tasks, 19 follow-ups
-and six optional extensions. All A tasks and B02/B03/B05/B07/B08/B15 are now verified;
-continue with HTTP/routing fidelity and native event diagnostics, then the
+backlog contains **45 tasks (26 complete, 19 remaining)**: four foundations, 16 core tasks, 19 follow-ups
+and six optional extensions. All A tasks and B02/B03/B05/B06/B07/B08/B15 are now verified;
+continue with native event diagnostics, then the
 remaining runner/capture/report work and supported C extensions. The ordering and effort assessments
 are recommendations based on the current source and parity audit.
 
@@ -19,28 +19,25 @@ limits remain in [PLAYWRIGHT-PARITY.md](PLAYWRIGHT-PARITY.md).
 
 ## Recommended next implementation
 
-Start with **B06 — route fetch/fulfill options**, followed by
-**B01 — native page/frame events**. B08 is now verified in `ffb5147`: shared
-redirect, retry, authentication, payload and cookie semantics are ready to reuse.
-B05's route lifecycle and B07's duplicate-header forwarding are complete and
-must remain covered.
+Start with **B01 — native page/frame events**, followed by
+**B04 — earliest popup diagnostics** and **B19 — structured errors/console data**.
+B06 is now verified in `c88c14b`: context-linked fetch and inherited fulfillment
+options reuse B08's HTTP implementation and B05/B07's routing/header behavior.
 
-The previous routing correctness issue is fixed: changing a route preserves
-active callback futures, and each request dispatches independently. Default and
-ignore-errors removal release pending requests to the network; wait preserves
-their decisions. Native cleanup and re-registration races are covered. Build
-fetch/fulfill options on this verified lifecycle and the shared HTTP implementation.
+The route-options phase passed all 318 E2E and 23 CLI/configuration checks,
+with strict Clippy, formatting and regenerated matrix links. Eight focused groups
+also ran on full Chrome and Firefox; the 18-case pinned reference covers binary
+replay, override/fulfillment precedence and CORS. Completed network/routing features
+remain regression requirements while adding native events.
 
-**Current handoff:** B06 already has draft `RouteFetchOptions`,
-`RouteFulfillOptions`, request-body availability states, weak context ownership,
-a pinned route-options reference and six regression groups in the working tree.
-Finish reviewing and verifying these changes before adding another implementation.
-The latest method normalization, relative fetch URLs, shared TLS fixture and
-TLS/proxy checks need verification against the final source. Add examples,
-migration notes and matrix mappings before marking B06 complete. Earlier focused
-results do not verify later edits.
+**Current handoff:** the B06 implementation is committed. Begin B01 by auditing
+existing native listeners and page/context event forwarding; preserve dialog,
+popup, download and page-close behavior. Use native frame identity and event
+ordering rather than synthesizing metadata from DOM state. B04 depends on this
+ownership/forwarding work; B19 must retain optional native data through attempt
+reports. Keep each new task unchecked until its acceptance criteria pass.
 
-The scope of the longer session is **all 20 open tasks below**. Completed tasks
+The scope of the longer session is **all 19 open tasks below**. Completed tasks
 remain regression requirements. The deferred projects are future work; completing
 this checklist means practical parity within the stated engine capabilities,
 not complete Playwright compatibility.
@@ -53,26 +50,25 @@ there. G04 applies during every phase and closes after the final audit.
 
 | Order | Task | Implementation result | Dependency or capability gate |
 |---|---|---|---|
-| 1 | B06 | Route fetch/fulfill options over the verified HTTP implementation | B05/B08; B07 complete; Firefox limits explicit |
-| 2 | B01 | Native frame, load and dialog event forwarding | Native event availability and page/context ownership |
-| 3 | B04 | Startup popup logs, errors and requests without adoption gaps | B01; existing popup and callback regressions |
-| 4 | B19 | Structured errors and bounded console value previews | Native metadata; page/context/report serialization |
-| 5 | B16 | Context owner access and reliable connection state | Weak ownership; disposal and transport-close tests |
-| 6 | B17 | Locator descriptions in steps and operation errors | Existing automatic step/source recording |
-| 7 | B12 | Attempt-owned soft assertions that affect test results | Retry and parallel-attempt isolation |
-| 8 | B14 | Effective project settings and read-only resolved configuration | Library/CLI precedence and serialization |
-| 9 | B13 | Fixture timeouts and one shared teardown budget | Runner cancellation, failed setup and reverse teardown |
-| 10 | B09 | Supported screenshot options with reversible temporary changes | Native capture capabilities on each engine |
-| 11 | B10 | Stable screenshot comparisons, paths and update modes | B09; project/path settings from B14 |
-| 12 | B18 | Bounded ARIA snapshots with optional boxes and state | Existing DOM approximation; no full ARIA/YAML implementation |
-| 13 | B11 | Searchable portable reports with per-attempt network diagnostics | B02/B03 complete; B19; browser visual inspection |
-| 14 | C01 | Validated PDF options | Chromium; explicit Firefox unsupported result |
-| 15 | C02 | Bounded captured-body bytes, text and JSON helpers | B02/B03 complete; Chromium body capture |
-| 16 | C03 | Coverage navigation/source options and restart lifecycle | Chromium JS/CSS coverage |
-| 17 | C04 | HAR matching, not-found and supported content options | A14 complete; B06; engine body/rewrite capabilities |
-| 18 | C05 | Supported media/device emulation options and resets | Chromium native capabilities |
-| 19 | C06 | Independently detachable CDP target sessions | Chromium transport and session ownership |
-| 20 | G04 | Final lifecycle, compatibility and resource-release audit | Evidence from every completed phase |
+| 1 | B01 | Native frame, load and dialog event forwarding | Native event availability and page/context ownership |
+| 2 | B04 | Startup popup logs, errors and requests without adoption gaps | B01; existing popup and callback regressions |
+| 3 | B19 | Structured errors and bounded console value previews | Native metadata; page/context/report serialization |
+| 4 | B16 | Context owner access and reliable connection state | Weak ownership; disposal and transport-close tests |
+| 5 | B17 | Locator descriptions in steps and operation errors | Existing automatic step/source recording |
+| 6 | B12 | Attempt-owned soft assertions that affect test results | Retry and parallel-attempt isolation |
+| 7 | B14 | Effective project settings and read-only resolved configuration | Library/CLI precedence and serialization |
+| 8 | B13 | Fixture timeouts and one shared teardown budget | Runner cancellation, failed setup and reverse teardown |
+| 9 | B09 | Supported screenshot options with reversible temporary changes | Native capture capabilities on each engine |
+| 10 | B10 | Stable screenshot comparisons, paths and update modes | B09; project/path settings from B14 |
+| 11 | B18 | Bounded ARIA snapshots with optional boxes and state | Existing DOM approximation; no full ARIA/YAML implementation |
+| 12 | B11 | Searchable portable reports with per-attempt network diagnostics | B02/B03 complete; B19; browser visual inspection |
+| 13 | C01 | Validated PDF options | Chromium; explicit Firefox unsupported result |
+| 14 | C02 | Bounded captured-body bytes, text and JSON helpers | B02/B03 complete; Chromium body capture |
+| 15 | C03 | Coverage navigation/source options and restart lifecycle | Chromium JS/CSS coverage |
+| 16 | C04 | HAR matching, not-found and supported content options | A14 complete; B06; engine body/rewrite capabilities |
+| 17 | C05 | Supported media/device emulation options and resets | Chromium native capabilities |
+| 18 | C06 | Independently detachable CDP target sessions | Chromium transport and session ownership |
+| 19 | G04 | Final lifecycle, compatibility and resource-release audit | Evidence from every completed phase |
 
 ## Concrete implementation deliverables
 
@@ -83,7 +79,6 @@ contracts and pinned behavior; prefer extending existing options and helpers.
 
 | Task | Start in | Deliverable to review |
 |---|---|---|
-| B06 | `route_options.rs`, `routing.rs`, `api.rs`, `driver.rs` | Finish fetch overrides and inherited fulfill responses; prove payload/header/file precedence, body availability, context defaults and cancellation. Include native CORS behavior and relative URL cases in the reference/regressions before claiming equivalence. |
 | B01 | `event.rs`, `page.rs`, `context.rs`, `driver.rs` | Add supported frame/load/dialog-close event variants with stable identities; test ordering, navigation/replacement and single page-to-context forwarding. |
 | B04 | `browser.rs`, `driver.rs`, `context.rs` | Buffer and adopt earliest popup observations once, including a popup that closes immediately; bound buffers and release listeners. |
 | B19 | `event.rs`, `driver.rs`, `report.rs` | Preserve optional structured errors and bounded argument previews from native events through page/context history and every attempt report. |
@@ -104,8 +99,8 @@ contracts and pinned behavior; prefer extending existing options and helpers.
 | C06 | `cdp.rs`, `driver.rs` | Own target sessions independently; detaching one must settle its pending calls while other sessions/pages keep working. |
 | G04 | `operation.rs`, affected tests and parity documents | Audit every new API's deadlines/cancellation/disposal/retries, resource release and serialization; reconcile the complete test inventory and matrix. |
 
-The first useful delivery is **B06**. Then complete the diagnostics group
-**B01/B04/B19**, the runner group **B16/B17/B12/B14/B13**, and the capture/report
+The next delivery is the diagnostics group **B01/B04/B19**, then the runner group
+**B16/B17/B12/B14/B13**, and the capture/report
 group **B09/B10/B18/B11**. Implement the six C extensions after checking native
 capabilities, and finish with G04. Each delivery should have usable public APIs,
 examples and verified behavior before its implementation commit.
@@ -239,6 +234,14 @@ they do not constitute differential Playwright conformance coverage.
   Clippy, formatting and regenerated links. Broad validation completed in two
   batches after process termination; combined verified inventory: 330 checks.
   Continue with B06, then B01. G04 remains open for the remaining additions.
+- `c88c14b`: B06. All 318 E2E and 23 CLI/configuration checks passed in bounded
+  complete-target batches, with strict Clippy, formatting and regenerated links.
+  Eight route-options groups additionally passed on full Chrome 153/Firefox 157;
+  18 pinned cases record actual Playwright fulfillment/fetch/CORS behavior.
+  Weak context ownership, binary capture/absence, overrides, file/JSON/header
+  precedence, TLS/proxy/auth/cookies, budgets/retries/disposal/disconnect and callback
+  release verified. Migration notes and supported Firefox limits are documented.
+  Combined verified inventory: 341 checks. Continue with B01, B04 and B19.
 - G04 remains open until lifecycle coverage across all additions is complete.
 
 ## G — Foundations for the larger session
@@ -483,7 +486,7 @@ their dependencies are ready. References include
   Empty pumps await native shutdown; Chromium tracks response stages and Firefox
   drains queued pauses. Rust registration priority, no callback-identity removal
   and already-issued native command cancellation limits remain explicit.
-- [ ] **B06 — Route fetch/fulfill option fidelity (M).** Extend supported route
+- [x] **B06 — Route fetch/fulfill option fidelity (M).** Extend supported route
   operations with method/body/header overrides and bounded fetch options using
   existing ApiClient machinery. Done when redirect limits, retries, binary bodies,
   duplicate headers and status overrides have focused regressions. Distinguish
@@ -503,6 +506,17 @@ their dependencies are ready. References include
   must not keep a disposed page/context alive.
   Preserve B07's duplicate-header and native acknowledgement tests.
   Reference: [route fetch options](https://playwright.dev/docs/api/class-route#route-fetch).
+  Evidence: `c88c14b`; 18 actual pinned Playwright 1.63.0 Chromium cases and
+  eight route-options groups on full Chrome 153/Firefox 157. Method/header/body/JSON
+  overrides, base-relative/HTTP(S) URLs, original binary capture or explicit
+  unavailability, inherited response/file/status/header precedence, cookies/CORS,
+  context TLS/proxy/auth, budgets/cancellation/disposal/transport loss and runner
+  retry capture release verified. Complete disjoint inventory: 145 units, 170
+  integration checks across all 22 targets and three doctests (318 E2E), plus 23
+  CLI/configuration checks. Strict Clippy, formatting and regenerated links passed.
+  Regular-file paths/final-status validation, private RouteInfo constructor
+  migration, source Content-Length retention and JSON truthiness are explicit;
+  Firefox native rewriting and automatic compressed decoding remain unsupported.
 
 ### API testing, captures and reports
 
@@ -517,7 +531,8 @@ their dependencies are ready. References include
   precedence. Same-URL redirect identity, rejection/drop and bounds covered.
   Firefox 156/157 omits the earlier synthetic redirect's response/completion:
   that request has no fabricated Response and settles unavailable. Native
-  generic comma folding remains intact; B06's fuller fetch/fulfill options stay open.
+  generic comma folding remains intact; B06's fuller fetch/fulfill options are
+  now verified.
 - [x] **B08 — API request option/redirect fidelity (M).** Extend current requests
   where the audit shows missing semantics: incompatible body options, retryable
   transport errors, credential-origin rules, redirect methods and status failure
@@ -681,7 +696,7 @@ waiting for every future feature before starting independent work.
 | Phase | Tasks | Outcome and reason for this order |
 |---|---|---|
 | 1. Network observations | B02, B03 — complete | Typed per-hop request/response identity and completion independent of body capture. Verified in `1a9e875`; continue with phase 2. |
-| 2. HTTP and routing correctness | B06; B05/B07/B08 complete | Next: fetch/fulfill overrides over the verified shared HTTP semantics. Route lifecycle is verified in `c644327` and header forwarding in `eb14f7b`; preserve both sets of regressions. |
+| 2. HTTP and routing correctness | B05/B06/B07/B08 — complete | Context-linked fetch/fulfill options verified in `c88c14b`. Preserve shared HTTP, route lifecycle, duplicate-header forwarding and pinned precedence regressions. |
 | 3. Native event diagnostics | B01, B04, B19 | Capture frame/load/dialog events, earliest popup traffic and structured error/console data with consistent ownership and ordering. |
 | 4. Runner and developer APIs | B16, B17, B12, B14, B13 | Add ownership and locator descriptions, attempt-owned soft assertions, effective configuration, then fixture/shared cleanup budgets. Changes to budgets need broader runner regressions. |
 | 5. Captures and reports | B09, B10, B18, B11 | Implement capture options before stabilized comparisons; add bounded ARIA output and searchable per-attempt reports using the earlier network/error data. |
