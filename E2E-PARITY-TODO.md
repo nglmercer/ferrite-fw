@@ -1,11 +1,11 @@
 # Ferrite E2E implementation TODO
 
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
-Session plan refreshed: 2026-09-29, after routing implementation `c644327`.
+Session plan refreshed: 2026-09-29, after API implementation `ffb5147`.
 
 Implement **G, then A, then B**, followed by the supported C extensions. This
-backlog contains **45 tasks (24 complete, 21 remaining)**: four foundations, 16 core tasks, 19 follow-ups
-and six optional extensions. All A tasks and B02/B03/B05/B07/B15 are now verified;
+backlog contains **45 tasks (25 complete, 20 remaining)**: four foundations, 16 core tasks, 19 follow-ups
+and six optional extensions. All A tasks and B02/B03/B05/B07/B08/B15 are now verified;
 continue with HTTP/routing fidelity and native event diagnostics, then the
 remaining runner/capture/report work and supported C extensions. The ordering and effort assessments
 are recommendations based on the current source and parity audit.
@@ -18,10 +18,11 @@ limits remain in [PLAYWRIGHT-PARITY.md](PLAYWRIGHT-PARITY.md).
 
 ## Recommended next implementation
 
-Start with **B08 — API request semantics**, followed by
-**B06 — route fetch/fulfill options**. B05 is now verified in `c644327`. Establish
-the shared HTTP behavior before exposing it through route options. B07's
-duplicate-header forwarding is complete and must remain covered.
+Start with **B06 — route fetch/fulfill options**, followed by
+**B01 — native page/frame events**. B08 is now verified in `ffb5147`: shared
+redirect, retry, authentication, payload and cookie semantics are ready to reuse.
+B05's route lifecycle and B07's duplicate-header forwarding are complete and
+must remain covered.
 
 The previous routing correctness issue is fixed: changing a route preserves
 active callback futures, and each request dispatches independently. Default and
@@ -29,7 +30,7 @@ ignore-errors removal release pending requests to the network; wait preserves
 their decisions. Native cleanup and re-registration races are covered. Build
 fetch/fulfill options on this verified lifecycle and the shared HTTP implementation.
 
-The scope of the longer session is **all 21 open tasks below**. Completed tasks
+The scope of the longer session is **all 20 open tasks below**. Completed tasks
 remain regression requirements. The deferred projects are future work; completing
 this checklist means practical parity within the stated engine capabilities,
 not complete Playwright compatibility.
@@ -42,29 +43,43 @@ there. G04 applies during every phase and closes after the final audit.
 
 | Order | Task | Implementation result | Dependency or capability gate |
 |---|---|---|---|
-| 1 | B08 | Verified payload, redirect, retry, authentication and cookie semantics | Preserve existing payload validation; HTTP/HTTPS fixtures |
-| 2 | B06 | Route fetch/fulfill options over the verified HTTP implementation | B05/B08; B07 complete; Firefox limits explicit |
-| 3 | B01 | Native frame, load and dialog event forwarding | Native event availability and page/context ownership |
-| 4 | B04 | Startup popup logs, errors and requests without adoption gaps | B01; existing popup and callback regressions |
-| 5 | B19 | Structured errors and bounded console value previews | Native metadata; page/context/report serialization |
-| 6 | B16 | Context owner access and reliable connection state | Weak ownership; disposal and transport-close tests |
-| 7 | B17 | Locator descriptions in steps and operation errors | Existing automatic step/source recording |
-| 8 | B12 | Attempt-owned soft assertions that affect test results | Retry and parallel-attempt isolation |
-| 9 | B14 | Effective project settings and read-only resolved configuration | Library/CLI precedence and serialization |
-| 10 | B13 | Fixture timeouts and one shared teardown budget | Runner cancellation, failed setup and reverse teardown |
-| 11 | B09 | Supported screenshot options with reversible temporary changes | Native capture capabilities on each engine |
-| 12 | B10 | Stable screenshot comparisons, paths and update modes | B09; project/path settings from B14 |
-| 13 | B18 | Bounded ARIA snapshots with optional boxes and state | Existing DOM approximation; no full ARIA/YAML implementation |
-| 14 | B11 | Searchable portable reports with per-attempt network diagnostics | B02/B03 complete; B19; browser visual inspection |
-| 15 | C01 | Validated PDF options | Chromium; explicit Firefox unsupported result |
-| 16 | C02 | Bounded captured-body bytes, text and JSON helpers | B02/B03 complete; Chromium body capture |
-| 17 | C03 | Coverage navigation/source options and restart lifecycle | Chromium JS/CSS coverage |
-| 18 | C04 | HAR matching, not-found and supported content options | A14 complete; B06; engine body/rewrite capabilities |
-| 19 | C05 | Supported media/device emulation options and resets | Chromium native capabilities |
-| 20 | C06 | Independently detachable CDP target sessions | Chromium transport and session ownership |
-| 21 | G04 | Final lifecycle, compatibility and resource-release audit | Evidence from every completed phase |
+| 1 | B06 | Route fetch/fulfill options over the verified HTTP implementation | B05/B08; B07 complete; Firefox limits explicit |
+| 2 | B01 | Native frame, load and dialog event forwarding | Native event availability and page/context ownership |
+| 3 | B04 | Startup popup logs, errors and requests without adoption gaps | B01; existing popup and callback regressions |
+| 4 | B19 | Structured errors and bounded console value previews | Native metadata; page/context/report serialization |
+| 5 | B16 | Context owner access and reliable connection state | Weak ownership; disposal and transport-close tests |
+| 6 | B17 | Locator descriptions in steps and operation errors | Existing automatic step/source recording |
+| 7 | B12 | Attempt-owned soft assertions that affect test results | Retry and parallel-attempt isolation |
+| 8 | B14 | Effective project settings and read-only resolved configuration | Library/CLI precedence and serialization |
+| 9 | B13 | Fixture timeouts and one shared teardown budget | Runner cancellation, failed setup and reverse teardown |
+| 10 | B09 | Supported screenshot options with reversible temporary changes | Native capture capabilities on each engine |
+| 11 | B10 | Stable screenshot comparisons, paths and update modes | B09; project/path settings from B14 |
+| 12 | B18 | Bounded ARIA snapshots with optional boxes and state | Existing DOM approximation; no full ARIA/YAML implementation |
+| 13 | B11 | Searchable portable reports with per-attempt network diagnostics | B02/B03 complete; B19; browser visual inspection |
+| 14 | C01 | Validated PDF options | Chromium; explicit Firefox unsupported result |
+| 15 | C02 | Bounded captured-body bytes, text and JSON helpers | B02/B03 complete; Chromium body capture |
+| 16 | C03 | Coverage navigation/source options and restart lifecycle | Chromium JS/CSS coverage |
+| 17 | C04 | HAR matching, not-found and supported content options | A14 complete; B06; engine body/rewrite capabilities |
+| 18 | C05 | Supported media/device emulation options and resets | Chromium native capabilities |
+| 19 | C06 | Independently detachable CDP target sessions | Chromium transport and session ownership |
+| 20 | G04 | Final lifecycle, compatibility and resource-release audit | Evidence from every completed phase |
 
 ## Scope and tracking
+
+### Session handoff
+
+Resume at the first unchecked task in the remaining-work index. Review the
+working tree before editing: an unfinished implementation may already exist.
+Keep a draft task unchecked until its acceptance criteria and required gates
+pass, even when its focused tests are green. Preserve its useful changes and
+finish verification before starting a dependent task.
+
+Use the pinned corpus to decide behavior differences and the capability table
+to decide backend support. Every phase should leave a reproducible checkpoint:
+implementation and examples, native evidence, documented Rust differences,
+updated matrix, accurate checkboxes and a commit. Close G04 only after the final
+audit across all phases. The copyable implementation request at the end of this
+file includes the whole remaining scope.
 
 Each checkbox is an implementation task with a completion criterion. API names
 suggested below are proposals, unless explicitly described as existing.
@@ -97,7 +112,7 @@ into a fabricated value or mark a skipped browser test as native verification.
 - Step controls, live reporters, attempt artifacts and portable report bundles.
 - Page/context action, navigation and assertion timeout settings; Page API clients.
 
-Baseline evidence: the latest implementation passed 265 E2E checks plus 23
+Original baseline evidence: the implementation passed 265 E2E checks plus 23
 CLI/configuration checks, with strict Clippy. These are Ferrite regressions;
 they do not constitute differential Playwright conformance coverage.
 
@@ -171,6 +186,13 @@ they do not constitute differential Playwright conformance coverage.
   weak capture release, cancellation, disposal, retries and disconnect verified.
   Strict Clippy, formatting and regenerated evidence links passed. Combined
   verified inventory: 325 checks. Continue with B08 then B06.
+- `ffb5147`: B08. Pinned 19-case API reference and five API fidelity groups passed
+  on full Chrome/Firefox 157. HTTP/HTTPS fixtures, replay, auth/origin filtering,
+  redirects, retry/error classification, cookies, disposal and runner budgets verified.
+  Complete target inventory: 307 E2E plus 23 CLI/configuration checks, with strict
+  Clippy, formatting and regenerated links. Broad validation completed in two
+  batches after process termination; combined verified inventory: 330 checks.
+  Continue with B06, then B01. G04 remains open for the remaining additions.
 - G04 remains open until lifecycle coverage across all additions is complete.
 
 ## G — Foundations for the larger session
@@ -423,7 +445,11 @@ their dependencies are ready. References include
   B08 so HTTP options share one transport contract and total operation budget.
   Verify header/body precedence, JSON content type, cookies/authentication and
   context-linked client behavior against the pinned corpus before documenting
-  equivalence. Preserve B07's duplicate-header and native acknowledgement tests.
+  equivalence. Reuse the intercepted request's owning context without introducing
+  an ownership cycle. When Firefox does not supply the original request body,
+  keep that absence explicit and distinguish a supplied body override from
+  unavailable bytes; never silently replay a missing payload as empty.
+  Preserve B07's duplicate-header and native acknowledgement tests.
   Reference: [route fetch options](https://playwright.dev/docs/api/class-route#route-fetch).
 
 ### API testing, captures and reports
@@ -440,7 +466,7 @@ their dependencies are ready. References include
   Firefox 156/157 omits the earlier synthetic redirect's response/completion:
   that request has no fabricated Response and settles unavailable. Native
   generic comma folding remains intact; B06's fuller fetch/fulfill options stay open.
-- [ ] **B08 — API request option/redirect fidelity (M).** Extend current requests
+- [x] **B08 — API request option/redirect fidelity (M).** Extend current requests
   where the audit shows missing semantics: incompatible body options, retryable
   transport errors, credential-origin rules, redirect methods and status failure
   handling. Done when local HTTP/HTTPS fixtures prove behavior, linked cookies
@@ -452,6 +478,19 @@ their dependencies are ready. References include
   Distinguish transport retries from HTTP status failures and keep retries/body
   reads within one deadline. Decide any intentional Rust differences using the
   pinned reference, not reqwest defaults alone.
+  Evidence: `ffb5147`; 19 actual pinned Playwright 1.63.0 HTTP cases and five
+  API fidelity groups, additionally verified with full Chrome 153/Firefox 157.
+  HTTP/HTTPS, binary/multipart replay, conflict validation, redirect limits/methods,
+  cross-origin headers, hop cookies, Basic origin/challenge rules, reset backoff,
+  status/body/TLS failures, caller/client/context cancellation and enclosing
+  runner retries verified. Canceled retry fixtures release their captured state.
+  All 307 E2E checks and 23 CLI/configuration checks verified, with strict Clippy,
+  formatting and regenerated links. The complete target inventory was verified
+  across a 300-check broad run and seven resumed checks after process termination;
+  see the parity report for the initial pointer timing failure and successful
+  rechecks. Legacy preemptive Basic/default-header precedence, normalized credential
+  origins, client-scoped TLS and owned response buffers remain explicit Rust
+  differences; no compression decoding or arbitrary request streams added.
 - [ ] **B09 — Screenshot capture options (M).** Extend existing screenshot and
   locator-capture options with supported clipping, scale, transparent background,
   mask color and temporary styles. Done when coordinates/masks work for scrolled
@@ -590,7 +629,7 @@ waiting for every future feature before starting independent work.
 | Phase | Tasks | Outcome and reason for this order |
 |---|---|---|
 | 1. Network observations | B02, B03 — complete | Typed per-hop request/response identity and completion independent of body capture. Verified in `1a9e875`; continue with phase 2. |
-| 2. HTTP and routing correctness | B08, B06; B05/B07 complete | Next: shared request/redirect semantics, then fetch/fulfill overrides. Route lifecycle is verified in `c644327` and header forwarding in `eb14f7b`; preserve both sets of regressions. |
+| 2. HTTP and routing correctness | B06; B05/B07/B08 complete | Next: fetch/fulfill overrides over the verified shared HTTP semantics. Route lifecycle is verified in `c644327` and header forwarding in `eb14f7b`; preserve both sets of regressions. |
 | 3. Native event diagnostics | B01, B04, B19 | Capture frame/load/dialog events, earliest popup traffic and structured error/console data with consistent ownership and ordering. |
 | 4. Runner and developer APIs | B16, B17, B12, B14, B13 | Add ownership and locator descriptions, attempt-owned soft assertions, effective configuration, then fixture/shared cleanup budgets. Changes to budgets need broader runner regressions. |
 | 5. Captures and reports | B09, B10, B18, B11 | Implement capture options before stabilized comparisons; add bounded ARIA output and searchable per-attempt reports using the earlier network/error data. |
