@@ -884,3 +884,67 @@ Migration: `AttemptResult` has a serde-defaulted `soft_assertions` vector of
 `SoftAssertionFailure` records with error, message, step ID and title path.
 Update exhaustive Rust AttemptResult literals with `soft_assertions: Vec::new()`.
 Old JSON without this field loads as empty; TestError's fields remain unchanged.
+
+
+Generic polling uses one window across all probes and waits:
+
+```rust,no_run
+use ferrite_e2e::{expect_poll_with, expect_to_pass_with, PollingOptions, Timeout};
+use std::time::Duration;
+let options = PollingOptions::default()
+    .timeout(Timeout::secs(3))
+    .intervals([Duration::from_millis(20), Duration::from_millis(40)])
+    .message("API eventually ready")
+    .cancellation(ctx.context.cancellation_token());
+let page = ctx.page.clone();
+let value = expect_poll_with("counter", &options, move || {
+    let page = page.clone();
+    async move {
+        let value: u32 = page.evaluate("window.counter || 0").await?;
+        Ok((value >= 3).then_some(value))
+    }
+}).await?;
+assert!(value >= 3);
+let soft = ctx.info.soft_asserts();
+let heading = ctx.page.locator("h1").expect();
+soft.run("eventual heading", expect_to_pass_with("heading", &options, || {
+    heading.text("Ready")
+})).await?;
+```
+
+The first probe is immediate. Intervals apply after each completed mismatch;
+when the sequence ends, its last value repeats. Empty sequences or zero intervals
+return Config before invoking the probe; a zero **timeout** remains valid and
+removes only the local deadline. All probe time and sleeps count toward one
+polling window. A hung future is dropped on expiry/cancellation. Caller/enclosing
+runtime limits still apply, including runtime timeout changes. A cancellation
+token interrupts both a hung probe and a long sleep; use a context's token to
+bind disposal to a generic poll even when its callback does no browser work.
+
+Only None (pending) and typed assertion mismatches retry. Operational errors,
+including a Timeout returned by a probe, propagate with their original kind/code
+and the helper's context. A timeout of the polling window itself becomes an
+Expect failure with the last mismatch (or "no data yet"). Both description and
+optional message appear in the single outer step and final error. Probes and
+nested assertions do not create duplicate implementation steps.
+
+Inside a retry probe, attempt-owned `soft.check(...)?` and `soft.run(...).await?`
+return mismatches for retry without recording failures. Wrap the entire helper
+in `soft.run` to collect its final mismatch once. Scope is local to the polled
+future; unrelated joined work keeps normal soft collection. Collected final
+failures are isolated by test retry as usual. Use `?` to propagate probe results;
+intentionally discarded Results cannot drive retries. This differs from pinned
+Playwright nested soft checks, which record a first-probe failure immediately.
+
+`expect_poll` and `expect_to_pass` keep their original signatures and 50 ms
+cadence. Their callbacks now propagate operational errors immediately; use None
+or Expect to signal "not yet", rather than Config/transport errors. Options
+companions support mutable/borrowed and non-Send probes and values; Runner test
+bodies still require Send. No new fields are required in existing option/config
+structs. PollingOptions is a separate input type with defaults.
+
+Rust Timeout/PollingOptions defaults remain 5 seconds for either helper.
+Playwright's default poll intervals are 100/250/500/1000 ms; default toPass has
+zero timeout and ignores configured expect timeout. Pinned empty intervals,
+zero intervals, early deadline cutoff, nested soft collection and step emission
+also differ. See the [actual reference corpus](../../scripts/e2e-conformance/README.md).

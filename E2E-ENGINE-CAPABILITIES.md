@@ -47,16 +47,26 @@ Partial means the listed limitation must be retained in API/docs/test evidence.
 | Resolved project/run/attempt configuration | Supported | Supported | Library/shared TOML/JSON/CLI selection and precedence; whole context overrides, actual owner versions, project artifact/snapshot paths, read-only TestInfo snapshots and serde-defaulted report metadata. Dedicated versions stay absent before launch; no project dependency scheduling. |
 | Fixture limits and shared cleanup clocks | Supported | Supported | Separate local setup/teardown limits capped by enclosing budgets; ready release after exhaustion, explicit pending errors and disposal surviving dropped waits. Rust accounting differs from upstream separate fixture budgets. |
 | CI flaky policy and focus protection | Supported | Supported | Opt-in aggregate failure preserves actual attempt outcomes; registered focus checked before filters/shards, including skipped descendants. CI forces existing focus protection. JSON/live/HTML aggregate status and explicit JUnit policy markers; upstream filtering/JUnit differences documented. |
+| Generic assertion polling options | Supported | Supported | Immediate probes, validated interval sequences with last-value reuse, messages and explicit cancellation/context tokens. Shared local/enclosing budgets, non-Send companions, typed operational errors and final-only soft collection/steps. Rust defaults and upstream nested-soft/step/cutoff differences documented. |
 | Portable reports, runner/fixtures/retries | Supported | Supported | Tokio workers, cooperative cancellation, current artifact formats |
 
 ## Evidence and validation gates
+
+[polling_options.rs](crates/ferrite-e2e/tests/polling_options.rs) verifies four
+native groups on full Chrome 153/Firefox 157: shared cadence, local non-Send
+blocks, final-only soft failures and retry reports, scope isolation, typed errors,
+cancellation/disposal and enclosing timeouts with actual context removal. Seven
+virtual-time unit groups cover exact clocks and validation; thirteen actual
+pinned polling cases record intentional upstream differences. Current combined
+inventory is 397 E2E plus 28 CLI/config checks, with strict Clippy and package
+formatting. Native polling HTML previews were inspected on both engines.
 
 [ci_policy.rs](crates/ferrite-e2e/tests/ci_policy.rs) verifies flaky policy,
 live/serialized reports, retry/repetition/project scheduling, registered focus,
 global/user interruption and isolated child exits. Fourteen pinned runner cases
 record intentional upstream differences; twelve actual CLI cases ran across
-full Chrome 153/Firefox 157 with parsed XML and child exit checks. The current
-combined inventory is 386 E2E plus 28 CLI/config checks, with strict Clippy and
+full Chrome 153/Firefox 157 with parsed XML and child exit checks. The D01
+combined inventory was 386 E2E plus 28 CLI/config checks, with strict Clippy and
 package formatting. Native HTML previews were inspected on both engines.
 
 [fixture_budgets.rs](crates/ferrite-e2e/tests/fixture_budgets.rs) verifies six

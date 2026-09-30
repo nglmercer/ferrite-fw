@@ -1,7 +1,6 @@
 //! Auto-retrying assertions (`expect_*`), Playwright-style.
 
 use std::future::Future;
-use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Serialize;
@@ -111,6 +110,117 @@ impl From<Duration> for Timeout {
     }
 }
 
+/// Controls for generic assertion polling. Probes run immediately, then wait
+/// through the interval sequence; its final interval repeats until completion.
+/// Zero timeout disables the local limit, but enclosing budgets still apply.
+#[derive(Debug, Clone)]
+pub struct PollingOptions {
+    pub timeout: Duration,
+    /// Must be nonempty and contain only positive durations.
+    pub intervals: Vec<Duration>,
+    pub message: Option<String>,
+    pub cancellation: Option<crate::CancellationToken>,
+}
+impl Default for PollingOptions {
+    fn default() -> Self {
+        Self {
+            timeout: Timeout::default().duration(),
+            intervals: vec![Duration::from_millis(50)],
+            message: None,
+            cancellation: None,
+        }
+    }
+}
+impl PollingOptions {
+    pub fn timeout(mut self, timeout: impl Into<Timeout>) -> Self {
+        self.timeout = timeout.into().duration();
+        self
+    }
+    pub fn intervals(mut self, intervals: impl IntoIterator<Item = Duration>) -> Self {
+        self.intervals = intervals.into_iter().collect();
+        self
+    }
+    pub fn message(mut self, message: impl Into<String>) -> Self {
+        let message = message.into();
+        self.message = (!message.is_empty()).then_some(message);
+        self
+    }
+    pub fn cancellation(mut self, token: crate::CancellationToken) -> Self {
+        self.cancellation = Some(token);
+        self
+    }
+    fn validate(&self) -> E2eResult<()> {
+        if self.intervals.is_empty() || self.intervals.iter().any(Duration::is_zero) {
+            return Err(E2eError::Config(
+                "polling intervals must be nonempty and positive".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+async fn poll_value<T, F, Fut>(
+    description: String,
+    options: &PollingOptions,
+    mut check: F,
+) -> E2eResult<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = E2eResult<Option<T>>>,
+{
+    let context = options
+        .message
+        .as_deref()
+        .filter(|message| !message.is_empty())
+        .map(|message| format!("{message}: {description}"))
+        .unwrap_or(description);
+    crate::report::automatic(
+        None,
+        format!("expect {context}"),
+        crate::StepCategory::Assertion,
+        async {
+            options
+                .validate()
+                .map_err(|error| error.with_context(&context))?;
+            let deadline = crate::operation::Deadline::new(options.timeout);
+            let mut last = None;
+            // Keep probe failures inside a successful outer result. This separates
+            // their Timeout errors from expiration of our one polling deadline.
+            let work = deadline.run(context.clone(), async {
+                let mut interval = 0;
+                loop {
+                    if deadline.expired() {
+                        std::future::pending::<()>().await;
+                    }
+                    match crate::report::retry_probe(async { check().await }).await {
+                        Ok(Some(value)) => return Ok(Ok(value)),
+                        Ok(None) => last = Some("pending".to_string()),
+                        Err(error) if error.code() == "FERRITE_E2E_EXPECT" => {
+                            last = Some(error.to_string())
+                        }
+                        Err(error) => return Ok(Err(error)),
+                    }
+                    tokio::time::sleep(options.intervals[interval]).await;
+                    interval = (interval + 1).min(options.intervals.len() - 1);
+                }
+            });
+            let result = match &options.cancellation {
+                Some(token) => token.run(work).await,
+                None => work.await,
+            };
+            match result {
+                Ok(result) => result.map_err(|error| error.with_context(&context)),
+                Err(E2eError::Timeout(..)) => Err(E2eError::Expect(format!(
+                    "{context} (last: {})",
+                    last.as_deref().unwrap_or("no data yet")
+                ))),
+                Err(error) => Err(error.with_context(&context)),
+            }
+        },
+    )
+    .await
+}
+
 /// Default assertion window in milliseconds.
 pub(crate) const DEFAULT_EXPECT_MS: u64 = 5_000;
 
@@ -173,8 +283,8 @@ fn not_tag(negated: bool) -> &'static str {
 
 /// Poll `check` until it returns `Some(value)` or the timeout hits.
 ///
-/// `None` means "not yet"; `Err` is recorded as the last mismatch and
-/// retried. Fails loudly with `E2eError::Expect` on timeout.
+/// `None` and assertion mismatches are retried every 50 ms; operational/control
+/// errors propagate. Fails with `E2eError::Expect` when its polling window expires.
 pub async fn expect_poll<T, F, Fut>(
     description: impl Into<String>,
     timeout: impl Into<Timeout>,
@@ -185,28 +295,27 @@ where
     Fut: Future<Output = E2eResult<Option<T>>> + Send,
     T: Send + 'static,
 {
-    use std::sync::Mutex;
+    expect_poll_with(
+        description,
+        &PollingOptions::default().timeout(timeout),
+        check,
+    )
+    .await
+}
 
-    let found: Arc<Mutex<Option<T>>> = Arc::new(Mutex::new(None));
-    let slot = found.clone();
-    let check = Arc::new(check);
-    poll(timeout.into().duration(), description.into(), move || {
-        let found = slot.clone();
-        let check = check.clone();
-        async move {
-            match check().await {
-                Ok(Some(value)) => {
-                    *found.lock().unwrap_or_else(|e| e.into_inner()) = Some(value);
-                    Ok(None)
-                }
-                Ok(None) => Ok(Some("pending".to_string())),
-                Err(error) => Err(error),
-            }
-        }
-    })
-    .await?;
-    let value = found.lock().unwrap_or_else(|e| e.into_inner()).take();
-    value.ok_or_else(|| E2eError::Expect("poll finished without a value".to_string()))
+/// Poll a value with custom intervals, contextual text and cancellation.
+/// Only None/assertion mismatches retry. Supports borrowed, mutable and non-Send
+/// probes/values; legacy expect_poll retains its original bounds and signature.
+pub async fn expect_poll_with<T, F, Fut>(
+    description: impl Into<String>,
+    options: &PollingOptions,
+    check: F,
+) -> E2eResult<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = E2eResult<Option<T>>>,
+{
+    poll_value(description.into(), options, check).await
 }
 
 /// Retry an arbitrary asynchronous assertion block until it succeeds.
@@ -219,8 +328,29 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = E2eResult<()>>,
 {
-    poll(timeout.into().duration(), description.into(), || async {
-        check().await.map(|()| None)
+    expect_to_pass_with(
+        description,
+        &PollingOptions::default().timeout(timeout),
+        check,
+    )
+    .await
+}
+
+/// Retry an assertion block with custom polling controls. Intermediate soft
+/// checks return their mismatch to retry; wrap this entire helper in soft.run
+/// to collect only its final mismatch. Operational/control errors never soften.
+pub async fn expect_to_pass_with<F, Fut>(
+    description: impl Into<String>,
+    options: &PollingOptions,
+    mut check: F,
+) -> E2eResult<()>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = E2eResult<()>>,
+{
+    poll_value(description.into(), options, || {
+        let future = check();
+        async move { future.await.map(|()| Some(())) }
     })
     .await
 }
@@ -1674,6 +1804,326 @@ impl Locator {
             async { self.expect().contains_text(fragment).await },
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod polling_options_tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::{
+        cell::Cell,
+        rc::Rc,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+    use tokio::time::Instant;
+
+    #[tokio::test(start_paused = true)]
+    async fn intervals_start_immediately_repeat_last_and_support_local_values() {
+        let start = Instant::now();
+        let mut times = Vec::new();
+        let value = Rc::new("local value".to_string());
+        let result = expect_poll_with(
+            "cadence",
+            &PollingOptions::default()
+                .intervals([Duration::from_millis(20), Duration::from_millis(40)]),
+            || {
+                assert!(crate::report::in_retry_probe());
+                times.push(start.elapsed().as_millis());
+                std::future::ready(Ok((times.len() == 5).then(|| value.clone())))
+            },
+        )
+        .await
+        .unwrap();
+        assert!(Rc::ptr_eq(&result, &value));
+        assert_eq!(times, [0, 20, 60, 100, 140]);
+        assert!(!crate::report::in_retry_probe());
+        let times = std::cell::RefCell::new(Vec::new());
+        let start = Instant::now();
+        expect_to_pass("legacy cadence", Timeout::default(), || {
+            let mut times = times.borrow_mut();
+            times.push(start.elapsed().as_millis());
+            std::future::ready(if times.len() == 3 {
+                Ok(())
+            } else {
+                Err(E2eError::Expect("retry".into()))
+            })
+        })
+        .await
+        .unwrap();
+        assert_eq!(*times.borrow(), [0, 50, 100]);
+        assert_eq!(PollingOptions::default().timeout, Duration::from_secs(5));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn invalid_intervals_and_precancellation_never_construct_probes() {
+        let called = Cell::new(0);
+        for intervals in [
+            vec![],
+            vec![Duration::ZERO],
+            vec![Duration::from_millis(10), Duration::ZERO],
+        ] {
+            let error = expect_to_pass_with(
+                "validation",
+                &PollingOptions::default()
+                    .intervals(intervals)
+                    .message("caller message"),
+                || {
+                    called.set(called.get() + 1);
+                    std::future::ready(Ok(()))
+                },
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.code(), "FERRITE_E2E_CONFIG");
+            assert!(error.to_string().contains("caller message"));
+        }
+        let token = crate::CancellationToken::new();
+        token.cancel_with_reason("already canceled");
+        let error = expect_to_pass_with(
+            "precancel",
+            &PollingOptions::default().cancellation(token),
+            || {
+                called.set(called.get() + 1);
+                std::future::ready(Ok(()))
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(error, E2eError::Cancelled(message) if message.contains("already canceled"))
+        );
+        assert_eq!(called.get(), 0);
+    }
+
+    struct Released(Arc<AtomicUsize>);
+    impl Drop for Released {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    #[tokio::test(start_paused = true)]
+    async fn one_clock_bounds_probe_work_sleep_and_hung_future_release() {
+        let calls = Cell::new(0);
+        let start = Instant::now();
+        let released = Arc::new(AtomicUsize::new(0));
+        let error = expect_poll_with::<(), _, _>(
+            "one clock",
+            &PollingOptions::default()
+                .timeout(Timeout::ms(100))
+                .intervals([Duration::from_millis(40)]),
+            || {
+                let guard = Released(released.clone());
+                calls.set(calls.get() + 1);
+                let delay = if calls.get() == 1 { 30 } else { 50 };
+                async move {
+                    let _guard = guard;
+                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                    Ok(None)
+                }
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(start.elapsed(), Duration::from_millis(100));
+        assert_eq!(calls.get(), 2);
+        assert_eq!(released.load(Ordering::SeqCst), 2);
+        assert!(matches!(error, E2eError::Expect(message) if message.contains("last: pending")));
+        let guard = Released(released.clone());
+        let error = expect_to_pass_with(
+            "hung",
+            &PollingOptions::default().timeout(Timeout::ms(20)),
+            || {
+                let guard = Released(guard.0.clone());
+                async move {
+                    let _guard = guard;
+                    std::future::pending::<E2eResult<()>>().await
+                }
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(error, E2eError::Expect(message) if message.contains("no data yet")));
+        assert_eq!(released.load(Ordering::SeqCst), 3);
+        drop(guard);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancellation_interrupts_long_waits_and_hung_probes_with_zero_timeout() {
+        for hung in [false, true] {
+            let token = crate::CancellationToken::new();
+            let cancel = token.clone();
+            let cancel_task = tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                cancel.cancel_with_reason("stop now");
+            });
+            let options = PollingOptions::default()
+                .timeout(Duration::ZERO)
+                .intervals([Duration::from_secs(60)])
+                .cancellation(token);
+            let calls = Cell::new(0);
+            let released = Arc::new(AtomicUsize::new(0));
+            let start = Instant::now();
+            let error = expect_poll_with::<(), _, _>("cancel probe/wait", &options, || {
+                calls.set(calls.get() + 1);
+                let guard = Released(released.clone());
+                async move {
+                    let _guard = guard;
+                    if hung {
+                        std::future::pending::<()>().await;
+                    }
+                    Ok(None)
+                }
+            })
+            .await
+            .unwrap_err();
+            assert!(matches!(error,E2eError::Cancelled(message) if message.contains("stop now")));
+            assert_eq!(start.elapsed(), Duration::from_millis(20));
+            assert_eq!(calls.get(), 1);
+            assert_eq!(released.load(Ordering::SeqCst), 1);
+            cancel_task.await.unwrap();
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn zero_and_large_local_windows_cannot_extend_the_enclosing_clock() {
+        for timeout in [Duration::ZERO, Duration::from_secs(5)] {
+            let start = Instant::now();
+            let calls = Cell::new(0);
+            let error = crate::operation::Deadline::new(Duration::from_millis(35))
+                .run(
+                    "caller",
+                    expect_to_pass_with(
+                        "enclosed",
+                        &PollingOptions::default()
+                            .timeout(timeout)
+                            .intervals([Duration::from_millis(20)]),
+                        || {
+                            calls.set(calls.get() + 1);
+                            std::future::ready(Err(E2eError::Expect("not yet".into())))
+                        },
+                    ),
+                )
+                .await
+                .unwrap_err();
+            assert!(matches!(error,E2eError::Timeout(35,message) if message=="caller"));
+            assert_eq!(start.elapsed(), Duration::from_millis(35));
+            assert_eq!(calls.get(), 2);
+            assert!(!crate::report::in_retry_probe());
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn operational_errors_keep_their_type_and_never_retry_or_become_mismatches() {
+        let errors = vec![
+            E2eError::Timeout(7, "probe timeout".into()),
+            E2eError::Cancelled("stop".into()),
+            E2eError::Disconnected("transport".into()),
+            E2eError::Skipped("skip".into()),
+            E2eError::StepSkipped("step".into()),
+            E2eError::Cdp {
+                method: "method".into(),
+                message: "native".into(),
+            },
+            E2eError::Config("bad input".into()),
+            E2eError::Diagnostic {
+                context: "label".into(),
+                source: Box::new(E2eError::Timeout(9, "nested timeout".into())),
+            },
+            E2eError::Io(std::io::Error::from(std::io::ErrorKind::NotFound)),
+        ];
+        for original in errors {
+            let code = original.code();
+            let message = original.to_string();
+            let mut error = Some(original);
+            let calls = Cell::new(0);
+            let actual = expect_to_pass_with(
+                "typed",
+                &PollingOptions::default().message("context"),
+                || {
+                    calls.set(calls.get() + 1);
+                    std::future::ready(Err(error.take().unwrap()))
+                },
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(actual.code(), code);
+            assert!(actual
+                .to_string()
+                .contains(message.rsplit(": ").next().unwrap()));
+            assert_eq!(calls.get(), 1);
+        }
+        let error = expect_to_pass("legacy typed", Timeout::ms(20), || async {
+            Err(E2eError::Timeout(7, "inner".into()))
+        })
+        .await
+        .unwrap_err();
+        assert!(matches!(error, E2eError::Timeout(7, _)));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn last_mismatch_message_and_nested_assertions_form_one_outer_step() {
+        let options = PollingOptions::default()
+            .timeout(Timeout::ms(90))
+            .intervals([Duration::from_millis(40)])
+            .message("eventually consistent");
+        let mut calls = 0;
+        let error = expect_to_pass_with("counter", &options, || {
+            calls += 1;
+            std::future::ready(Err(E2eError::Diagnostic {
+                context: "inner label".into(),
+                source: Box::new(E2eError::Expect(format!("probe {calls}"))),
+            }))
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(calls, 3);
+        assert!(error.to_string().contains("eventually consistent: counter"));
+        assert!(error.to_string().contains("probe 3"));
+        assert!(error.to_string().contains("inner label"));
+        let session = crate::report::StepSession::new(
+            crate::report::ReporterHub::default(),
+            crate::AttemptInfo {
+                name: "one step".into(),
+                file: "poll.rs".into(),
+                line: 1,
+                project: None,
+                worker_index: 0,
+                repeat_each_index: 0,
+                retry: 0,
+            },
+        );
+        let calls = Cell::new(0);
+        session
+            .scope(expect_to_pass_with(
+                "outer",
+                &PollingOptions::default().message("caller"),
+                || {
+                    calls.set(calls.get() + 1);
+                    let done = calls.get() == 3;
+                    crate::report::automatic(
+                        None,
+                        "nested",
+                        crate::StepCategory::Assertion,
+                        async move {
+                            assert!(crate::report::in_retry_probe());
+                            if done {
+                                Ok(())
+                            } else {
+                                Err(E2eError::Expect("retry".into()))
+                            }
+                        },
+                    )
+                },
+            ))
+            .await
+            .unwrap();
+        let steps = session.finish_all();
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].title, "expect caller: outer");
+        assert_eq!(steps[0].status, crate::StepStatus::Passed);
+        assert!(steps[0].steps.is_empty());
+        assert!(!crate::report::in_retry_probe());
     }
 }
 

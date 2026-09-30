@@ -157,6 +157,13 @@ impl AttemptSoftAsserts {
         match result {
             Err(error @ E2eError::Expect(_)) => {
                 let message = message.into();
+                if crate::report::in_retry_probe() {
+                    return Err(if message.is_empty() {
+                        error
+                    } else {
+                        error.with_context(&message)
+                    });
+                }
                 self.record(
                     error,
                     (!message.is_empty()).then_some(message),
@@ -224,6 +231,12 @@ impl AttemptSoftAsserts {
         let location = SourceLocation::caller(Location::caller());
         async move {
             self.state()?;
+            if crate::report::in_retry_probe() {
+                return future.await.map_err(|error| match &message {
+                    Some(message) => error.with_context(message),
+                    None => error,
+                });
+            }
             let title = message
                 .as_ref()
                 .map(|message| format!("expect.soft {message}"))

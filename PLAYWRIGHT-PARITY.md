@@ -1380,3 +1380,72 @@ still must audit ignored native page close/detach errors.
 The current matrix remains a partial inventory: 73 classes, 1,018 members,
 Partial632/Missing330/Equivalent15/Idiomatic41. Public struct-literal migration
 and backward JSON defaults are documented in the E2E example guide.
+
+
+## Generic assertion polling controls (D02)
+
+`expect_poll_with` and `expect_to_pass_with` accept a separate PollingOptions input
+with timeout, interval sequence, optional message and cancellation. Existing
+helpers keep their signatures and 50 ms cadence. The first probe is immediate;
+intervals follow completed mismatches and the final interval repeats. Empty or
+zero interval values fail validation before constructing a probe. Zero timeout
+only removes the local window; caller/runtime deadlines continue to apply.
+
+One clock bounds all probes and sleeps, including hung futures. An explicit
+cancellation token interrupts either kind of pending work; bind a generic helper
+to a context's public cancellation_token when disposal must wake an idle poll.
+A finite enclosing runtime limit caps zero/long local windows and still cleans
+up. Probe None or Expect mismatches retry; operational/control errors retain
+kind/code/cause, including wrapped errors and a probe's own Timeout. Expiry of
+the polling window itself becomes Expect with the last mismatch or no-data
+message. The optional message appears in the outer step and final diagnostic.
+
+A scoped retry probe prevents attempt-owned soft.run/check from collecting
+intermediate mismatches; these calls propagate mismatch Results for retry. Wrap
+the complete helper in soft.run to collect one final mismatch. Probe factories
+and async bodies share this rule. Scope does not bleed into unrelated joined
+work. One outer assertion step suppresses nested implementation steps. Retries
+retain first-attempt errors/soft records and isolate a successful final attempt.
+Standalone soft collectors and unrelated locator assertion semantics are unchanged.
+
+Options companions support borrowed/mutable/non-Send probes and values; native
+local blocks were exercised outside the Runner, whose test bodies still require
+Send. No existing DTO fields or serde schema change is needed. Behavior migration:
+generic helper operational errors that were previously retried now propagate;
+signal pending with None or an assertion mismatch instead. Defaults remain five
+seconds when using Rust Timeout/PollingOptions defaults, including toPass.
+
+[Thirteen actual pinned observations](scripts/e2e-conformance/polling-reference.json)
+record material differences: upstream default intervals are 100/250/500/1000 ms;
+default toPass has timeout zero and ignores configured expect timeout. Empty
+intervals abort after an initial mismatch in the pinned case, while zero intervals
+permit rapid probes; Rust rejects both. Upstream may stop early when the next
+sleep would cross its deadline; Rust waits until its actual window expires.
+Upstream toPass retries ordinary thrown errors; Rust propagates typed operational
+errors. Upstream nested soft records an immediate failure and its normal
+expectation probes emit intermediate steps; Rust enforces final-only collection
+and one outer step. The hung-probe case catches an enclosing test timeout;
+its measured helper duration reflects setup time already spent from that clock.
+These differences are explicit policies, not full Playwright equivalence.
+
+
+Verification: all **397 E2E checks** passed: 180 units, 213 integrations across
+all 32 targets and four doctests. Runner74 used full Chrome 153/Firefox 157;
+core203/browser93/routing23 used matching Headless Shell/Firefox. All 28 CLI/config
+checks and strict all-target Clippy passed; package formatting, regenerated
+matrix and local source links passed. The seven new virtual-time groups and
+[four native groups](crates/ferrite-e2e/tests/polling_options.rs) verify cadence,
+local futures, typed errors, hung/zero/enclosing budgets, cancellation/disposal,
+soft/retry/step/serialization rules and actual native context removal. Expanded
+HTML previews were inspected on both engines. The pinned generator completed
+all thirteen real runner cases with checked process exits and outcomes.
+
+The broad gate exposed two existing fixture assumptions. The navigation
+replacement fixture reused a cached image, allowing its load to finish before
+a scheduled redirect; it now uses a fresh image URL to keep the replaced
+first document pending. A short pointer timeout required key-up without proving
+key-down had happened; its finite budget now permits native acquisition and
+explicitly requires key-down/mouse-down before release checks. Both native
+fixtures passed after correction, as did the full remaining inventory. Runtime
+navigation and input behavior was unchanged. G04 remains open for the separate
+native protocol/lifecycle/error audit and final cross-feature verification.

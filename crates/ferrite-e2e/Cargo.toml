@@ -31,5 +31,5 @@ axum = { workspace = true }
 futures = { workspace = true }
 md-5 = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 tokio-tungstenite = { workspace = true }

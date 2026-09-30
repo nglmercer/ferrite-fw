@@ -324,6 +324,13 @@ tokio::task_local! {
     static CURRENT_STEP: (u64, u64);
     static CURRENT_SESSION: StepSession;
     static SUPPRESS_ACTIONS: bool;
+    static RETRY_PROBE: bool;
+}
+pub(crate) fn in_retry_probe() -> bool {
+    RETRY_PROBE.try_with(|active| *active).unwrap_or(false)
+}
+pub(crate) async fn retry_probe<F: std::future::Future>(future: F) -> F::Output {
+    RETRY_PROBE.scope(true, future).await
 }
 #[derive(Default)]
 struct StepRecords {

@@ -39,7 +39,9 @@ async fn server() -> (String, tokio::task::AbortHandle) {
         .route("/image.svg", get(|| async { tokio::time::sleep(Duration::from_millis(550)).await; ([("content-type","image/svg+xml")],"<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'/>") }))
         .route("/redirect", get(|| async { (axum::http::StatusCode::FOUND,[("location","/doc")],"redirect") }))
         .route("/done", get(|| async { Html("<p>done</p>") }))
-        .route("/swap", get(|| async { Html("<script>setTimeout(()=>location.replace('/done'),40)</script><img src='/image.svg'>") }))
+        // A fresh URL keeps the replacement's load blocked even when /doc's
+        // earlier image was cached by the browser.
+        .route("/swap", get(|| async { Html("<script>setTimeout(()=>location.replace('/done'),40)</script><img src='/image.svg?swap=1'>") }))
         .route("/slow-header", get(|| async { tokio::time::sleep(Duration::from_millis(150)).await; Html("<script defer src='/defer.js'></script><img src='/image.svg'>") }))
         .route("/short", get(|| async { tokio::time::sleep(Duration::from_millis(5)).await; "short" }));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

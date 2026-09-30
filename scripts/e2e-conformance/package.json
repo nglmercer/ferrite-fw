@@ -16,7 +16,8 @@
     "reference:soft-assertions": "node soft-assertion-reference.mjs",
     "reference:configuration": "node configuration-reference.mjs",
     "reference:fixture-budgets": "node fixture-budget-reference.mjs",
-    "reference:ci-policy": "node ci-policy-reference.mjs"
+    "reference:ci-policy": "node ci-policy-reference.mjs",
+    "reference:polling": "node polling-reference.mjs"
   },
   "devDependencies": {
     "playwright": "1.63.0"

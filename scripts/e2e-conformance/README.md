@@ -39,6 +39,35 @@ FERRITE_E2E_REQUIRE_BOTH_BROWSERS=1 cargo test -p ferrite-e2e --test core_confor
 Node/Playwright are optional development tooling and are not dependencies of
 Ferrite's library or its normal Rust test command.
 
+`polling-reference.mjs` / `polling-reference.json` record 13 actual pinned runner
+cases: explicit/default cadence, last-interval reuse, final mismatch, empty/zero
+intervals, thrown callback/block errors, outer/nested soft behavior, default toPass
+ignoring expect timeout, zero timeout and a hung probe bounded by the enclosing
+test clock. Regenerate with `npm run reference:polling` or the external module
+installation and `node scripts/e2e-conformance/polling-reference.mjs`. Probe times
+and public reporter step events are actual observations, not exact timing promises.
+
+Four native groups in `cargo test -p ferrite-e2e --test polling_options` cover
+Chromium/Firefox cadence and non-Send native blocks; single-step/final-only soft
+collection across retries, synchronous probe factories and joined-scope isolation;
+caller cancellation and context-bound disposal during sleep/in-flight evaluation;
+and enclosing runtime deadlines with actual removed context IDs and cleanup.
+Seven virtual-time unit groups additionally verify exact cadence, invalid/pre-
+canceled probes, one clock/drop release, zero/enclosing windows, typed errors,
+messages and nested-step suppression. Test-only Tokio time control does not change
+the library runtime dependencies.
+
+Ferrite keeps 50 ms cadence and five-second Timeout/PollingOptions defaults;
+upstream default poll intervals are 100/250/500/1000 ms, while default toPass has
+zero timeout and ignores configured expect timeout. Ferrite rejects empty/zero
+intervals before probing, waits to its actual deadline when a following sleep
+would not fit, propagates typed operational failures rather than retrying them,
+and suppresses intermediate implementation steps and attempt-owned soft failures.
+The upstream nested-soft case instead stops after one probe with a recorded soft
+failure; its normal poll/expect block reports intermediate expectation steps.
+The pinned hung-probe case catches an enclosing timeout without escaping its
+deadline. These intentional differences are not claims of identical semantics.
+
 `ci-policy-reference.mjs` / `ci-policy-reference.json` record 14 actual pinned
 runner cases without a browser: default/config/CLI flaky policy, success/failure,
 expected failures and skip/fixme, expected-status recovery, repetition,

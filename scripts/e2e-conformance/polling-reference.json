@@ -1,0 +1,527 @@
+{
+  "playwright": "1.63.0",
+  "cases": [
+    {
+      "name": "poll-cadence",
+      "exitCode": 0,
+      "status": "passed",
+      "probeTimesMs": [
+        6,
+        30,
+        71,
+        113,
+        154
+      ],
+      "result": {
+        "kind": "result",
+        "outcome": "passed",
+        "softErrors": 0,
+        "durationMs": 155
+      },
+      "assertionSteps": [
+        {
+          "kind": "step",
+          "title": "API eventually ready",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "API eventually ready",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "API eventually ready",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "API eventually ready",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "API eventually ready",
+          "error": false
+        },
+        {
+          "kind": "step",
+          "title": "API eventually ready",
+          "error": false
+        }
+      ],
+      "attemptErrors": 0
+    },
+    {
+      "name": "pass-cadence",
+      "exitCode": 0,
+      "status": "passed",
+      "probeTimesMs": [
+        4,
+        27,
+        69,
+        111,
+        152
+      ],
+      "result": {
+        "kind": "result",
+        "outcome": "passed",
+        "softErrors": 0,
+        "durationMs": 153
+      },
+      "assertionSteps": [
+        {
+          "kind": "step",
+          "title": "Expect \"toBe\"",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "Expect \"toBe\"",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "Expect \"toBe\"",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "Expect \"toBe\"",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "Expect \"toBe\"",
+          "error": false
+        },
+        {
+          "kind": "step",
+          "title": "block eventually completes",
+          "error": false
+        }
+      ],
+      "attemptErrors": 0
+    },
+    {
+      "name": "default-poll-cadence",
+      "exitCode": 0,
+      "status": "passed",
+      "probeTimesMs": [
+        3,
+        107,
+        360,
+        863
+      ],
+      "result": {
+        "kind": "result",
+        "outcome": "passed",
+        "softErrors": 0,
+        "durationMs": 863
+      },
+      "assertionSteps": [
+        {
+          "kind": "step",
+          "title": "Expect \"toBe\"",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "Expect \"toBe\"",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "Expect \"toBe\"",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "Expect \"toBe\"",
+          "error": false
+        },
+        {
+          "kind": "step",
+          "title": "Expect \"poll toBe\"",
+          "error": false
+        }
+      ],
+      "attemptErrors": 0
+    },
+    {
+      "name": "poll-final-mismatch",
+      "exitCode": 0,
+      "status": "passed",
+      "probeTimesMs": [
+        5,
+        31,
+        72,
+        114
+      ],
+      "result": {
+        "kind": "result",
+        "outcome": "caught",
+        "error": "API never ready\nAPI never ready\nexpect(received).toBe(expected) // Object.is equality",
+        "softErrors": 0,
+        "durationMs": 115
+      },
+      "assertionSteps": [
+        {
+          "kind": "step",
+          "title": "API never ready",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "API never ready",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "API never ready",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "API never ready",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "API never ready",
+          "error": true
+        }
+      ],
+      "attemptErrors": 0
+    },
+    {
+      "name": "empty-intervals",
+      "exitCode": 0,
+      "status": "passed",
+      "probeTimesMs": [
+        4
+      ],
+      "result": {
+        "kind": "result",
+        "outcome": "caught",
+        "error": "expect(received).toBe(expected) // Object.is equality\nExpected: 1\nReceived: 0",
+        "softErrors": 0,
+        "durationMs": 10
+      },
+      "assertionSteps": [
+        {
+          "kind": "step",
+          "title": "Expect \"toBe\"",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "Expect \"poll toBe\"",
+          "error": true
+        }
+      ],
+      "attemptErrors": 0
+    },
+    {
+      "name": "zero-intervals",
+      "exitCode": 0,
+      "status": "passed",
+      "probeTimesMs": [
+        4,
+        10,
+        13,
+        15,
+        17
+      ],
+      "result": {
+        "kind": "result",
+        "outcome": "passed",
+        "softErrors": 0,
+        "durationMs": 18
+      },
+      "assertionSteps": [
+        {
+          "kind": "step",
+          "title": "Expect \"toBe\"",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "Expect \"toBe\"",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "Expect \"toBe\"",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "Expect \"toBe\"",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "Expect \"toBe\"",
+          "error": false
+        },
+        {
+          "kind": "step",
+          "title": "Expect \"poll toBe\"",
+          "error": false
+        }
+      ],
+      "attemptErrors": 0
+    },
+    {
+      "name": "poll-callback-error",
+      "exitCode": 0,
+      "status": "passed",
+      "probeTimesMs": [
+        6
+      ],
+      "result": {
+        "kind": "result",
+        "outcome": "caught",
+        "error": "operation failure",
+        "softErrors": 0,
+        "durationMs": 8
+      },
+      "assertionSteps": [
+        {
+          "kind": "step",
+          "title": "Expect \"poll toBe\"",
+          "error": true
+        }
+      ],
+      "attemptErrors": 0
+    },
+    {
+      "name": "pass-thrown-error",
+      "exitCode": 0,
+      "status": "passed",
+      "probeTimesMs": [
+        6,
+        27,
+        47
+      ],
+      "result": {
+        "kind": "result",
+        "outcome": "passed",
+        "softErrors": 0,
+        "durationMs": 48
+      },
+      "assertionSteps": [
+        {
+          "kind": "step",
+          "title": "Expect \"toPass\"",
+          "error": false
+        }
+      ],
+      "attemptErrors": 0
+    },
+    {
+      "name": "soft-outer-poll",
+      "exitCode": 1,
+      "status": "failed",
+      "probeTimesMs": [
+        3,
+        26,
+        47,
+        69,
+        90
+      ],
+      "result": {
+        "kind": "result",
+        "outcome": "passed",
+        "softErrors": 1,
+        "durationMs": 91
+      },
+      "assertionSteps": [
+        {
+          "kind": "step",
+          "title": "one soft failure",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "one soft failure",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "one soft failure",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "one soft failure",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "one soft failure",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "one soft failure",
+          "error": true
+        }
+      ],
+      "attemptErrors": 1
+    },
+    {
+      "name": "nested-soft-in-pass",
+      "exitCode": 1,
+      "status": "failed",
+      "probeTimesMs": [
+        3
+      ],
+      "result": {
+        "kind": "result",
+        "outcome": "passed",
+        "softErrors": 1,
+        "durationMs": 6
+      },
+      "assertionSteps": [
+        {
+          "kind": "step",
+          "title": "inner soft",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "Expect \"toPass\"",
+          "error": true
+        }
+      ],
+      "attemptErrors": 1
+    },
+    {
+      "name": "default-pass-ignores-expect-timeout",
+      "exitCode": 0,
+      "status": "passed",
+      "probeTimesMs": [
+        3,
+        28,
+        50,
+        73,
+        96
+      ],
+      "result": {
+        "kind": "result",
+        "outcome": "passed",
+        "softErrors": 0,
+        "durationMs": 98
+      },
+      "assertionSteps": [
+        {
+          "kind": "step",
+          "title": "Expect \"toBe\"",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "Expect \"toBe\"",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "Expect \"toBe\"",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "Expect \"toBe\"",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "Expect \"toBe\"",
+          "error": false
+        },
+        {
+          "kind": "step",
+          "title": "Expect \"toPass\"",
+          "error": false
+        }
+      ],
+      "attemptErrors": 0
+    },
+    {
+      "name": "zero-poll-timeout",
+      "exitCode": 0,
+      "status": "passed",
+      "probeTimesMs": [
+        3,
+        27,
+        48,
+        69,
+        90
+      ],
+      "result": {
+        "kind": "result",
+        "outcome": "passed",
+        "softErrors": 0,
+        "durationMs": 91
+      },
+      "assertionSteps": [
+        {
+          "kind": "step",
+          "title": "Expect \"toBe\"",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "Expect \"toBe\"",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "Expect \"toBe\"",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "Expect \"toBe\"",
+          "error": true
+        },
+        {
+          "kind": "step",
+          "title": "Expect \"toBe\"",
+          "error": false
+        },
+        {
+          "kind": "step",
+          "title": "Expect \"poll toBe\"",
+          "error": false
+        }
+      ],
+      "attemptErrors": 0
+    },
+    {
+      "name": "hung-probe-enclosing-timeout",
+      "exitCode": 0,
+      "status": "passed",
+      "probeTimesMs": [
+        3
+      ],
+      "result": {
+        "kind": "result",
+        "outcome": "caught",
+        "error": "Test timeout of 300ms exceeded",
+        "softErrors": 0,
+        "durationMs": 48
+      },
+      "assertionSteps": [
+        {
+          "kind": "step",
+          "title": "Expect \"poll toBe\"",
+          "error": true
+        }
+      ],
+      "attemptErrors": 0
+    }
+  ]
+}

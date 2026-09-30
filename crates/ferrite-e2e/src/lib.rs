@@ -103,7 +103,10 @@ pub use coverage::{Coverage, CoverageFunction, CoverageRange, CssCoverageEntry, 
 pub use driver::FrameStream;
 pub use error::{E2eError, E2eResult};
 pub use event::{DispatchEventOptions, DomEventKind};
-pub use expect::{expect_poll, expect_to_pass, LocatorExpect, PageExpect, SoftAsserts, Timeout};
+pub use expect::{
+    expect_poll, expect_poll_with, expect_to_pass, expect_to_pass_with, LocatorExpect, PageExpect,
+    PollingOptions, SoftAsserts, Timeout,
+};
 pub use file_payload::FilePayload;
 pub use frame_locator::FrameLocator;
 pub use function_wait::{FunctionPolling, FunctionWaitOptions};

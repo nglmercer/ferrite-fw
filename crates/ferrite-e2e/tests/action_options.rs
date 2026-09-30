@@ -265,11 +265,18 @@ async fn canceled_pointer_action_releases_input_and_modifiers() {
             .click_with_options(ClickOptions {
                 delay: Duration::from_secs(10),
                 modifiers: vec![KeyboardModifier::Shift],
-                timeout: Some(Duration::from_millis(160)),
+                // Leave native readiness/input acquisition time inside the
+                // budget so this tests timeout while input is actually held.
+                timeout: Some(Duration::from_secs(2)),
                 ..Default::default()
             })
             .await;
         assert!(matches!(result, Err(E2eError::Timeout(..))));
+        let acquired: Vec<Value> = page.evaluate("input").await.unwrap();
+        assert!(acquired
+            .iter()
+            .any(|e| e["type"] == "keydown" && e["shift"] == true));
+        assert!(acquired.iter().any(|e| e["type"] == "mousedown"));
         page.wait_for_function(
             "input.some(e=>e.type==='keyup' && !e.shift)",
             Duration::from_secs(3),
