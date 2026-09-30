@@ -1491,9 +1491,9 @@ styles and restoration were measured at DPR 1/2. Pinned Firefox ignores Css scal
 at DPR 2 and rejects transparency. Upstream clears a pre-existing background
 color after transparent capture, whereas Rust restores its last acknowledged
 Page.call value. Upstream accepts JPEG quality zero and infinite clip width;
-Rust validates 1..=100 and finite bounds. CSS animation suppression remains a
-narrower algorithm; temporary CSS removal does not rewind layout/scroll side
-effects or application execution. Closed roots/cross-origin style traversal,
+Rust validates 1..=100 and finite bounds. The B10 follow-up below now uses native
+finite-animation finishing and infinite-animation cancellation/resumption.
+Temporary CSS removal does not rewind layout/scroll effects or application execution. Closed roots/cross-origin style traversal,
 WebP format and all upstream specialized capture options remain outside this
 supported surface. Public literal migration and examples are in the E2E guide.
 
@@ -1527,7 +1527,8 @@ the same assertion clock and never starts a new post-expiry artifact capture.
 Underlying operation failures retain typed causes. `SnapshotUpdate::Changed`
 creates missing values and rewrites only mismatches; corrupt PNGs/invalid ratios
 are configuration errors, and comparison rejects more than 64 million pixels.
-Defaults now use B09 Css scale, hidden carets and CSS animation suppression.
+Defaults use B09 Css scale, hidden carets and native animation finishing/cancellation
+(the original B10 checkpoint used CSS duration suppression).
 
 The [actual snapshot reference](scripts/e2e-conformance/snapshot-reference.json)
 contains 56 runner observations on both pinned engines. Playwright's `missing`
@@ -1539,8 +1540,8 @@ pair, and retains retrying initially stable mismatches within the shared window.
 Per-channel comparison remains different from upstream's perceived-color/YIQ
 algorithm. These are documented differences, not full matcher parity.
 
-B10 remains unchecked. Real delayed-font/animation evidence, CPU/filesystem
-budget work and final broad verification
+B10 remains unchecked. Real delayed-font/animation evidence is recorded in the
+follow-up below; CPU/filesystem budget work and final broad verification
 are still required. Focused draft checks do not replace the completed B09
 checkpoint or prove completion of the expanded current test inventory.
 
@@ -1671,3 +1672,61 @@ soft_assertions5 and step_controls_and_bundles4. Every native group requires ful
 Chrome 153 and Firefox 157. Final strict all-target Clippy, formatting, matrix
 generation and parity-document links passed. This remains focused evidence;
 the expanded full integration inventory is not yet a completed B10 phase gate.
+
+
+### B10 draft: actual downloadable fonts and native animations
+
+The [font/animation tests](crates/ferrite-e2e/tests/snapshot_fonts_and_animations.rs)
+use an [original reproducible font](crates/ferrite-e2e/tests/fixtures/README.md)
+served over actual held HTTP responses. Main-document, open-shadow-root and
+same-origin-frame cases exercise page and locator assertions. No baseline is
+written while the real font is blocked. Loaded locator dimensions become
+160 × 40; explicit font opt-out captures a different fallback width. Assertion
+expiry, caller cancellation and page disposal preserve existing baselines and
+publish no incomplete image. Active-page cleanup restores the style and permits
+capture after the font response is released.
+
+Animation preparation now uses native `Animation` objects instead of setting
+CSS durations to zero. Finite animations finish, including completion events;
+infinite animations cancel for capture and play again during owned cleanup.
+Zero-playback-rate objects retain their position. CSS `animationstart` and
+`transitionrun` listeners cover animations started during font waits in roots
+visited at preparation. Both CSS and Web Animations API captures verify actual
+red/blue pixels and post-cleanup states; explicitly allowed changing CSS frames
+fail stability without creating a baseline. Native finish/resume errors remain
+visible, and successfully cancelled objects still resume after a later failure.
+The 4,096-object boundary succeeds; 4,097 objects fail with an explicit preparation
+error and all affected objects running again afterward.
+
+This follows the supported finite/infinite behavior of the pinned
+[upstream screenshotter](https://github.com/microsoft/playwright/blob/v1.63.0/packages/playwright-core/src/server/screenshotter.ts).
+Ferrite's helper runs in the application realm and surfaces native method errors;
+upstream uses its utility realm and suppresses some animation-method exceptions.
+Closed roots, cross-origin frame traversal and newly inserted roots remain outside
+the owned preparation surface. The distinct-animation limit does not preempt
+blocking browser JavaScript or establish a complete CPU bound. CPU/decode/encode/
+filesystem budget work, failed outer-poll final diagnostics and final broad gates
+still keep B10 open.
+
+Focused final-source validation combines 194 unit tests, 49 native integration
+checks across twelve targets, four doctests and 28 CLI/configuration checks
+(275 total). The six font/animation groups passed after the preparation/error-
+restoration fixes; the additional native animation-limit group passed after it
+was added. Existing paths2, stability3, browser snapshots3, diagnostics4,
+polling4 and related capture/configuration/report/soft/step groups26 reran.
+Strict all-target E2E/CLI/config Clippy, package formatting and regenerated matrix
+also passed. Native gates required full Chrome 153 and Firefox 157. This is
+combined focused evidence, not a fresh complete integration inventory or B10
+completion.
+
+The [32 checked pinned font/animation observations](scripts/e2e-conformance/font-animation-reference.json)
+verify actual rendering and font waits on both engines. Upstream page assertions
+settled while the same-origin child font was still loading; upstream iframe
+locator assertions waited. Ferrite's page assertion waits for reachable
+same-origin font documents too. Upstream default page-clip animation pixels and
+states match the supported finite/infinite/zero-rate cases above. Chromium CSS
+locator observations also exposed native element-stability timeouts: the final
+reference records a successful finite locator and an infinite locator timeout,
+while both Firefox locators succeeded. Page clips retain strict pixel checks,
+and caught locator outcomes must identify that native wait. These timeouts are
+recorded without claiming a root cause or universal Chromium limitation.

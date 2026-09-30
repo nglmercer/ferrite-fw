@@ -1,0 +1,459 @@
+{
+  "playwright": "1.63.0",
+  "fontSha256": "eb22d9ac770bd9abf4e4caf1c5285ac033d76df7171ab6fbb170d1d13113748c",
+  "engines": [
+    {
+      "name": "chromium",
+      "version": "153.0.8010.12",
+      "cases": [
+        {
+          "name": "font-plain-page",
+          "outcome": "passed",
+          "durationMs": 695,
+          "widthBefore": 96,
+          "widthAfter": 160,
+          "settledBeforeDelivery": false,
+          "baselineBeforeDelivery": false,
+          "fontStatusAtSettlement": "loaded",
+          "dimensions": [
+            300,
+            120
+          ]
+        },
+        {
+          "name": "font-plain-locator",
+          "outcome": "passed",
+          "durationMs": 766,
+          "widthBefore": 96,
+          "widthAfter": 160,
+          "settledBeforeDelivery": false,
+          "baselineBeforeDelivery": false,
+          "fontStatusAtSettlement": "loaded",
+          "dimensions": [
+            160,
+            40
+          ]
+        },
+        {
+          "name": "font-shadow-page",
+          "outcome": "passed",
+          "durationMs": 674,
+          "widthBefore": 96,
+          "widthAfter": 160,
+          "settledBeforeDelivery": false,
+          "baselineBeforeDelivery": false,
+          "fontStatusAtSettlement": "loaded",
+          "dimensions": [
+            300,
+            120
+          ]
+        },
+        {
+          "name": "font-shadow-locator",
+          "outcome": "passed",
+          "durationMs": 754,
+          "widthBefore": 96,
+          "widthAfter": 160,
+          "settledBeforeDelivery": false,
+          "baselineBeforeDelivery": false,
+          "fontStatusAtSettlement": "loaded",
+          "dimensions": [
+            160,
+            40
+          ]
+        },
+        {
+          "name": "font-iframe-page",
+          "outcome": "passed",
+          "durationMs": 543,
+          "widthBefore": 96,
+          "widthAfter": 160,
+          "settledBeforeDelivery": true,
+          "baselineBeforeDelivery": true,
+          "fontStatusAtSettlement": "loading",
+          "dimensions": [
+            300,
+            120
+          ]
+        },
+        {
+          "name": "font-iframe-locator",
+          "outcome": "passed",
+          "durationMs": 765,
+          "widthBefore": 96,
+          "widthAfter": 160,
+          "settledBeforeDelivery": false,
+          "baselineBeforeDelivery": false,
+          "fontStatusAtSettlement": "loaded",
+          "dimensions": [
+            160,
+            40
+          ]
+        },
+        {
+          "name": "font-plain-timeout",
+          "outcome": "caught",
+          "error": "expect(locator).toHaveScreenshot(expected) failed",
+          "durationMs": 476,
+          "widthBefore": 96,
+          "widthAfter": 160,
+          "settledBeforeDelivery": true,
+          "baselineBeforeDelivery": false,
+          "dimensions": null
+        },
+        {
+          "name": "css-finite",
+          "captureTarget": "page-clip",
+          "outcome": "passed",
+          "dimensions": [
+            80,
+            60
+          ],
+          "pixel": [
+            0,
+            0,
+            255,
+            255
+          ],
+          "state": "finished",
+          "rate": 1
+        },
+        {
+          "name": "css-finite-locator",
+          "captureTarget": "locator",
+          "outcome": "passed",
+          "dimensions": [
+            80,
+            60
+          ],
+          "pixel": [
+            0,
+            0,
+            255,
+            255
+          ]
+        },
+        {
+          "name": "css-finite-live",
+          "captureTarget": "page-clip",
+          "outcome": "caught",
+          "error": "expect(page).toHaveScreenshot(expected) failed",
+          "baselineExists": false
+        },
+        {
+          "name": "css-infinite",
+          "captureTarget": "page-clip",
+          "outcome": "passed",
+          "dimensions": [
+            80,
+            60
+          ],
+          "pixel": [
+            255,
+            0,
+            0,
+            255
+          ],
+          "state": "running",
+          "rate": 1
+        },
+        {
+          "name": "css-infinite-locator",
+          "captureTarget": "locator",
+          "outcome": "caught",
+          "reason": "native-locator-stability-timeout",
+          "error": "expect(locator).toHaveScreenshot(expected) failed",
+          "baselineExists": false
+        },
+        {
+          "name": "css-infinite-live",
+          "captureTarget": "page-clip",
+          "outcome": "caught",
+          "error": "expect(page).toHaveScreenshot(expected) failed",
+          "baselineExists": false
+        },
+        {
+          "name": "waapi-finite",
+          "captureTarget": "page-clip",
+          "outcome": "passed",
+          "dimensions": [
+            80,
+            60
+          ],
+          "pixel": [
+            0,
+            0,
+            255,
+            255
+          ],
+          "state": "finished",
+          "rate": 1
+        },
+        {
+          "name": "waapi-infinite",
+          "captureTarget": "page-clip",
+          "outcome": "passed",
+          "dimensions": [
+            80,
+            60
+          ],
+          "pixel": [
+            255,
+            0,
+            0,
+            255
+          ],
+          "state": "running",
+          "rate": 1
+        },
+        {
+          "name": "waapi-zero-rate",
+          "captureTarget": "page-clip",
+          "outcome": "passed",
+          "dimensions": [
+            80,
+            60
+          ],
+          "pixel": [
+            128,
+            0,
+            128,
+            255
+          ],
+          "state": "running",
+          "rate": 0
+        }
+      ]
+    },
+    {
+      "name": "firefox",
+      "version": "157.0",
+      "cases": [
+        {
+          "name": "font-plain-page",
+          "outcome": "passed",
+          "durationMs": 1356,
+          "widthBefore": 96,
+          "widthAfter": 160,
+          "settledBeforeDelivery": false,
+          "baselineBeforeDelivery": false,
+          "fontStatusAtSettlement": "loaded",
+          "dimensions": [
+            300,
+            120
+          ]
+        },
+        {
+          "name": "font-plain-locator",
+          "outcome": "passed",
+          "durationMs": 1317,
+          "widthBefore": 96,
+          "widthAfter": 160,
+          "settledBeforeDelivery": false,
+          "baselineBeforeDelivery": false,
+          "fontStatusAtSettlement": "loaded",
+          "dimensions": [
+            160,
+            40
+          ]
+        },
+        {
+          "name": "font-shadow-page",
+          "outcome": "passed",
+          "durationMs": 1081,
+          "widthBefore": 96,
+          "widthAfter": 160,
+          "settledBeforeDelivery": false,
+          "baselineBeforeDelivery": false,
+          "fontStatusAtSettlement": "loaded",
+          "dimensions": [
+            300,
+            120
+          ]
+        },
+        {
+          "name": "font-shadow-locator",
+          "outcome": "passed",
+          "durationMs": 1306,
+          "widthBefore": 96,
+          "widthAfter": 160,
+          "settledBeforeDelivery": false,
+          "baselineBeforeDelivery": false,
+          "fontStatusAtSettlement": "loaded",
+          "dimensions": [
+            160,
+            40
+          ]
+        },
+        {
+          "name": "font-iframe-page",
+          "outcome": "passed",
+          "durationMs": 1199,
+          "widthBefore": 96,
+          "widthAfter": 160,
+          "settledBeforeDelivery": true,
+          "baselineBeforeDelivery": true,
+          "fontStatusAtSettlement": "loading",
+          "dimensions": [
+            300,
+            120
+          ]
+        },
+        {
+          "name": "font-iframe-locator",
+          "outcome": "passed",
+          "durationMs": 2147,
+          "widthBefore": 96,
+          "widthAfter": 160,
+          "settledBeforeDelivery": false,
+          "baselineBeforeDelivery": false,
+          "fontStatusAtSettlement": "loaded",
+          "dimensions": [
+            160,
+            40
+          ]
+        },
+        {
+          "name": "font-plain-timeout",
+          "outcome": "caught",
+          "error": "expect(locator).toHaveScreenshot(expected) failed",
+          "durationMs": 786,
+          "widthBefore": 96,
+          "widthAfter": 160,
+          "settledBeforeDelivery": true,
+          "baselineBeforeDelivery": false,
+          "dimensions": null
+        },
+        {
+          "name": "css-finite",
+          "captureTarget": "page-clip",
+          "outcome": "passed",
+          "dimensions": [
+            80,
+            60
+          ],
+          "pixel": [
+            0,
+            0,
+            255,
+            255
+          ],
+          "state": "finished",
+          "rate": 1
+        },
+        {
+          "name": "css-finite-locator",
+          "captureTarget": "locator",
+          "outcome": "passed",
+          "dimensions": [
+            80,
+            60
+          ],
+          "pixel": [
+            0,
+            0,
+            255,
+            255
+          ]
+        },
+        {
+          "name": "css-finite-live",
+          "captureTarget": "page-clip",
+          "outcome": "caught",
+          "error": "expect(page).toHaveScreenshot(expected) failed",
+          "baselineExists": false
+        },
+        {
+          "name": "css-infinite",
+          "captureTarget": "page-clip",
+          "outcome": "passed",
+          "dimensions": [
+            80,
+            60
+          ],
+          "pixel": [
+            255,
+            0,
+            0,
+            255
+          ],
+          "state": "running",
+          "rate": 1
+        },
+        {
+          "name": "css-infinite-locator",
+          "captureTarget": "locator",
+          "outcome": "passed",
+          "dimensions": [
+            80,
+            60
+          ],
+          "pixel": [
+            255,
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "name": "css-infinite-live",
+          "captureTarget": "page-clip",
+          "outcome": "caught",
+          "error": "expect(page).toHaveScreenshot(expected) failed",
+          "baselineExists": false
+        },
+        {
+          "name": "waapi-finite",
+          "captureTarget": "page-clip",
+          "outcome": "passed",
+          "dimensions": [
+            80,
+            60
+          ],
+          "pixel": [
+            0,
+            0,
+            255,
+            255
+          ],
+          "state": "finished",
+          "rate": 1
+        },
+        {
+          "name": "waapi-infinite",
+          "captureTarget": "page-clip",
+          "outcome": "passed",
+          "dimensions": [
+            80,
+            60
+          ],
+          "pixel": [
+            255,
+            0,
+            0,
+            255
+          ],
+          "state": "running",
+          "rate": 1
+        },
+        {
+          "name": "waapi-zero-rate",
+          "captureTarget": "page-clip",
+          "outcome": "passed",
+          "dimensions": [
+            80,
+            60
+          ],
+          "pixel": [
+            128,
+            0,
+            128,
+            255
+          ],
+          "state": "running",
+          "rate": 0
+        }
+      ]
+    }
+  ]
+}

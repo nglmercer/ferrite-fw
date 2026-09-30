@@ -47,24 +47,32 @@ Partial means the listed limitation must be retained in API/docs/test evidence.
 | Resolved project/run/attempt configuration | Supported | Supported | Library/shared TOML/JSON/CLI selection and precedence; whole context overrides, actual owner versions, project artifact/snapshot paths, read-only TestInfo snapshots and serde-defaulted report metadata. Dedicated versions stay absent before launch; no project dependency scheduling. |
 | Fixture limits and shared cleanup clocks | Supported | Supported | Separate local setup/teardown limits capped by enclosing budgets; ready release after exhaustion, explicit pending errors and disposal surviving dropped waits. Rust accounting differs from upstream separate fixture budgets. |
 | CI flaky policy and focus protection | Supported | Supported | Opt-in aggregate failure preserves actual attempt outcomes; registered focus checked before filters/shards, including skipped descendants. CI forces existing focus protection. JSON/live/HTML aggregate status and explicit JUnit policy markers; upstream filtering/JUnit differences documented. |
-| Screenshot options and reversible preparation | Supported | Supported with limits | Viewport/document clips, full-page masks/colors/styles, locator companions and shared capture clocks. Device/Css output; Firefox Css uses raster normalization. Transparent default canvas is Chromium PNG only. Owned bounded restoration, visible errors and preserved metrics; narrower animation/style traversal documented. |
-| Stable screenshot assertions (B10 in progress) | Partial | Partial | Successive PNG comparison and font readiness after owned style preparation; typed errors and changed update mode. Attempt/step-owned expected/actual/diff copies and last-pair stability diagnostics survive portable export. Per-channel comparator/update policy differs; real-font evidence and CPU-budget work remain open. |
+| Screenshot options and reversible preparation | Supported | Supported with limits | Viewport/document clips, full-page masks/colors/styles, locator companions and shared capture clocks. Device/Css output; Firefox Css uses raster normalization. Transparent default canvas is Chromium PNG only. Owned bounded restoration, visible errors and preserved metrics; native finite finish/infinite cancel-resume, zero-rate preservation and late CSS listeners. Application-realm helpers and root traversal remain narrower. |
+| Stable screenshot assertions (B10 in progress) | Partial | Partial | Successive PNG comparison and font readiness after owned style preparation; typed errors and changed update mode. Attempt/step-owned expected/actual/diff copies and last-pair stability diagnostics survive portable export. Per-channel comparator/update policy differs; real-font/animation evidence is verified; CPU-budget work remains open. |
 | Snapshot path templates (B10 in progress) | Supported with differences | Supported with differences | Global/project/explicit templates and frozen TestInfo metadata; CLI/config/env plumbing, PNG/text paths and no-write path access. Additional browser token, lowercase slugs, nested names and legacy layout differ from upstream; no anonymous/ARIA kinds. |
 | Generic assertion polling options | Supported | Supported | Immediate probes, validated interval sequences with last-value reuse, messages and explicit cancellation/context tokens. Shared local/enclosing budgets, non-Send companions, typed operational errors and final-only soft collection/steps. Rust defaults and upstream nested-soft/step/cutoff differences documented. |
 | Portable reports, runner/fixtures/retries | Supported | Supported | Tokio workers, cooperative cancellation, current artifact formats |
 
 ## Evidence and validation gates
 
-The latest B10 increment passed 194 units, 42 native integration checks/eleven targets,
-four doctests and 28 CLI/configuration checks (268 focused checks), with final
+The latest B10 increment passed 194 units, 49 native integration checks/twelve targets,
+four doctests and 28 CLI/configuration checks (275 focused checks), with final
 strict Clippy, package formatting and regenerated links/matrix. All native checks
 required full Chrome 153 and Firefox 157. The
 [snapshot stability tests](crates/ferrite-e2e/tests/snapshot_stability.rs) cover
 update/negation/size/validation, never-stable existing and missing baselines,
 actual typed capture timeout and held font readiness with style ordering,
-caller/owner cancellation and restoration. Actual downloadable-font evidence
-remains pending. The 56 pinned runner snapshot cases document intentional
-stability/update differences. This is focused increment evidence, not a fresh
+caller/owner cancellation and restoration. The new
+[font/animation tests](crates/ferrite-e2e/tests/snapshot_fonts_and_animations.rs)
+use actual gated HTTP font responses across page/locator, open roots and
+same-origin frames. They also verify fallback opt-out, disposal, CSS/Web Animations
+API finite/infinite/zero-rate behavior, late CSS animations during font waits,
+visible native finish/resume failures and the 4,096/4,097-object preparation boundary. The 56 pinned runner snapshot cases document intentional
+stability/update differences. The 32 checked
+[font/animation observations](scripts/e2e-conformance/font-animation-reference.json)
+record actual pixels/states, upstream page capture before child-font delivery
+and Chromium locator-stability timeouts. Ferrite waits for reachable same-origin
+font documents in page assertions too. This is focused increment evidence, not a fresh
 complete integration inventory; B10 remains unchecked. The
 [snapshot path tests](crates/ferrite-e2e/tests/snapshot_paths.rs) verify project,
 page/locator/text and explicit overrides, retry identity, early validation and

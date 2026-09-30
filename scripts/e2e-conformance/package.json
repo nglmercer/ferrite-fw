@@ -20,7 +20,8 @@
     "reference:polling": "node polling-reference.mjs",
     "reference:screenshots": "node screenshot-reference.mjs",
     "reference:snapshots": "node snapshot-reference.mjs",
-    "reference:snapshot-paths": "node snapshot-path-reference.mjs"
+    "reference:snapshot-paths": "node snapshot-path-reference.mjs",
+    "reference:fonts-animations": "node font-animation-reference.mjs"
   },
   "devDependencies": {
     "playwright": "1.63.0"

@@ -392,8 +392,9 @@ last image after stability times out, while a never-stable missing baseline fail
 without creation. Rust requires stable generation for both existing and missing
 baselines and preserves its earlier write-and-pass `missing` policy. Its per-
 channel comparator also remains different. Expected/actual/diff copies now use
-attempt-owned report attachments; actual delayed fonts, budget audits and final
-phase gates remain before B10 is complete.
+attempt-owned report attachments. The font/animation reference below adds actual
+downloadable-font evidence; budget audits and final phase gates remain before
+B10 is complete.
 
 ### Snapshot path reference (B10 in progress)
 
@@ -412,3 +413,36 @@ and retains its earlier legacy paths when no template is configured. An initial
 reference assumption missed string flattening and the legacy platform suffix;
 the corrected exact expectations passed all 36 cases. These differences remain
 Partial matrix mappings, rather than a claim of identical naming behavior.
+
+
+### Real font and animation reference (B10 in progress)
+
+`reference:fonts-animations` records 32 checked public screenshot-assertion cases
+using pinned Playwright 1.63.0, Chromium 153.0.8010.12 and Firefox 157 through
+`moz-firefox`. It serves the same [original font fixture](../../crates/ferrite-e2e/tests/fixtures/README.md)
+as the Rust tests over actual held HTTP responses. Six page/locator combinations
+cover the main document, open shadow roots and a same-origin iframe; a seventh
+font case verifies expiry without a baseline. Nine animation cases per engine
+cover finite/infinite CSS captures, allowed live playback, locator observations
+and finite/infinite/zero-rate Web Animations API objects. The
+[recorded results](font-animation-reference.json) preserve actual outcomes,
+font state before delivery, dimensions, animation states and sampled pixels.
+
+Both engines' main-page and shadow-root font captures wait for delivery. Their
+iframe locator captures also wait; their page captures settle while the child
+font is still loading. Ferrite's page assertion intentionally waits for reachable
+same-origin documents as well, and its real-font tests prove that stronger wait.
+Default finite animation pixels are blue, infinite pixels red, and zero-rate
+midpoint pixels purple; completed finite objects stay finished and infinite
+objects run again afterward. Explicitly allowed changing frames fail without
+creating a baseline.
+
+Initial Chromium CSS locator calls timed out at native element-stability waiting,
+while Firefox completed. The final run records a Chromium infinite-locator
+stability timeout and a successful finite-locator capture. The reference checks
+animation pixels strictly through page clips and records locator outcomes
+separately; a caught locator error must specifically identify that native stability
+timeout. It never treats an arbitrary exception as a valid result. No cause or
+universal engine limitation is inferred from these timeouts. These observations
+and Ferrite's application-realm helpers remain documented differences, not full
+screenshot parity.

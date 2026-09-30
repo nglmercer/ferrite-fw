@@ -995,10 +995,14 @@ format; valid quality is 1..=100. Default format remains PNG.
 
 Temporary styles reach the main document, reachable same-origin frames and open
 shadow roots present at preparation. Closed roots/cross-origin frames are outside
-that traversal. Application-owned nodes/IDs are retained. Existing animation
-controls remain CSS suppression, not Playwright's finite-animation fast-forward
-algorithm. CSS reflow may affect scroll and animation progression as in normal
-browser layout; removing temporary CSS does not rewind application execution.
+that traversal. Application-owned nodes/IDs are retained. With disable_animations,
+finite CSS animations/transitions and Web Animations API objects finish through
+their native finish method. Infinite animations are cancelled for capture and played again during
+cleanup; zero-playback-rate animations remain untouched. Listeners also settle
+CSS animations/transitions started during font waits in prepared roots. Finite
+completion events and application execution are not rewound. Native finish/resume
+errors remain visible; helpers run in the application realm, and preparation
+rejects more than 4,096 distinct handled animations.
 
 Captures serialize per page. The optional timeout bounds queueing, preparation,
 native capture and awaiting restoration; zero removes the local limit, while
@@ -1050,8 +1054,8 @@ and runner/CLI configuration. `missing` retains Ferrite's existing write-and-pas
 policy; Playwright writes the baseline and fails the test. Negated screenshot
 assertions require an existing valid baseline and never generate or update one.
 
-With `capture: None`, assertions use CSS scale, hidden carets and B09 animation
-suppression; a supplied ScreenshotOptions replaces those capture defaults.
+With `capture: None`, assertions use CSS scale, hidden carets and native animation
+finishing/cancellation; a supplied ScreenshotOptions replaces those capture defaults.
 `wait_for_fonts` defaults to true and awaits reachable same-origin documents'
 `document.fonts.ready` after temporary style preparation, within the same
 assertion window. Owned restoration covers the font wait. JPEG is unavailable for

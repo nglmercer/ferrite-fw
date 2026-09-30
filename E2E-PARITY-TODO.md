@@ -1,7 +1,7 @@
 # Ferrite E2E implementation TODO
 
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
-Session plan refreshed: 2026-09-30, with verified B10 capture, path and diagnostic increments.
+Session plan refreshed: 2026-09-30, with verified B10 capture, path, diagnostic and native font/animation increments.
 Expanded on request for a longer implementation session; B09/B13/B14 and D01/D02 are verified.
 Uncommitted implementations are not counted complete.
 
@@ -31,8 +31,9 @@ restoration survives cancellation and dropped waits; cleanup failures remain
 visible. Chromium transparent PNG preserves the last acknowledged background
 set through Page.call; Firefox rejects transparency and normalizes Css output
 from its native raster. Captures preserve caller viewport/emulation settings.
-CSS animation suppression remains narrower than Playwright fast-forwarding;
-styles cover reachable same-origin documents and open shadow roots.
+The B10 follow-up now finishes finite animations and cancels/resumes infinite
+animations through native objects; styles cover reachable same-origin documents
+and open shadow roots. Application-realm helpers and traversal remain narrower.
 
 Latest completed-task checkpoint inventory: **405 E2E and 28 CLI/configuration checks**,
 433 combined: 180 units, 221 integrations across all 34 targets and four doctests.
@@ -57,8 +58,8 @@ batch; its cause remains an explicit G04 audit item.
 
 The matrix remains 73 classes/1,018 members: Partial635/Missing327/Equivalent15/
 Idiomatic41. Capture mappings now describe these options and engine differences;
-they do not imply full compatibility. Current matrix generation, 740 parity-document
-local links and 655 source anchors passed for the path increment.
+they do not imply full compatibility. Current matrix generation, 753 parity-document/fixture local links and 655
+source anchors passed for the native font/animation increment.
 
 **Current handoff:** B10 is in progress. The verified increment `499c274` in
 `snapshot.rs`,
@@ -69,7 +70,8 @@ suppression and hidden carets; no unstable baseline is written on expiry.
 The 56-case actual pinned runner reference records missing/update/negation and
 never-stable behavior differences. Three required two-engine native groups and
 virtual-time tests cover the draft; these are focused evidence, not final phase
-gates. The font wait test currently uses a held readiness promise.
+gates. The original font-wait test uses a held readiness promise; the new
+`tests/snapshot_fonts_and_animations.rs` exercises actual held HTTP font responses.
 
 Verified path increment `b34174d` implements browser/project/platform and file/title path
 templates, project/assertion precedence, CLI/config/env plumbing and immutable
@@ -86,8 +88,16 @@ I/O failures and cancellation/restoration. Generic retry probes suppress interme
 report images; final-only deferred publication for a failed outer poll remains
 an audit item.
 
-Continue B10 with an actual delayed downloadable-font fixture and animation cases,
-and audit CPU/decode/encode/filesystem bounds under the shared assertion clock.
+Seven native font/animation groups now verify page/locator captures in the main
+document, open roots and same-origin frames, fallback opt-out, timeout/cancellation/
+disposal, native finite/infinite/zero-rate animation behavior and finish/resume errors.
+The original reproducible font fixture is independent of installed system fonts.
+The 32 checked actual pinned font/animation observations document matching
+finite/infinite/zero-rate pixels, stronger same-origin page font waits in Rust
+and observed upstream Chromium locator-stability timeouts.
+
+Continue B10 with CPU/decode/encode/filesystem bounds under the shared assertion
+clock and final-only deferred diagnostics for failing outer generic polls.
 Run final complete phase gates, update matrix/capability evidence and commit only
 verified work before checking B10. Preserve entry points and document input-struct
 migration. B18/B11 follow after B10 is complete.
@@ -838,7 +848,7 @@ their dependencies are ready. References include
   Final inventory 405 E2E/28 CLI checks is covered by broad initial 404 E2E batches
   plus 16 related final-source checks after the added trace regression; final
   routing/doc/CLI/Clippy/fmt passed. Firefox transparency is explicitly unsupported;
-  Css uses raster normalization. CSS animation suppression, reachable-root styles,
+  Css uses raster normalization. The original CSS duration suppression (superseded by the B10 follow-up), reachable-root styles,
   quality 1–100 and finite-coordinate validation remain documented differences.
   Raw CDP background tracking is limited to acknowledged Page.call operations;
   cleanup has a separate bounded five-second window. Examples, migration notes,
@@ -856,15 +866,18 @@ their dependencies are ready. References include
   assertion precedence, frozen metadata, CLI/env and TestInfo access (`b34174d`); two native
   groups and 36 pinned path-only cases verify them. Attempt/step-owned expected/
   actual/diff and last-pair stability attachments (`b826c56`) now preserve immutable retry
-  evidence and portable links, with four native diagnostic groups. Real font/
-  animation cases, final-only outer-poll diagnostics, resource/clock audits and
-  final complete phase gates are still required.
-  Latest focused increment gates passed: 194 units, 42 native integrations/eleven
-  targets, four doctests and 28 CLI/configuration checks (268 combined), strict
+  evidence and portable links, with four native diagnostic groups. Seven additional
+  native font/animation groups use real held HTTP fonts and native animation
+  objects, including late CSS animation cancellation/resumption and visible
+  finish/resume errors and the 4,096/4,097-object limit boundary. Final-only
+  outer-poll diagnostics, resource/clock audits and final complete phase gates
+  are still required.
+  Latest focused increment gates passed: 194 units, 49 native integrations/twelve
+  targets, four doctests and 28 CLI/configuration checks (275 combined), strict
   Clippy, formatting, regenerated matrix and local links. Font waits now follow
-  owned style preparation across reachable same-origin documents, with held-
-  promise cancellation/restoration coverage. These are not full phase gates;
-  keep this task unchecked until the remaining acceptance criteria are verified.
+  owned style preparation across reachable same-origin documents, with real-
+  font HTTP delivery, cancellation/restoration and animation-boundary coverage.
+  These are not full phase gates; keep this task unchecked until the remaining acceptance criteria are verified.
 - [ ] **B11 — Report search, filtering and network diagnostics (M; needs B02/B03).**
   Extend the portable HTML report with test/status/project filters and per-attempt
   network summaries beside existing console output. Done when retries stay

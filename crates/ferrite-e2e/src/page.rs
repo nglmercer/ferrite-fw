@@ -763,7 +763,7 @@ pub struct ScreenshotOptions {
     pub quality: Option<u8>,
     /// Locators to cover, including document/full-page captures.
     pub mask: Vec<Locator>,
-    /// Freeze animations/transitions during the capture.
+    /// Finish finite and cancel/resume infinite animations, leaving zero playback rates unchanged.
     pub disable_animations: bool,
     /// Hide the text caret during the capture.
     pub hide_caret: bool,

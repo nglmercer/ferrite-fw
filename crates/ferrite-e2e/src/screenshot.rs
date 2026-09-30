@@ -122,7 +122,18 @@ impl CleanupWork {
                 if let Err(failed)=self.page.driver.raw("Emulation.setDefaultBackgroundColorOverride",params,CLEANUP_TIMEOUT).await { error=Some(failed); }
             }
             let key=serde_json::to_string(&self.token)?;
-            if let Err(failed)=self.page.evaluate_value(&format!("(() => {{const key={key}; const nodes=globalThis[key]; if(Array.isArray(nodes) && nodes.ferriteOwner === key){{let failed;for(const node of nodes){{try{{node.remove()}}catch(e){{failed ||= e}}}}if(!delete globalThis[key])failed ||= Error('screenshot ownership state could not be removed');if(failed)throw failed}}return true}})()")).await {
+            if let Err(failed)=self.page.evaluate_value(&format!(r#"(() => {{
+const key={key},nodes=globalThis[key];
+if(Array.isArray(nodes) && nodes.ferriteOwner === key){{
+let failed=nodes.animationErrors?.[0];
+for(const [root,listener] of nodes.animationListeners||[]){{
+try{{root.removeEventListener('animationstart',listener);root.removeEventListener('transitionrun',listener)}}catch(e){{failed ||= e}}
+}}
+for(const node of nodes){{try{{node.remove()}}catch(e){{failed ||= e}}}}
+for(const animation of nodes.cancelledAnimations||[]){{try{{animation.play()}}catch(e){{failed ||= e}}}}
+if(!delete globalThis[key])failed ||= Error('screenshot ownership state could not be removed');
+if(failed)throw failed;
+}}return true}})()"#)).await {
                 error=Some(match error {Some(first)=>first.with_context(&format!("DOM restoration also failed: {failed}")),None=>failed});
             }
             error.map_or(Ok(()),Err)
@@ -181,20 +192,38 @@ fn number(value: &Value, key: &str) -> E2eResult<f64> {
 async fn prepare(page: &Page, options: &ScreenshotOptions, token: &str) -> E2eResult<()> {
     let mut css = options.style.clone().unwrap_or_default();
     if options.disable_animations {
-        css.push_str("\n*,*::before,*::after{animation-duration:0s!important;animation-delay:0s!important;transition-duration:0s!important;scroll-behavior:auto!important}");
+        css.push_str("\n*,*::before,*::after{scroll-behavior:auto!important}");
     }
     if options.hide_caret {
         css.push_str("\n*{caret-color:transparent!important}");
     }
     let key = serde_json::to_string(token)?;
     let css = serde_json::to_string(&css)?;
+    let disable = options.disable_animations;
     page.evaluate_value(&format!(r#"(() => {{
 const key={key};if(Object.hasOwn(globalThis,key))throw Error('capture ownership collision');
-const nodes=[],seen=new Set();nodes.ferriteOwner=key;Object.defineProperty(globalThis,key,{{value:nodes,configurable:true}});
+const nodes=[],seen=new Set();nodes.ferriteOwner=key;
+nodes.cancelledAnimations=new Set();nodes.animationListeners=[];nodes.animationErrors=[];nodes.animationsSeen=new Set();
+Object.defineProperty(globalThis,key,{{value:nodes,configurable:true}});
 const visit=root=>{{if(!root||seen.has(root))return;seen.add(root);
 if({css}){{const style=document.createElement('style');style.setAttribute('data-ferrite-screenshot',{key});style.textContent={css};nodes.push(style);(root.head||root).appendChild(style)}}
+if({disable}){{
+const settle=()=>{{try{{
+for(const animation of root.getAnimations()){{
+if(nodes.cancelledAnimations.has(animation)||!animation.effect||animation.playbackRate===0)continue;
+if(!nodes.animationsSeen.has(animation)){{
+if(nodes.animationsSeen.size>=4096)throw Error('screenshot animation preparation exceeds the 4096 animation limit');
+nodes.animationsSeen.add(animation);
+}}
+if(Number.isFinite(animation.effect.getComputedTiming().endTime))animation.finish();
+else{{animation.cancel();nodes.cancelledAnimations.add(animation)}}
+}}
+}}catch(error){{if(nodes.animationErrors.length<64)nodes.animationErrors.push(error)}}}};
+nodes.animationListeners.push([root,settle]);
+root.addEventListener('animationstart',settle);root.addEventListener('transitionrun',settle);settle();
+}}
 for(const el of root.querySelectorAll('*')){{if(el.shadowRoot)visit(el.shadowRoot);if(el.tagName==='IFRAME'){{try{{visit(el.contentDocument)}}catch(_){{}}}}}}
-}};visit(document);return true;
+}};visit(document);if(nodes.animationErrors.length){{const failed=nodes.animationErrors[0];nodes.animationErrors.length=0;throw failed}}return true;
 }})()"#)).await?;
     Ok(())
 }
