@@ -475,7 +475,7 @@ pub struct E2eConfig {
     pub video_fps: u32,
     /// Slow down each action by this many milliseconds.
     pub slow_mo_ms: u64,
-    /// Snapshot update mode (`missing`, `all`, `none`).
+    /// Snapshot update mode (`missing`, `changed`, `all`, `none`).
     pub update_snapshots: String,
     /// Default viewport.
     pub viewport: Option<ViewportConfig>,

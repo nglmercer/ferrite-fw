@@ -9,8 +9,7 @@ use crate::error::{E2eError, E2eResult};
 use crate::locator::Locator;
 use crate::page::{Page, ScreenshotOptions};
 use crate::snapshot::{
-    assert_snapshot_png, compare_png, resolve_update, snap_path_for, SnapshotOptions,
-    SnapshotUpdate,
+    assert_snapshot_png, resolve_update, snap_path_for, SnapshotOptions, SnapshotUpdate,
 };
 
 /// Collect assertion failures without stopping at the first one
@@ -599,66 +598,38 @@ impl PageExpect {
             .await
     }
 
-    /// [`PageExpect::screenshot`] with explicit snapshot options.
+    /// [`PageExpect::screenshot`] with capture and snapshot options.
     ///
-    /// Missing snapshots and `update=all` are one-shot (write once, pass);
-    /// otherwise captures are compared until they match or the timeout expires.
+    /// Accepts only successive stable captures within one assertion window,
+    /// including generation under missing/all/changed. Operational errors retain
+    /// their type; failure artifacts use the last completed capture.
     pub async fn screenshot_with(&self, name: &str, opts: &SnapshotOptions) -> E2eResult<()> {
         self.page
             .auto_step(
                 "expect.screenshot_with",
                 crate::StepCategory::Assertion,
                 async {
-                    let mut effective = opts.clone();
-                    if effective.dir.is_none() {
-                        effective.dir = self.page.snapshot_dir.clone();
-                    }
-                    if effective.update.is_none() {
-                        effective.update = self.page.snapshot_update;
-                    }
-                    let opts = &effective;
-                    let path = snap_path_for(name, "png", opts);
-                    if !path.is_file() || resolve_update(opts.update) == SnapshotUpdate::All {
-                        let actual = self.page.screenshot(ScreenshotOptions::default()).await?;
-                        return assert_snapshot_png(name, &actual, opts);
-                    }
-                    let expected = std::fs::read(&path)?;
-                    let page = self.page.clone();
-                    let opts = opts.clone();
-                    let name = name.to_string();
-                    let negated = self.negated;
-                    let description = format!("screenshot {name:?}{}", not_tag(negated));
-                    let result = poll(self.timeout, description, || {
-                        let page = page.clone();
-                        let expected = expected.clone();
-                        let opts = opts.clone();
-                        async move {
-                            let actual = match page.screenshot(ScreenshotOptions::default()).await {
-                                Ok(bytes) => bytes,
-                                Err(error) => return Ok(Some(error.to_string())),
-                            };
-                            match compare_png(&actual, &expected, opts.threshold) {
-                                Ok(diff) if diff.passed(&opts) != negated => Ok(None),
-                                Ok(diff) => Ok(Some(diff.summary())),
-                                // Size mismatches count as different under negation.
-                                Err(_) if negated => Ok(None),
-                                Err(error) => Err(error),
+                    let page = self.page.with_timeout(Duration::ZERO);
+                    screenshot_assertion(
+                        &page,
+                        name,
+                        opts,
+                        self.timeout,
+                        self.negated,
+                        |options, wait_for_fonts| {
+                            let page = page.clone();
+                            async move {
+                                crate::screenshot::capture_with_font_wait(
+                                    &page,
+                                    options,
+                                    crate::screenshot::Source::Page,
+                                    wait_for_fonts,
+                                )
+                                .await
                             }
-                        }
-                    })
-                    .await;
-                    match result {
-                        Ok(()) => Ok(()),
-                        Err(poll_error) => {
-                            // Final capture for the `.actual.png` artifact + detailed message.
-                            let actual = page.screenshot(ScreenshotOptions::default()).await?;
-                            match assert_snapshot_png(&name, &actual, &opts) {
-                                Err(rich) => Err(rich),
-                                // Negated case: still matching at timeout.
-                                Ok(()) => Err(poll_error),
-                            }
-                        }
-                    }
+                        },
+                    )
+                    .await
                 },
             )
             .await
@@ -1671,74 +1642,134 @@ impl LocatorExpect {
             .await
     }
 
-    /// [`LocatorExpect::screenshot`] with explicit snapshot options.
-    ///
-    /// Missing snapshots and `update=all` are one-shot (write once, pass);
-    /// otherwise captures are compared until they match or the timeout expires.
+    /// [`LocatorExpect::screenshot`] with capture and snapshot options.
+    /// Uses successive stable element captures within one assertion window.
     pub async fn screenshot_with(&self, name: &str, opts: &SnapshotOptions) -> E2eResult<()> {
         self.locator
             .diagnostic_step(
                 format!("expect.screenshot_with {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 async {
-                    let mut effective = opts.clone();
-                    if effective.dir.is_none() {
-                        effective.dir = self.locator.page().snapshot_dir.clone();
-                    }
-                    if effective.update.is_none() {
-                        effective.update = self.locator.page().snapshot_update;
-                    }
-                    let opts = &effective;
-                    let path = snap_path_for(name, "png", opts);
-                    if !path.is_file() || resolve_update(opts.update) == SnapshotUpdate::All {
-                        let actual = self.locator.screenshot().await?;
-                        return assert_snapshot_png(name, &actual, opts);
-                    }
-                    let expected = std::fs::read(&path)?;
-                    let locator = self.locator.clone();
-                    let opts = opts.clone();
-                    let name = name.to_string();
-                    let negated = self.negated;
-                    let description = format!(
-                        "`{}` screenshot {name:?}{}",
-                        locator.selector(),
-                        not_tag(negated)
-                    );
-                    let result = poll(self.timeout, description, || {
-                        let locator = locator.clone();
-                        let expected = expected.clone();
-                        let opts = opts.clone();
-                        async move {
-                            let actual = match locator.screenshot().await {
-                                Ok(bytes) => bytes,
-                                Err(error) => return Ok(Some(error.to_string())),
-                            };
-                            match compare_png(&actual, &expected, opts.threshold) {
-                                Ok(diff) if diff.passed(&opts) != negated => Ok(None),
-                                Ok(diff) => Ok(Some(diff.summary())),
-                                // Size mismatches count as different under negation.
-                                Err(_) if negated => Ok(None),
-                                Err(error) => Err(error),
+                    let locator = self.locator.with_timeout(Duration::ZERO);
+                    let page = locator.page();
+                    screenshot_assertion(
+                        &page,
+                        name,
+                        opts,
+                        self.timeout,
+                        self.negated,
+                        |options, wait_for_fonts| {
+                            let locator = locator.clone();
+                            async move {
+                                crate::screenshot::capture_with_font_wait(
+                                    &locator.page(),
+                                    options,
+                                    crate::screenshot::Source::Element(Box::new(locator.clone())),
+                                    wait_for_fonts,
+                                )
+                                .await
                             }
-                        }
-                    })
-                    .await;
-                    match result {
-                        Ok(()) => Ok(()),
-                        Err(poll_error) => {
-                            // Final capture for the `.actual.png` artifact + detailed message.
-                            let actual = locator.screenshot().await?;
-                            match assert_snapshot_png(&name, &actual, &opts) {
-                                Err(rich) => Err(rich),
-                                // Negated case: still matching at timeout.
-                                Ok(()) => Err(poll_error),
-                            }
-                        }
-                    }
+                        },
+                    )
+                    .await
                 },
             )
             .await
     }
+}
+
+async fn screenshot_assertion<F, Fut>(
+    page: &Page,
+    name: &str,
+    options: &SnapshotOptions,
+    timeout: Duration,
+    negated: bool,
+    mut capture: F,
+) -> E2eResult<()>
+where
+    F: FnMut(ScreenshotOptions, bool) -> Fut,
+    Fut: Future<Output = E2eResult<Vec<u8>>>,
+{
+    page.run_operation(async {
+        let deadline = crate::operation::Deadline::new(timeout);
+        let mut options = options.clone();
+        options.validate()?;
+        if options.dir.is_none() {
+            options.dir = page.snapshot_dir.clone();
+        }
+        if options.update.is_none() {
+            options.update = page.snapshot_update;
+        }
+        let path = snap_path_for(name, "png", &options);
+        let expected = match std::fs::read(&path) {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error.into()),
+        };
+        let mode = resolve_update(options.update);
+        if expected.is_none() && (negated || mode == SnapshotUpdate::None) {
+            return Err(E2eError::Expect(format!(
+                "no snapshot {name:?}{}",
+                if negated {
+                    "; negated assertions never write baselines"
+                } else {
+                    " (update=none)"
+                }
+            )));
+        }
+        let target = if !negated && matches!(mode, SnapshotUpdate::All | SnapshotUpdate::Changed) {
+            None
+        } else {
+            expected.as_deref()
+        };
+        let capture_options = options.capture_options();
+        let description = format!("screenshot {name:?}{}", not_tag(negated));
+        let comparison = crate::snapshot_capture::compare_with_deadline(
+            deadline,
+            &description,
+            target,
+            &options,
+            negated,
+            || capture(capture_options.clone(), options.wait_for_fonts),
+        )
+        .await;
+        match comparison.result {
+            Ok(()) if negated => Ok(()),
+            Ok(()) => assert_snapshot_png(
+                name,
+                comparison
+                    .actual
+                    .as_deref()
+                    .expect("successful comparison has a capture"),
+                &options,
+            ),
+            Err(error) => {
+                // Preserve typed control errors. Never take another capture after
+                // exhaustion just to write an artifact, or update an unstable baseline.
+                if error.code() == "FERRITE_E2E_EXPECT" {
+                    if let Some(actual) = comparison.actual {
+                        let actual_path = path.with_extension("actual.png");
+                        let write = (|| -> std::io::Result<()> {
+                            if let Some(parent) = actual_path.parent() {
+                                std::fs::create_dir_all(parent)?;
+                            }
+                            std::fs::write(&actual_path, actual)
+                        })();
+                        if let Err(write_error) = write {
+                            return Err(error.with_context(&format!(
+                                "writing screenshot failure artifact also failed: {write_error}"
+                            )));
+                        }
+                        return Err(
+                            error.with_context(&format!("actual: {}", actual_path.display()))
+                        );
+                    }
+                }
+                Err(error)
+            }
+        }
+    })
+    .await
 }
 
 impl Page {

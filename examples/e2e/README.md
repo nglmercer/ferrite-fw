@@ -1020,3 +1020,52 @@ now explicitly select the viewport; full_page selects the document. Previously
 Chromium captureBeyondViewport without a region could include the document.
 See the [native pinned observations](../../scripts/e2e-conformance/README.md)
 for CSS-scale, background restoration and validation differences.
+
+### Stable screenshot assertions (B10 in progress)
+
+```rust
+use ferrite_e2e::{ScreenshotOptions, SnapshotOptions, SnapshotUpdate};
+
+let options = SnapshotOptions {
+    update: Some(SnapshotUpdate::Changed),
+    capture: Some(ScreenshotOptions {
+        style: Some(".timestamp { visibility: hidden !important }".into()),
+        disable_animations: true,
+        hide_caret: true,
+        scale: ferrite_e2e::ScreenshotScale::Css,
+        ..Default::default()
+    }),
+    ..Default::default()
+};
+page.locator(".card").expect().screenshot_with("card", &options).await?;
+```
+
+Page and locator assertions require two successive captures that agree within
+SnapshotOptions tolerances. Existing baselines may become correct later within
+the same assertion window. Generation under `missing`, `all` and `changed` also
+requires stability. A changing page cannot replace a baseline after expiry.
+`changed` creates missing baselines and replaces only values outside tolerance;
+matching files remain untouched. This mode also works for text snapshot helpers
+and runner/CLI configuration. `missing` retains Ferrite's existing write-and-pass
+policy; Playwright writes the baseline and fails the test. Negated screenshot
+assertions require an existing valid baseline and never generate or update one.
+
+With `capture: None`, assertions use CSS scale, hidden carets and B09 animation
+suppression; a supplied ScreenshotOptions replaces those capture defaults.
+`wait_for_fonts` defaults to true and awaits reachable same-origin documents'
+`document.fonts.ready` after temporary style preparation, within the same
+assertion window. Owned restoration covers the font wait. JPEG is unavailable for
+PNG snapshot assertions. A caller-supplied capture timeout may shorten a capture;
+the page's action timeout does not create fresh assertion windows. Zero assertion
+timeout removes the local limit while caller/owner cancellation and enclosing
+test budgets continue to apply. Operational timeout/configuration/cancellation/
+disconnection errors retain their type. Assertion expiry uses the last completed
+image for `.actual.png`; it does not open another capture window.
+
+Pixel comparison still uses per-channel tolerance and both diff count/ratio
+limits, rather than Playwright's perceived-color comparator. PNGs above 64 million
+pixels, malformed bytes and nonfinite/out-of-range ratios fail explicitly.
+SnapshotOptions gained `capture` and `wait_for_fonts`: migrate exhaustive struct
+literals with these fields or `..Default::default()`. This is an input-only type.
+Path templates and expected/actual/diff report attachments remain B10 work; the
+whole task is still unchecked.

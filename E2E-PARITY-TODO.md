@@ -34,7 +34,7 @@ from its native raster. Captures preserve caller viewport/emulation settings.
 CSS animation suppression remains narrower than Playwright fast-forwarding;
 styles cover reachable same-origin documents and open shadow roots.
 
-Current verification inventory: **405 E2E and 28 CLI/configuration checks**,
+Latest completed-task checkpoint inventory: **405 E2E and 28 CLI/configuration checks**,
 433 combined: 180 units, 221 integrations across all 34 targets and four doctests.
 Broad batches covered the initial 404 E2E inventory; after adding the trace-step
 regression and fixing private trace capture, all 16 related capture/report/step
@@ -60,19 +60,25 @@ Idiomatic41. Capture mappings now describe these options and engine differences;
 they do not imply full compatibility. Matrix generation, 735 local evidence
 links and 652 source anchors passed before the B09 implementation commit.
 
-**Current handoff:** start B10 in `snapshot.rs`, `expect.rs` and the resolved
-configuration/path plumbing from B14. Existing screenshot assertions write
-missing/all baselines after one capture, broadly convert capture errors into
-mismatches and take another capture after the polling budget. Replace these
-paths with successive stable captures and baseline comparison within one shared
-local/enclosing window, preserving typed control errors and the last captured
-bytes for failure artifacts. Use B09 capture options without duplicating its
-restoration machinery. Define browser/project/platform path templates and update
-modes with explicit precedence over immutable run/project settings. Diagnose
-font readiness, animations, never-stable content, dimension differences and
-baseline changes; attach expected/actual/diff artifacts with portable report
-links. Compare pinned behavior before choosing defaults and validation. Preserve
-legacy public entry points and document any input-struct migration.
+**Current handoff:** B10 is in progress. The working draft in `snapshot.rs`,
+`snapshot_capture.rs` and `expect.rs` implements successive captures, bounded font
+readiness waits, typed control failures, retained last-image artifacts and
+`Changed` update mode. Page/locator capture defaults use B09 Css scale, animation
+suppression and hidden carets; no unstable baseline is written on expiry.
+The 56-case actual pinned runner reference records missing/update/negation and
+never-stable behavior differences. Three required two-engine native groups and
+virtual-time tests cover the draft; these are focused evidence, not final phase
+gates. The font wait test currently uses a held readiness promise.
+
+Continue B10 with browser/project/platform path templates and explicit precedence
+over B14 immutable run/project settings, including useful TestInfo path access.
+Attach expected/actual/diff artifacts through existing report/bundle plumbing;
+retain prior/last images for never-stable and dimension diagnostics. Add an actual
+delayed downloadable-font fixture, animation cases, report/soft/retry/cancellation
+coverage, and audit CPU/decode/filesystem bounds under the shared assertion clock.
+Run final complete phase gates, update matrix/capability evidence and commit only
+verified work before checking B10. Preserve entry points and document input-struct
+migration. B18/B11 follow after B10 is complete.
 
 Preserve D02's strict typed generic probe errors, immediate/final-repeat cadence,
 5-second defaults, shared local/enclosing clocks, contextual last mismatches,
@@ -830,6 +836,18 @@ their dependencies are ready. References include
   project/platform path templates and clearly defined update modes. Done when
   delayed fonts/animations, never-stable content, dimension differences and
   baseline changes are bounded and diagnosed; attach expected/actual/diff artifacts.
+  Draft progress: successive stable capture and typed deadline/error handling,
+  font readiness, `Changed` mode, PNG/ratio validation and last-image failures are
+  implemented in the working tree. The 56-case actual pinned reference verifies
+  mode/negation/stability differences; three required two-engine groups and
+  virtual-time checks cover the draft. Path templates, report diff attachments,
+  real font/animation cases and final complete phase gates are still required.
+  Final focused increment gates passed: 187 units, 27 native integrations/seven
+  targets, four doctests and 28 CLI/configuration checks (246 combined), strict
+  Clippy, formatting, regenerated matrix and local links. Font waits now follow
+  owned style preparation across reachable same-origin documents, with held-
+  promise cancellation/restoration coverage. These are not full phase gates;
+  keep this task unchecked until the remaining acceptance criteria are verified.
 - [ ] **B11 — Report search, filtering and network diagnostics (M; needs B02/B03).**
   Extend the portable HTML report with test/status/project filters and per-attempt
   network summaries beside existing console output. Done when retries stay

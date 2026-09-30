@@ -74,6 +74,7 @@ mod routing;
 mod runner;
 mod screenshot;
 mod snapshot;
+mod snapshot_capture;
 mod url_matcher;
 mod url_wait;
 mod video;

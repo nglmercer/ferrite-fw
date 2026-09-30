@@ -1,0 +1,1245 @@
+{
+  "playwright": "1.63.0",
+  "engines": [
+    {
+      "name": "chromium",
+      "cases": [
+        {
+          "name": "missing",
+          "mode": "missing",
+          "outcome": "passed",
+          "durationMs": 192,
+          "baselineExists": true,
+          "baselineChanged": false,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [
+            {
+              "name": "missing-expected.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "missing-actual.png",
+              "contentType": "image/png",
+              "exists": true
+            }
+          ],
+          "statuses": [
+            "failed"
+          ]
+        },
+        {
+          "name": "mismatch",
+          "mode": "missing",
+          "outcome": "caught",
+          "error": "expect(page).toHaveScreenshot(expected) failed\n  4800 pixels (ratio 1.00 of all image pixels) are different.\n  Snapshot: mismatch.png\nCall log:\n  - Expect \"toHaveScreenshot(mismatch.png)\" with timeout 1000ms",
+          "durationMs": 181,
+          "baselineExists": true,
+          "baselineChanged": false,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [
+            {
+              "name": "mismatch-expected.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "mismatch-actual.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "mismatch-diff.png",
+              "contentType": "image/png",
+              "exists": true
+            }
+          ],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "unchanged",
+          "mode": "missing",
+          "outcome": "passed",
+          "durationMs": 21,
+          "baselineExists": true,
+          "baselineChanged": false,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "negated-missing",
+          "mode": "missing",
+          "outcome": "caught",
+          "error": "A snapshot doesn't exist at /home/meme/.cache/ferrite-playwright-audit/ferrite-snapshot-reference-SsmuBY/chromium-missing/baselines/negated-missing.png, matchers using \".not\" won't write them automatically.",
+          "durationMs": 2,
+          "baselineExists": false,
+          "baselineChanged": false,
+          "dimensions": null,
+          "attachments": [],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "dimension-mismatch",
+          "mode": "missing",
+          "outcome": "caught",
+          "error": "expect(page).toHaveScreenshot(expected) failed\n  Expected an image 40px by 40px, received 80px by 60px. 3200 pixels (ratio 0.67 of all image pixels) are different.\n  Snapshot: dimension-mismatch.png\nCall log:\n  - Expect \"toHaveScreenshot(dimension-mismatch.png)\" with timeout 1000ms",
+          "durationMs": 173,
+          "baselineExists": true,
+          "baselineChanged": false,
+          "dimensions": [
+            40,
+            40
+          ],
+          "attachments": [
+            {
+              "name": "dimension-mismatch-expected.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "dimension-mismatch-actual.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "dimension-mismatch-diff.png",
+              "contentType": "image/png",
+              "exists": true
+            }
+          ],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "never-stable",
+          "mode": "missing",
+          "outcome": "caught",
+          "error": "expect(page).toHaveScreenshot(expected) failed\nTimeout: 1000ms\n  Failed to take two consecutive stable screenshots.\n  Snapshot: never-stable.png\nCall log:",
+          "durationMs": 1013,
+          "baselineExists": true,
+          "baselineChanged": false,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [
+            {
+              "name": "never-stable-expected.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "never-stable-previous.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "never-stable-actual.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "never-stable-diff.png",
+              "contentType": "image/png",
+              "exists": true
+            }
+          ],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "never-stable-missing",
+          "mode": "missing",
+          "outcome": "caught",
+          "error": "expect(page).toHaveScreenshot(expected) failed\nTimeout: 1000ms\n  Timeout 1000ms exceeded.\n  Snapshot: never-stable-missing.png\nCall log:",
+          "durationMs": 1339,
+          "baselineExists": false,
+          "baselineChanged": false,
+          "dimensions": null,
+          "attachments": [],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "missing",
+          "mode": "none",
+          "outcome": "caught",
+          "error": "A snapshot doesn't exist at /home/meme/.cache/ferrite-playwright-audit/ferrite-snapshot-reference-SsmuBY/chromium-none/baselines/missing.png.",
+          "durationMs": 7,
+          "baselineExists": false,
+          "baselineChanged": false,
+          "dimensions": null,
+          "attachments": [],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "mismatch",
+          "mode": "none",
+          "outcome": "caught",
+          "error": "expect(page).toHaveScreenshot(expected) failed\n  4800 pixels (ratio 1.00 of all image pixels) are different.\n  Snapshot: mismatch.png\nCall log:\n  - Expect \"toHaveScreenshot(mismatch.png)\" with timeout 1000ms",
+          "durationMs": 180,
+          "baselineExists": true,
+          "baselineChanged": false,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [
+            {
+              "name": "mismatch-expected.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "mismatch-actual.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "mismatch-diff.png",
+              "contentType": "image/png",
+              "exists": true
+            }
+          ],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "unchanged",
+          "mode": "none",
+          "outcome": "passed",
+          "durationMs": 19,
+          "baselineExists": true,
+          "baselineChanged": false,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "negated-missing",
+          "mode": "none",
+          "outcome": "caught",
+          "error": "A snapshot doesn't exist at /home/meme/.cache/ferrite-playwright-audit/ferrite-snapshot-reference-SsmuBY/chromium-none/baselines/negated-missing.png.",
+          "durationMs": 2,
+          "baselineExists": false,
+          "baselineChanged": false,
+          "dimensions": null,
+          "attachments": [],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "dimension-mismatch",
+          "mode": "none",
+          "outcome": "caught",
+          "error": "expect(page).toHaveScreenshot(expected) failed\n  Expected an image 40px by 40px, received 80px by 60px. 3200 pixels (ratio 0.67 of all image pixels) are different.\n  Snapshot: dimension-mismatch.png\nCall log:\n  - Expect \"toHaveScreenshot(dimension-mismatch.png)\" with timeout 1000ms",
+          "durationMs": 156,
+          "baselineExists": true,
+          "baselineChanged": false,
+          "dimensions": [
+            40,
+            40
+          ],
+          "attachments": [
+            {
+              "name": "dimension-mismatch-expected.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "dimension-mismatch-actual.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "dimension-mismatch-diff.png",
+              "contentType": "image/png",
+              "exists": true
+            }
+          ],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "never-stable",
+          "mode": "none",
+          "outcome": "caught",
+          "error": "expect(page).toHaveScreenshot(expected) failed\nTimeout: 1000ms\n  Failed to take two consecutive stable screenshots.\n  Snapshot: never-stable.png\nCall log:",
+          "durationMs": 1011,
+          "baselineExists": true,
+          "baselineChanged": false,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [
+            {
+              "name": "never-stable-expected.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "never-stable-previous.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "never-stable-actual.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "never-stable-diff.png",
+              "contentType": "image/png",
+              "exists": true
+            }
+          ],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "never-stable-missing",
+          "mode": "none",
+          "outcome": "caught",
+          "error": "A snapshot doesn't exist at /home/meme/.cache/ferrite-playwright-audit/ferrite-snapshot-reference-SsmuBY/chromium-none/baselines/never-stable-missing.png.",
+          "durationMs": 5,
+          "baselineExists": false,
+          "baselineChanged": false,
+          "dimensions": null,
+          "attachments": [],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "missing",
+          "mode": "changed",
+          "outcome": "passed",
+          "durationMs": 191,
+          "baselineExists": true,
+          "baselineChanged": false,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [
+            {
+              "name": "missing-expected.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "missing-actual.png",
+              "contentType": "image/png",
+              "exists": true
+            }
+          ],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "mismatch",
+          "mode": "changed",
+          "outcome": "passed",
+          "durationMs": 158,
+          "baselineExists": true,
+          "baselineChanged": true,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "unchanged",
+          "mode": "changed",
+          "outcome": "passed",
+          "durationMs": 17,
+          "baselineExists": true,
+          "baselineChanged": false,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "negated-missing",
+          "mode": "changed",
+          "outcome": "caught",
+          "error": "A snapshot doesn't exist at /home/meme/.cache/ferrite-playwright-audit/ferrite-snapshot-reference-SsmuBY/chromium-changed/baselines/negated-missing.png, matchers using \".not\" won't write them automatically.",
+          "durationMs": 2,
+          "baselineExists": false,
+          "baselineChanged": false,
+          "dimensions": null,
+          "attachments": [],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "dimension-mismatch",
+          "mode": "changed",
+          "outcome": "passed",
+          "durationMs": 157,
+          "baselineExists": true,
+          "baselineChanged": true,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "never-stable",
+          "mode": "changed",
+          "outcome": "passed",
+          "durationMs": 1012,
+          "baselineExists": true,
+          "baselineChanged": true,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "never-stable-missing",
+          "mode": "changed",
+          "outcome": "caught",
+          "error": "expect(page).toHaveScreenshot(expected) failed\nTimeout: 1000ms\n  Failed to take two consecutive stable screenshots.\n  Snapshot: never-stable-missing.png\nCall log:",
+          "durationMs": 1010,
+          "baselineExists": false,
+          "baselineChanged": false,
+          "dimensions": null,
+          "attachments": [
+            {
+              "name": "never-stable-missing-previous.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "never-stable-missing-actual.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "never-stable-missing-diff.png",
+              "contentType": "image/png",
+              "exists": true
+            }
+          ],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "missing",
+          "mode": "all",
+          "outcome": "passed",
+          "durationMs": 161,
+          "baselineExists": true,
+          "baselineChanged": false,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [
+            {
+              "name": "missing-expected.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "missing-actual.png",
+              "contentType": "image/png",
+              "exists": true
+            }
+          ],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "mismatch",
+          "mode": "all",
+          "outcome": "passed",
+          "durationMs": 155,
+          "baselineExists": true,
+          "baselineChanged": true,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "unchanged",
+          "mode": "all",
+          "outcome": "passed",
+          "durationMs": 167,
+          "baselineExists": true,
+          "baselineChanged": false,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "negated-missing",
+          "mode": "all",
+          "outcome": "caught",
+          "error": "A snapshot doesn't exist at /home/meme/.cache/ferrite-playwright-audit/ferrite-snapshot-reference-SsmuBY/chromium-all/baselines/negated-missing.png, matchers using \".not\" won't write them automatically.",
+          "durationMs": 2,
+          "baselineExists": false,
+          "baselineChanged": false,
+          "dimensions": null,
+          "attachments": [],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "dimension-mismatch",
+          "mode": "all",
+          "outcome": "passed",
+          "durationMs": 136,
+          "baselineExists": true,
+          "baselineChanged": true,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "never-stable",
+          "mode": "all",
+          "outcome": "passed",
+          "durationMs": 1014,
+          "baselineExists": true,
+          "baselineChanged": true,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "never-stable-missing",
+          "mode": "all",
+          "outcome": "caught",
+          "error": "expect(page).toHaveScreenshot(expected) failed\nTimeout: 1000ms\n  Failed to take two consecutive stable screenshots.\n  Snapshot: never-stable-missing.png\nCall log:",
+          "durationMs": 1011,
+          "baselineExists": false,
+          "baselineChanged": false,
+          "dimensions": null,
+          "attachments": [
+            {
+              "name": "never-stable-missing-previous.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "never-stable-missing-actual.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "never-stable-missing-diff.png",
+              "contentType": "image/png",
+              "exists": true
+            }
+          ],
+          "statuses": [
+            "passed"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "firefox",
+      "cases": [
+        {
+          "name": "missing",
+          "mode": "missing",
+          "outcome": "passed",
+          "durationMs": 146,
+          "baselineExists": true,
+          "baselineChanged": false,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [
+            {
+              "name": "missing-expected.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "missing-actual.png",
+              "contentType": "image/png",
+              "exists": true
+            }
+          ],
+          "statuses": [
+            "failed"
+          ]
+        },
+        {
+          "name": "mismatch",
+          "mode": "missing",
+          "outcome": "caught",
+          "error": "expect(page).toHaveScreenshot(expected) failed\n  4800 pixels (ratio 1.00 of all image pixels) are different.\n  Snapshot: mismatch.png\nCall log:\n  - Expect \"toHaveScreenshot(mismatch.png)\" with timeout 1000ms",
+          "durationMs": 162,
+          "baselineExists": true,
+          "baselineChanged": false,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [
+            {
+              "name": "mismatch-expected.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "mismatch-actual.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "mismatch-diff.png",
+              "contentType": "image/png",
+              "exists": true
+            }
+          ],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "unchanged",
+          "mode": "missing",
+          "outcome": "passed",
+          "durationMs": 192,
+          "baselineExists": true,
+          "baselineChanged": false,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "negated-missing",
+          "mode": "missing",
+          "outcome": "caught",
+          "error": "A snapshot doesn't exist at /home/meme/.cache/ferrite-playwright-audit/ferrite-snapshot-reference-SsmuBY/firefox-missing/baselines/negated-missing.png, matchers using \".not\" won't write them automatically.",
+          "durationMs": 1,
+          "baselineExists": false,
+          "baselineChanged": false,
+          "dimensions": null,
+          "attachments": [],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "dimension-mismatch",
+          "mode": "missing",
+          "outcome": "caught",
+          "error": "expect(page).toHaveScreenshot(expected) failed\n  Expected an image 40px by 40px, received 80px by 60px. 3200 pixels (ratio 0.67 of all image pixels) are different.\n  Snapshot: dimension-mismatch.png\nCall log:\n  - Expect \"toHaveScreenshot(dimension-mismatch.png)\" with timeout 1000ms",
+          "durationMs": 136,
+          "baselineExists": true,
+          "baselineChanged": false,
+          "dimensions": [
+            40,
+            40
+          ],
+          "attachments": [
+            {
+              "name": "dimension-mismatch-expected.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "dimension-mismatch-actual.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "dimension-mismatch-diff.png",
+              "contentType": "image/png",
+              "exists": true
+            }
+          ],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "never-stable",
+          "mode": "missing",
+          "outcome": "caught",
+          "error": "expect(page).toHaveScreenshot(expected) failed\nTimeout: 1000ms\n  Failed to take two consecutive stable screenshots.\n  Snapshot: never-stable.png\nCall log:",
+          "durationMs": 1013,
+          "baselineExists": true,
+          "baselineChanged": false,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [
+            {
+              "name": "never-stable-expected.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "never-stable-previous.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "never-stable-actual.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "never-stable-diff.png",
+              "contentType": "image/png",
+              "exists": true
+            }
+          ],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "never-stable-missing",
+          "mode": "missing",
+          "outcome": "caught",
+          "error": "expect(page).toHaveScreenshot(expected) failed\nTimeout: 1000ms\n  Failed to take two consecutive stable screenshots.\n  Snapshot: never-stable-missing.png\nCall log:",
+          "durationMs": 1015,
+          "baselineExists": false,
+          "baselineChanged": false,
+          "dimensions": null,
+          "attachments": [
+            {
+              "name": "never-stable-missing-previous.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "never-stable-missing-actual.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "never-stable-missing-diff.png",
+              "contentType": "image/png",
+              "exists": true
+            }
+          ],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "missing",
+          "mode": "none",
+          "outcome": "caught",
+          "error": "A snapshot doesn't exist at /home/meme/.cache/ferrite-playwright-audit/ferrite-snapshot-reference-SsmuBY/firefox-none/baselines/missing.png.",
+          "durationMs": 5,
+          "baselineExists": false,
+          "baselineChanged": false,
+          "dimensions": null,
+          "attachments": [],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "mismatch",
+          "mode": "none",
+          "outcome": "caught",
+          "error": "expect(page).toHaveScreenshot(expected) failed\n  4800 pixels (ratio 1.00 of all image pixels) are different.\n  Snapshot: mismatch.png\nCall log:\n  - Expect \"toHaveScreenshot(mismatch.png)\" with timeout 1000ms",
+          "durationMs": 285,
+          "baselineExists": true,
+          "baselineChanged": false,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [
+            {
+              "name": "mismatch-expected.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "mismatch-actual.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "mismatch-diff.png",
+              "contentType": "image/png",
+              "exists": true
+            }
+          ],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "unchanged",
+          "mode": "none",
+          "outcome": "passed",
+          "durationMs": 39,
+          "baselineExists": true,
+          "baselineChanged": false,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "negated-missing",
+          "mode": "none",
+          "outcome": "caught",
+          "error": "A snapshot doesn't exist at /home/meme/.cache/ferrite-playwright-audit/ferrite-snapshot-reference-SsmuBY/firefox-none/baselines/negated-missing.png.",
+          "durationMs": 1,
+          "baselineExists": false,
+          "baselineChanged": false,
+          "dimensions": null,
+          "attachments": [],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "dimension-mismatch",
+          "mode": "none",
+          "outcome": "caught",
+          "error": "expect(page).toHaveScreenshot(expected) failed\n  Expected an image 40px by 40px, received 80px by 60px. 3200 pixels (ratio 0.67 of all image pixels) are different.\n  Snapshot: dimension-mismatch.png\nCall log:\n  - Expect \"toHaveScreenshot(dimension-mismatch.png)\" with timeout 1000ms",
+          "durationMs": 131,
+          "baselineExists": true,
+          "baselineChanged": false,
+          "dimensions": [
+            40,
+            40
+          ],
+          "attachments": [
+            {
+              "name": "dimension-mismatch-expected.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "dimension-mismatch-actual.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "dimension-mismatch-diff.png",
+              "contentType": "image/png",
+              "exists": true
+            }
+          ],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "never-stable",
+          "mode": "none",
+          "outcome": "caught",
+          "error": "expect(page).toHaveScreenshot(expected) failed\nTimeout: 1000ms\n  Failed to take two consecutive stable screenshots.\n  Snapshot: never-stable.png\nCall log:",
+          "durationMs": 1011,
+          "baselineExists": true,
+          "baselineChanged": false,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [
+            {
+              "name": "never-stable-expected.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "never-stable-previous.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "never-stable-actual.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "never-stable-diff.png",
+              "contentType": "image/png",
+              "exists": true
+            }
+          ],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "never-stable-missing",
+          "mode": "none",
+          "outcome": "caught",
+          "error": "A snapshot doesn't exist at /home/meme/.cache/ferrite-playwright-audit/ferrite-snapshot-reference-SsmuBY/firefox-none/baselines/never-stable-missing.png.",
+          "durationMs": 7,
+          "baselineExists": false,
+          "baselineChanged": false,
+          "dimensions": null,
+          "attachments": [],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "missing",
+          "mode": "changed",
+          "outcome": "passed",
+          "durationMs": 146,
+          "baselineExists": true,
+          "baselineChanged": false,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [
+            {
+              "name": "missing-expected.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "missing-actual.png",
+              "contentType": "image/png",
+              "exists": true
+            }
+          ],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "mismatch",
+          "mode": "changed",
+          "outcome": "passed",
+          "durationMs": 279,
+          "baselineExists": true,
+          "baselineChanged": true,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "unchanged",
+          "mode": "changed",
+          "outcome": "passed",
+          "durationMs": 114,
+          "baselineExists": true,
+          "baselineChanged": false,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "negated-missing",
+          "mode": "changed",
+          "outcome": "caught",
+          "error": "A snapshot doesn't exist at /home/meme/.cache/ferrite-playwright-audit/ferrite-snapshot-reference-SsmuBY/firefox-changed/baselines/negated-missing.png, matchers using \".not\" won't write them automatically.",
+          "durationMs": 2,
+          "baselineExists": false,
+          "baselineChanged": false,
+          "dimensions": null,
+          "attachments": [],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "dimension-mismatch",
+          "mode": "changed",
+          "outcome": "passed",
+          "durationMs": 133,
+          "baselineExists": true,
+          "baselineChanged": true,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "never-stable",
+          "mode": "changed",
+          "outcome": "passed",
+          "durationMs": 1013,
+          "baselineExists": true,
+          "baselineChanged": true,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "never-stable-missing",
+          "mode": "changed",
+          "outcome": "caught",
+          "error": "expect(page).toHaveScreenshot(expected) failed\nTimeout: 1000ms\n  Failed to take two consecutive stable screenshots.\n  Snapshot: never-stable-missing.png\nCall log:",
+          "durationMs": 1007,
+          "baselineExists": false,
+          "baselineChanged": false,
+          "dimensions": null,
+          "attachments": [
+            {
+              "name": "never-stable-missing-previous.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "never-stable-missing-actual.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "never-stable-missing-diff.png",
+              "contentType": "image/png",
+              "exists": true
+            }
+          ],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "missing",
+          "mode": "all",
+          "outcome": "passed",
+          "durationMs": 160,
+          "baselineExists": true,
+          "baselineChanged": false,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [
+            {
+              "name": "missing-expected.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "missing-actual.png",
+              "contentType": "image/png",
+              "exists": true
+            }
+          ],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "mismatch",
+          "mode": "all",
+          "outcome": "passed",
+          "durationMs": 254,
+          "baselineExists": true,
+          "baselineChanged": true,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "unchanged",
+          "mode": "all",
+          "outcome": "passed",
+          "durationMs": 169,
+          "baselineExists": true,
+          "baselineChanged": false,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "negated-missing",
+          "mode": "all",
+          "outcome": "caught",
+          "error": "A snapshot doesn't exist at /home/meme/.cache/ferrite-playwright-audit/ferrite-snapshot-reference-SsmuBY/firefox-all/baselines/negated-missing.png, matchers using \".not\" won't write them automatically.",
+          "durationMs": 2,
+          "baselineExists": false,
+          "baselineChanged": false,
+          "dimensions": null,
+          "attachments": [],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "dimension-mismatch",
+          "mode": "all",
+          "outcome": "passed",
+          "durationMs": 123,
+          "baselineExists": true,
+          "baselineChanged": true,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "never-stable",
+          "mode": "all",
+          "outcome": "passed",
+          "durationMs": 1010,
+          "baselineExists": true,
+          "baselineChanged": true,
+          "dimensions": [
+            80,
+            60
+          ],
+          "attachments": [],
+          "statuses": [
+            "passed"
+          ]
+        },
+        {
+          "name": "never-stable-missing",
+          "mode": "all",
+          "outcome": "caught",
+          "error": "expect(page).toHaveScreenshot(expected) failed\nTimeout: 1000ms\n  Failed to take two consecutive stable screenshots.\n  Snapshot: never-stable-missing.png\nCall log:",
+          "durationMs": 1007,
+          "baselineExists": false,
+          "baselineChanged": false,
+          "dimensions": null,
+          "attachments": [
+            {
+              "name": "never-stable-missing-previous.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "never-stable-missing-actual.png",
+              "contentType": "image/png",
+              "exists": true
+            },
+            {
+              "name": "never-stable-missing-diff.png",
+              "contentType": "image/png",
+              "exists": true
+            }
+          ],
+          "statuses": [
+            "passed"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -6,7 +6,7 @@
 //! resolved runner/project seed. Standalone pages use `FERRITE_SNAPSHOT_DIR`
 //! followed by `test-results/snapshots`. Update behavior resolves as explicit
 //! [`SnapshotOptions::update`], then the runner's captured mode. Standalone pages
-//! use `FERRITE_UPDATE_SNAPSHOTS` (`missing`/`all`/`none`), then
+//! use `FERRITE_UPDATE_SNAPSHOTS` (`missing`/`changed`/`all`/`none`), then
 //! [`SnapshotUpdate::Missing`]. Runner inputs are fixed at run startup; they do
 //! not mutate the process environment. Explicit assertion options take precedence.
 
@@ -26,19 +26,22 @@ pub enum SnapshotUpdate {
     Missing,
     /// Always overwrite with the actual value.
     All,
+    /// Create missing snapshots and replace only snapshots outside the tolerance.
+    Changed,
     /// Never write; missing snapshots fail.
     None,
 }
 
 impl SnapshotUpdate {
-    /// Parse `missing` / `all` / `none` (case-insensitive).
+    /// Parse `missing` / `changed` / `all` / `none` (case-insensitive).
     pub fn parse(name: &str) -> E2eResult<Self> {
         match name.trim().to_ascii_lowercase().as_str() {
             "missing" => Ok(Self::Missing),
             "all" => Ok(Self::All),
+            "changed" => Ok(Self::Changed),
             "none" => Ok(Self::None),
             other => Err(E2eError::Config(format!(
-                "unknown snapshot update mode {other:?}: expected \"missing\", \"all\" or \"none\""
+                "unknown snapshot update mode {other:?}: expected \"missing\", \"changed\", \"all\" or \"none\""
             ))),
         }
     }
@@ -52,7 +55,7 @@ impl SnapshotUpdate {
                 Err(_) => {
                     eprintln!(
                         "warning: ignoring invalid FERRITE_UPDATE_SNAPSHOTS={raw:?} \
-                         (want \"missing\", \"all\" or \"none\")"
+                         (want \"missing\", \"changed\", \"all\" or \"none\")"
                     );
                     Self::Missing
                 }
@@ -63,7 +66,7 @@ impl SnapshotUpdate {
 }
 
 /// Options for snapshot assertions.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SnapshotOptions {
     /// Maximum differing pixels that still pass.
     pub max_diff_pixels: u32,
@@ -75,6 +78,61 @@ pub struct SnapshotOptions {
     pub dir: Option<PathBuf>,
     /// Update behavior (defaults per module docs).
     pub update: Option<SnapshotUpdate>,
+    /// Capture options for page/locator assertions. None uses CSS scale, hidden
+    /// carets and animation suppression. JPEG is not a snapshot format.
+    pub capture: Option<crate::ScreenshotOptions>,
+    /// Wait for reachable same-origin documents' fonts after capture style preparation.
+    pub wait_for_fonts: bool,
+}
+
+impl Default for SnapshotOptions {
+    fn default() -> Self {
+        Self {
+            max_diff_pixels: 0,
+            max_diff_ratio: 0.0,
+            threshold: 0,
+            dir: None,
+            update: None,
+            capture: None,
+            wait_for_fonts: true,
+        }
+    }
+}
+
+impl SnapshotOptions {
+    pub(crate) fn validate(&self) -> E2eResult<()> {
+        if !self.max_diff_ratio.is_finite() || !(0.0..=1.0).contains(&self.max_diff_ratio) {
+            return Err(E2eError::Config(
+                "snapshot max_diff_ratio must be finite and between zero and one".into(),
+            ));
+        }
+        if self
+            .capture
+            .as_ref()
+            .is_some_and(|capture| capture.quality.is_some())
+        {
+            return Err(E2eError::Config(
+                "screenshot snapshots require PNG; JPEG quality is unavailable".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn capture_options(&self) -> crate::ScreenshotOptions {
+        let mut capture = self
+            .capture
+            .clone()
+            .unwrap_or_else(|| crate::ScreenshotOptions {
+                scale: crate::ScreenshotScale::Css,
+                disable_animations: true,
+                hide_caret: true,
+                ..Default::default()
+            });
+        // The assertion owns the shared window. An explicit per-capture cap may
+        // shorten it, but the page's unrelated action timeout must not renew it.
+        capture.timeout.get_or_insert(std::time::Duration::ZERO);
+        capture
+    }
 }
 
 /// Pixel comparison result.
@@ -131,10 +189,8 @@ impl SnapshotDiff {
 /// A pixel differs when any RGBA channel differs by more than `threshold`.
 /// Dimension mismatches fail loudly (exact sizes required).
 pub fn compare_png(actual: &[u8], expected: &[u8], threshold: u8) -> E2eResult<SnapshotDiff> {
-    let actual_img = image::load_from_memory_with_format(actual, image::ImageFormat::Png)
-        .map_err(|error| E2eError::Config(format!("cannot decode actual PNG: {error}")))?;
-    let expected_img = image::load_from_memory_with_format(expected, image::ImageFormat::Png)
-        .map_err(|error| E2eError::Config(format!("cannot decode snapshot PNG: {error}")))?;
+    let actual_img = decode_png(actual, "actual")?;
+    let expected_img = decode_png(expected, "snapshot")?;
     if actual_img.dimensions() != expected_img.dimensions() {
         let (aw, ah) = actual_img.dimensions();
         let (ew, eh) = expected_img.dimensions();
@@ -178,6 +234,22 @@ pub fn compare_png(actual: &[u8], expected: &[u8], threshold: u8) -> E2eResult<S
     })
 }
 
+fn decode_png(bytes: &[u8], label: &str) -> E2eResult<image::DynamicImage> {
+    let reader =
+        || image::ImageReader::with_format(std::io::Cursor::new(bytes), image::ImageFormat::Png);
+    let (width, height) = reader()
+        .into_dimensions()
+        .map_err(|error| E2eError::Config(format!("cannot decode {label} PNG: {error}")))?;
+    if u64::from(width) * u64::from(height) > 64_000_000 {
+        return Err(E2eError::Config(format!(
+            "{label} PNG exceeds the 64 million pixel comparison limit"
+        )));
+    }
+    reader()
+        .decode()
+        .map_err(|error| E2eError::Config(format!("cannot decode {label} PNG: {error}")))
+}
+
 /// Resolve the snapshot directory (explicit > env > default).
 pub(crate) fn resolve_dir(explicit: Option<&Path>) -> PathBuf {
     if let Some(dir) = explicit {
@@ -212,6 +284,9 @@ pub(crate) fn snap_path_for(name: &str, ext: &str, opts: &SnapshotOptions) -> Pa
 /// `None`; `All` overwrites unconditionally. Mismatches write
 /// `<slug>.actual.png` next to the expected file and fail with the diff summary.
 pub fn assert_snapshot_png(name: &str, actual: &[u8], opts: &SnapshotOptions) -> E2eResult<()> {
+    opts.validate()?;
+    // Invalid bytes must never become a new baseline, even under update=all.
+    compare_png(actual, actual, opts.threshold)?;
     let dir = resolve_dir(opts.dir.as_deref());
     let path = snap_path(&dir, name, "png");
     let update = resolve_update(opts.update);
@@ -236,13 +311,26 @@ pub fn assert_snapshot_png(name: &str, actual: &[u8], opts: &SnapshotOptions) ->
     let expected = std::fs::read(&path)?;
     match compare_png(actual, &expected, opts.threshold) {
         Ok(diff) if diff.passed(opts) => Ok(()),
+        Ok(_) if update == SnapshotUpdate::Changed => {
+            std::fs::write(&path, actual)?;
+            Ok(())
+        }
         Ok(diff) => Err(mismatch(&dir, name, "png", actual, diff.summary())),
-        Err(error) => Err(mismatch(&dir, name, "png", actual, error.to_string())),
+        Err(error) if error.code() == "FERRITE_E2E_EXPECT" => {
+            if update == SnapshotUpdate::Changed {
+                std::fs::write(&path, actual)?;
+                Ok(())
+            } else {
+                Err(mismatch(&dir, name, "png", actual, error.to_string()))
+            }
+        }
+        Err(error) => Err(error),
     }
 }
 
 /// Assert text against the named snapshot (`<slug>.snap`, same update rules).
 pub fn assert_snapshot_text(name: &str, actual: &str, opts: &SnapshotOptions) -> E2eResult<()> {
+    opts.validate()?;
     let dir = resolve_dir(opts.dir.as_deref());
     let path = snap_path(&dir, name, "snap");
     let update = resolve_update(opts.update);
@@ -266,6 +354,9 @@ pub fn assert_snapshot_text(name: &str, actual: &str, opts: &SnapshotOptions) ->
     }
     let expected = std::fs::read_to_string(&path)?;
     if expected == actual {
+        Ok(())
+    } else if update == SnapshotUpdate::Changed {
+        std::fs::write(&path, actual)?;
         Ok(())
     } else {
         Err(mismatch(
@@ -435,6 +526,14 @@ mod tests {
         );
         assert_eq!(SnapshotUpdate::parse("ALL").unwrap(), SnapshotUpdate::All);
         assert_eq!(
+            SnapshotUpdate::parse("CHANGED").unwrap(),
+            SnapshotUpdate::Changed
+        );
+        assert_eq!(
+            serde_json::to_string(&SnapshotUpdate::Changed).unwrap(),
+            "\"changed\""
+        );
+        assert_eq!(
             SnapshotUpdate::parse(" none ").unwrap(),
             SnapshotUpdate::None
         );
@@ -516,6 +615,83 @@ mod tests {
         assert!(error.to_string().contains("no snapshot"), "{error}");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn changed_updates_only_mismatches_and_invalid_png_never_becomes_a_baseline() {
+        let dir = tempfile::tempdir().unwrap();
+        let options = SnapshotOptions {
+            dir: Some(dir.path().into()),
+            update: Some(SnapshotUpdate::Changed),
+            ..Default::default()
+        };
+        let first = png_bytes(2, 2, |_, _| [10, 20, 30, 255]);
+        let second = png_bytes(2, 2, |_, _| [100, 20, 30, 255]);
+        assert_snapshot_png("changed", &first, &options).unwrap();
+        let path = dir.path().join("changed.png");
+        let before = std::fs::metadata(&path).unwrap().modified().unwrap();
+        assert_snapshot_png("changed", &first, &options).unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            before
+        );
+        assert_snapshot_png("changed", &second, &options).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), second);
+        let tolerant = SnapshotOptions {
+            threshold: 100,
+            ..options.clone()
+        };
+        assert_snapshot_png("changed", &first, &tolerant).unwrap();
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            second,
+            "a match within tolerance must retain the baseline"
+        );
+        let bigger = png_bytes(3, 2, |_, _| [100, 20, 30, 255]);
+        assert_snapshot_png("changed", &bigger, &options).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), bigger);
+        for mode in [
+            SnapshotUpdate::Missing,
+            SnapshotUpdate::All,
+            SnapshotUpdate::Changed,
+        ] {
+            let options = SnapshotOptions {
+                update: Some(mode),
+                ..options.clone()
+            };
+            assert_eq!(
+                assert_snapshot_png("invalid", b"not png", &options)
+                    .unwrap_err()
+                    .code(),
+                "FERRITE_E2E_CONFIG"
+            );
+            assert!(!dir.path().join("invalid.png").exists());
+        }
+        std::fs::write(&path, b"corrupt baseline").unwrap();
+        assert_eq!(
+            assert_snapshot_png("changed", &first, &options)
+                .unwrap_err()
+                .code(),
+            "FERRITE_E2E_CONFIG"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"corrupt baseline");
+        assert_snapshot_text("text", "first", &options).unwrap();
+        assert_snapshot_text("text", "second", &options).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("text.snap")).unwrap(),
+            "second"
+        );
+        let invalid = SnapshotOptions {
+            max_diff_ratio: f32::NAN,
+            ..options
+        };
+        assert_eq!(
+            assert_snapshot_png("nan", &first, &invalid)
+                .unwrap_err()
+                .code(),
+            "FERRITE_E2E_CONFIG"
+        );
+        assert!(!dir.path().join("nan.png").exists());
     }
 
     #[test]

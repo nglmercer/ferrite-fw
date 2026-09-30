@@ -222,6 +222,17 @@ pub(crate) async fn capture(
     options: ScreenshotOptions,
     source: Source,
 ) -> E2eResult<Vec<u8>> {
+    capture_with_font_wait(page, options, source, false).await
+}
+
+/// Assertions wait after temporary style preparation, since that style may
+/// itself initiate a font load. The same owned cleanup guard covers the wait.
+pub(crate) async fn capture_with_font_wait(
+    page: &Page,
+    options: ScreenshotOptions,
+    source: Source,
+    wait_for_fonts: bool,
+) -> E2eResult<Vec<u8>> {
     let element = matches!(&source, Source::Element(_));
     options.validate(page.browser_kind(), element)?;
     if let Source::Box(rect) = &source {
@@ -279,6 +290,19 @@ pub(crate) async fn capture(
             };
             let result = async {
                 prepare(&page, &options, &token).await?;
+                if wait_for_fonts {
+                    page.evaluate_value(
+                        r#"(async () => {
+const seen=new Set(),fonts=[];
+const visit=root=>{if(!root||seen.has(root))return;seen.add(root);
+if(root.nodeType===9&&root.fonts)fonts.push(root.fonts.ready);
+for(const el of root.querySelectorAll('*')){if(el.shadowRoot)visit(el.shadowRoot);
+if(el.tagName==='IFRAME'){try{visit(el.contentDocument)}catch(_){}}}
+};visit(document);await Promise.all(fonts);return true;
+})()"#,
+                    )
+                    .await?;
+                }
                 let box_rect = match &source {
                     Source::Element(locator) => {
                         Some(locator.with_timeout(timeout).screenshot_rect().await?)

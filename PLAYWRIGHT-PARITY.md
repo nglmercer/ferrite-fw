@@ -1516,3 +1516,42 @@ relaxed and no root cause is claimed here. A concurrent pinned Firefox launch
 also timed out at 15 seconds; its terminal process was rerun after native gates
 with a 30-second launch budget and all 52 cases passed. These observations do
 not imply complete screenshot or backend equivalence.
+
+### B10 draft: successive screenshot assertions
+
+The working implementation now requires successive captures for page and locator
+PNG assertions, including missing/all/changed generation; it waits for fonts under
+the same assertion clock and never starts a new post-expiry artifact capture.
+Underlying operation failures retain typed causes. `SnapshotUpdate::Changed`
+creates missing values and rewrites only mismatches; corrupt PNGs/invalid ratios
+are configuration errors, and comparison rejects more than 64 million pixels.
+Defaults now use B09 Css scale, hidden carets and CSS animation suppression.
+
+The [actual snapshot reference](scripts/e2e-conformance/snapshot-reference.json)
+contains 56 runner observations on both pinned engines. Playwright's `missing`
+policy writes and fails the test; Ferrite preserves its write-and-pass behavior.
+Upstream `all`/`changed` can replace an existing baseline using the last image
+when stable capture expires. Rust leaves that baseline intact and fails. Unlike
+upstream's first matching capture shortcut, Rust always requires a successive
+pair, and retains retrying initially stable mismatches within the shared window.
+Per-channel comparison remains different from upstream's perceived-color/YIQ
+algorithm. These are documented differences, not full matcher parity.
+
+B10 remains unchecked. Baseline templates, expected/actual/diff report
+attachments, real delayed-font/animation evidence and final broad verification
+are still required. Focused draft checks do not replace the completed B09
+checkpoint or prove completion of the expanded current test inventory.
+
+Final focused validation for this B10 increment: 187 units, 27 native integration
+checks across seven targets, four doctests and 28 CLI/configuration checks,
+246 combined. The integration scope is new snapshot_stability3, browser3
+(snapshot/ARIA selection), effective_configuration5, runtime_and_reporters4,
+screenshot_capabilities1, screenshot_options7 and step_controls_and_bundles4.
+All native targets required both full Chrome 153 and Firefox 157. Final strict
+all-target Clippy, package formatting, regenerated matrix and local links passed.
+This is focused increment evidence, not a complete current integration inventory
+run. A timeout fixture initially used a missing mask (validly ignored); changing
+it to a missing capture target verified a real typed native timeout and restoration
+without relaxing capture behavior. Font wait ordering was corrected and the final
+native scopes reran after that change. CPU/decode/filesystem budget work remains
+part of B10; synchronous computation is not preempted by an async deadline.

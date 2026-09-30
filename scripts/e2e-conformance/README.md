@@ -367,3 +367,27 @@ quality zero and an infinite clip width that trims to the viewport; Rust require
 independent restoration with visible failures. Animation suppression, style
 traversal and integer enclosure do not imply every upstream screenshot option
 or rendering algorithm is equivalent.
+
+### Stable snapshot reference (B10 in progress)
+
+`reference:snapshots` runs the actual pinned Playwright 1.63.0 test runner on
+full Chromium and system Firefox through its public `moz-firefox` BiDi channel.
+It records 56 cases: seven scenarios under each of `missing`, `none`, `changed`
+and `all` on both engines. Cases cover missing/matching/different/dimension
+baselines, negated missing snapshots, and strictly changing captures with and
+without an existing baseline. Output retains raw assertion outcome, final attempt
+status, baseline creation/change/dimensions and existing attachment metadata.
+
+The never-stable fixture requests threshold zero and zero allowed differing
+pixels: its small per-frame color changes would otherwise fall within upstream's
+perceived-color tolerance. Early harness runs exposed that fixture mistake and
+an escaped generated-source error; only the final validated 56-case run is the
+reference evidence. The script checks both assertion and runner statuses, so
+Playwright's write-and-fail `missing` policy is not mislabeled a pass.
+
+Both engines show that `all`/`changed` can replace an existing baseline with the
+last image after stability times out, while a never-stable missing baseline fails
+without creation. Rust requires stable generation for both existing and missing
+baselines and preserves its earlier write-and-pass `missing` policy. Its per-
+channel comparator also remains different. B10 is not complete: snapshot path
+and report artifact work, actual delayed fonts and final phase gates remain.
