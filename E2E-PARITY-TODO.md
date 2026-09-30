@@ -1,7 +1,7 @@
 # Ferrite E2E implementation TODO
 
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
-Session plan refreshed: 2026-09-30, with verified B10 stable-capture and path increments.
+Session plan refreshed: 2026-09-30, with verified B10 capture, path and diagnostic increments.
 Expanded on request for a longer implementation session; B09/B13/B14 and D01/D02 are verified.
 Uncommitted implementations are not counted complete.
 
@@ -78,7 +78,7 @@ snapshot_options supplies standalone helpers with the same identity. Two require
 two-engine native groups verify page/locator/text paths and retries; 36 actual
 pinned path-only calls document naming differences. This remains partial parity.
 
-The diagnostic increment copies expected/actual/diff images into attempt and
+Diagnostic increment `b826c56` copies expected/actual/diff images into attempt and
 assertion-step attachments, retains previous/stability-diff images for unstable
 content and preserves portability after baseline updates/source removal. Native
 groups cover retry/soft ownership, exact pixels/dimensions, live events, visible
@@ -855,7 +855,7 @@ their dependencies are ready. References include
   virtual-time checks cover the draft. Path templates now cover global/project/
   assertion precedence, frozen metadata, CLI/env and TestInfo access (`b34174d`); two native
   groups and 36 pinned path-only cases verify them. Attempt/step-owned expected/
-  actual/diff and last-pair stability attachments now preserve immutable retry
+  actual/diff and last-pair stability attachments (`b826c56`) now preserve immutable retry
   evidence and portable links, with four native diagnostic groups. Real font/
   animation cases, final-only outer-poll diagnostics, resource/clock audits and
   final complete phase gates are still required.

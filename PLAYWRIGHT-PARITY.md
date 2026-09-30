@@ -1619,7 +1619,7 @@ passed. The final unit run also verifies visible failure-artifact write errors
 without losing the original mismatch. Full current-inventory verification and
 the remaining B10 acceptance criteria are still pending.
 
-### B10 draft: attempt-owned screenshot diagnostics
+### B10 draft: attempt-owned screenshot diagnostics (`b826c56`)
 
 Page/locator screenshot mismatches now copy the expected bytes read before
 capture, the last completed actual image and a visual diff into the attempt's
