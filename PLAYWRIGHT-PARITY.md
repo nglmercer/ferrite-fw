@@ -1731,7 +1731,7 @@ and caught locator outcomes must identify that native wait. These timeouts are
 recorded without claiming a root cause or universal Chromium limitation.
 
 
-### B10 draft: final screenshot images for failed generic polls
+### B10 draft: final screenshot images for failed generic polls (`0509518`)
 
 Generic `expect_poll_with`/`expect_to_pass_with` invocations now own a task-local
 collector for the last screenshot mismatch within each probe. Only a completed

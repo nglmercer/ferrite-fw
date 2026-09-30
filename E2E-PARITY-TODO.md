@@ -85,7 +85,7 @@ assertion-step attachments, retains previous/stability-diff images for unstable
 content and preserves portability after baseline updates/source removal. Native
 groups cover retry/soft ownership, exact pixels/dimensions, live events, visible
 I/O failures and cancellation/restoration. Generic retry probes suppress intermediate
-report images. Final-only deferred publication now retains the last screenshot
+report images. Verified deferred increment `0509518` now retains the last screenshot
 mismatch from the last completed failing outer probe; nested polls transfer
 images. Success/control errors and completed pending results discard retained
 images; unfinished probes drop their own images without replacing the earlier
@@ -878,7 +878,7 @@ their dependencies are ready. References include
   native font/animation groups using real held HTTP fonts and native animation
   objects, including late CSS animation cancellation/resumption and visible
   finish/resume errors and the 4,096/4,097-object limit boundary. Final-only
-  outer-poll diagnostics now publish the last completed failing probe only,
+  outer-poll diagnostics (`0509518`) now publish the last completed failing probe only,
   with four additional native diagnostic groups verifying nested/control/pending/
   unfinished/soft/parallel/retry/export and publication I/O behavior. Resource/
   clock audits and final complete phase gates are still required.
