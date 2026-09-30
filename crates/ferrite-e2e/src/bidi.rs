@@ -6,7 +6,7 @@
 //! as broadcast events. Verified against Firefox 156.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -50,6 +50,7 @@ enum Outbound {
 struct Inner {
     closed: crate::CancellationToken,
     user_context_preloads: AtomicBool,
+    lifecycle_events: AtomicU8,
     tx: mpsc::UnboundedSender<Outbound>,
     pending: Mutex<HashMap<u64, oneshot::Sender<E2eResult<Value>>>>,
     events: broadcast::Sender<BidiEvent>,
@@ -89,6 +90,7 @@ impl BidiConnection {
         let inner = Arc::new(Inner {
             closed: crate::CancellationToken::new(),
             user_context_preloads: AtomicBool::new(false),
+            lifecycle_events: AtomicU8::new(0),
             tx,
             pending: Mutex::new(HashMap::new()),
             events,
@@ -152,6 +154,9 @@ impl BidiConnection {
     pub(crate) fn supports_user_context_preloads(&self) -> bool {
         self.inner.user_context_preloads.load(Ordering::Acquire)
     }
+    pub(crate) fn supports_lifecycle_event(&self, event: &str) -> bool {
+        self.inner.lifecycle_events.load(Ordering::Acquire) & lifecycle_event_bit(event) != 0
+    }
 
     /// Send a command and await its `result`.
     pub async fn call(&self, method: &str, params: Value, timeout: Duration) -> E2eResult<Value> {
@@ -179,14 +184,24 @@ impl BidiConnection {
             .tx
             .send(Outbound::Text(text))
             .map_err(|_| E2eError::Disconnected("bidi writer gone".to_string()))?;
-        crate::operation::Deadline::new(timeout)
+        let result=crate::operation::Deadline::new(timeout)
             .run(format!("bidi {method}"), async {
                 tokio::select! {biased;
                     reason=self.inner.closed.cancelled()=>Err(E2eError::Disconnected(reason)),
                     result=rx=>result.map_err(|_|E2eError::Disconnected(format!("bidi {method} dropped")))?,
                 }
             })
-            .await
+            .await?;
+        if method == "session.subscribe" {
+            if let Some(events) = frame["params"]["events"].as_array() {
+                for event in events.iter().filter_map(Value::as_str) {
+                    self.inner
+                        .lifecycle_events
+                        .fetch_or(lifecycle_event_bit(event), Ordering::Release);
+                }
+            }
+        }
+        Ok(result)
     }
 
     /// Close the underlying socket.
@@ -198,6 +213,16 @@ impl BidiConnection {
     #[must_use]
     pub fn is_open(&self) -> bool {
         !self.inner.tx.is_closed() && !self.inner.closed.is_cancelled()
+    }
+}
+
+fn lifecycle_event_bit(event: &str) -> u8 {
+    match event {
+        "browsingContext.navigationCommitted" => 1,
+        "browsingContext.fragmentNavigated" => 2,
+        "browsingContext.historyUpdated" => 4,
+        "browsingContext.userPromptClosed" => 8,
+        _ => 0,
     }
 }
 
@@ -320,6 +345,7 @@ mod tests {
         let inner = Arc::new(Inner {
             closed: crate::CancellationToken::new(),
             user_context_preloads: AtomicBool::new(false),
+            lifecycle_events: AtomicU8::new(0),
             tx,
             pending: Mutex::new(HashMap::new()),
             events,

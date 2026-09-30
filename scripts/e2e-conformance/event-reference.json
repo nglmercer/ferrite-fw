@@ -1,0 +1,102 @@
+{
+  "playwright": "1.63.0",
+  "engine": "chromium",
+  "browser": "153.0.8010.12",
+  "cases": [
+    {
+      "name": "frame-lifecycle",
+      "result": [
+        {
+          "frame": "main",
+          "parent": null,
+          "attached": 0,
+          "detached": 0,
+          "navigations": [
+            "/main",
+            "/main#fragment",
+            "/main?history=1",
+            "/main?history=1"
+          ],
+          "ready": [
+            "dom",
+            "load"
+          ]
+        },
+        {
+          "frame": "f1",
+          "parent": "main",
+          "attached": 1,
+          "detached": 1,
+          "navigations": [
+            "/frame?phase=1",
+            "/frame?phase=2"
+          ],
+          "ready": []
+        },
+        {
+          "frame": "f2",
+          "parent": "f1",
+          "attached": 1,
+          "detached": 1,
+          "navigations": [
+            "/nested"
+          ],
+          "ready": []
+        },
+        {
+          "frame": "f3",
+          "parent": "main",
+          "attached": 1,
+          "detached": 1,
+          "navigations": [
+            "/frame?phase=3"
+          ],
+          "ready": []
+        },
+        {
+          "frame": "f4",
+          "parent": "f3",
+          "attached": 1,
+          "detached": 1,
+          "navigations": [
+            "/nested?phase=2"
+          ],
+          "ready": []
+        }
+      ]
+    },
+    {
+      "name": "repeated-readiness",
+      "result": {
+        "sameMain": true,
+        "ready": [
+          "dom",
+          "load",
+          "dom",
+          "load"
+        ]
+      }
+    },
+    {
+      "name": "prompt-accepted",
+      "result": {
+        "accepted": true,
+        "userText": "fixture",
+        "pageClosed": 1,
+        "contextClosed": 1,
+        "type": "prompt",
+        "pageOwned": true
+      }
+    },
+    {
+      "name": "confirm-dismissed",
+      "result": {
+        "accepted": false,
+        "pageClosed": 1,
+        "contextClosed": 1,
+        "type": "confirm",
+        "pageOwned": true
+      }
+    }
+  ]
+}

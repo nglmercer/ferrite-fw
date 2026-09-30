@@ -630,6 +630,27 @@ impl Browser {
             options.timeout,
         )
         .await?;
+        // Probe new lifecycle events separately: one absent event must not stop
+        // the browser from launching or disable the others.
+        for event in [
+            "browsingContext.navigationCommitted",
+            "browsingContext.fragmentNavigated",
+            "browsingContext.historyUpdated",
+            "browsingContext.userPromptClosed",
+        ] {
+            let subscribed = bidi
+                .call(
+                    "session.subscribe",
+                    serde_json::json!({"events":[event]}),
+                    options.timeout,
+                )
+                .await;
+            if let Err(error) = subscribed {
+                if !matches!(error, E2eError::Cdp { .. }) {
+                    return Err(error);
+                }
+            }
+        }
         // Newer BiDi engines expose scoped download lifecycle events. Older
         // engines keep the existing explicit filesystem download waits.
         let _=bidi.call("session.subscribe",serde_json::json!({"events":["browsingContext.downloadWillBegin","browsingContext.downloadEnd"]}),options.timeout).await;
@@ -883,14 +904,19 @@ impl Browser {
                             continue;
                         }
                         let sink = ConsoleSink::new();
-                        let driver = Driver::Bidi(BidiDriver::spawn(
+                        let Ok(driver) = BidiDriver::spawn(
                             conn.clone(),
                             context_id.to_string(),
                             timeout,
                             insecure_certs,
                             sink.clone(),
                             owner.id().map(str::to_string),
-                        ));
+                        )
+                        .await
+                        else {
+                            continue;
+                        };
+                        let driver = Driver::Bidi(driver);
                         if let Ok(page) = owner.finish_page(driver, sink, true).await {
                             page.set_opener_target(opener.target_id());
                             opener.emit(PageEvent::Popup(Box::new(page)));

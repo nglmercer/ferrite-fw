@@ -6,7 +6,7 @@ assertion/runner API. **It does not provide full Playwright API or behavioral
 parity.** The implementation deliberately defers substantial backend,
 distribution, debugger and orchestration work.
 
-Audit date: **2026-09-29**. Upstream baseline:
+Audit date: **2026-09-30**. Upstream baseline:
 [Playwright v1.63.0](https://github.com/microsoft/playwright/releases/tag/v1.63.0).
 The initial inventory and existing changes were committed in `d93365a`; this
 report describes the subsequent practical parity implementation. The original
@@ -19,9 +19,9 @@ reporter, Android and Electron APIs:
 | Classification | Members | Meaning |
 |---|---:|---|
 | Equivalent | 15 | Counterpart for the basic operation/value, without full options or engine compatibility |
-| Partial | 603 | Related exposed operation with material semantic, option or engine differences |
+| Partial | 613 | Related exposed operation with material semantic, option or engine differences |
 | Idiomatic | 41 | Comparable operation through Rust language/library facilities |
-| Missing | 359 | No dedicated public counterpart |
+| Missing | 349 | No dedicated public counterpart |
 
 These counts describe an inventory, **not a behavioral compatibility
 percentage**. The earlier inventory had 458 Partial and 503 Missing members.
@@ -63,6 +63,7 @@ implementation.
 | URL/network waits | Exact/glob/regex, predicates, URL document readiness and typed per-hop Request/Response companions; async snapshot predicates | Optional native metadata, bounded redirect history; frame network idle, URLPattern and full body/worker graph unsupported |
 | DOM access | Separate textContent/innerText, arrays, evaluate-all/JSON arguments, highlight removal; single-target getters wait and enforce strictness | JSON values only, without arbitrary JS/JSHandle argument serialization |
 | Frames and handles | Same-origin lazy/nested/replacement `FrameLocator`, frame ownership, content/function/URL/load/selector helpers, remote handle evaluation/properties | Cross-origin/OOPIF lazy selection and ElementHandle are deferred |
+| Native lifecycle events | Frame attach/navigation/detach with native identities, main DOM/load readiness, dialog closure and single context forwarding | Owned metadata snapshots; optional native fields/subscriptions; Chromium current target only, with OOPIF adoption and earliest popup diagnostics deferred |
 | Assertions | Exact/regex page title/URL, raw regex/normalized or rendered text options, mixed lists, ordered text subsets, exact classes/class tokens, values, state/indeterminate options, native intersection ratios, accessible regex, custom predicates and `expect_to_pass` | Rust regex syntax; accessibility approximation; no custom matcher registry/asymmetric matchers or full options parity |
 | Accessibility snapshots | Structured DOM role/name/state tree and locator/page exact snapshot assertions | Approximation, without complete ARIA/YAML matching or all upstream modes |
 | Clock | Separate fixed Date/system time, run-for/fast-forward, promise/timer ordering, pause-at/resume and installation time | Page-local; navigation reinstalls initial state; idle callbacks approximate browser behavior |
@@ -844,6 +845,40 @@ and returns true after explicit owning-page closure; native disconnection errors
 propagate. Firefox names remain empty because its native tree supplies no names.
 Same-origin nested/replacement cases have native regressions on both engines.
 Selector-free OOPIF traversal remains deferred.
+
+### Native frame, document and dialog events
+
+Page and context subscriptions expose `FrameAttached`, `FrameNavigated`,
+`FrameDetached`, `DomContentLoaded`, `Load` and `DialogClosed`. Context events
+retain source page identity and receive each page observation once. Frame
+payloads are owned metadata snapshots, without retaining live Page/Frame owners.
+They use native frame and document IDs; unavailable URLs/names/document IDs
+remain optional. Navigation preserves the native frame identity, while removed
+and replacement frames have distinct IDs. Fragment/history observations include
+repeated updates to the same URL. Subtree detach emits children before their
+parent, marks ancestor-driven removals and suppresses later duplicate native
+notifications. Only live frame metadata is retained.
+
+DOM/load events describe the main document. Repeated `set_content` operations
+can emit readiness again without changing its document ID. Dialog-close payloads
+retain accepted/user-text fields when supplied. Firefox identifies the prompt
+context/type; CDP omits these fields, so Ferrite leaves them unavailable. These
+are snapshots rather than Playwright 1.63's live `Dialog` payloads.
+
+Firefox navigation/history/dialog-close subscriptions are probed individually.
+Waiting for navigation or closure fails explicitly when its required native
+subscription is unavailable; older engines can lack particular same-document
+events. Firefox frame names remain unavailable. Chromium observes its current
+target session: OOPIF session adoption is deferred, and a native `swap` detach
+means leaving that session. Startup popup adoption gaps remain B04.
+
+Page/context event waits retain zero/caller/enclosing deadlines, disposal and
+transport wake-up. Context waits use live action-timeout defaults. Interrupted
+page initialization releases its listener without closing the shared browser
+transport. The [native regressions](crates/ferrite-e2e/tests/lifecycle_events.rs)
+compare four actual pinned Playwright cases on both engines, with separate
+checks for identity, forwarding, metadata absence and wait/resource lifecycle.
+Exhaustive matches on public event enums must handle the six new variants.
 
 ### Completed download I/O
 

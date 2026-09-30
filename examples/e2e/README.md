@@ -66,6 +66,35 @@ with source page IDs. `wait_for_event` provides a timed filter;
 `wait_for_event_with_options` additionally accepts a cancellation token. A zero
 operation timeout waits until success, cancellation or page/context disposal.
 
+Page and context subscriptions also include native frame attachment/navigation/
+detachment, main-document DOM/load readiness and dialog closure:
+
+```rust,no_run
+let (event, navigation) = tokio::join!(
+    page.wait_for_event(ferrite_e2e::PageEventKind::FrameNavigated,
+        std::time::Duration::from_secs(5)),
+    page.goto("/account"),
+);
+navigation?;
+if let ferrite_e2e::PageEvent::FrameNavigated(frame) = event? {
+    println!("{} {:?}", frame.frame_id, frame.url);
+}
+```
+
+Payloads contain native identity and optional metadata, without owning a live
+Page/Frame. Same-document history events keep frame identity. Descendant removal
+is reported once, child-first, with `detached_with_parent` when the ancestor's
+native detach caused the observation. Readiness belongs to the main document;
+repeated `set_content` calls retain distinct readiness events. Frame names are
+unavailable on Firefox; CDP dialog closure omits frame identity/type. These
+payloads are owned snapshots rather than upstream live Frame/Dialog objects.
+New Firefox event subscriptions are individually probed; unsupported commit/
+closure waits fail explicitly. Chromium observes its current target; OOPIF
+adoption is deferred and a `swap` detach means leaving that session. Context
+waits use live action-timeout defaults and also wake on transport loss.
+Exhaustive PageEvent/Kind and ContextEventKind matches need the new variants or
+a wildcard. Arm dialog handling before triggering a prompt.
+
 When a route callback may still be running, remove routes with an explicit policy:
 
 ```rust

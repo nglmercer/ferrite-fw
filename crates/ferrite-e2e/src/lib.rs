@@ -60,6 +60,7 @@ mod frame_locator;
 mod function_wait;
 mod har;
 mod jshandle;
+mod lifecycle_events;
 mod locator;
 mod network;
 mod operation;
@@ -102,6 +103,7 @@ pub use frame_locator::FrameLocator;
 pub use function_wait::{FunctionPolling, FunctionWaitOptions};
 pub use har::{HarContentMode, HarFile, HarReplayEntry};
 pub use jshandle::JSHandle;
+pub use lifecycle_events::{DialogClosedInfo, FrameEvent};
 pub use locator::{
     set_test_id_attribute, test_id_attribute, FilterOptions, GetByRoleOptions, Locator,
     LocatorOptions, SelectOption, Selector, WaitForState,

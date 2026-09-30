@@ -324,6 +324,12 @@ impl TracingState {
 /// Kinds of events emitted by a context across all its pages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContextEventKind {
+    FrameAttached,
+    FrameNavigated,
+    FrameDetached,
+    DomContentLoaded,
+    Load,
+    DialogClosed,
     Page,
     Closed,
     Console,
@@ -367,6 +373,12 @@ impl ContextEvent {
                 ..
             } if message.kind == "exception" => ContextEventKind::PageError,
             Self::PageEvent { event, .. } => match event.kind() {
+                PageEventKind::FrameAttached => ContextEventKind::FrameAttached,
+                PageEventKind::FrameNavigated => ContextEventKind::FrameNavigated,
+                PageEventKind::FrameDetached => ContextEventKind::FrameDetached,
+                PageEventKind::DomContentLoaded => ContextEventKind::DomContentLoaded,
+                PageEventKind::Load => ContextEventKind::Load,
+                PageEventKind::DialogClosed => ContextEventKind::DialogClosed,
                 PageEventKind::Console => ContextEventKind::Console,
                 PageEventKind::Dialog => ContextEventKind::Dialog,
                 PageEventKind::Request => ContextEventKind::Request,
@@ -501,8 +513,29 @@ impl BrowserContext {
                 "websocket events are not supported on Firefox".into(),
             ));
         }
+        if let Backend::Bidi { conn, .. } = &self.backend {
+            let event = match kind {
+                ContextEventKind::FrameNavigated => Some("browsingContext.navigationCommitted"),
+                ContextEventKind::DialogClosed => Some("browsingContext.userPromptClosed"),
+                _ => None,
+            };
+            if let Some(event) = event {
+                if !conn.supports_lifecycle_event(event) {
+                    return Err(E2eError::Config(format!(
+                        "native {event} events are unavailable on this Firefox version"
+                    )));
+                }
+            }
+        }
         let mut events = self.subscribe();
-        let wait = crate::operation::Deadline::new(options.timeout.unwrap_or(self.timeout)).run(
+        let timeout = options.timeout.unwrap_or_else(|| {
+            self.live
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .action_timeout
+                .unwrap_or(self.timeout)
+        });
+        let wait = crate::operation::Deadline::new(timeout).run(
             format!("wait for context {kind:?}"),
             async {
                 loop {
@@ -526,6 +559,16 @@ impl BrowserContext {
                 wait.await
             } else {
                 self.cancellation.run(wait).await
+            }
+        };
+        let transport = match &self.backend {
+            Backend::Cdp(connection) => connection.disconnection(),
+            Backend::Bidi { conn, .. } => conn.disconnection(),
+        };
+        let wait = async {
+            tokio::select! {biased;
+                result=wait=>result,
+                reason=transport.cancelled()=>Err(E2eError::Disconnected(reason)),
             }
         };
         match options.cancellation {
@@ -601,14 +644,17 @@ impl BrowserContext {
                     .and_then(Value::as_str)
                     .ok_or_else(|| E2eError::Launch("no BiDi context".to_string()))?
                     .to_string();
-                Driver::Bidi(BidiDriver::spawn(
-                    conn.clone(),
-                    context,
-                    self.timeout,
-                    *insecure_certs,
-                    sink.clone(),
-                    self.id.clone(),
-                ))
+                Driver::Bidi(
+                    BidiDriver::spawn(
+                        conn.clone(),
+                        context,
+                        self.timeout,
+                        *insecure_certs,
+                        sink.clone(),
+                        self.id.clone(),
+                    )
+                    .await?,
+                )
             }
         };
 

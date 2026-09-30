@@ -30,9 +30,27 @@ type ContextEventForwarding = (
 );
 type IdleRequestScope = (Option<String>, Option<String>);
 struct NetworkListenerGuard(ConsoleSink);
+/// Native listeners must also stop when setup is canceled before a Page exists.
+struct PageInitialization {
+    lifecycle: crate::CancellationToken,
+    complete: bool,
+}
+impl Drop for PageInitialization {
+    fn drop(&mut self) {
+        if !self.complete {
+            self.lifecycle
+                .cancel_with_reason("page initialization interrupted");
+        }
+    }
+}
 impl Drop for NetworkListenerGuard {
     fn drop(&mut self) {
         self.0.close_network("native event listener ended");
+        self.0
+            .frame_events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
     }
 }
 
@@ -70,6 +88,7 @@ pub struct ConsoleSink {
     downloads_emitted: Arc<Mutex<HashMap<PathBuf, (u64, SystemTime)>>>,
     context_events: Arc<Mutex<Option<ContextEventForwarding>>>,
     page_id: Arc<Mutex<Option<String>>>,
+    frame_events: Arc<Mutex<crate::lifecycle_events::FrameEvents>>,
 }
 
 /// Maximum recorded requests per page (oldest dropped first).
@@ -102,6 +121,7 @@ impl ConsoleSink {
             events: tokio::sync::broadcast::channel(MAX_EVENT_BUFFER).0,
             context_events: Arc::new(Mutex::new(None)),
             page_id: Arc::new(Mutex::new(None)),
+            frame_events: Arc::new(Mutex::new(crate::lifecycle_events::FrameEvents::default())),
             download_dir: Arc::new(Mutex::new(None)),
             downloads_emitted: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -326,6 +346,35 @@ impl ConsoleSink {
     /// Subscribe to page events.
     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<PageEvent> {
         self.events.subscribe()
+    }
+
+    fn observe_lifecycle(&self, method: &str, params: &Value, cdp: bool) {
+        let Some(page) = self
+            .page_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        else {
+            return;
+        };
+        let events = {
+            let mut frames = self.frame_events.lock().unwrap_or_else(|e| e.into_inner());
+            if cdp {
+                frames.cdp(&page, method, params)
+            } else {
+                frames.bidi(&page, method, params)
+            }
+        };
+        for event in events {
+            self.emit(event);
+        }
+    }
+
+    fn contains_frame(&self, id: &str) -> bool {
+        self.frame_events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(id)
     }
 
     /// Emit a page event (dropped when nobody listens).
@@ -744,11 +793,33 @@ impl CdpDriver {
             browser_context,
             fetch_auth: Arc::new(Mutex::new(FetchAuthState::default())),
         };
+        let mut initialization = PageInitialization {
+            lifecycle: driver.lifecycle.clone(),
+            complete: false,
+        };
         driver.spawn_listener();
-        driver.call("Page.enable", Value::Null).await?;
-        driver.call("Runtime.enable", Value::Null).await?;
-        driver.call("Log.enable", Value::Null).await?;
-        driver.call("Network.enable", Value::Null).await?;
+        let initialized = async {
+            let tree = driver.call("Page.getFrameTree", Value::Null).await?;
+            driver
+                .sink
+                .frame_events
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .seed_cdp(&driver.target, &tree["frameTree"]);
+            driver.call("Page.enable", Value::Null).await?;
+            driver.call("Runtime.enable", Value::Null).await?;
+            driver.call("Log.enable", Value::Null).await?;
+            driver.call("Network.enable", Value::Null).await?;
+            Ok::<_, E2eError>(())
+        }
+        .await;
+        if let Err(error) = initialized {
+            driver
+                .lifecycle
+                .cancel_with_reason("page initialization failed");
+            return Err(error);
+        }
+        initialization.complete = true;
         Ok(driver)
     }
 
@@ -756,20 +827,18 @@ impl CdpDriver {
         let mut events = self.cdp.subscribe();
         let session = self.session.clone();
         let sink = self.sink.clone();
-        let target = self.target.clone();
         let worlds = self.main_worlds.clone();
         let lifecycle = self.lifecycle.clone();
         let transport = self.cdp.disconnection();
         tokio::spawn(async move {
             let _guard = NetworkListenerGuard(sink.clone());
-            let mut frames = std::collections::HashSet::from([target]);
             let mut downloads = HashMap::new();
             while let Ok(event) = tokio::select! { biased; _ = lifecycle.cancelled() => Err(tokio::sync::broadcast::error::RecvError::Closed), _=transport.cancelled()=>Err(tokio::sync::broadcast::error::RecvError::Closed), event = events.recv() => event }
             {
                 if event.method == "Browser.downloadWillBegin"
                     && event.params["frameId"]
                         .as_str()
-                        .is_some_and(|id| frames.contains(id))
+                        .is_some_and(|id| sink.contains_frame(id))
                 {
                     downloads.insert(
                         event.params["guid"].as_str().unwrap_or_default().to_owned(),
@@ -819,16 +888,6 @@ impl CdpDriver {
                     }
                     _ => {}
                 }
-                if event.method == "Page.frameAttached" {
-                    if let Some(id) = event.params["frameId"].as_str() {
-                        frames.insert(id.to_owned());
-                    }
-                }
-                if event.method == "Page.frameNavigated" {
-                    if let Some(id) = event.params["frame"]["id"].as_str() {
-                        frames.insert(id.to_owned());
-                    }
-                }
                 handle_cdp_event(&event, &sink);
             }
         });
@@ -840,15 +899,19 @@ impl BidiDriver {
         *self.timeout.lock().unwrap_or_else(|e| e.into_inner())
     }
     /// Spawn the event listener (session-wide subscription already active).
-    pub fn spawn(
+    pub async fn spawn(
         bidi: BidiConnection,
         context: String,
         timeout: Duration,
         insecure_certs: bool,
         sink: ConsoleSink,
         user_context: Option<String>,
-    ) -> Self {
+    ) -> E2eResult<Self> {
         *sink.page_id.lock().unwrap_or_else(|e| e.into_inner()) = Some(context.clone());
+        sink.frame_events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .seed_bidi(&context);
         let driver = Self {
             modifiers: Arc::new(Mutex::new(0)),
             bidi,
@@ -862,8 +925,29 @@ impl BidiDriver {
             sink,
             user_context,
         };
+        let mut initialization = PageInitialization {
+            lifecycle: driver.lifecycle.clone(),
+            complete: false,
+        };
         driver.spawn_listener();
+        let tree = driver
+            .call(
+                "browsingContext.getTree",
+                serde_json::json!({"root":driver.context}),
+            )
+            .await?;
         driver
+            .sink
+            .frame_events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .seed_bidi_tree(&driver.context, &tree["contexts"]);
+        initialization.complete = true;
+        Ok(driver)
+    }
+
+    pub(crate) fn supports_lifecycle_event(&self, event: &str) -> bool {
+        self.bidi.supports_lifecycle_event(event)
     }
 
     fn spawn_listener(&self) {
@@ -874,26 +958,20 @@ impl BidiDriver {
         let transport = self.bidi.disconnection();
         tokio::spawn(async move {
             let _guard = NetworkListenerGuard(sink.clone());
-            let mut frames = std::collections::HashSet::from([context.clone()]);
             let mut downloads = HashMap::new();
             while let Ok(event) = tokio::select! {biased; _=lifecycle.cancelled()=>Err(tokio::sync::broadcast::error::RecvError::Closed), _=transport.cancelled()=>Err(tokio::sync::broadcast::error::RecvError::Closed), event=events.recv()=>event}
             {
-                if event.method == "browsingContext.contextCreated"
-                    && event.params["parent"]
+                let belongs = if event.method == "browsingContext.contextCreated" {
+                    event.params["parent"]
                         .as_str()
-                        .is_some_and(|parent| frames.contains(parent))
-                {
-                    if let Some(id) = event.params["context"].as_str() {
-                        frames.insert(id.into());
-                    }
-                }
-                if !event.context().is_some_and(|id| frames.contains(id)) {
+                        .is_some_and(|parent| sink.contains_frame(parent))
+                } else {
+                    event
+                        .context()
+                        .is_some_and(|id| id == context || sink.contains_frame(id))
+                };
+                if !belongs {
                     continue;
-                }
-                if event.method == "browsingContext.contextDestroyed" {
-                    if let Some(id) = event.params["context"].as_str() {
-                        frames.remove(id);
-                    }
                 }
                 if event.method == "browsingContext.downloadWillBegin" {
                     downloads.insert(
@@ -5310,6 +5388,7 @@ fn console_location(value: &Value) -> Option<crate::ConsoleLocation> {
 }
 
 fn handle_bidi_event(event: &BidiEvent, sink: &ConsoleSink) {
+    sink.observe_lifecycle(&event.method, &event.params, false);
     match event.method.as_str() {
         "log.entryAdded" => {
             let entry_type = event.params["type"].as_str().unwrap_or("console");
@@ -5998,6 +6077,7 @@ fn read_manifest(path: &std::path::Path) -> Vec<SpooledFrame> {
 }
 
 fn handle_cdp_event(event: &CdpEvent, sink: &ConsoleSink) {
+    sink.observe_lifecycle(&event.method, &event.params, true);
     match event.method.as_str() {
         "Fetch.requestPaused" => {
             if let (Some(pause_id), Some(native_id), Some(url)) = (
@@ -6214,6 +6294,84 @@ fn handle_cdp_event(event: &CdpEvent, sink: &ConsoleSink) {
             }));
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod initialization_tests {
+    use super::*;
+    use futures::{SinkExt, StreamExt};
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn dropping_page_initialization_releases_its_listener_without_closing_transport() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let mut started = Some(started);
+            while let Some(Ok(message)) = socket.next().await {
+                let tokio_tungstenite::tungstenite::Message::Text(text) = message else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                if request["method"] == "Runtime.enable" {
+                    started.take().unwrap().send(()).unwrap();
+                    std::future::pending::<()>().await;
+                }
+                let result = if request["method"] == "Page.getFrameTree" {
+                    json!({"frameTree":{"frame":{"id":"native-root","url":"about:blank","loaderId":"document"}}})
+                } else {
+                    json!({})
+                };
+                let reply =
+                    json!({"id":request["id"],"sessionId":request["sessionId"],"result":result});
+                socket
+                    .send(tokio_tungstenite::tungstenite::Message::Text(
+                        reply.to_string().into(),
+                    ))
+                    .await
+                    .unwrap();
+            }
+        });
+        let connection = CdpConnection::connect(&format!("ws://{address}"))
+            .await
+            .unwrap();
+        let sink = ConsoleSink::new();
+        let retained = Arc::downgrade(&sink.frame_events);
+        let transport = connection.clone();
+        let setup = tokio::spawn(async move {
+            CdpDriver::spawn(
+                transport,
+                "session".into(),
+                "page".into(),
+                Duration::ZERO,
+                sink,
+                None,
+            )
+            .await
+        });
+        tokio::time::timeout(Duration::from_secs(2), ready)
+            .await
+            .unwrap()
+            .unwrap();
+        setup.abort();
+        assert!(matches!(setup.await,Err(error) if error.is_cancelled()));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while retained.upgrade().is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("interrupted initialization must drop its native listener and frame metadata");
+        assert!(
+            connection.is_open(),
+            "a page's interrupted initialization must not close the shared browser transport"
+        );
+        connection.close();
+        server.abort();
     }
 }
 

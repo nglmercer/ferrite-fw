@@ -232,6 +232,12 @@ pub struct DialogInfo {
 /// Kinds of observable page events (see [`Page::wait_for_event`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PageEventKind {
+    FrameAttached,
+    FrameNavigated,
+    FrameDetached,
+    DomContentLoaded,
+    Load,
+    DialogClosed,
     /// Console message or page exception.
     Console,
     /// JavaScript dialog (observed while handling is armed).
@@ -293,6 +299,18 @@ pub struct NetworkRequest {
 /// An observed page event.
 #[derive(Debug, Clone)]
 pub enum PageEvent {
+    /// A native child frame was attached; navigation metadata may not exist yet.
+    FrameAttached(crate::FrameEvent),
+    /// A native frame committed a document or same-document navigation.
+    FrameNavigated(crate::FrameEvent),
+    /// Child-first native subtree removal; identities never retarget replacements.
+    FrameDetached(crate::FrameEvent),
+    /// Main-document DOM readiness, including repeated set-content operations.
+    DomContentLoaded(crate::FrameEvent),
+    /// Main-document load readiness.
+    Load(crate::FrameEvent),
+    /// Native dialog closed; handling still needs to be armed for Dialog events.
+    DialogClosed(crate::DialogClosedInfo),
     /// Console message or page exception.
     Console(ConsoleMessage),
     /// JavaScript dialog.
@@ -341,6 +359,12 @@ impl PageEvent {
     #[must_use]
     pub fn kind(&self) -> PageEventKind {
         match self {
+            Self::FrameAttached(_) => PageEventKind::FrameAttached,
+            Self::FrameNavigated(_) => PageEventKind::FrameNavigated,
+            Self::FrameDetached(_) => PageEventKind::FrameDetached,
+            Self::DomContentLoaded(_) => PageEventKind::DomContentLoaded,
+            Self::Load(_) => PageEventKind::Load,
+            Self::DialogClosed(_) => PageEventKind::DialogClosed,
             Self::Console(_) => PageEventKind::Console,
             Self::Dialog(_) => PageEventKind::Dialog,
             Self::Request { .. } => PageEventKind::Request,
@@ -1970,6 +1994,22 @@ impl Page {
                  (BiDi has no socket-frame events)"
                             .to_string(),
                     ));
+                }
+                if let Driver::Bidi(driver) = &self.driver {
+                    let event = match kind {
+                        PageEventKind::FrameNavigated => {
+                            Some("browsingContext.navigationCommitted")
+                        }
+                        PageEventKind::DialogClosed => Some("browsingContext.userPromptClosed"),
+                        _ => None,
+                    };
+                    if let Some(event) = event {
+                        if !driver.supports_lifecycle_event(event) {
+                            return Err(E2eError::Config(format!(
+                                "native {event} events are unavailable on this Firefox version"
+                            )));
+                        }
+                    }
                 }
                 if kind == PageEventKind::Download {
                     let dir = self

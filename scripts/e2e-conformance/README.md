@@ -124,3 +124,21 @@ truthiness, a file wins over body/JSON bytes, and inherited Content-Length can
 remain even when a fulfillment body changes. Source response inheritance with
 replacement headers need not synthesize a new Content-Length. These records
 verify observable browser results; they do not imply identical raw wire framing.
+
+`event-reference.mjs` / `event-reference.json` record four actual Playwright
+1.63.0 Chromium cases: main readiness and nested frame identities through
+navigation/removal/replacement, repeated same-URL history updates, repeated
+set-content readiness and prompt/confirm decisions. Regenerate with
+`npm run reference:events`, or the external installation above and
+`node scripts/e2e-conformance/event-reference.mjs`.
+
+`cargo test -p ferrite-e2e --test lifecycle_events` compares normalized per-frame
+navigation/attachment/detachment counts and main readiness with that reference
+on Chromium and Firefox. It separately verifies native metadata absence,
+exact-once page-to-context forwarding, dialog-close fields, zero/caller/enclosing
+budgets, disposal, retries and transport loss. The Playwright reference also
+observes its v1.63 dialogclosed event on page and context, alongside dialog
+decisions and resulting JavaScript values. Rust
+closure payloads are native snapshots rather than the upstream Dialog object.
+Firefox's newer native navigation/history/closure subscriptions are probed
+individually; missing main-commit or closure support gives an explicit wait error.

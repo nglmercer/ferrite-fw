@@ -15,6 +15,7 @@ Partial means the listed limitation must be retained in API/docs/test evidence.
 | URL/request/response predicates | Supported | Supported | Legacy snapshots plus typed handle waits; 256-event channel fails explicitly on lag |
 | URL wait document readiness | Supported | Supported | Commit, DOMContentLoaded, Load; page-only observed HTTP idle for 500ms, frame idle unsupported |
 | Request/response lifecycle and redirects | Supported | Supported | IDs are scoped to a page; optional native metadata must stay optional |
+| Native frame/document/dialog-close events | Partial | Partial | Owned frame/page metadata, main DOM/load readiness and subtree removal; Firefox navigation/history/dialog-close subscriptions are probed separately. Frame names and CDP dialog-frame/type fields remain unavailable. Chromium observes its current target session; OOPIF session adoption is deferred, and native detach reason swap denotes leaving that session. Earliest popup adoption gaps remain B04. |
 | Typed request/response metadata and completion | Supported | Supported | Per-hop identity, page/frame ownership, bounded weak redirect history; completion independent of body capture |
 | Native headers and request POST text | Partial | Partial | Chromium extra headers require native hop flags; Firefox can fold repeated fields and omit POST text/resource destination; completeness remains optional |
 | API/header lookup and route fulfillment pairs | Supported | Supported | Case-insensitive lookup and duplicate-preserving serialized arrays; acknowledged route headers have an explicit source flag when native events omit/fold them. Firefox 156/157 omits first-hop synthetic redirect response/completion events; that observation settles unavailable. |
@@ -53,6 +54,14 @@ context/emulation/routing/coverage/download/screenshot/video restrictions;
 [network and context lifecycle](crates/ferrite-e2e/tests/scopes_and_network.rs)
 and [wait/upload/console](crates/ferrite-e2e/tests/waits_uploads_and_console.rs)
 groups cover metadata and lifecycle semantics.
+
+[lifecycle_events.rs](crates/ferrite-e2e/tests/lifecycle_events.rs) compares four
+pinned frame/readiness/dialog cases and verifies stable native identity,
+child-first subtree detach, replacement/history events, repeated set-content
+readiness, optional metadata and single context forwarding. Zero/live-default/
+caller/enclosing deadlines, disposal, retry and disconnect waits run on both
+engines. A protocol fixture separately verifies that interrupted page setup
+releases its listener while the shared browser transport remains open.
 
 [typed network metadata](crates/ferrite-e2e/tests/network_metadata.rs) verifies
 concurrent requests, child frames, redirects, JSON/form request text, duplicate
