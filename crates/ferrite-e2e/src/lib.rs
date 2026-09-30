@@ -65,6 +65,7 @@ mod network;
 mod operation;
 mod page;
 mod report;
+mod route_options;
 mod routing;
 mod runner;
 mod snapshot;
@@ -124,6 +125,7 @@ pub use report::{
     StepAnnotation, StepCategory, StepContext, StepInfo, StepOptions, StepOutcome, StepStatus,
     TestError, TestReport, TestResult, TestStatus,
 };
+pub use route_options::{RouteBodyState, RouteFetchOptions, RouteFulfillOptions};
 pub use routing::{UnrouteBehavior, UnrouteOptions};
 pub use runner::{
     describe, test, test_with_context, ContextHook, Fixture, FixtureMap, FixtureScope, GlobalHook,

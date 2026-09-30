@@ -6,7 +6,8 @@
     "reference:urls": "node url-reference.mjs",
     "reference:functions": "node function-reference.mjs",
     "reference:routes": "node route-reference.mjs",
-    "reference:api": "node api-reference.mjs"
+    "reference:api": "node api-reference.mjs",
+    "reference:route-options": "node route-options-reference.mjs"
   },
   "devDependencies": {
     "playwright": "1.63.0"

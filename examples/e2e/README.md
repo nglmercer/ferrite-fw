@@ -88,6 +88,51 @@ Requests retain their dispatch-time registration order; removed entries cannot
 start new calls, while new registrations apply to subsequent requests. Native
 commands already issued may finish after cancellation.
 
+Fetch and rewrite a real response through the route's owning context:
+
+```rust,no_run
+use ferrite_e2e::{RouteFetchOptions, RouteFulfillOptions};
+use serde_json::Value;
+
+page.route_with_handler("**/api/account", |route| async move {
+    let response = route.fetch_with(RouteFetchOptions {
+        max_redirects: Some(5),
+        max_retries: 1,
+        ..Default::default()
+    }).await?;
+    let mut account: Value = response.json()?;
+    account["plan"] = Value::String("fixture".into());
+    route.fulfill_with(RouteFulfillOptions {
+        response: Some(response),
+        json: Some(account),
+        ..Default::default()
+    }).await
+}).await?;
+```
+
+Fetch inherits cookies, TLS/proxy/auth and HTTP defaults. Relative override URLs
+use the context base URL. It leaves the browser request paused until the callback
+returns an action. Options can replace method/headers/raw body/JSON and bound
+redirects, reset retries, timeout and cancellation. Missing timeout uses the live
+Page action setting; zero disables the local deadline.
+
+Inspect `route.body_state()` before replaying an original payload: Chromium's
+lossless binary entries have a 16 MiB cap, and Firefox's original bytes are
+unavailable. Supply `body: Some(bytes)` or `json: Some(value)` explicitly when
+needed; `Some(vec![])` means an intentional empty override. Text-only native
+previews do not establish replayable bytes. `RouteInfo::new(...)` constructs a
+detached record and replaces external struct literals now that native owner/state
+fields are private.
+
+Fulfillment supports response inheritance, status, duplicate-preserving replacement
+headers, raw/JSON bytes and a regular-file path. Explicit content type wins;
+truthy JSON then file MIME inference follow the pinned reference. A file wins
+over body/JSON bytes, while supplying both body and JSON is invalid. Inherited
+Content-Length is preserved even when bytes change. The request-aware companion
+adds cross-origin CORS headers when no allow-origin value exists. Static legacy
+helpers keep their contracts. An independent HTTP fetch URL override works on
+both engines; native intercepted-URL/response-stage rewriting stays Chromium-only.
+
 `page.with_cancellation(token)` and `locator.with_cancellation(token)` apply
 cancellation to their clones. `with_timeout` overrides their action/protocol
 budgets without changing siblings. Frame helpers include `page`, `set_content`,

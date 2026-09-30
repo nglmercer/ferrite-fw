@@ -32,8 +32,9 @@ Partial means the listed limitation must be retained in API/docs/test evidence.
 | PDF export | Partial | Unsupported | Native Chromium Page.printToPDF; options extension tracked separately |
 | Native response-body capture | Partial | Unsupported | Chromium capture is capped/truncated; missing is distinct from an empty body |
 | Route request control | Partial | Partial | Supported request interception operations; see route regressions |
+| Context-linked route fetch and fulfillment options | Supported | Partial | HTTP(S)/base-relative fetch URL, method/header/raw/JSON overrides, cookies/TLS/proxy/auth, redirect/retry budgets and inherited response/file/JSON fulfillment. Chromium lossless request bytes capped at 16 MiB; text fallback is a preview. Firefox original request bodies remain unavailable and require an explicit override. Request-origin CORS preparation uses the new RouteInfo companion. |
 | Page/context route removal policies | Supported | Supported | Default/ignore-errors release active requests while callbacks settle; wait retains decisions; explicit Cancel is a Rust extension. Match limits are reserved atomically across pages, including fallback. |
-| Route response rewriting / URL override | Supported | Unsupported | Firefox rejects unsupported overrides explicitly |
+| Native route response-stage rewriting / intercepted URL override | Supported | Unsupported | Firefox rejects unsupported native overrides explicitly; an independent route fetch to another HTTP(S) URL and prepared fulfillment are supported separately. |
 | HAR capture/replay | Partial | Partial | Engine body and response rewriting limits carry through |
 | WebSocket observation | Supported | Unsupported | No stock BiDi socket-frame stream; routing/mocking excluded |
 | Video / frame streams | Supported | Supported | Chromium video requires ffmpeg; Firefox records natively |
@@ -72,6 +73,15 @@ budgets, retries, disposal and transport loss. Its pinned Chromium reference
 records actual Playwright release behavior; native regressions also run on
 Firefox. Empty interception is released after pending native stages and calls
 settle; Firefox pauses queued before removal are explicitly continued.
+
+[route_options.rs](crates/ferrite-e2e/tests/route_options.rs) compares the pinned
+fetch/fulfill reference with native binary responses, inferred/explicit headers,
+duplicate cookies and cross-origin CORS results. It also verifies unavailable
+Firefox request bytes, context TLS/proxy/credentials, live budgets, cancellation,
+disposal, transport loss and runner retries. Firefox's browser certificate
+acceptance still needs the launch setting; the context-linked HTTP client uses
+its own inherited TLS setting. Neither engine gains automatic compressed-body
+decoding through these helpers.
 
 Run the portable gate with both executable paths supplied:
 

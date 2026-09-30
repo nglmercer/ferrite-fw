@@ -3294,12 +3294,7 @@ async fn route_and_dialog_handlers() {
 
         // `RouteInfo::fetch` replays the request over plain HTTP
         // (Playwright `route.fetch`).
-        let info = RouteInfo {
-            url: format!("{base}api/method"),
-            method: "GET".to_string(),
-            headers: Vec::new(),
-            post_data: None,
-        };
+        let info = RouteInfo::new(format!("{base}api/method"), "GET", Vec::new(), None);
         let response = info.fetch().await.unwrap();
         assert_eq!(response.status(), 200, "{tag}");
         assert_eq!(response.text(), "GET", "{tag}");

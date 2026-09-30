@@ -118,6 +118,7 @@ struct ActiveCall {
 #[derive(Default)]
 struct State {
     configuration: Option<Arc<RouteConfiguration>>,
+    fetch_owner: Option<crate::route_options::RouteFetchOwner>,
     retired: HashSet<usize>,
     calls: HashMap<u64, ActiveCall>,
     next_call: u64,
@@ -144,6 +145,13 @@ fn reserve(hits: &AtomicU32, times: Option<u32>) -> bool {
 }
 
 impl RouteRuntime {
+    pub(crate) fn set_fetch_owner(&self, owner: crate::route_options::RouteFetchOwner) {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .fetch_owner = Some(owner);
+    }
+
     pub(crate) fn configure(&self, configuration: RouteConfiguration) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.configuration = Some(Arc::new(configuration));
@@ -255,7 +263,7 @@ impl RouteRuntime {
     }
     pub(crate) async fn decide(
         self: &Arc<Self>,
-        info: RouteInfo,
+        mut info: RouteInfo,
         sink: &ConsoleSink,
         forward: &CancellationToken,
     ) -> (Option<RouteAction>, Option<HandlerGuard>) {
@@ -268,6 +276,13 @@ impl RouteRuntime {
         else {
             return (None, None);
         };
+        info.set_fetch_owner(
+            self.state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .fetch_owner
+                .clone(),
+        );
         for index in sorted_matches(&configuration.handler_matchers, &info.url) {
             let entry = &configuration.handlers[index];
             let Some(guard) = self.begin(entry, forward) else {

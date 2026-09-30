@@ -100,3 +100,27 @@ and verifies TLS rejection/explicit opt-out without contacting an external host.
 Fixture processes/listeners are released when the owning test future is dropped.
 Ferrite retains its preemptive authentication default; explicitly choose
 `ApiCredentialsSend::Unauthorized` for the pinned Playwright default behavior.
+
+`route-options-reference.mjs` / `route-options-reference.json` record 18 actual
+Playwright 1.63.0 Chromium cases: binary request replay, lowercase method and
+header overrides, base-relative JSON fetches, disabled redirects, reset retries,
+response inheritance/status/body/header precedence, false/null JSON, explicit
+content type, file overrides and cross-origin fulfillment. Regenerate with
+`npm run reference:route-options` or the external installation above and
+`node scripts/e2e-conformance/route-options-reference.mjs`.
+
+`cargo test -p ferrite-e2e --test route_options` compares supported semantics on
+both engines, including actual browser response bytes, cookies and CORS headers.
+It additionally checks context TLS/proxy/auth defaults, validation, live page
+timeouts, zero/caller/enclosing budgets, retries, page/context disposal, native
+transport loss and callback resource release. Its HTTPS fixture uses the shared
+ephemeral `openssl` helper. Firefox supplies no original binary request body:
+Ferrite reports `RouteBodyState::Unavailable` and requires an explicit override
+instead of claiming empty-byte replay. Chromium's lossless capture is bounded
+to 16 MiB; native text-only fallback is an unavailable-body preview, not replay.
+
+The reference preserves upstream quirks: JSON content-type inference uses JSON
+truthiness, a file wins over body/JSON bytes, and inherited Content-Length can
+remain even when a fulfillment body changes. Source response inheritance with
+replacement headers need not synthesize a new Content-Length. These records
+verify observable browser results; they do not imply identical raw wire framing.

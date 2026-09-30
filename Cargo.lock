@@ -930,6 +930,7 @@ dependencies = [
  "hyper",
  "image",
  "md-5",
+ "mime_guess",
  "regex",
  "reqwest",
  "serde",

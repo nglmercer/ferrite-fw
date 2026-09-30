@@ -156,6 +156,55 @@ that a dedicated feature was implemented.
 
 ## Reliability and API additions
 
+- `RouteInfo::fetch_with(RouteFetchOptions)` replays through the intercepted
+  request's owning context, including cookies, TLS/proxy/auth and HTTP defaults.
+  It supports method/header/raw/JSON and HTTP(S) URL overrides, context-base
+  relative URLs, redirect limits and reset-only retries. Fetch does not resolve
+  the native interception; return a RouteAction separately. Weak owner lookup
+  prevents a retained description from keeping a page/context alive. Defaults
+  use the live page action timeout; zero, caller cancellation, page/context
+  disposal, transport loss and enclosing runner deadlines remain effective.
+- `RouteBodyState` distinguishes absent, captured and unavailable request bytes.
+  Chromium binary entries are lossless within a 16 MiB cap. A text-only native
+  fallback is a preview limited to 64 KiB and is marked unavailable for replay.
+  Firefox supplies no original body bytes: a body/JSON override is required
+  for requests whose payload is unavailable, including an explicit empty body
+  when desired. An independent HTTP fetch URL override is available on both
+  engines; Firefox native intercepted-URL/response-stage rewriting stays unsupported.
+- `RouteInfo::fulfill_with(RouteFulfillOptions)` prepares owned API response
+  inheritance and status/header/binary/JSON/regular-file overrides. Header sets
+  preserve duplicates and replace the inherited set when supplied. Explicit
+  content type wins; otherwise truthy JSON supplies application/json, then a
+  file supplies its MIME type. A file wins over body/JSON bytes; body plus JSON
+  remains invalid. Pinned behavior preserves inherited/explicit Content-Length,
+  even when bytes change, and adds length only for a nonempty explicit payload
+  lacking that header. Source inheritance with replaced headers may omit length.
+  These are browser-observable fulfillment semantics, not a raw HTTP wire promise.
+  The request-aware companion adds Origin/credentials/Vary headers for cross-origin
+  fulfillment when no allow-origin header exists. Legacy static helpers keep
+  their existing behavior; `RouteAction::fulfill_with` has no request-origin data.
+- Fulfillment preparation validates final status 200..=599, header values and
+  optional status text. Paths must resolve to regular files; devices, FIFOs and
+  directories fail before reading. Deadlines/cancellation bound the awaited
+  preparation; an already issued regular-file blocking read is not synchronously
+  interrupted. Exhaustive external `RouteInfo` literals must migrate to
+  `RouteInfo::new(url, method, headers, post_data)` because native state/weak owner
+  fields are private. Detached records use a standalone client and caller-known bytes.
+  Public options are additive companions; existing route rule/action APIs remain.
+- Shared API requests uppercase methods and compute Content-Length from the
+  materialized payload. Client default Content-Type participates before JSON/raw
+  inference; explicit request headers win, and raw bytes default to
+  application/octet-stream when no content type is supplied. These adjustments
+  also apply to context-linked route fetches. Compression decoding remains absent.
+- Route-options evidence: 18 actual pinned Playwright 1.63.0 Chromium reference
+  cases and eight [route-option groups](crates/ferrite-e2e/tests/route_options.rs)
+  passed on full Chrome 153 / Firefox 157. Binary replay, original-body absence,
+  response/file/JSON/header precedence, duplicate cookies, relative URLs, CORS,
+  context TLS/proxy/auth, zero/live/caller/enclosing budgets, retries, disposal,
+  transport loss and callback release are covered. Full regression inventory
+  verified in bounded batches: 145 units, 170 integration checks across all 22
+  targets, and three doctests (318 E2E), plus 23 CLI/configuration checks.
+  Strict E2E/CLI Clippy, formatting and regenerated source links passed.
 - API redirects use explicit 301/302 POST and 303 method-to-GET transitions;
   307/308 replay owned binary/multipart payloads. Client/request redirect limits
   default to 20; zero returns the redirect response. Cross-origin Authorization

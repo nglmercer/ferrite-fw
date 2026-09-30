@@ -589,6 +589,33 @@ impl Driver {
         }
         self
     }
+    pub(crate) fn route_fetch_owner(
+        &self,
+        registry: std::sync::Weak<Mutex<Vec<crate::BrowserContext>>>,
+        context_id: Option<String>,
+        timeout: Arc<Mutex<Duration>>,
+    ) -> crate::route_options::RouteFetchOwner {
+        let (page, context, transport) = match self {
+            Self::Cdp(d) => (
+                d.lifecycle.clone(),
+                d.context_cancellation.clone(),
+                d.cdp.disconnection(),
+            ),
+            Self::Bidi(d) => (
+                d.lifecycle.clone(),
+                d.context_cancellation.clone(),
+                d.bidi.disconnection(),
+            ),
+        };
+        crate::route_options::RouteFetchOwner {
+            registry,
+            context_id,
+            timeout,
+            page,
+            context,
+            transport,
+        }
+    }
     pub(crate) fn caller_cancellation(&self) -> crate::CancellationToken {
         match self {
             Self::Cdp(driver) => driver.cancellation.clone(),
@@ -2907,18 +2934,8 @@ impl CdpDriver {
                     let decided_action = if response_stage {
                         cached.as_ref().filter(|c| !c._request.forward.is_cancelled()).and_then(|c| c.action.clone())
                     } else {
-                        let info = RouteInfo {
-                            url: url.clone(),
-                            method: event.params["request"]["method"]
-                                .as_str()
-                                .unwrap_or_default()
-                                .to_string(),
-                            headers: cdp_header_pairs(&event.params["request"]["headers"]),
-                            post_data: event.params["request"]
-                                .get("postData")
-                                .and_then(Value::as_str)
-                                .map(|data| data.as_bytes().to_vec()),
-                        };
+                        let (post_data, body_state)=crate::route_options::cdp_body(&event.params["request"]);
+                        let info = RouteInfo::new(url.clone(), event.params["request"]["method"].as_str().unwrap_or_default(), cdp_header_pairs(&event.params["request"]["headers"]), post_data).native(body_state);
                         let forward = request_guard.as_ref().unwrap().forward.clone();
                         let decision = runtime.decide(info, &sink, &forward);
                         tokio::pin!(decision);
@@ -4674,15 +4691,7 @@ impl BidiDriver {
                         .as_str()
                         .unwrap_or_default()
                         .to_string();
-                    let info = RouteInfo {
-                        url: url.clone(),
-                        method: event.params["request"]["method"]
-                            .as_str()
-                            .unwrap_or_default()
-                            .to_string(),
-                        headers: bidi_header_pairs(&event.params["request"]["headers"]),
-                        post_data: None,
-                    };
+                    let info = RouteInfo::new(url.clone(), event.params["request"]["method"].as_str().unwrap_or_default(), bidi_header_pairs(&event.params["request"]["headers"]), None).native(crate::route_options::bidi_body(&event.params["request"]));
                     let forward = _request_guard.forward.clone();
                     let decision = runtime.decide(info, &sink, &forward);
                     tokio::pin!(decision);

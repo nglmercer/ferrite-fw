@@ -375,13 +375,24 @@ impl ApiClient {
                             ));
                         }
                         let method = method
+                            .to_ascii_uppercase()
                             .parse::<reqwest::Method>()
                             .map_err(|e| E2eError::Config(e.to_string()))?;
                         let mut request = self
                             .client
                             .request(method.clone(), self.url(path)?)
                             .query(&options.query);
-                        for (name, value) in &options.headers {
+                        // Defaults must participate before payload content-type inference.
+                        let mut headers = options.headers.clone();
+                        for (name, value) in &self.headers {
+                            if !headers
+                                .iter()
+                                .any(|(key, _)| key.eq_ignore_ascii_case(name))
+                            {
+                                headers.push((name.clone(), value.clone()));
+                            }
+                        }
+                        for (name, value) in &headers {
                             request = request.header(name, value);
                         }
                         if let Some(timeout) = options.timeout {
@@ -389,6 +400,15 @@ impl ApiClient {
                         }
                         if let Some(body) = &options.body {
                             request = request.body(body.clone());
+                            if !headers
+                                .iter()
+                                .any(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+                            {
+                                request = request.header(
+                                    reqwest::header::CONTENT_TYPE,
+                                    "application/octet-stream",
+                                );
+                            }
                         }
                         if let Some(json) = &options.json {
                             request = request.json(json);
@@ -536,6 +556,7 @@ impl ApiClient {
     ) -> E2eResult<ApiResponse> {
         let url = self.url(url)?;
         let method: reqwest::Method = method
+            .to_ascii_uppercase()
             .parse()
             .map_err(|error| E2eError::Config(format!("bad API method: {error}")))?;
         let mut request = self.client.request(method, &url);
@@ -549,7 +570,7 @@ impl ApiClient {
     }
 
     /// Resolve `path` against the base URL (absolute URLs pass through).
-    fn url(&self, path: &str) -> E2eResult<String> {
+    pub(crate) fn url(&self, path: &str) -> E2eResult<String> {
         if path.starts_with("http://") || path.starts_with("https://") {
             return Ok(path.to_string());
         }
@@ -599,6 +620,10 @@ impl ApiClient {
                 if let Some(body) = request.body_mut().take() {
                     use http_body_util::BodyExt;
                     let body = body.collect().await?.to_bytes();
+                    request.headers_mut().insert(
+                        reqwest::header::CONTENT_LENGTH,
+                        body.len().to_string().parse().expect("valid byte length"),
+                    );
                     *request.body_mut() = Some(body.into());
                 }
                 let _linked = if self.context.is_some() {

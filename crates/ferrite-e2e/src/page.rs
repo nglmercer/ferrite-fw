@@ -13,7 +13,6 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::api::{ApiClient, ApiResponse};
 use crate::context::{TraceScreenshot, TracingState};
 use crate::driver::now_ms;
 use crate::driver::{base64_encode, ConsoleSink, Driver, FrameStream, RecordingState};
@@ -1090,23 +1089,10 @@ pub struct RouteInfo {
     pub method: String,
     /// Request headers as sent.
     pub headers: Vec<(String, String)>,
-    /// Request body bytes (`None` when absent; Firefox never captures it).
+    /// Native bytes/preview; consult body_state() before interpreting availability.
     pub post_data: Option<Vec<u8>>,
-}
-
-impl RouteInfo {
-    /// Fetch the real response over plain HTTP (no browser state, like
-    /// Playwright's `route.fetch`): inspect or rework it, then `Fulfill`.
-    pub async fn fetch(&self) -> E2eResult<ApiResponse> {
-        ApiClient::new()
-            .request(
-                &self.method,
-                &self.url,
-                &self.headers,
-                self.post_data.as_deref(),
-            )
-            .await
-    }
+    pub(crate) body_state: crate::RouteBodyState,
+    pub(crate) owner: Option<crate::route_options::RouteFetchOwner>,
 }
 
 /// A route handler: inspect the request, decide the action.
@@ -4373,6 +4359,12 @@ impl Page {
                 );
                 let configuration = crate::routing::RouteConfiguration::new(rules, handlers)?;
                 self.driver.validate_routing(&configuration)?;
+                self.route_runtime
+                    .set_fetch_owner(self.driver.route_fetch_owner(
+                        self.context_registry.clone(),
+                        self.context_id.clone(),
+                        self.action_timeout.clone(),
+                    ));
                 self.route_runtime.configure(configuration);
                 if let Some(task) = slot.as_ref().filter(|task| !task.is_finished()) {
                     // If no call/stage remains, complete native shutdown before
