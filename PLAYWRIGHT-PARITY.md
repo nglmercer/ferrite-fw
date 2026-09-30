@@ -99,6 +99,18 @@ presence does not establish full Playwright behavior:
   WebSocket observation is Chromium-only; interception/mocking is absent.
 - HAR recording/replay has narrower timing, body, update and archive support.
   Routes do not reproduce every response/redirect/header transformation option.
+  Page/context removal now has default, wait and ignore-errors policies plus
+  explicit Rust cancellation. Default/ignore-errors release pending requests
+  while callbacks finish; later RouteAction decisions are discarded. Wait
+  preserves decisions and shares caller/enclosing deadlines. Dispatch is
+  independent and bounded to 256 concurrent pause tasks; shared hit limits count
+  invocations atomically, including fallback. Empty pumps release native
+  interception after pending stages/calls settle. Rust route priority remains
+  page-first/context-fallback and first-registered-first, rather than upstream's
+  newest-route-first order. Per-handler callback-identity removal is absent.
+  A dispatched request retains its registration snapshot: removed entries cannot
+  start another call, and newly registered entries apply to later requests.
+  Native decisions already issued may finish after cancellation.
 - Traces are Ferrite JSON rather than Trace Viewer archives with DOM/source
   snapshots. Live Reporter callbacks expose attempt and named-step metadata,
   without the complete Suite/TestCase/TestStep graph, blob merging or all

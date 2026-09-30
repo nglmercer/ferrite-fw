@@ -40,6 +40,28 @@ with source page IDs. `wait_for_event` provides a timed filter;
 `wait_for_event_with_options` additionally accepts a cancellation token. A zero
 operation timeout waits until success, cancellation or page/context disposal.
 
+When a route callback may still be running, remove routes with an explicit policy:
+
+```rust
+page.unroute_all_with(
+    UnrouteOptions::default()
+        .behavior(UnrouteBehavior::Wait)
+        .timeout(std::time::Duration::from_secs(5)),
+).await?;
+```
+
+Page and context removal also support pattern and shared-matcher companions.
+Default removal releases active requests to the network while callbacks finish;
+their later decisions are discarded and errors recorded. `IgnoreErrors` also
+suppresses those errors. `Wait` awaits decisions within one shared budget;
+timeout/cancellation stops the wait after removal, without canceling callbacks.
+`Cancel` explicitly drops pending callbacks and aborts their requests. Closing
+the page/context cancels its routing work. Handler hit limits now count every
+invocation, including fallback, and remain shared across context pages.
+Requests retain their dispatch-time registration order; removed entries cannot
+start new calls, while new registrations apply to subsequent requests. Native
+commands already issued may finish after cancellation.
+
 `page.with_cancellation(token)` and `locator.with_cancellation(token)` apply
 cancellation to their clones. `with_timeout` overrides their action/protocol
 budgets without changing siblings. Frame helpers include `page`, `set_content`,

@@ -888,7 +888,7 @@ impl BrowserContext {
     }
 
     /// Register a context-level route handler. Handlers run before
-    /// declarative rules and page handlers; the first matching handler (or
+    /// declarative rules, after page handlers; the first matching handler (or
     /// rule) on the page wins (pattern match on `pattern`), unless it
     /// returns [`RouteAction::Fallback`].
     pub async fn route_with_handler<F, Fut>(&self, pattern: &str, handler: F) -> E2eResult<()>
@@ -1066,73 +1066,96 @@ impl BrowserContext {
         Ok(())
     }
 
-    /// Remove context rules/handlers with `pattern`; returns how many were removed.
+    /// Remove context routes with this pattern, preserving active calls.
     pub async fn unroute(&self, pattern: &str) -> E2eResult<usize> {
-        let removed_rules = self
-            .routes
-            .lock()
-            .map(|mut routes| {
-                let before = routes.len();
-                routes.retain(|rule| rule.pattern != pattern);
-                before - routes.len()
-            })
-            .unwrap_or(0);
-        let removed_handlers = self
-            .handlers
-            .lock()
-            .map(|mut handlers| {
-                let before = handlers.len();
-                handlers.retain(|entry| entry.pattern != pattern);
-                before - handlers.len()
-            })
-            .unwrap_or(0);
-        for page in self.pages() {
-            page.restart_routing().await?;
-        }
-        Ok(removed_rules + removed_handlers)
-    }
-
-    /// Remove all context rules and handlers; returns how many were removed.
-    pub async fn unroute_all(&self) -> E2eResult<usize> {
-        let removed_rules = self
-            .routes
-            .lock()
-            .map(|mut routes| std::mem::take(&mut *routes).len())
-            .unwrap_or(0);
-        let removed_handlers = self
-            .handlers
-            .lock()
-            .map(|mut handlers| std::mem::take(&mut *handlers).len())
-            .unwrap_or(0);
-        for page in self.pages() {
-            page.restart_routing().await?;
-        }
-        Ok(removed_rules + removed_handlers)
-    }
-
-    pub async fn unroute_matching(&self, matcher: &crate::UrlMatcher) -> E2eResult<usize> {
-        self.cancellation
-            .run(async {
-                let matcher = matcher.resolved(|url| self.resolve_url(url))?;
-                let mut removed = 0;
-                {
-                    let mut rules = self.routes.lock().unwrap_or_else(|e| e.into_inner());
-                    let before = rules.len();
-                    rules.retain(|r| r.matcher.as_ref() != Some(&matcher));
-                    removed += before - rules.len();
-                }
-                {
-                    let mut handlers = self.handlers.lock().unwrap_or_else(|e| e.into_inner());
-                    let before = handlers.len();
-                    handlers.retain(|r| r.matcher.as_ref() != Some(&matcher));
-                    removed += before - handlers.len();
-                }
-                for page in self.pages() {
-                    page.restart_routing().await?;
-                }
-                Ok(removed)
-            })
+        self.unroute_with(pattern, crate::UnrouteOptions::default())
             .await
+    }
+    pub async fn unroute_with(
+        &self,
+        pattern: &str,
+        options: crate::UnrouteOptions,
+    ) -> E2eResult<usize> {
+        self.remove_routes(
+            options,
+            |rule| rule.pattern == pattern,
+            |entry| entry.pattern == pattern,
+        )
+        .await
+    }
+    pub async fn unroute_all(&self) -> E2eResult<usize> {
+        self.unroute_all_with(crate::UnrouteOptions::default())
+            .await
+    }
+    pub async fn unroute_all_with(&self, options: crate::UnrouteOptions) -> E2eResult<usize> {
+        self.remove_routes(options, |_| true, |_| true).await
+    }
+    pub async fn unroute_matching(&self, matcher: &crate::UrlMatcher) -> E2eResult<usize> {
+        self.unroute_matching_with(matcher, crate::UnrouteOptions::default())
+            .await
+    }
+    pub async fn unroute_matching_with(
+        &self,
+        matcher: &crate::UrlMatcher,
+        options: crate::UnrouteOptions,
+    ) -> E2eResult<usize> {
+        let matcher = matcher.resolved(|url| self.resolve_url(url))?;
+        self.remove_routes(
+            options,
+            |rule| rule.matcher.as_ref() == Some(&matcher),
+            |entry| entry.matcher.as_ref() == Some(&matcher),
+        )
+        .await
+    }
+    async fn remove_routes(
+        &self,
+        options: crate::UnrouteOptions,
+        rule: impl Fn(&crate::RouteRule) -> bool,
+        handler: impl Fn(&RouteHandlerEntry) -> bool,
+    ) -> E2eResult<usize> {
+        let timeout = options.timeout.unwrap_or_else(|| {
+            self.live
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .action_timeout
+                .unwrap_or(self.timeout)
+        });
+        let work = self
+            .cancellation
+            .run(
+                crate::operation::Deadline::new(timeout).run("context route removal", async {
+                    let removed_rules = {
+                        let mut rules = self.routes.lock().unwrap_or_else(|e| e.into_inner());
+                        let before = rules.len();
+                        rules.retain(|r| !rule(r));
+                        before - rules.len()
+                    };
+                    let removed_handlers = {
+                        let mut entries = self.handlers.lock().unwrap_or_else(|e| e.into_inner());
+                        let removed: Vec<_> =
+                            entries.iter().filter(|e| handler(e)).cloned().collect();
+                        entries.retain(|e| !handler(e));
+                        removed
+                    };
+                    let pages = self.pages();
+                    // Retire on every page before waiting on any single page.
+                    let mut calls = Vec::new();
+                    for page in &pages {
+                        calls.extend(page.retire_routes(&removed_handlers, options.behavior));
+                    }
+                    for page in pages {
+                        page.restart_routing().await?;
+                    }
+                    if options.behavior == crate::UnrouteBehavior::Wait {
+                        crate::routing::wait_calls(calls).await?;
+                    }
+                    Ok(removed_rules + removed_handlers.len())
+                }),
+            );
+        match options.cancellation {
+            Some(token) => token.run(work).await,
+            None => work.await,
+        }
     }
 
     /// Replay responses from a HAR 1.2 file on every current and future page.
@@ -1586,6 +1609,14 @@ impl BrowserContext {
         let _ = self.events.send(ContextEvent::Closed);
         self.cancellation
             .cancel_with_reason("browser context closed");
+        self.routes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        self.handlers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
         let _callback_gate = self.callbacks.gate.lock().await;
         let preloads: Vec<_> = self
             .callbacks

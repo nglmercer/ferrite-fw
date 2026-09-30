@@ -1,0 +1,54 @@
+import {createRequire} from 'node:module';
+import {writeFile} from 'node:fs/promises';
+import {fileURLToPath} from 'node:url';
+import {createServer} from 'node:http';
+const require=createRequire(import.meta.url);
+const modulePath=process.env.FERRITE_PLAYWRIGHT_MODULE || 'playwright';
+const {chromium}=require(modulePath);
+const {version}=require(modulePath+'/package.json');
+if(version!=='1.63.0') throw Error('Reference must use Playwright 1.63.0');
+const server=createServer((request,response)=>response.end('network'));
+await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+const base=`http://127.0.0.1:${server.address().port}`;
+const browser=await chromium.launch({executablePath:process.env.FERRITE_CHROMIUM_PATH,headless:true});
+const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};
+try {
+  const output={playwright:version,engine:'chromium',browser:browser.version(),cases:[]};
+  for(const behavior of ['default','wait','ignoreErrors']) {
+    const page=await browser.newPage();await page.goto(base);
+    const started=deferred(),release=deferred(),completed=deferred();
+    let handlerError=null;
+    await page.route('**/slow',async route=>{started.resolve();await release.promise;try {await route.fulfill({body:'handled'});} catch(error) {handlerError=error.message;} finally {completed.resolve();}});
+    await page.evaluate(()=>{window.routeFetch=fetch('/slow').then(r=>r.text());});
+    await started.promise;
+    let returned=false;
+    const removal=page.unrouteAll({behavior}).then(()=>returned=true);
+    await new Promise(resolve=>setTimeout(resolve,50));
+    const returnedBeforeRelease=returned;
+    release.resolve();await removal;await completed.promise;
+    const result=await page.evaluate(()=>window.routeFetch);
+    output.cases.push({name:`remove-${behavior}`,returnedBeforeRelease,result,handlerError});
+    await page.close();
+  }
+  const page=await browser.newPage();await page.goto(base);
+  const started=deferred(),release=deferred();
+  await page.route('**/slow',async route=>{started.resolve();await release.promise;await route.fulfill({body:'handled'});});
+  await page.evaluate(()=>{window.routeFetch=fetch('/slow').then(r=>r.text());});await started.promise;
+  await page.route('**/fast',route=>route.fulfill({body:'fast'}));
+  const fast=await page.evaluate(()=>fetch('/fast').then(r=>r.text()));
+  release.resolve();const slow=await page.evaluate(()=>window.routeFetch);
+  output.cases.push({name:'register-while-active',fast,slow});await page.unrouteAll();
+  let count=0;
+  await page.route('**/once',async route=>{count++;await new Promise(resolve=>setTimeout(resolve,80));await route.fulfill({body:'once'});},{times:1});
+  const results=await page.evaluate(()=>Promise.all([fetch('/once').then(r=>r.text()),fetch('/once').then(r=>r.text())]));
+  output.cases.push({name:'concurrent-times',count,results:results.sort()});await page.unrouteAll();
+  let fallbacks=0;
+  await page.route('**/fallback',route=>route.fulfill({body:'lower'}));
+  await page.route('**/fallback',async route=>{fallbacks++;await route.fallback();},{times:1});
+  const fallbackResults=await page.evaluate(async()=>[await fetch('/fallback').then(r=>r.text()),await fetch('/fallback').then(r=>r.text())]);
+  output.cases.push({name:'fallback-times',count:fallbacks,results:fallbackResults});
+  await page.close();
+  const target=process.argv[2] || fileURLToPath(new URL('./route-reference.json',import.meta.url));
+  await writeFile(target,JSON.stringify(output,null,2)+'\n');
+  console.log(`Recorded ${output.cases.length} route cases on Playwright ${version}, Chromium ${output.browser}: ${target}`);
+} finally {await browser.close();await new Promise(resolve=>server.close(resolve));}

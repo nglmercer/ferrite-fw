@@ -1,0 +1,46 @@
+{
+  "playwright": "1.63.0",
+  "engine": "chromium",
+  "browser": "153.0.8010.12",
+  "cases": [
+    {
+      "name": "remove-default",
+      "returnedBeforeRelease": true,
+      "result": "network",
+      "handlerError": "route.fulfill: Route is already handled!"
+    },
+    {
+      "name": "remove-wait",
+      "returnedBeforeRelease": false,
+      "result": "handled",
+      "handlerError": null
+    },
+    {
+      "name": "remove-ignoreErrors",
+      "returnedBeforeRelease": true,
+      "result": "network",
+      "handlerError": "route.fulfill: Route is already handled!"
+    },
+    {
+      "name": "register-while-active",
+      "fast": "fast",
+      "slow": "handled"
+    },
+    {
+      "name": "concurrent-times",
+      "count": 1,
+      "results": [
+        "network",
+        "once"
+      ]
+    },
+    {
+      "name": "fallback-times",
+      "count": 1,
+      "results": [
+        "lower",
+        "lower"
+      ]
+    }
+  ]
+}

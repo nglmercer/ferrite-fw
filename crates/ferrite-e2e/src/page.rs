@@ -1156,6 +1156,7 @@ pub struct RouteHandlerEntry {
 
 impl RouteHandlerEntry {
     /// Whether the entry still matches (`times` not exhausted).
+    #[cfg(test)]
     pub(crate) fn allows_match(&self) -> bool {
         match self.times {
             Some(limit) => self.hits.load(std::sync::atomic::Ordering::Relaxed) < limit,
@@ -1164,6 +1165,7 @@ impl RouteHandlerEntry {
     }
 
     /// Record one match.
+    #[cfg(test)]
     pub(crate) fn record_match(&self) {
         self.hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
@@ -1281,6 +1283,7 @@ impl RouteRule {
     }
 
     /// Whether the rule still matches (`times` not exhausted).
+    #[cfg(test)]
     pub(crate) fn allows_match(&self) -> bool {
         match self.times {
             Some(limit) => self.hits.load(std::sync::atomic::Ordering::Relaxed) < limit,
@@ -1289,6 +1292,7 @@ impl RouteRule {
     }
 
     /// Record one match.
+    #[cfg(test)]
     pub(crate) fn record_match(&self) {
         self.hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
@@ -1603,7 +1607,8 @@ pub struct Page {
     sink: ConsoleSink,
     slow_mo: Duration,
     base_url: Option<String>,
-    routing: Arc<Mutex<Option<tokio::task::AbortHandle>>>,
+    routing: Arc<crate::routing::PumpSlot>,
+    route_runtime: Arc<crate::routing::RouteRuntime>,
     dialogs: Arc<Mutex<Option<tokio::task::AbortHandle>>>,
     capture: Arc<Mutex<Option<CaptureState>>>,
     routes: Arc<Mutex<Vec<RouteRule>>>,
@@ -1716,7 +1721,8 @@ impl Page {
             sink,
             slow_mo,
             base_url,
-            routing: Arc::new(Mutex::new(None)),
+            routing: Arc::new(tokio::sync::Mutex::new(None)),
+            route_runtime: Arc::new(crate::routing::RouteRuntime::default()),
             dialogs: Arc::new(Mutex::new(None)),
             capture: Arc::new(Mutex::new(None)),
             routes: Arc::new(Mutex::new(Vec::new())),
@@ -2027,6 +2033,16 @@ impl Page {
             return;
         }
         *closed = true;
+        drop(closed);
+        self.routes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        self.handlers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        self.route_runtime.clear();
         self.exposed.stop();
         self.emit(PageEvent::Closed);
         self.driver.cancel_lifecycle();
@@ -4166,87 +4182,119 @@ impl Page {
         self.restart_routing().await
     }
 
-    /// Stop page-level interception (rules and handlers; context entries
-    /// still apply).
+    /// Stop page-level interception; current handler calls continue.
     pub async fn stop_routing(&self) {
-        *self.routes.lock().unwrap_or_else(|e| e.into_inner()) = Vec::new();
-        *self.handlers.lock().unwrap_or_else(|e| e.into_inner()) = Vec::new();
-        let _ = self.restart_routing().await;
+        if self.is_closed() {
+            self.routes
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clear();
+            self.handlers
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clear();
+            self.route_runtime.clear();
+            if let Some(task) = self.routing.lock().await.take() {
+                task.abort();
+            }
+            let _ =
+                tokio::time::timeout(Duration::from_millis(750), self.driver.stop_routing()).await;
+        } else {
+            let _ = self.unroute_all().await;
+        }
     }
 
-    /// Remove rules and handlers with `pattern`; returns how many were
-    /// removed (both kinds counted).
+    /// Remove page rules/handlers with this pattern, preserving active calls.
     pub async fn unroute(&self, pattern: &str) -> E2eResult<usize> {
-        self.driver
-            .run(async {
-                let removed = self
-                    .routes
-                    .lock()
-                    .map(|mut routes| {
-                        let before = routes.len();
-                        routes.retain(|rule| rule.pattern != pattern);
-                        before - routes.len()
-                    })
-                    .unwrap_or(0);
-                let removed_handlers = self
-                    .handlers
-                    .lock()
-                    .map(|mut handlers| {
-                        let before = handlers.len();
-                        handlers.retain(|entry| entry.pattern != pattern);
-                        before - handlers.len()
-                    })
-                    .unwrap_or(0);
-                self.restart_routing().await?;
-                Ok(removed + removed_handlers)
-            })
+        self.unroute_with(pattern, crate::UnrouteOptions::default())
             .await
     }
-
-    /// Remove all page-level rules and handlers (context entries still apply).
-    ///
-    /// Returns how many entries were removed (both kinds counted).
+    pub async fn unroute_with(
+        &self,
+        pattern: &str,
+        options: crate::UnrouteOptions,
+    ) -> E2eResult<usize> {
+        self.remove_routes(
+            options,
+            |rule| rule.pattern == pattern,
+            |entry| entry.pattern == pattern,
+        )
+        .await
+    }
+    /// Remove all page routes, preserving active calls and context routes.
     pub async fn unroute_all(&self) -> E2eResult<usize> {
-        self.driver
-            .run(async {
-                let removed = self
-                    .routes
-                    .lock()
-                    .map(|mut routes| std::mem::take(&mut *routes).len())
-                    .unwrap_or(0);
-                let removed_handlers = self
-                    .handlers
-                    .lock()
-                    .map(|mut handlers| std::mem::take(&mut *handlers).len())
-                    .unwrap_or(0);
-                self.restart_routing().await?;
-                Ok(removed + removed_handlers)
-            })
+        self.unroute_all_with(crate::UnrouteOptions::default())
             .await
     }
-
-    /// Remove rules/handlers with this resolved matcher identity.
+    pub async fn unroute_all_with(&self, options: crate::UnrouteOptions) -> E2eResult<usize> {
+        self.remove_routes(options, |_| true, |_| true).await
+    }
+    /// Remove routes with this resolved matcher identity.
     pub async fn unroute_matching(&self, matcher: &crate::UrlMatcher) -> E2eResult<usize> {
-        self.driver
-            .run(async {
-                let matcher = matcher.resolved(|url| self.resolve_url(url))?;
-                let mut removed = 0;
-                {
-                    let mut rules = self.routes.lock().unwrap_or_else(|e| e.into_inner());
-                    let before = rules.len();
-                    rules.retain(|r| r.matcher.as_ref() != Some(&matcher));
-                    removed += before - rules.len();
-                }
-                {
-                    let mut handlers = self.handlers.lock().unwrap_or_else(|e| e.into_inner());
-                    let before = handlers.len();
-                    handlers.retain(|r| r.matcher.as_ref() != Some(&matcher));
-                    removed += before - handlers.len();
-                }
-                self.restart_routing().await?;
-                Ok(removed)
-            })
+        self.unroute_matching_with(matcher, crate::UnrouteOptions::default())
             .await
+    }
+    pub async fn unroute_matching_with(
+        &self,
+        matcher: &crate::UrlMatcher,
+        options: crate::UnrouteOptions,
+    ) -> E2eResult<usize> {
+        let matcher = matcher.resolved(|url| self.resolve_url(url))?;
+        self.remove_routes(
+            options,
+            |rule| rule.matcher.as_ref() == Some(&matcher),
+            |entry| entry.matcher.as_ref() == Some(&matcher),
+        )
+        .await
+    }
+    async fn remove_routes(
+        &self,
+        options: crate::UnrouteOptions,
+        rule: impl Fn(&RouteRule) -> bool,
+        handler: impl Fn(&RouteHandlerEntry) -> bool,
+    ) -> E2eResult<usize> {
+        let scoped = self.operation_page(&crate::OperationOptions {
+            timeout: options.timeout,
+            cancellation: options.cancellation,
+        });
+        let timeout = options.timeout.unwrap_or_else(|| {
+            *self
+                .action_timeout
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+        });
+        scoped
+            .run_operation(
+                crate::operation::Deadline::new(timeout).run("route removal", async {
+                    let removed_rules = {
+                        let mut rules = self.routes.lock().unwrap_or_else(|e| e.into_inner());
+                        let before = rules.len();
+                        rules.retain(|r| !rule(r));
+                        before - rules.len()
+                    };
+                    let removed_handlers = {
+                        let mut entries = self.handlers.lock().unwrap_or_else(|e| e.into_inner());
+                        let removed: Vec<_> =
+                            entries.iter().filter(|e| handler(e)).cloned().collect();
+                        entries.retain(|e| !handler(e));
+                        removed
+                    };
+                    let calls = self.retire_routes(&removed_handlers, options.behavior);
+                    scoped.restart_routing().await?;
+                    if options.behavior == crate::UnrouteBehavior::Wait {
+                        crate::routing::wait_calls(calls).await?;
+                    }
+                    Ok(removed_rules + removed_handlers.len())
+                }),
+            )
+            .await
+    }
+    pub(crate) fn retire_routes(
+        &self,
+        entries: &[RouteHandlerEntry],
+        behavior: crate::UnrouteBehavior,
+    ) -> Vec<crate::CancellationToken> {
+        self.route_runtime.retire(entries, behavior)
     }
 
     /// Replay responses from a HAR 1.2 file (Playwright `routeFromHAR`).
@@ -4300,41 +4348,54 @@ impl Page {
     pub(crate) async fn restart_routing(&self) -> E2eResult<()> {
         self.driver
             .run(async {
-                let handle = self.routing.lock().map(|mut r| r.take()).unwrap_or(None);
-                if let Some(handle) = handle {
-                    handle.abort();
-                    self.driver.stop_routing().await;
-                }
+                let mut slot = self.routing.lock().await;
                 let mut rules = self
                     .routes
                     .lock()
-                    .map(|routes| routes.clone())
-                    .unwrap_or_default();
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone();
                 rules.extend(
                     self.context_routes
                         .lock()
-                        .map(|routes| routes.clone())
-                        .unwrap_or_default(),
+                        .unwrap_or_else(|e| e.into_inner())
+                        .clone(),
                 );
                 let mut handlers = self
                     .handlers
                     .lock()
-                    .map(|handlers| handlers.clone())
-                    .unwrap_or_default();
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone();
                 handlers.extend(
                     self.context_handlers
                         .lock()
-                        .map(|handlers| handlers.clone())
-                        .unwrap_or_default(),
+                        .unwrap_or_else(|e| e.into_inner())
+                        .clone(),
                 );
-                if rules.is_empty() && handlers.is_empty() {
+                let configuration = crate::routing::RouteConfiguration::new(rules, handlers)?;
+                self.driver.validate_routing(&configuration)?;
+                self.route_runtime.configure(configuration);
+                if let Some(task) = slot.as_ref().filter(|task| !task.is_finished()) {
+                    // If no call/stage remains, complete native shutdown before
+                    // a subsequent page operation can start another request.
+                    // Active default/ignore-errors callbacks never make removal wait.
+                    let stopped = self.route_runtime.idle().then(|| task.stopped.clone());
+                    drop(slot);
+                    if let Some(stopped) = stopped {
+                        stopped.cancelled().await;
+                    }
                     return Ok(());
                 }
-                let handle = self
+                if slot.take().is_some() {
+                    self.driver.stop_routing().await;
+                }
+                if self.route_runtime.empty() {
+                    return Ok(());
+                }
+                let task = self
                     .driver
-                    .start_routing(Arc::new(rules), Arc::new(handlers))
+                    .start_routing(self.route_runtime.clone(), Arc::downgrade(&self.routing))
                     .await?;
-                *self.routing.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
+                *slot = Some(task);
                 Ok(())
             })
             .await

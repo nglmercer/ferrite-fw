@@ -66,3 +66,20 @@ external-install environment above, replacing `url-reference.mjs` with
 cadence, retained cyclic-object identity, predicate errors, frames, disposal,
 zero deadlines, cancellation/drop cleanup, document replacement and runner retries
 on installed Chromium and Firefox.
+
+`route-reference.mjs` / `route-reference.json` record six actual Playwright
+1.63.0 Chromium cases: default/wait/ignore-errors removal, registration during
+an active call, concurrent hit limits and fallback hit consumption. Regenerate
+with the same external-install environment and `route-reference.mjs`, or run
+`npm run reference:routes`. `route_lifecycle.rs` uses this reference for released
+request results and hit/fallback counts, and verifies the remaining removal,
+registration, cancellation and lifecycle behavior natively on both engines.
+
+Default and ignore-errors removal release the pending request to the network;
+an upstream callback that later tries to fulfill records `Route is already
+handled!`. Ferrite's Rust callback returns a RouteAction rather than operating
+on a live Route: its late decision is discarded, while later callback errors
+are recorded or suppressed according to policy. Wait mode preserves and awaits
+the decision. Explicit Cancel is a Rust extension. Rust registration order stays
+page-first/context-fallback and first-registered-first; this corpus does not
+claim equivalence to Playwright's newest-route-first priority.

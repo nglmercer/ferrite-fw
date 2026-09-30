@@ -32,6 +32,7 @@ Partial means the listed limitation must be retained in API/docs/test evidence.
 | PDF export | Partial | Unsupported | Native Chromium Page.printToPDF; options extension tracked separately |
 | Native response-body capture | Partial | Unsupported | Chromium capture is capped/truncated; missing is distinct from an empty body |
 | Route request control | Partial | Partial | Supported request interception operations; see route regressions |
+| Page/context route removal policies | Supported | Supported | Default/ignore-errors release active requests while callbacks settle; wait retains decisions; explicit Cancel is a Rust extension. Match limits are reserved atomically across pages, including fallback. |
 | Route response rewriting / URL override | Supported | Unsupported | Firefox rejects unsupported overrides explicitly |
 | HAR capture/replay | Partial | Partial | Engine body and response rewriting limits carry through |
 | WebSocket observation | Supported | Unsupported | No stock BiDi socket-frame stream; routing/mocking excluded |
@@ -63,6 +64,14 @@ actual API transport, serialization, binary fulfillment, separate cookies with
 Expires commas, browser cookie storage and per-hop same-URL synthetic redirects.
 Generic native comma folding stays intact; known route-supplied pairs are
 retained separately from native completeness signals.
+
+[route_lifecycle.rs](crates/ferrite-e2e/tests/route_lifecycle.rs) checks active-call
+removal, independent dispatch, registration churn, default/wait/ignore-errors/
+cancel, errors/panics, shared finite hit limits, context/future-page routing,
+budgets, retries, disposal and transport loss. Its pinned Chromium reference
+records actual Playwright release behavior; native regressions also run on
+Firefox. Empty interception is released after pending native stages and calls
+settle; Firefox pauses queued before removal are explicitly continued.
 
 Run the portable gate with both executable paths supplied:
 

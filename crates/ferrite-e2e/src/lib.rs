@@ -65,6 +65,7 @@ mod network;
 mod operation;
 mod page;
 mod report;
+mod routing;
 mod runner;
 mod snapshot;
 mod url_matcher;
@@ -121,6 +122,7 @@ pub use report::{
     StepAnnotation, StepCategory, StepContext, StepInfo, StepOptions, StepOutcome, StepStatus,
     TestError, TestReport, TestResult, TestStatus,
 };
+pub use routing::{UnrouteBehavior, UnrouteOptions};
 pub use runner::{
     describe, test, test_with_context, ContextHook, Fixture, FixtureMap, FixtureScope, GlobalHook,
     HookFn, Project, Runner, Suite, Test, TestContext, TestContextFn, TestInfo, TestMode,

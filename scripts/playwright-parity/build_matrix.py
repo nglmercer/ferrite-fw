@@ -385,6 +385,9 @@ put('PageAssertions','toHaveURL','PageExpect.url_matching','Shared exact/base UR
 for c in ['Page','BrowserContext']:
  for m,t in {'route':'route_matching','unroute':'unroute_matching','routeFromHAR':'route_from_har'}.items():
   put(c,m,c+'.'+t,'Shared resolved UrlMatcher for rules/handlers/HAR filters, with match limits and identity-based removal; legacy string/globset contracts preserved. Invalid patterns fail before registration, including empty contexts; native response/URL override differences remain. In-flight removal and fuller HAR policies tracked separately.')
+for c in ['Page','BrowserContext']:
+ for m,t in {'unrouteAll':'unroute_all_with','unroute':'unroute_matching_with'}.items():
+  put(c,m,c+'.'+t,'Pattern/shared-matcher/all removal with default/wait/ignore-errors and explicit Rust Cancel. Default/ignore-errors release requests while callbacks settle and discard late decisions; wait preserves native decisions within shared deadlines. Independent bounded dispatch, atomic invocation limits including fallback, disposal/retry/disconnect cleanup verified on Chromium/Firefox. Rust first-registration/page priority and no callback-identity removal remain differences.')
 def default_note(c,e):
  if c.startswith('Android') or c in ['Electron','ElectronApplication']:return 'Experimental upstream API; Ferrite has no Android/ADB/WebView or Electron backend.'
  if c=='ElementHandle':return 'No ElementHandle abstraction; locator replacements cover many DOM actions but do not reproduce handle identity/lifetime semantics.'

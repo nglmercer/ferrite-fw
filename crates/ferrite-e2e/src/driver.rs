@@ -19,7 +19,7 @@ use crate::jshandle::JSHandle;
 use crate::page::{
     ColorScheme, ConsoleMessage, Cookie, DialogDecision, DialogHandler, DialogInfo, ElementRect,
     FrameInfo, LoadState, NetworkRequest, PageEvent, RecordedRequest, ReducedMotion, RouteAction,
-    RouteHandlerEntry, RouteInfo, RouteRule, TraceEntry, WebSocketDirection, WebSocketEvent,
+    RouteInfo, TraceEntry, WebSocketDirection, WebSocketEvent,
 };
 use crate::video::{assemble_webm, SpooledFrame, VideoFrame, VideoOptions};
 
@@ -1680,16 +1680,31 @@ impl Driver {
         .await
     }
 
-    /// Start intercepting requests; returns the handler task handle.
-    pub async fn start_routing(
+    pub(crate) fn validate_routing(
         &self,
-        rules: Arc<Vec<RouteRule>>,
-        handlers: Arc<Vec<RouteHandlerEntry>>,
-    ) -> E2eResult<tokio::task::AbortHandle> {
+        configuration: &crate::routing::RouteConfiguration,
+    ) -> E2eResult<()> {
+        if matches!(self, Self::Bidi(_)) {
+            for rule in configuration.rules() {
+                if matches!(rule.action, RouteAction::ContinueWith { url: Some(_), .. }) {
+                    return Err(E2eError::Config("continue_with url overrides are not supported on Firefox (BiDi aborts the redirected request)".into()));
+                }
+                if matches!(rule.action, RouteAction::ModifyResponse { .. }) {
+                    return Err(E2eError::Config("modify_response is not supported on Firefox (BiDi provideResponse overrides are request-phase-only)".into()));
+                }
+            }
+        }
+        Ok(())
+    }
+    pub(crate) async fn start_routing(
+        &self,
+        runtime: Arc<crate::routing::RouteRuntime>,
+        slot: std::sync::Weak<crate::routing::PumpSlot>,
+    ) -> E2eResult<crate::routing::RoutePump> {
         self.run(async {
             match self {
-                Self::Cdp(driver) => driver.start_routing(rules, handlers).await,
-                Self::Bidi(driver) => driver.start_routing(rules, handlers).await,
+                Self::Cdp(driver) => driver.start_routing(runtime, slot).await,
+                Self::Bidi(driver) => driver.start_routing(runtime, slot).await,
             }
         })
         .await
@@ -2779,71 +2794,119 @@ impl CdpDriver {
 
     async fn start_routing(
         &self,
-        rules: Arc<Vec<RouteRule>>,
-        handlers: Arc<Vec<RouteHandlerEntry>>,
-    ) -> E2eResult<tokio::task::AbortHandle> {
-        let set = routing_matchers(
-            rules
-                .iter()
-                .map(|rule| (rule.pattern.as_str(), rule.matcher.as_ref())),
-        )?;
-        let handler_set = routing_matchers(
-            handlers
-                .iter()
-                .map(|entry| (entry.pattern.as_str(), entry.matcher.as_ref())),
-        )?;
-        // Handler decisions may modify responses, so handlers imply the
-        // response stage (rules alone only need it for ModifyResponse).
-        let wants_response = !handlers.is_empty()
-            || rules
-                .iter()
-                .any(|rule| matches!(rule.action, RouteAction::ModifyResponse { .. }));
-        let mut patterns = vec![serde_json::json!({ "urlPattern": "*" })];
-        if wants_response {
-            patterns.push(serde_json::json!({ "urlPattern": "*", "requestStage": "Response" }));
-        }
+        runtime: Arc<crate::routing::RouteRuntime>,
+        slot: std::sync::Weak<crate::routing::PumpSlot>,
+    ) -> E2eResult<crate::routing::RoutePump> {
+        let mut events = self.cdp.subscribe();
         if let Ok(mut shared) = self.fetch_auth.lock() {
-            shared.routing_patterns = Some(patterns);
+            shared.routing_patterns = Some(vec![
+                serde_json::json!({ "urlPattern": "*" }),
+                serde_json::json!({ "urlPattern": "*", "requestStage": "Response" }),
+            ]);
         }
         self.apply_fetch_config().await?;
-        let mut events = self.cdp.subscribe();
         let session = self.session.clone();
         let cdp = self.cdp.clone();
         let sink = self.sink.clone();
         let timeout = self.timeout();
+        let lifecycle = self.lifecycle.clone();
+        let context_lifecycle = self.context_cancellation.clone();
+        let transport = self.cdp.disconnection();
+        let driver = Driver::Cdp(self.clone());
+        let stopped = crate::CancellationToken::new();
+        let completion = crate::routing::PumpCompletion(stopped.clone());
         let handle = tokio::spawn(async move {
-            // Handler decisions cached for response-stage replay (handlers
-            // run once per request, at the request stage).
-            let mut decided: HashMap<String, RouteAction> = HashMap::new();
+            let _completion = completion;
+            let decided = Arc::new(Mutex::new(HashMap::<String, CachedRouteDecision>::new()));
+            let mut tasks = tokio::task::JoinSet::new();
             loop {
-                let event = match events.recv().await {
-                    Ok(event) => event,
-                    Err(_) => break,
-                };
-                if event.session.as_deref() != Some(&session)
-                    || event.method != "Fetch.requestPaused"
+                if route_pump_idle(&runtime, &slot, &driver, || async {
+                    while let Ok(event) = events.try_recv() {
+                        if event.session.as_deref() == Some(&session)
+                            && event.method == "Fetch.requestPaused"
+                        {
+                            let response = event.params.get("responseStatusCode").is_some()
+                                || event.params.get("responseHeaders").is_some()
+                                || event.params.get("responseErrorReason").is_some();
+                            let method = if response {
+                                "Fetch.continueResponse"
+                            } else {
+                                "Fetch.continueRequest"
+                            };
+                            if let Err(error) = cdp
+                                .call(
+                                    Some(&session),
+                                    method,
+                                    serde_json::json!({ "requestId": event.params["requestId"] }),
+                                    Duration::from_millis(750),
+                                )
+                                .await
+                            {
+                                sink.record(
+                                    "route_cleanup",
+                                    format!("queued pause release failed: {error}"),
+                                );
+                            }
+                        }
+                    }
+                })
+                .await
                 {
+                    return;
+                }
+                let event = tokio::select! { biased;
+                    _ = lifecycle.cancelled() => break,
+                    _ = context_lifecycle.cancelled() => break,
+                    _ = transport.cancelled() => break,
+                    Some(_) = tasks.join_next(), if !tasks.is_empty() => continue,
+                    _ = runtime.changed.notified() => continue,
+                    event = events.recv(), if tasks.len() < 256 => match event { Ok(event) => event, Err(error) => { sink.record("route", format!("interception event stream ended: {error}")); break; } },
+                };
+                if event.session.as_deref() != Some(&session) {
                     continue;
                 }
-                let request_id = event.params["requestId"].clone();
-                let url = event.params["request"]["url"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .to_string();
-                let response_stage = event.params.get("responseStatusCode").is_some()
-                    || event.params.get("responseHeaders").is_some();
-                let decided_action: Option<RouteAction> = if response_stage {
-                    request_id
+                if matches!(
+                    event.method.as_str(),
+                    "Network.loadingFailed" | "Network.loadingFinished"
+                ) {
+                    let id = event.params["requestId"].as_str();
+                    decided
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .retain(|_, pending| pending.network_id.as_deref() != id);
+                    continue;
+                }
+                if event.method != "Fetch.requestPaused" {
+                    continue;
+                }
+                let runtime = runtime.clone();
+                let request_guard = runtime.request();
+                let sink = sink.clone();
+                let session = session.clone();
+                let cdp = cdp.clone();
+                let decided = decided.clone();
+                tasks.spawn(async move {
+                    let request_id = event.params["requestId"].clone();
+                    let url = event.params["request"]["url"]
                         .as_str()
-                        .and_then(|id| decided.remove(id))
-                        .or_else(|| rule_action_for(&rules, &set, &url))
-                } else {
-                    let mut action = None;
-                    for index in sorted_matches(&handler_set, &url) {
-                        let hit = &handlers[index];
-                        if !hit.allows_match() {
-                            continue;
-                        }
+                        .unwrap_or_default()
+                        .to_string();
+                    let response_stage = event.params.get("responseStatusCode").is_some()
+                        || event.params.get("responseHeaders").is_some()
+                        || event.params.get("responseErrorReason").is_some();
+                    let mut request_guard = Some(request_guard);
+                    let mut handler = None;
+                    let cached = if response_stage {
+                        decided
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .remove(request_id.as_str().unwrap_or_default())
+                    } else {
+                        None
+                    };
+                    let decided_action = if response_stage {
+                        cached.as_ref().filter(|c| !c._request.forward.is_cancelled()).and_then(|c| c.action.clone())
+                    } else {
                         let info = RouteInfo {
                             url: url.clone(),
                             method: event.params["request"]["method"]
@@ -2856,113 +2919,111 @@ impl CdpDriver {
                                 .and_then(Value::as_str)
                                 .map(|data| data.as_bytes().to_vec()),
                         };
-                        let decision = match (hit.handler)(info).await {
-                            Ok(decision) => decision,
-                            Err(error) => {
-                                sink.record("route", format!("handler failed, aborting: {error}"));
-                                hit.record_match();
-                                action = Some(RouteAction::Abort);
-                                break;
-                            }
+                        let forward = request_guard.as_ref().unwrap().forward.clone();
+                        let decision = runtime.decide(info, &sink, &forward);
+                        tokio::pin!(decision);
+                        let (action, active) = tokio::select! { biased;
+                            _ = forward.cancelled() => {
+                                decided.lock().unwrap_or_else(|e| e.into_inner()).insert(request_id.as_str().unwrap_or_default().to_string(), CachedRouteDecision { action: None, _handler: None, _request: request_guard.take().unwrap(), network_id: event.params["networkId"].as_str().map(str::to_string) });
+                                let result = cdp.call(Some(&session), "Fetch.continueRequest", serde_json::json!({ "requestId": request_id }), timeout).await;
+                                if result.is_err() { decided.lock().unwrap_or_else(|e| e.into_inner()).remove(request_id.as_str().unwrap_or_default()); }
+                                // Preserve the callback and error policy, but its route is already released.
+                                let _ = decision.await;
+                                return;
+                            },
+                            result = &mut decision => result,
                         };
-                        if matches!(decision, RouteAction::Fallback) {
-                            continue;
-                        }
-                        hit.record_match();
-                        if matches!(decision, RouteAction::ModifyResponse { .. }) {
-                            if decided.len() > 4096 {
-                                decided.clear();
-                            }
-                            if let Some(id) = request_id.as_str() {
-                                decided.insert(id.to_string(), decision.clone());
-                            }
-                        }
-                        action = Some(decision);
-                        break;
+                        handler = active;
+                        // Response interception outlives the request-stage RPC.
+                        // Keep every native request owned until its response pause
+                        // or terminal event, so idle removal cannot disable Fetch
+                        // between the two stages (including unrelated traffic).
+                        let edit = action.as_ref().filter(|action| matches!(action, RouteAction::ModifyResponse { .. })).cloned();
+                        let mut pending = decided.lock().unwrap_or_else(|e| e.into_inner());
+                        if pending.len() >= 4096 { pending.clear(); sink.record("route", "response decision history exceeded its bound".into()); }
+                        pending.insert(request_id.as_str().unwrap_or_default().to_string(), CachedRouteDecision { action: edit.clone(), _handler: if edit.is_some() { handler.take() } else { None }, _request: request_guard.take().unwrap(), network_id: event.params["networkId"].as_str().map(str::to_string) });
+                        drop(pending);
+                        action
+                    };
+                    let action = decided_action.as_ref();
+                    if response_stage {
+                        answer_response_pause(
+                            &cdp,
+                            &session,
+                            timeout,
+                            &request_id,
+                            &event.params,
+                            action,
+                        )
+                        .await;
+                        drop(cached);
+                        return;
                     }
-                    if action.is_none() {
-                        action = rule_action_for(&rules, &set, &url);
-                    }
-                    action
-                };
-                let action = decided_action.as_ref();
-                if response_stage {
-                    answer_response_pause(
-                        &cdp,
-                        &session,
-                        timeout,
-                        &request_id,
-                        &event.params,
-                        action,
-                    )
-                    .await;
-                    continue;
-                }
-                let is_override = matches!(action, Some(RouteAction::ContinueWith { .. }));
-                let (method, params) = match action {
-                    Some(RouteAction::Abort) => (
-                        "Fetch.failRequest",
-                        serde_json::json!({
-                            "requestId": request_id,
-                            "errorReason": "Aborted",
-                        }),
-                    ),
-                    Some(RouteAction::AbortWith(reason)) => (
-                        "Fetch.failRequest",
-                        serde_json::json!({
-                            "requestId": request_id,
-                            "errorReason": reason.as_cdp(),
-                        }),
-                    ),
-                    Some(RouteAction::Fulfill {
-                        status,
-                        status_text,
-                        headers,
-                        body,
-                        content_type,
-                    }) => {
-                        let mut response_headers: Vec<Value> = headers
+                    let is_override = matches!(action, Some(RouteAction::ContinueWith { .. }));
+                    let (method, params) = match action {
+                        Some(RouteAction::Abort) => (
+                            "Fetch.failRequest",
+                            serde_json::json!({
+                                "requestId": request_id,
+                                "errorReason": "Aborted",
+                            }),
+                        ),
+                        Some(RouteAction::AbortWith(reason)) => (
+                            "Fetch.failRequest",
+                            serde_json::json!({
+                                "requestId": request_id,
+                                "errorReason": reason.as_cdp(),
+                            }),
+                        ),
+                        Some(RouteAction::Fulfill {
+                            status,
+                            status_text,
+                            headers,
+                            body,
+                            content_type,
+                        }) => {
+                            let mut response_headers: Vec<Value> = headers
                             .iter()
                             .map(
                                 |(name, value)| serde_json::json!({ "name": name, "value": value }),
                             )
                             .collect();
-                        if !content_type.is_empty()
-                            && !headers
-                                .iter()
-                                .any(|(name, _)| name.eq_ignore_ascii_case("content-type"))
-                        {
-                            response_headers.push(serde_json::json!({
-                                "name": "Content-Type",
-                                "value": content_type,
-                            }));
+                            if !content_type.is_empty()
+                                && !headers
+                                    .iter()
+                                    .any(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+                            {
+                                response_headers.push(serde_json::json!({
+                                    "name": "Content-Type",
+                                    "value": content_type,
+                                }));
+                            }
+                            let mut params = serde_json::json!({
+                                "requestId": request_id,
+                                "responseCode": status,
+                                "body": base64_encode(body),
+                                "responseHeaders": response_headers,
+                            });
+                            if !status_text.is_empty() {
+                                params["responsePhrase"] = Value::String(status_text.clone());
+                            }
+                            ("Fetch.fulfillRequest", params)
                         }
-                        let mut params = serde_json::json!({
-                            "requestId": request_id,
-                            "responseCode": status,
-                            "body": base64_encode(body),
-                            "responseHeaders": response_headers,
-                        });
-                        if !status_text.is_empty() {
-                            params["responsePhrase"] = Value::String(status_text.clone());
-                        }
-                        ("Fetch.fulfillRequest", params)
-                    }
-                    Some(RouteAction::ContinueWith {
-                        url,
-                        method,
-                        headers,
-                        body,
-                    }) => {
-                        let mut params = serde_json::json!({ "requestId": request_id });
-                        if let Some(url) = url {
-                            params["url"] = Value::String(url.clone());
-                        }
-                        if let Some(method) = method {
-                            params["method"] = Value::String(method.clone());
-                        }
-                        if let Some(headers) = headers {
-                            params["headers"] = Value::Array(
+                        Some(RouteAction::ContinueWith {
+                            url,
+                            method,
+                            headers,
+                            body,
+                        }) => {
+                            let mut params = serde_json::json!({ "requestId": request_id });
+                            if let Some(url) = url {
+                                params["url"] = Value::String(url.clone());
+                            }
+                            if let Some(method) = method {
+                                params["method"] = Value::String(method.clone());
+                            }
+                            if let Some(headers) = headers {
+                                params["headers"] = Value::Array(
                                 headers
                                     .iter()
                                     .map(|(name, value)| {
@@ -2970,48 +3031,67 @@ impl CdpDriver {
                                     })
                                     .collect(),
                             );
+                            }
+                            if let Some(body) = body {
+                                params["postData"] = Value::String(base64_encode(body));
+                            }
+                            ("Fetch.continueRequest", params)
                         }
-                        if let Some(body) = body {
-                            params["postData"] = Value::String(base64_encode(body));
-                        }
-                        ("Fetch.continueRequest", params)
-                    }
-                    // Response edits apply at the response stage; the request
-                    // must reach the server first.
-                    Some(RouteAction::ModifyResponse { .. }) | None => (
-                        "Fetch.continueRequest",
-                        serde_json::json!({ "requestId": request_id }),
-                    ),
-                    _ => (
-                        "Fetch.continueRequest",
-                        serde_json::json!({ "requestId": request_id }),
-                    ),
-                };
-                let supplied = event.params["networkId"].as_str().and_then(|id| {
-                    request_id
-                        .as_str()
-                        .and_then(|pause_id| sink.routed_headers(pause_id, id, &url, action))
-                });
-                let result = cdp.call(Some(&session), method, params, timeout).await;
-                if result.is_ok() {
-                    if let Some(supplied) = supplied {
-                        supplied.accept();
-                    }
-                }
-                if result.is_err() && is_override {
-                    // Rejected overrides must not hang the page: let it through.
-                    let _ = cdp
-                        .call(
-                            Some(&session),
+                        // Response edits apply at the response stage; the request
+                        // must reach the server first.
+                        Some(RouteAction::ModifyResponse { .. }) | None => (
                             "Fetch.continueRequest",
-                            serde_json::json!({ "requestId": event.params["requestId"] }),
-                            timeout,
-                        )
-                        .await;
-                }
+                            serde_json::json!({ "requestId": request_id }),
+                        ),
+                        _ => (
+                            "Fetch.continueRequest",
+                            serde_json::json!({ "requestId": request_id }),
+                        ),
+                    };
+                    let supplied = event.params["networkId"].as_str().and_then(|id| {
+                        request_id
+                            .as_str()
+                            .and_then(|pause_id| sink.routed_headers(pause_id, id, &url, action))
+                    });
+                    let result = cdp.call(Some(&session), method, params, timeout).await;
+                    if let Err(error) = &result { sink.record("route", format!("native route decision failed: {error}")); }
+                    if result.is_ok() {
+                        if let Some(supplied) = supplied {
+                            supplied.accept();
+                        }
+                    }
+                    if result.is_err() && is_override {
+                        // Rejected overrides must not hang the page: let it through.
+                        let _ = cdp
+                            .call(
+                                Some(&session),
+                                "Fetch.continueRequest",
+                                serde_json::json!({ "requestId": event.params["requestId"] }),
+                                timeout,
+                            )
+                            .await;
+                    }
+                    if result.is_err() {
+                        decided
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .remove(request_id.as_str().unwrap_or_default());
+                    }
+                    drop(cached);
+                    drop(handler);
+                    drop(request_guard);
+                });
             }
+            tasks.abort_all();
+            tasks.shutdown().await;
+            decided.lock().unwrap_or_else(|e| e.into_inner()).clear();
+            runtime.clear();
+            let _ = tokio::time::timeout(Duration::from_millis(750), driver.stop_routing()).await;
         });
-        Ok(handle.abort_handle())
+        Ok(crate::routing::RoutePump::new(
+            handle.abort_handle(),
+            stopped,
+        ))
     }
 
     async fn stop_routing(&self) {
@@ -4524,48 +4604,10 @@ impl BidiDriver {
 
     async fn start_routing(
         &self,
-        rules: Arc<Vec<RouteRule>>,
-        handlers: Arc<Vec<RouteHandlerEntry>>,
-    ) -> E2eResult<tokio::task::AbortHandle> {
-        let set = routing_matchers(
-            rules
-                .iter()
-                .map(|rule| (rule.pattern.as_str(), rule.matcher.as_ref())),
-        )?;
-        let handler_set = routing_matchers(
-            handlers
-                .iter()
-                .map(|entry| (entry.pattern.as_str(), entry.matcher.as_ref())),
-        )?;
-        // Firefox accepts `url` overrides but aborts the redirected request,
-        // so fail fast instead of breaking the page's fetch.
-        if rules
-            .iter()
-            .any(|rule| matches!(&rule.action, RouteAction::ContinueWith { url: Some(_), .. }))
-        {
-            return Err(E2eError::Config(
-                "continue_with url overrides are not supported on Firefox \
-                 (BiDi aborts the redirected request)"
-                    .to_string(),
-            ));
-        }
-        // Firefox rejects every `provideResponse` override at `responseStarted`
-        // (status, headers and body are request-phase-only), so response
-        // edits fail fast instead of silently passing the original through.
-        if rules
-            .iter()
-            .any(|rule| matches!(rule.action, RouteAction::ModifyResponse { .. }))
-        {
-            return Err(E2eError::Config(
-                "modify_response is not supported on Firefox \
-                 (BiDi provideResponse overrides are request-phase-only)"
-                    .to_string(),
-            ));
-        }
-        // Firefox rejects `*` in URL patterns, so intercept everything with
-        // the empty match-all pattern and filter client-side with globset.
-        // Scoped to this page: a global intercept would block sibling pages
-        // whose pumps never see (or no longer handle) the events.
+        runtime: Arc<crate::routing::RouteRuntime>,
+        slot: std::sync::Weak<crate::routing::PumpSlot>,
+    ) -> E2eResult<crate::routing::RoutePump> {
+        let mut events = self.bidi.subscribe();
         let added = self
             .bidi
             .call(
@@ -4581,16 +4623,39 @@ impl BidiDriver {
         if let Some(intercept) = added.get("intercept").and_then(Value::as_str) {
             *self.intercept.lock().unwrap_or_else(|e| e.into_inner()) = Some(intercept.to_string());
         }
-        let mut events = self.bidi.subscribe();
         let context = self.context.clone();
         let bidi = self.bidi.clone();
         let sink = self.sink.clone();
         let timeout = self.timeout();
+        let lifecycle = self.lifecycle.clone();
+        let context_lifecycle = self.context_cancellation.clone();
+        let transport = self.bidi.disconnection();
+        let driver = Driver::Bidi(self.clone());
+        let stopped = crate::CancellationToken::new();
+        let completion = crate::routing::PumpCompletion(stopped.clone());
         let handle = tokio::spawn(async move {
+            let _completion = completion;
+            let mut tasks = tokio::task::JoinSet::new();
             loop {
-                let event = match events.recv().await {
-                    Ok(event) => event,
-                    Err(_) => break,
+                if route_pump_idle(&runtime, &slot, &driver, || async {
+                    // removeIntercept does not release Firefox requests already
+                    // blocked before its acknowledgement. Drain while registration
+                    // remains locked so this cannot consume a new intercept's calls.
+                    while let Ok(event) = events.try_recv() {
+                        if event.context() == Some(context.as_str()) && event.method == "network.beforeRequestSent" && event.params["isBlocked"].as_bool() == Some(true) {
+                            let _ = bidi.call("network.continueRequest", serde_json::json!({ "request": event.params["request"]["request"] }), Duration::from_millis(750)).await;
+                        }
+                    }
+                }).await {
+                    return;
+                }
+                let event = tokio::select! { biased;
+                    _ = lifecycle.cancelled() => break,
+                    _ = context_lifecycle.cancelled() => break,
+                    _ = transport.cancelled() => break,
+                    Some(_) = tasks.join_next(), if !tasks.is_empty() => continue,
+                    _ = runtime.changed.notified() => continue,
+                    event = events.recv(), if tasks.len() < 256 => match event { Ok(event) => event, Err(error) => { sink.record("route", format!("interception event stream ended: {error}")); break; } },
                 };
                 if event.context() != Some(context.as_str())
                     || event.method != "network.beforeRequestSent"
@@ -4598,17 +4663,17 @@ impl BidiDriver {
                 {
                     continue;
                 }
-                let request = event.params["request"]["request"].clone();
-                let url = event.params["request"]["url"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .to_string();
-                let mut decided_action: Option<RouteAction> = None;
-                for index in sorted_matches(&handler_set, &url) {
-                    let hit = &handlers[index];
-                    if !hit.allows_match() {
-                        continue;
-                    }
+                let runtime = runtime.clone();
+                let request_guard = runtime.request();
+                let sink = sink.clone();
+                let bidi = bidi.clone();
+                tasks.spawn(async move {
+                    let _request_guard = request_guard;
+                    let request = event.params["request"]["request"].clone();
+                    let url = event.params["request"]["url"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string();
                     let info = RouteInfo {
                         url: url.clone(),
                         method: event.params["request"]["method"]
@@ -4618,159 +4683,157 @@ impl BidiDriver {
                         headers: bidi_header_pairs(&event.params["request"]["headers"]),
                         post_data: None,
                     };
-                    match (hit.handler)(info).await {
-                        Ok(decision)
-                            if matches!(decision, RouteAction::ModifyResponse { .. })
-                                || matches!(
-                                    &decision,
-                                    RouteAction::ContinueWith { url: Some(_), .. }
-                                ) =>
-                        {
-                            sink.record(
-                                "route",
-                                "handler decision not supported on Firefox, aborting".to_string(),
-                            );
-                            hit.record_match();
-                            decided_action = Some(RouteAction::Abort);
-                            break;
-                        }
-                        Ok(RouteAction::Fallback) => continue,
-                        Ok(decision) => {
-                            hit.record_match();
-                            decided_action = Some(decision);
-                            break;
-                        }
-                        Err(error) => {
-                            sink.record("route", format!("handler failed, aborting: {error}"));
-                            hit.record_match();
-                            decided_action = Some(RouteAction::Abort);
-                            break;
-                        }
+                    let forward = _request_guard.forward.clone();
+                    let decision = runtime.decide(info, &sink, &forward);
+                    tokio::pin!(decision);
+                    let (mut decided_action, _handler) = tokio::select! { biased;
+                        _ = forward.cancelled() => {
+                            let _ = bidi.call("network.continueRequest", serde_json::json!({ "request": request }), timeout).await;
+                            let _ = decision.await;
+                            return;
+                        },
+                        result = &mut decision => result,
+                    };
+                    if matches!(
+                        decided_action,
+                        Some(RouteAction::ModifyResponse { .. })
+                            | Some(RouteAction::ContinueWith { url: Some(_), .. })
+                    ) {
+                        sink.record(
+                            "route",
+                            "handler decision not supported on Firefox, aborting".into(),
+                        );
+                        decided_action = Some(RouteAction::Abort);
                     }
-                }
-                if decided_action.is_none() {
-                    decided_action = rule_action_for(&rules, &set, &url);
-                }
-                let action = decided_action.as_ref();
-                let is_override = matches!(action, Some(RouteAction::ContinueWith { .. }));
-                let (method, params) = match action {
-                    Some(RouteAction::Abort) | Some(RouteAction::AbortWith(_)) => (
-                        "network.failRequest",
-                        serde_json::json!({ "request": request }),
-                    ),
-                    Some(RouteAction::Fulfill {
-                        status,
-                        status_text,
-                        headers,
-                        body,
-                        content_type,
-                    }) => {
-                        let mut all: Vec<(String, String)> = headers.clone();
-                        if !content_type.is_empty()
-                            && !all
-                                .iter()
-                                .any(|(name, _)| name.eq_ignore_ascii_case("content-type"))
-                        {
-                            all.push(("Content-Type".to_string(), content_type.clone()));
-                        }
-                        let mut params = serde_json::json!({
-                            "request": request,
-                            "statusCode": status,
-                            "headers": all.iter().map(|(name, value)| {
-                                serde_json::json!({
-                                    "name": name,
-                                    "value": { "type": "string", "value": value },
-                                })
-                            }).collect::<Vec<_>>(),
-                            "body": { "type": "base64", "value": base64_encode(body) },
-                        });
-                        if !status_text.is_empty() {
-                            params["reasonPhrase"] = Value::String(status_text.clone());
-                        }
-                        ("network.provideResponse", params)
-                    }
-                    Some(RouteAction::ContinueWith {
-                        url,
-                        method,
-                        headers,
-                        body,
-                    }) => {
-                        let mut params = serde_json::json!({ "request": request });
-                        if let Some(url) = url {
-                            params["url"] = Value::String(url.clone());
-                        }
-                        if let Some(method) = method {
-                            params["method"] = Value::String(method.clone());
-                        }
-                        // Firefox keeps a stale Content-Length when only the body
-                        // is replaced, truncating the server-side read; carry the
-                        // right length (over the user's set, else the original's).
-                        let effective = match (headers, body) {
-                            (Some(user), Some(replacement)) => {
-                                Some(with_content_length(user.clone(), replacement.len()))
-                            }
-                            (None, Some(replacement)) => Some(with_content_length(
-                                bidi_header_pairs(&event.params["request"]["headers"]),
-                                replacement.len(),
-                            )),
-                            (Some(user), None) => Some(user.clone()),
-                            (None, None) => None,
-                        };
-                        if let Some(list) = effective {
-                            params["headers"] = Value::Array(
-                                list.iter()
-                                    .map(|(name, value)| {
-                                        serde_json::json!({
-                                            "name": name,
-                                            "value": { "type": "string", "value": value },
-                                        })
-                                    })
-                                    .collect(),
-                            );
-                        }
-                        if let Some(body) = body {
-                            params["body"] = serde_json::json!({
-                                "type": "base64",
-                                "value": base64_encode(body),
-                            });
-                        }
-                        ("network.continueRequest", params)
-                    }
-                    _ => (
-                        "network.continueRequest",
-                        serde_json::json!({ "request": request }),
-                    ),
-                };
-                let supplied = request.as_str().and_then(|id| {
-                    sink.routed_headers(
-                        &format!(
-                            "bidi:{id}:{}",
-                            event.params["redirectCount"].as_u64().unwrap_or(0)
+                    let action = decided_action.as_ref();
+                    let is_override = matches!(action, Some(RouteAction::ContinueWith { .. }));
+                    let (method, params) = match action {
+                        Some(RouteAction::Abort) | Some(RouteAction::AbortWith(_)) => (
+                            "network.failRequest",
+                            serde_json::json!({ "request": request }),
                         ),
-                        id,
-                        &url,
-                        action,
-                    )
-                });
-                let result = bidi.call(method, params, timeout).await;
-                if result.is_ok() {
-                    if let Some(supplied) = supplied {
-                        supplied.accept();
+                        Some(RouteAction::Fulfill {
+                            status,
+                            status_text,
+                            headers,
+                            body,
+                            content_type,
+                        }) => {
+                            let mut all: Vec<(String, String)> = headers.clone();
+                            if !content_type.is_empty()
+                                && !all
+                                    .iter()
+                                    .any(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+                            {
+                                all.push(("Content-Type".to_string(), content_type.clone()));
+                            }
+                            let mut params = serde_json::json!({
+                                "request": request,
+                                "statusCode": status,
+                                "headers": all.iter().map(|(name, value)| {
+                                    serde_json::json!({
+                                        "name": name,
+                                        "value": { "type": "string", "value": value },
+                                    })
+                                }).collect::<Vec<_>>(),
+                                "body": { "type": "base64", "value": base64_encode(body) },
+                            });
+                            if !status_text.is_empty() {
+                                params["reasonPhrase"] = Value::String(status_text.clone());
+                            }
+                            ("network.provideResponse", params)
+                        }
+                        Some(RouteAction::ContinueWith {
+                            url,
+                            method,
+                            headers,
+                            body,
+                        }) => {
+                            let mut params = serde_json::json!({ "request": request });
+                            if let Some(url) = url {
+                                params["url"] = Value::String(url.clone());
+                            }
+                            if let Some(method) = method {
+                                params["method"] = Value::String(method.clone());
+                            }
+                            // Firefox keeps a stale Content-Length when only the body
+                            // is replaced, truncating the server-side read; carry the
+                            // right length (over the user's set, else the original's).
+                            let effective = match (headers, body) {
+                                (Some(user), Some(replacement)) => {
+                                    Some(with_content_length(user.clone(), replacement.len()))
+                                }
+                                (None, Some(replacement)) => Some(with_content_length(
+                                    bidi_header_pairs(&event.params["request"]["headers"]),
+                                    replacement.len(),
+                                )),
+                                (Some(user), None) => Some(user.clone()),
+                                (None, None) => None,
+                            };
+                            if let Some(list) = effective {
+                                params["headers"] = Value::Array(
+                                    list.iter()
+                                        .map(|(name, value)| {
+                                            serde_json::json!({
+                                                "name": name,
+                                                "value": { "type": "string", "value": value },
+                                            })
+                                        })
+                                        .collect(),
+                                );
+                            }
+                            if let Some(body) = body {
+                                params["body"] = serde_json::json!({
+                                    "type": "base64",
+                                    "value": base64_encode(body),
+                                });
+                            }
+                            ("network.continueRequest", params)
+                        }
+                        _ => (
+                            "network.continueRequest",
+                            serde_json::json!({ "request": request }),
+                        ),
+                    };
+                    let supplied = request.as_str().and_then(|id| {
+                        sink.routed_headers(
+                            &format!(
+                                "bidi:{id}:{}",
+                                event.params["redirectCount"].as_u64().unwrap_or(0)
+                            ),
+                            id,
+                            &url,
+                            action,
+                        )
+                    });
+                    let result = bidi.call(method, params, timeout).await;
+                    if let Err(error) = &result { sink.record("route", format!("native route decision failed: {error}")); }
+                    if result.is_ok() {
+                        if let Some(supplied) = supplied {
+                            supplied.accept();
+                        }
                     }
-                }
-                if result.is_err() && is_override {
-                    // Rejected overrides must not hang the page: let it through.
-                    let _ = bidi
+                    if result.is_err() && is_override {
+                        // Rejected overrides must not hang the page: let it through.
+                        let _ = bidi
                         .call(
                             "network.continueRequest",
                             serde_json::json!({ "request": event.params["request"]["request"] }),
                             timeout,
                         )
                         .await;
-                }
+                    }
+                });
             }
+            tasks.abort_all();
+            tasks.shutdown().await;
+            runtime.clear();
+            let _ = tokio::time::timeout(Duration::from_millis(750), driver.stop_routing()).await;
         });
-        Ok(handle.abort_handle())
+        Ok(crate::routing::RoutePump::new(
+            handle.abort_handle(),
+            stopped,
+        ))
     }
 
     async fn stop_routing(&self) {
@@ -5807,11 +5870,39 @@ fn decide_dialog(
     }
 }
 
-enum RouteMatcher {
+struct CachedRouteDecision {
+    action: Option<RouteAction>,
+    _handler: Option<crate::routing::HandlerGuard>,
+    _request: crate::routing::RequestGuard,
+    network_id: Option<String>,
+}
+async fn route_pump_idle<F: std::future::Future<Output = ()>>(
+    runtime: &crate::routing::RouteRuntime,
+    slot: &std::sync::Weak<crate::routing::PumpSlot>,
+    driver: &Driver,
+    drain: impl FnOnce() -> F,
+) -> bool {
+    if !runtime.idle() {
+        return false;
+    }
+    let Some(slot) = slot.upgrade() else {
+        return true;
+    };
+    let mut slot = slot.lock().await;
+    if !runtime.idle() {
+        return false;
+    }
+    let _ = tokio::time::timeout(Duration::from_millis(750), driver.stop_routing()).await;
+    let _ = tokio::time::timeout(Duration::from_millis(750), drain()).await;
+    slot.take();
+    true
+}
+
+pub(crate) enum RouteMatcher {
     Shared(crate::UrlMatcher),
     Legacy(globset::GlobMatcher),
 }
-fn routing_matchers<'a>(
+pub(crate) fn routing_matchers<'a>(
     patterns: impl IntoIterator<Item = (&'a str, Option<&'a crate::UrlMatcher>)>,
 ) -> E2eResult<Vec<RouteMatcher>> {
     patterns
@@ -5823,7 +5914,7 @@ fn routing_matchers<'a>(
         .collect()
 }
 /// Registration order is shared by typed matchers and legacy glob fallbacks.
-fn sorted_matches(set: &[RouteMatcher], url: &str) -> Vec<usize> {
+pub(crate) fn sorted_matches(set: &[RouteMatcher], url: &str) -> Vec<usize> {
     set.iter()
         .enumerate()
         .filter_map(|(index, matcher)| {
@@ -5834,22 +5925,6 @@ fn sorted_matches(set: &[RouteMatcher], url: &str) -> Vec<usize> {
             matches.then_some(index)
         })
         .collect()
-}
-
-/// First non-fallback rule action for `url` (registration order; honors `times`).
-fn rule_action_for(rules: &[RouteRule], set: &[RouteMatcher], url: &str) -> Option<RouteAction> {
-    for index in sorted_matches(set, url) {
-        let rule = &rules[index];
-        if !rule.allows_match() {
-            continue;
-        }
-        if matches!(rule.action, RouteAction::Fallback) {
-            continue;
-        }
-        rule.record_match();
-        return Some(rule.action.clone());
-    }
-    None
 }
 
 fn with_content_length(mut headers: Vec<(String, String)>, len: usize) -> Vec<(String, String)> {
