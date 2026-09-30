@@ -755,9 +755,25 @@ pub struct TestInfo {
     reporters: crate::report::ReporterHub,
     attempt: crate::report::AttemptInfo,
     steps: Option<crate::report::StepSession>,
+    configuration: Arc<crate::ResolvedRunConfig>,
+    settings: crate::ResolvedTestSettings,
 }
 
 impl TestInfo {
+    /// Immutable run snapshot used for scheduling this attempt.
+    pub fn config(&self) -> &crate::ResolvedRunConfig {
+        &self.configuration
+    }
+    /// Selected project defaults, before suite/test overrides.
+    pub fn project_config(&self) -> Option<&crate::ResolvedProjectConfig> {
+        self.configuration.project(self.settings.project.as_deref())
+    }
+    /// Owned effective attempt snapshot; timeout reflects runtime updates.
+    pub fn settings(&self) -> crate::ResolvedTestSettings {
+        let mut settings = self.settings.clone();
+        settings.timeout_ms = duration_ms(self.effective_timeout());
+        settings
+    }
     /// Current raw outcome. None before a body outcome or the first soft mismatch.
     /// Soft and cleanup failures publish immediately; body outcome precedes after_each.
     pub fn status(&self) -> Option<AttemptStatus> {
@@ -1466,6 +1482,10 @@ pub struct Project {
     pub retries: Option<u32>,
     /// Timeout override for this project.
     pub timeout: Option<Duration>,
+    pub grep_invert: Option<String>,
+    pub repeat_each: Option<u32>,
+    pub output_dir: Option<String>,
+    pub snapshot_dir: Option<String>,
 }
 
 impl Project {
@@ -1504,6 +1524,23 @@ impl Project {
         self
     }
 
+    pub fn grep_invert(mut self, value: impl Into<String>) -> Self {
+        self.grep_invert = Some(value.into());
+        self
+    }
+    pub fn repeat_each(mut self, count: u32) -> Self {
+        self.repeat_each = Some(count.max(1));
+        self
+    }
+    pub fn output_dir(mut self, value: impl Into<String>) -> Self {
+        self.output_dir = Some(value.into());
+        self
+    }
+    pub fn snapshot_dir(mut self, value: impl Into<String>) -> Self {
+        self.snapshot_dir = Some(value.into());
+        self
+    }
+
     /// Retry override for this project.
     #[must_use]
     pub fn retries(mut self, retries: u32) -> Self {
@@ -1516,6 +1553,201 @@ impl Project {
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
         self
+    }
+}
+
+fn projects_from_config(config: &crate::E2eConfig) -> E2eResult<Vec<Project>> {
+    config
+        .projects
+        .iter()
+        .map(|input| {
+            let mut project = Project::new(input.name.clone());
+            project.grep = input.grep.clone();
+            project.grep_invert = input.grep_invert.clone();
+            project.retries = input.retries;
+            project.timeout = input.timeout_ms.map(Duration::from_millis);
+            project.repeat_each = input.repeat_each.map(|count| count.max(1));
+            project.output_dir = input.output_dir.clone();
+            project.snapshot_dir = input.snapshot_dir.clone();
+            if let Some(viewport) = &input.viewport {
+                project.context_options = Some(ContextOptions {
+                    viewport: Some(crate::Viewport {
+                        width: viewport.width,
+                        height: viewport.height,
+                    }),
+                    ..Default::default()
+                });
+            }
+            let launch_override = input.browser.is_some()
+                || input.headless.is_some()
+                || input.executable_path.is_some()
+                || input.args.is_some();
+            if launch_override {
+                let mut launch = LaunchOptions::from_config(config)?;
+                if let Some(kind) = &input.browser {
+                    launch.browser = BrowserKind::parse(kind)?;
+                }
+                if let Some(headless) = input.headless {
+                    launch.headless = headless;
+                }
+                if let Some(executable) = &input.executable_path {
+                    launch.executable_path = Some(executable.into());
+                }
+                // A global executable is engine-specific; do not launch Firefox with Chrome's path.
+                if input.browser.as_ref().is_some_and(|kind| {
+                    BrowserKind::parse(kind).ok() != BrowserKind::parse(&config.browser).ok()
+                }) && input.executable_path.is_none()
+                {
+                    launch.executable_path = None;
+                }
+                if let Some(args) = &input.args {
+                    launch.args = args.clone();
+                }
+                project = project.launch_options(launch);
+            }
+            Ok(project)
+        })
+        .collect()
+}
+fn duration_ms(duration: Duration) -> u64 {
+    duration.as_millis().min(u128::from(u64::MAX)) as u64
+}
+fn absolute_path(path: &str) -> E2eResult<String> {
+    if path.is_empty() {
+        return Err(E2eError::Config(
+            "artifact/snapshot directory cannot be empty".into(),
+        ));
+    }
+    let path = std::path::Path::new(path);
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    Ok(path.display().to_string())
+}
+
+#[cfg(test)]
+mod effective_configuration_units {
+    use super::*;
+
+    #[test]
+    fn shared_project_conversion_keeps_zero_and_clears_engine_specific_executable() {
+        let config = crate::E2eConfig {
+            executable_path: Some("/custom/chrome".into()),
+            headless: false,
+            projects: vec![
+                crate::E2eProjectConfig {
+                    name: "other".into(),
+                    browser: Some("firefox".into()),
+                    repeat_each: Some(0),
+                    retries: Some(0),
+                    timeout_ms: Some(0),
+                    ..Default::default()
+                },
+                crate::E2eProjectConfig {
+                    name: "same".into(),
+                    browser: Some("chrome".into()),
+                    ..Default::default()
+                },
+                crate::E2eProjectConfig {
+                    name: "explicit".into(),
+                    browser: Some("firefox".into()),
+                    executable_path: Some("/custom/firefox".into()),
+                    args: Some(vec![]),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let projects = projects_from_config(&config).unwrap();
+        assert_eq!(projects[0].repeat_each, Some(1));
+        assert_eq!(projects[0].retries, Some(0));
+        assert_eq!(projects[0].timeout, Some(Duration::ZERO));
+        assert!(!projects[0].launch_options.as_ref().unwrap().headless);
+        assert!(projects[0]
+            .launch_options
+            .as_ref()
+            .unwrap()
+            .executable_path
+            .is_none());
+        assert_eq!(
+            projects[1]
+                .launch_options
+                .as_ref()
+                .unwrap()
+                .executable_path
+                .as_deref(),
+            Some(std::path::Path::new("/custom/chrome"))
+        );
+        assert_eq!(
+            projects[2]
+                .launch_options
+                .as_ref()
+                .unwrap()
+                .executable_path
+                .as_deref(),
+            Some(std::path::Path::new("/custom/firefox"))
+        );
+        assert!(projects[2].launch_options.as_ref().unwrap().args.is_empty());
+        assert_eq!(duration_ms(Duration::MAX), u64::MAX);
+        assert_eq!(
+            absolute_path("relative/output").unwrap(),
+            std::env::current_dir()
+                .unwrap()
+                .join("relative/output")
+                .display()
+                .to_string()
+        );
+        assert!(absolute_path("").is_err());
+    }
+
+    #[test]
+    fn project_exclusion_tag_repetition_and_combined_sharding_keep_effective_values() {
+        let tests = vec![
+            test("included", |_| async { Ok(()) }).tag("smoke"),
+            test("tag excluded", |_| async { Ok(()) })
+                .tag("smoke")
+                .tag("blocked"),
+            test("global excluded", |_| async { Ok(()) }).tag("smoke"),
+            test("unselected", |_| async { Ok(()) }),
+        ];
+        let projects = vec![
+            Some(
+                Project::new("alpha")
+                    .grep("smoke")
+                    .grep_invert("blocked")
+                    .repeat_each(2)
+                    .retries(0)
+                    .timeout(Duration::ZERO),
+            ),
+            Some(
+                Project::new("beta")
+                    .grep("smoke")
+                    .grep_invert("blocked")
+                    .repeat_each(0),
+            ),
+        ];
+        let (items, skipped) = build_work_items(
+            &tests,
+            None,
+            Some("smoke"),
+            Some("global"),
+            &projects,
+            3,
+            Duration::from_secs(10),
+            4,
+            Some((2, 2)),
+        );
+        assert!(skipped.is_empty());
+        assert_eq!(items.len(), 1);
+        let item = &items[0];
+        assert_eq!(item.project.as_deref(), Some("alpha"));
+        assert_eq!(item.test.name, "included");
+        assert_eq!(item.repeat_each, 2);
+        assert_eq!(item.repeat_each_index, 1);
+        assert_eq!(item.retries, 0);
+        assert_eq!(item.timeout, Duration::ZERO);
     }
 }
 
@@ -1602,6 +1834,7 @@ pub(crate) struct WorkItem {
     retries: u32,
     timeout: Duration,
     repeat_each_index: u32,
+    repeat_each: u32,
 }
 
 impl WorkItem {
@@ -1663,11 +1896,25 @@ pub(crate) fn build_work_items(
                     continue;
                 }
             }
+            if let Some(exclude) = project
+                .as_ref()
+                .and_then(|project| project.grep_invert.as_deref())
+            {
+                if test.name.contains(exclude) || test.tags.iter().any(|tag| tag.contains(exclude))
+                {
+                    continue;
+                }
+            }
+            let repetitions = project
+                .as_ref()
+                .and_then(|project| project.repeat_each)
+                .unwrap_or(repeat_each)
+                .max(1);
             let name = project.clone().map(|p| p.name);
             match test.mode {
                 TestMode::Skip | TestMode::Fixme => skipped.push(((*test).clone(), name)),
                 _ => {
-                    for repeat in 0..repeat_each.max(1) {
+                    for repeat in 0..repetitions {
                         runnable.push(WorkItem {
                             context_options: test.context_options.clone().or_else(|| {
                                 project.as_ref().and_then(|p| p.context_options.clone())
@@ -1683,6 +1930,7 @@ pub(crate) fn build_work_items(
                                 .or_else(|| project.as_ref().and_then(|p| p.timeout))
                                 .unwrap_or(runner_timeout),
                             repeat_each_index: repeat,
+                            repeat_each: repetitions,
                         });
                     }
                 }
@@ -1773,6 +2021,12 @@ pub struct Runner {
     repeat_each: u32,
     forbid_only: bool,
     fixtures: Vec<FixtureDef>,
+    snapshot_dir: Option<String>,
+    snapshot_update: Option<crate::SnapshotUpdate>,
+    selected_projects: Option<Vec<String>>,
+    configuration_error: Option<String>,
+    active_config: Option<Arc<crate::ResolvedRunConfig>>,
+    configuration_emitted: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl Default for Runner {
@@ -1784,7 +2038,7 @@ impl Default for Runner {
 impl Runner {
     /// Read configuration exported by the Ferrite CLI.
     pub fn from_env() -> E2eResult<Self> {
-        Ok(Self::from_config(&crate::config_from_env()?))
+        Self::try_from_config(&crate::config_from_env()?)
     }
 
     /// Add a live reporter alongside the configured file reporters.
@@ -1807,6 +2061,11 @@ impl Runner {
     /// Build from resolved e2e config.
     #[must_use]
     pub fn from_config(config: &ferrite_config::E2eConfig) -> Self {
+        let projects = projects_from_config(config);
+        let configuration_error = crate::config::validate_config(config)
+            .err()
+            .map(|error| error.to_string())
+            .or_else(|| projects.as_ref().err().map(ToString::to_string));
         Self {
             firefox_lifecycle: Arc::new(tokio::sync::Mutex::new(())),
             context_options: ContextOptions {
@@ -1827,10 +2086,10 @@ impl Runner {
             cleanup_timeout: Duration::from_millis(config.cleanup_timeout_ms),
             max_failures: config.max_failures,
             cancellation: crate::CancellationToken::new(),
-            filter: None,
-            grep: None,
-            grep_invert: None,
-            shard: None,
+            filter: config.filter.clone(),
+            grep: config.grep.clone(),
+            grep_invert: config.grep_invert.clone(),
+            shard: config.shard,
             before_each: Vec::new(),
             after_each: Vec::new(),
             before_all: Vec::new(),
@@ -1844,11 +2103,215 @@ impl Runner {
             list_progress: true,
             video: VideoMode::parse(&config.video).unwrap_or(VideoMode::Off),
             video_fps: config.video_fps.max(1),
-            projects: Vec::new(),
-            repeat_each: 1,
+            projects: projects.unwrap_or_default(),
+            repeat_each: config.repeat_each.max(1),
             forbid_only: false,
             fixtures: Vec::new(),
+            snapshot_dir: config.snapshot_dir.clone(),
+            snapshot_update: crate::SnapshotUpdate::parse(&config.update_snapshots).ok(),
+            selected_projects: (!config.selected_projects.is_empty())
+                .then(|| config.selected_projects.clone()),
+            configuration_error,
+            active_config: None,
+            configuration_emitted: None,
         }
+    }
+
+    /// Validated shared CLI/library configuration.
+    pub fn try_from_config(config: &ferrite_config::E2eConfig) -> E2eResult<Self> {
+        crate::config::validate_config(config)?;
+        projects_from_config(config)?;
+        Ok(Self::from_config(config))
+    }
+    pub fn snapshot_dir(mut self, dir: impl Into<String>) -> Self {
+        self.snapshot_dir = Some(dir.into());
+        self
+    }
+    pub fn snapshot_update(mut self, mode: crate::SnapshotUpdate) -> Self {
+        self.snapshot_update = Some(mode);
+        self
+    }
+    pub fn selected_projects(mut self, names: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.selected_projects = Some(names.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Resolve a read-only scheduling snapshot without launching project browsers.
+    /// Supplied-browser identity is native; dedicated versions remain None until run startup.
+    ///
+    /// ```rust,no_run
+    /// use ferrite_e2e::{Browser, E2eResult, Project, Runner};
+    /// async fn inspect(browser: &Browser) -> E2eResult<()> {
+    ///     let runner = Runner::default().project(Project::new("desktop").repeat_each(2));
+    ///     let config = runner.resolve_config(browser).await?;
+    ///     let project = config.project(Some("desktop")).unwrap();
+    ///     println!("{} repetitions under {}", project.repeat_each, project.output_dir);
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn resolve_config(&self, browser: &Browser) -> E2eResult<crate::ResolvedRunConfig> {
+        if let Some(error) = &self.configuration_error {
+            return Err(E2eError::Config(error.clone()));
+        }
+        let mut names = std::collections::HashSet::new();
+        for project in &self.projects {
+            if project.name.trim().is_empty() || !names.insert(project.name.clone()) {
+                return Err(E2eError::Config(format!(
+                    "empty or duplicate project name {:?}",
+                    project.name
+                )));
+            }
+            if let (Some(kind), Some(launch)) = (project.browser, project.launch_options.as_ref()) {
+                if kind != launch.browser {
+                    return Err(E2eError::Config(format!(
+                        "conflicting engine/launch options for {:?}",
+                        project.name
+                    )));
+                }
+            }
+        }
+        let filter = self
+            .filter
+            .clone()
+            .or_else(|| env_filter("FERRITE_E2E_FILTER"));
+        let grep = self.grep.clone().or_else(|| env_filter("FERRITE_E2E_GREP"));
+        let grep_invert = self
+            .grep_invert
+            .clone()
+            .or_else(|| env_filter("FERRITE_E2E_GREP_INVERT"));
+        let shard = self.shard.or_else(shard_from_env);
+        if let Some((index, total)) = shard {
+            if index == 0 || total == 0 || index > total {
+                return Err(E2eError::Config(
+                    "shard index must be within 1..=total".into(),
+                ));
+            }
+        }
+        let mut selected_projects = self.selected_projects.clone().unwrap_or_else(|| {
+            env_filter("FERRITE_E2E_PROJECT")
+                .map(|raw| {
+                    raw.split(',')
+                        .map(str::trim)
+                        .filter(|name| !name.is_empty())
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default()
+        });
+        let mut wanted_names = std::collections::HashSet::new();
+        selected_projects.retain(|name| wanted_names.insert(name.clone()));
+        let selected =
+            resolve_projects(&self.projects, &selected_projects).map_err(E2eError::Config)?;
+        let output_dir = absolute_path(&self.output_dir)?;
+        let snapshot_dir = self
+            .snapshot_dir
+            .clone()
+            .or_else(|| env_filter("FERRITE_SNAPSHOT_DIR"));
+        let global_snapshot = absolute_path(
+            snapshot_dir
+                .as_deref()
+                .unwrap_or(&format!("{output_dir}/snapshots")),
+        )?;
+        let snapshot_update = self
+            .snapshot_update
+            .unwrap_or_else(crate::SnapshotUpdate::from_env);
+        let browser_version = browser.version().await?;
+        let mut projects = Vec::new();
+        for project in selected {
+            let project_output = absolute_path(
+                project
+                    .as_ref()
+                    .and_then(|project| project.output_dir.as_deref())
+                    .unwrap_or(&output_dir),
+            )?;
+            let project_snapshot = match project
+                .as_ref()
+                .and_then(|project| project.snapshot_dir.as_deref())
+            {
+                Some(path) => absolute_path(path)?,
+                None if snapshot_dir.is_some() => global_snapshot.clone(),
+                None => absolute_path(&format!("{project_output}/snapshots"))?,
+            };
+            let kind = project
+                .as_ref()
+                .and_then(|project| project.browser)
+                .unwrap_or(browser.kind());
+            let launch = project
+                .as_ref()
+                .and_then(|project| project.launch_options.clone())
+                .or_else(|| {
+                    (kind != browser.kind()).then(|| LaunchOptions::default().browser(kind))
+                });
+            let mut context = project
+                .as_ref()
+                .and_then(|project| project.context_options.clone())
+                .unwrap_or_else(|| self.context_options.clone());
+            if let Some(launch) = &launch {
+                context.proxy_server = context.proxy_server.or_else(|| launch.proxy_server.clone());
+                context.ignore_https_errors |= launch.ignore_https_errors;
+            } else {
+                context = browser.effective_context_options(context);
+            }
+            projects.push(crate::ResolvedProjectConfig {
+                name: project.as_ref().map(|project| project.name.clone()),
+                browser: kind,
+                browser_version: launch.is_none().then(|| browser_version.clone()),
+                launch_options: launch,
+                grep: project.as_ref().and_then(|project| project.grep.clone()),
+                grep_invert: project
+                    .as_ref()
+                    .and_then(|project| project.grep_invert.clone()),
+                retries: project
+                    .as_ref()
+                    .and_then(|project| project.retries)
+                    .unwrap_or(self.retries),
+                timeout_ms: duration_ms(
+                    project
+                        .as_ref()
+                        .and_then(|project| project.timeout)
+                        .unwrap_or(self.test_timeout),
+                ),
+                repeat_each: project
+                    .as_ref()
+                    .and_then(|project| project.repeat_each)
+                    .unwrap_or(self.repeat_each)
+                    .max(1),
+                output_dir: project_output,
+                snapshot_dir: project_snapshot,
+                context,
+            });
+        }
+        Ok(crate::ResolvedRunConfig {
+            workers: self.workers,
+            retries: self.retries,
+            timeout_ms: duration_ms(self.test_timeout),
+            expect_timeout_ms: duration_ms(self.expect_timeout),
+            cleanup_timeout_ms: duration_ms(self.cleanup_timeout),
+            global_timeout_ms: duration_ms(self.global_timeout),
+            max_failures: self.max_failures,
+            reporter: self.reporter.clone(),
+            list_progress: self.list_progress,
+            forbid_only: self.forbid_only || ci_truthy(),
+            screenshot_always: self.screenshot_always,
+            screenshot_on_failure: self.screenshot_on_failure,
+            trace: self.write_trace,
+            video: self.video,
+            video_fps: self.video_fps,
+            output_dir,
+            snapshot_dir: global_snapshot,
+            snapshot_update,
+            repeat_each: self.repeat_each,
+            filter,
+            grep,
+            grep_invert,
+            shard,
+            selected_projects,
+            projects,
+            browser: browser.kind(),
+            browser_version,
+            base_url: browser.base_url(),
+            context: browser.effective_context_options(self.context_options.clone()),
+        })
     }
 
     /// Parallel workers.
@@ -1908,6 +2371,9 @@ impl Runner {
         })
     }
     async fn finish_run(&self, mut report: TestReport) -> TestReport {
+        if let Some(config) = &report.configuration {
+            self.publish_configuration(config);
+        }
         for (label, hooks) in [
             ("<after_all>", &self.after_all),
             ("<global teardown>", &self.global_teardown),
@@ -1934,6 +2400,16 @@ impl Runner {
         self.write_artifacts(&report, &self.reporter);
         self.reporters.emit(|r| r.on_end(&report));
         report
+    }
+    fn publish_configuration(&self, config: &crate::ResolvedRunConfig) {
+        if self
+            .configuration_emitted
+            .as_ref()
+            .is_some_and(|emitted| !emitted.swap(true, std::sync::atomic::Ordering::SeqCst))
+        {
+            self.reporters
+                .emit(|reporter| reporter.on_configuration(config));
+        }
     }
     /// Only run tests whose name or tags contain `filter`.
     ///
@@ -2220,8 +2696,38 @@ impl Runner {
         session.scope(self.run_inner(browser, tests)).await
     }
     async fn run_inner(&self, browser: &Browser, tests: Vec<Test>) -> TestReport {
-        self.reporters.emit(|r| r.on_begin(&tests));
-        let mut report = TestReport::default();
+        self.reporters.emit(|reporter| reporter.on_begin(&tests));
+        let config = match self.resolve_config(browser).await {
+            Ok(config) => config,
+            Err(error) => {
+                let mut report = TestReport::default();
+                report
+                    .results
+                    .push(self.report_failure("<configuration>", error.to_string()));
+                self.write_artifacts(&report, &self.reporter);
+                self.reporters.emit(|reporter| reporter.on_end(&report));
+                return report;
+            }
+        };
+        let mut runner = self.clone();
+        runner.filter = config.filter.clone();
+        runner.grep = config.grep.clone();
+        runner.grep_invert = config.grep_invert.clone();
+        runner.shard = config.shard;
+        runner.selected_projects = Some(config.selected_projects.clone());
+        runner.output_dir = config.output_dir.clone();
+        runner.snapshot_dir = Some(config.snapshot_dir.clone());
+        runner.snapshot_update = Some(config.snapshot_update);
+        runner.forbid_only = config.forbid_only;
+        runner.active_config = Some(Arc::new(config));
+        runner.configuration_emitted = Some(Arc::new(std::sync::atomic::AtomicBool::new(false)));
+        runner.run_resolved_inner(browser, tests).await
+    }
+    async fn run_resolved_inner(&self, browser: &Browser, tests: Vec<Test>) -> TestReport {
+        let mut report = TestReport {
+            configuration: self.active_config.as_deref().cloned(),
+            ..Default::default()
+        };
         let control = crate::CancellationToken::new();
         if let Some(reason) = self.cancellation.reason() {
             control.cancel_with_reason(reason);
@@ -2302,24 +2808,11 @@ impl Runner {
                 return self.finish_run(report).await;
             }
         }
-        let filter = self
-            .filter
-            .clone()
-            .or_else(|| env_filter("FERRITE_E2E_FILTER"));
-        let grep = self.grep.clone().or_else(|| env_filter("FERRITE_E2E_GREP"));
-        let grep_invert = self
-            .grep_invert
-            .clone()
-            .or_else(|| env_filter("FERRITE_E2E_GREP_INVERT"));
-        let shard = self.shard.or_else(shard_from_env);
-        let project_filter: Vec<String> = env_filter("FERRITE_E2E_PROJECT")
-            .map(|raw| {
-                raw.split(',')
-                    .map(|name| name.trim().to_string())
-                    .filter(|name| !name.is_empty())
-                    .collect()
-            })
-            .unwrap_or_default();
+        let filter = self.filter.clone();
+        let grep = self.grep.clone();
+        let grep_invert = self.grep_invert.clone();
+        let shard = self.shard;
+        let project_filter = self.selected_projects.clone().unwrap_or_default();
         let projects = match resolve_projects(&self.projects, &project_filter) {
             Ok(projects) => projects,
             Err(error) => {
@@ -2338,9 +2831,7 @@ impl Runner {
             self.repeat_each,
             shard,
         );
-        if (self.forbid_only || ci_truthy())
-            && runnable.iter().any(|item| item.test.mode == TestMode::Only)
-        {
+        if self.forbid_only && runnable.iter().any(|item| item.test.mode == TestMode::Only) {
             report.results.push(self.report_failure(
                 "<forbid-only>",
                 "test.only is forbidden (forbid_only/CI)".to_string(),
@@ -2427,6 +2918,24 @@ impl Runner {
                     .is_some_and(|name| rejected_projects.contains(name))
             })
             .collect::<Vec<_>>();
+        if let Some(config) = report.configuration.as_mut() {
+            config.base_url = browser.base_url();
+            for project in &mut config.projects {
+                if let Some(owner) = project
+                    .name
+                    .as_ref()
+                    .and_then(|name| project_browsers.get(name))
+                {
+                    project.browser = owner.kind();
+                    project.browser_version = Some(owner.version().await.unwrap_or_default());
+                }
+            }
+        }
+        let mut worker_runner = self.clone();
+        worker_runner.active_config = report.configuration.clone().map(Arc::new);
+        if let Some(config) = &report.configuration {
+            self.publish_configuration(config);
+        }
         let project_browsers = Arc::new(project_browsers);
         // Worker pool: stable worker index; isolated context per attempt.
         let queue = Arc::new(Mutex::new(VecDeque::from(runnable)));
@@ -2435,7 +2944,7 @@ impl Runner {
         let mut workers = tokio::task::JoinSet::new();
         for worker_index in 0..self.workers {
             let queue = Arc::clone(&queue);
-            let runner = self.clone();
+            let runner = worker_runner.clone();
             let browser = Arc::clone(&browser);
             let project_browsers = project_browsers.clone();
             let control = control.clone();
@@ -2784,6 +3293,7 @@ impl AttemptGuard {
     ) -> Self {
         let started = Instant::now();
         let start_time_ms = crate::driver::now_ms();
+        hub.emit(|reporter| reporter.on_test_configuration(&info.attempt, &info.settings()));
         hub.emit(|r| r.on_test_begin(&info.attempt));
         let mut result = failed_result(
             &info.attempt.name,
@@ -2835,6 +3345,7 @@ impl Drop for AttemptGuard {
             .skip(self.attachments_start)
             .collect();
         let attempt = AttemptResult {
+            settings: Some(self.info.settings()),
             soft_assertions: self.info.soft_failures(),
             popup_diagnostics: self
                 .context
@@ -2929,6 +3440,19 @@ async fn run_one(
     } else {
         format!("{}-r{}", slug(&name), item.repeat_each_index)
     };
+    let config = runner
+        .active_config
+        .as_ref()
+        .expect("resolved runner configuration");
+    let project = config
+        .project(item.project.as_deref())
+        .expect("selected project configuration");
+    let project_output_dir = project.output_dir.clone();
+    let context_options = browser.effective_context_options(
+        item.context_options
+            .clone()
+            .unwrap_or_else(|| project.context.clone()),
+    );
     let mut timeout = item.timeout;
     if test.slow {
         timeout = timeout.saturating_mul(3);
@@ -2955,12 +3479,33 @@ async fn run_one(
             worker_index,
             repeat_each_index: item.repeat_each_index,
             timeout,
-            output_dir: std::path::Path::new(&runner.output_dir)
+            output_dir: std::path::Path::new(&project_output_dir)
                 .join(format!("{slug}-attempt{attempts}"))
                 .display()
                 .to_string(),
             project: item.project.clone(),
             attachments: Arc::clone(&attachments),
+            configuration: config.clone(),
+            settings: crate::ResolvedTestSettings {
+                project: item.project.clone(),
+                browser: browser.kind(),
+                browser_version: project.browser_version.clone().unwrap_or_default(),
+                base_url: browser.base_url(),
+                retries: item.retries,
+                timeout_ms: duration_ms(timeout),
+                expect_timeout_ms: duration_ms(runner.expect_timeout),
+                cleanup_timeout_ms: duration_ms(runner.cleanup_timeout),
+                repeat_each: item.repeat_each,
+                repeat_each_index: item.repeat_each_index,
+                project_output_dir: project_output_dir.clone(),
+                output_dir: std::path::Path::new(&project_output_dir)
+                    .join(format!("{slug}-attempt{attempts}"))
+                    .display()
+                    .to_string(),
+                snapshot_dir: project.snapshot_dir.clone(),
+                snapshot_update: config.snapshot_update,
+                context: context_options.clone(),
+            },
             steps: None,
             runtime: runtime.clone(),
             reporters: runner.reporters.clone(),
@@ -3111,11 +3656,7 @@ async fn run_one(
             deadline,
             Some(control),
             "context setup",
-            browser.new_context(
-                item.context_options
-                    .clone()
-                    .unwrap_or_else(|| runner.context_options.clone()),
-            ),
+            browser.new_context(context_options.clone()),
         )
         .await
         {
@@ -3157,11 +3698,8 @@ async fn run_one(
         };
         page.set_expect_timeout(runner.expect_timeout);
         drop(lifecycle);
-        page.snapshot_dir = Some(
-            std::env::var("FERRITE_SNAPSHOT_DIR")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|_| std::path::Path::new(&runner.output_dir).join("snapshots")),
-        );
+        page.snapshot_dir = Some(std::path::PathBuf::from(&project.snapshot_dir));
+        page.snapshot_update = Some(config.snapshot_update);
         page.reporter = info.steps.clone();
         let request = match crate::ApiClient::with_options(context.api_options()) {
             Ok(request) => request,
@@ -3259,7 +3797,7 @@ async fn run_one(
                 .await?;
                 if runner.video.records() {
                     page.start_video(VideoOptions {
-                        dir: std::path::PathBuf::from(&runner.output_dir),
+                        dir: std::path::PathBuf::from(&project_output_dir),
                         fps: runner.video_fps,
                         ..VideoOptions::default()
                     })
@@ -3391,7 +3929,7 @@ async fn run_one(
             let keep = runner.video == VideoMode::On
                 || (runner.video == VideoMode::OnlyOnFailure && failed.is_some());
             if keep {
-                let path = std::path::Path::new(&runner.output_dir)
+                let path = std::path::Path::new(&project_output_dir)
                     .join(format!("{slug}-attempt{attempts}.webm"));
                 match bounded_in(
                     info.steps.as_ref(),
@@ -3430,7 +3968,7 @@ async fn run_one(
         let take_shot =
             runner.screenshot_always || (failed.is_some() && runner.screenshot_on_failure);
         if take_shot {
-            let path = std::path::Path::new(&runner.output_dir)
+            let path = std::path::Path::new(&project_output_dir)
                 .join(format!("{slug}-attempt{attempts}.png"));
             if bounded_in(
                 info.steps.as_ref(),
@@ -3446,7 +3984,7 @@ async fn run_one(
             }
         }
         if runner.write_trace {
-            let path = std::path::Path::new(&runner.output_dir)
+            let path = std::path::Path::new(&project_output_dir)
                 .join(format!("{slug}-attempt{attempts}.json"));
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent).ok();
@@ -3464,7 +4002,7 @@ async fn run_one(
             if std::fs::write(&path, &data).is_ok() {
                 // Preserve the original latest-attempt filename for existing consumers.
                 let _ = std::fs::write(
-                    std::path::Path::new(&runner.output_dir).join(format!("{slug}.json")),
+                    std::path::Path::new(&project_output_dir).join(format!("{slug}.json")),
                     &data,
                 );
                 trace_path = Some(path.display().to_string());
@@ -3863,6 +4401,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let runner = Runner::default().output_dir(dir.display().to_string());
         let report = TestReport {
+            configuration: None,
             run_steps: Vec::new(),
             results: vec![TestResult {
                 attempt_results: Vec::new(),
@@ -4020,6 +4559,8 @@ mod tests {
             output_dir: dir.display().to_string(),
             project: None,
             attachments: Arc::new(Mutex::new(Vec::new())),
+            configuration: Arc::new(crate::ResolvedRunConfig::default()),
+            settings: crate::ResolvedTestSettings::default(),
             steps: None,
             runtime: RuntimeControl::new(Duration::from_secs(1), false, false, Vec::new()),
             reporters: crate::report::ReporterHub::default(),
@@ -4084,6 +4625,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let runner = Runner::default().output_dir(dir.display().to_string());
         let report = TestReport {
+            configuration: None,
             run_steps: Vec::new(),
             results: vec![TestResult {
                 attempt_results: Vec::new(),
@@ -4394,6 +4936,8 @@ mod fixture_cancellation_tests {
             output_dir: String::new(),
             project: None,
             attachments: Arc::default(),
+            configuration: Arc::new(crate::ResolvedRunConfig::default()),
+            settings: crate::ResolvedTestSettings::default(),
             steps: None,
             runtime: RuntimeControl::new(timeout, false, false, Vec::new()),
             reporters: crate::report::ReporterHub::default(),

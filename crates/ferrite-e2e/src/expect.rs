@@ -483,6 +483,9 @@ impl PageExpect {
                     if effective.dir.is_none() {
                         effective.dir = self.page.snapshot_dir.clone();
                     }
+                    if effective.update.is_none() {
+                        effective.update = self.page.snapshot_update;
+                    }
                     let opts = &effective;
                     let path = snap_path_for(name, "png", opts);
                     if !path.is_file() || resolve_update(opts.update) == SnapshotUpdate::All {
@@ -1551,6 +1554,9 @@ impl LocatorExpect {
                     let mut effective = opts.clone();
                     if effective.dir.is_none() {
                         effective.dir = self.locator.page().snapshot_dir.clone();
+                    }
+                    if effective.update.is_none() {
+                        effective.update = self.locator.page().snapshot_update;
                     }
                     let opts = &effective;
                     let path = snap_path_for(name, "png", opts);

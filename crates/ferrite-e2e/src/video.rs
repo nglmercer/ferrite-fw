@@ -10,7 +10,8 @@ use std::time::Duration;
 use crate::error::{E2eError, E2eResult};
 
 /// When the runner keeps video.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum VideoMode {
     /// Never record.
     #[default]

@@ -219,7 +219,7 @@ for c in ['TestInfoError','TestError']:
  put(c,'message','TestResult.error','String-formatted Rust error; no structured cause/stack/error-context object.')
 for c in ['FullConfig','TestConfig']:
  d={'forbidOnly':'Runner.forbid_only','globalSetup':'Runner.global_setup','globalTeardown':'Runner.global_teardown','grep':'Runner.grep','grepInvert':'Runner.grep_invert','projects':'Runner.project','shard':'Runner.shard','workers':'Runner.workers','reporter':'E2eConfig.reporter','webServer':'E2eConfig.web_server','updateSnapshots':'E2eConfig.update_snapshots','outputDir':'E2eConfig.output_dir','repeatEach':'Runner.repeat_each','retries':'Runner.retries','timeout':'Runner.test_timeout','use':'ContextOptions','expect':'E2eConfig.expect_timeout_ms'}
- for m,t in d.items():put(c,m,t,'Comparable knob, but no FullConfig/TestConfig object; runner/CLI wiring and scheduling semantics differ.')
+ for m,t in d.items():put(c,m,t,'Comparable runner/configuration knob; effective configuration is a Rust subset and runner/CLI scheduling semantics differ.')
  put(c,'expect','E2eConfig.expect_timeout_ms','Config field exists but is not consumed by ferrite-e2e; assertion default stays 5000 ms. Set assertion timeout explicitly.')
 for c in ['FullProject','TestProject']:
  for m,t in {'name':'Project.name','grep':'Project.grep','retries':'Project.retries','timeout':'Project.timeout'}.items():put(c,m,t,'Project name/filter/retry/timeout/context/browser overrides; no dependency graph or suite-scoped test.use.')
@@ -402,6 +402,18 @@ for c in ['Page','BrowserContext']:
 for c in ['Page','BrowserContext']:
  for m,t in {'unrouteAll':'unroute_all_with','unroute':'unroute_matching_with'}.items():
   put(c,m,c+'.'+t,'Pattern/shared-matcher/all removal with default/wait/ignore-errors and explicit Rust Cancel. Default/ignore-errors release requests while callbacks settle and discard late decisions; wait preserves native decisions within shared deadlines. Independent bounded dispatch, atomic invocation limits including fallback, disposal/retry/disconnect cleanup verified on Chromium/Firefox. Rust first-registration/page priority and no callback-identity removal remain differences.')
+# B14: effective configuration snapshots follow the actual selected work and native owners.
+config_note='Owned effective run/project/attempt snapshots, selected projects, absolute output/snapshot paths, actual supplied browser identity and native dedicated versions after startup. Rust name/tag substring filters, Tokio workers and a smaller configuration surface; no JS fixture/config object compatibility.'
+for m,t in {'workers':'workers','retries':'retries','timeout':'timeout_ms','grep':'grep','grepInvert':'grep_invert','repeatEach':'repeat_each','outputDir':'output_dir','snapshotDir':'snapshot_dir','projects':'projects','shard':'shard','reporter':'reporter','globalTimeout':'global_timeout_ms','maxFailures':'max_failures','use':'context','updateSnapshots':'snapshot_update','forbidOnly':'forbid_only','expect':'expect_timeout_ms'}.items():
+ put('FullConfig',m,'ResolvedRunConfig.'+t,config_note)
+for m,t in {'grep':'grep','grepInvert':'grep_invert','repeatEach':'repeat_each','outputDir':'output_dir','snapshotDir':'snapshot_dir','projects':'projects','shard':'shard'}.items():
+ put('TestConfig',m,'E2eConfig.'+t,'Shared TOML/JSON configuration, complete CLI child bridge and Runner builders. Legacy environment overrides are read by from_env; explicit builder values win at run resolution. Name/tag substring filters and Rust scheduling differ from upstream.')
+for m,t in {'name':'name','grep':'grep','grepInvert':'grep_invert','retries':'retries','timeout':'timeout_ms','repeatEach':'repeat_each','outputDir':'output_dir','snapshotDir':'snapshot_dir','use':'context'}.items():
+ put('FullProject',m,'ResolvedProjectConfig.'+t,config_note+' Context overrides replace the whole value; launch proxy/TLS inheritance is shared with native creation.')
+for m,t in {'grepInvert':'grep_invert','repeatEach':'repeat_each','outputDir':'output_dir','snapshotDir':'snapshot_dir'}.items():
+ put('TestProject',m,'Project.'+t,'Library Project plus shared E2eProjectConfig fields and CLI configuration bridge; project overrides precede global values. Repetition zero normalizes to one, paths are absolute at run resolution; dependency scheduling remains absent.')
+put('TestInfo','config','TestInfo.config',config_note)
+put('TestInfo','project','TestInfo.project_config','Read-only selected project defaults through project_config, with actual attempt context/retry/repetition and runtime timeout through settings(). Existing public project remains an optional name. No full upstream FullProject object or dependency graph.')
 def default_note(c,e):
  if c.startswith('Android') or c in ['Electron','ElectronApplication']:return 'Experimental upstream API; Ferrite has no Android/ADB/WebView or Electron backend.'
  if c=='ElementHandle':return 'No ElementHandle abstraction; locator replacements cover many DOM actions but do not reproduce handle identity/lifetime semantics.'

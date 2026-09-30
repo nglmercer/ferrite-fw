@@ -260,6 +260,9 @@ pub struct AttemptResult {
     /// Attempt-owned soft mismatches, isolated from other retries and tests.
     #[serde(default)]
     pub soft_assertions: Vec<SoftAssertionFailure>,
+    /// Effective attempt settings, including its final runtime timeout.
+    #[serde(default)]
+    pub settings: Option<crate::ResolvedTestSettings>,
     pub info: AttemptInfo,
     pub status: AttemptStatus,
     pub expected_status: AttemptStatus,
@@ -283,6 +286,17 @@ pub struct AttemptResult {
 pub trait Reporter: Send + Sync + 'static {
     /// Discovered tests, before filtering or project expansion.
     fn on_begin(&self, _tests: &[crate::Test]) {}
+    /// Resolved run configuration after project browser startup, before workers.
+    /// When startup aborts early, emits its planned snapshot before cleanup instead.
+    /// Dedicated versions remain None for browsers that were never launched.
+    fn on_configuration(&self, _config: &crate::ResolvedRunConfig) {}
+    /// Initial attempt settings, emitted immediately before on_test_begin.
+    fn on_test_configuration(
+        &self,
+        _attempt: &AttemptInfo,
+        _settings: &crate::ResolvedTestSettings,
+    ) {
+    }
     fn on_test_begin(&self, _attempt: &AttemptInfo) {}
     /// The result covers this attempt only; `attempts` is its one-based ordinal.
     fn on_test_end(&self, _attempt: &AttemptInfo, _result: &TestResult) {}
@@ -808,6 +822,9 @@ pub struct TestResult {
 /// Aggregate report for a run.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TestReport {
+    /// Effective configuration used by this run; absent in historical reports.
+    #[serde(default)]
+    pub configuration: Option<crate::ResolvedRunConfig>,
     /// Global hooks and shared worker lifecycle that are outside an attempt.
     #[serde(default)]
     pub run_steps: Vec<StepInfo>,
@@ -1088,6 +1105,13 @@ impl TestReport {
                     attempt.info.worker_index,
                     attempt.info.repeat_each_index
                 ));
+                if let Some(settings) = &attempt.settings {
+                    out.push_str("<details><summary>Effective settings</summary><pre>");
+                    out.push_str(&xml_escape(
+                        &serde_json::to_string_pretty(settings).unwrap_or_default(),
+                    ));
+                    out.push_str("</pre></details>");
+                }
                 for error in &attempt.errors {
                     render_error(&mut out, error);
                 }
@@ -1131,6 +1155,14 @@ impl TestReport {
             out.push_str("</td></tr>");
         }
         out.push_str("</tbody></table>");
+        if let Some(config) = &self.configuration {
+            out.push_str("<details><summary>Effective configuration</summary><pre>");
+            out.push_str(&xml_escape(
+                &serde_json::to_string_pretty(config).unwrap_or_default(),
+            ));
+            out.push_str("</pre></details>");
+        }
+
         if !self.run_steps.is_empty() {
             out.push_str("<h2>Run lifecycle</h2>");
             render_steps(&mut out, &self.run_steps);
@@ -1525,6 +1557,7 @@ mod tests {
             console: Vec::new(),
             popup_diagnostics: Default::default(),
             soft_assertions: Vec::new(),
+            settings: None,
             info: session.attempt.clone(),
             status: AttemptStatus::Failed,
             expected_status: AttemptStatus::Passed,
@@ -1557,6 +1590,7 @@ mod tests {
         result.attempts = 2;
         result.attempt_results = vec![attempt, second];
         let report = TestReport {
+            configuration: None,
             run_steps: Vec::new(),
             results: vec![result],
         };
@@ -1755,6 +1789,7 @@ mod tests {
 
     fn sample() -> TestReport {
         TestReport {
+            configuration: None,
             run_steps: Vec::new(),
             results: vec![
                 sample_result("passes", TestStatus::Passed),
@@ -1839,6 +1874,7 @@ mod tests {
     #[test]
     fn dot_marks_statuses() {
         let report = TestReport {
+            configuration: None,
             run_steps: Vec::new(),
             results: vec![
                 sample_result("a", TestStatus::Passed),
@@ -1857,6 +1893,7 @@ mod tests {
         let mut expected = sample_result("flaky", TestStatus::FailedExpected);
         expected.error = Some("timed out".to_string());
         let report = TestReport {
+            configuration: None,
             run_steps: Vec::new(),
             results: vec![expected],
         };

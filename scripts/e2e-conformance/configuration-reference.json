@@ -1,0 +1,56 @@
+{
+  "playwright": "1.63.0",
+  "engine": "chromium",
+  "cases": [
+    {
+      "project": "alpha",
+      "repeat": 0,
+      "retries": 1,
+      "repeatEach": 2,
+      "timeout": 8000,
+      "viewport": [
+        480,
+        320
+      ],
+      "currentTimeout": 9000
+    },
+    {
+      "project": "alpha",
+      "repeat": 1,
+      "retries": 1,
+      "repeatEach": 2,
+      "timeout": 8000,
+      "viewport": [
+        480,
+        320
+      ],
+      "currentTimeout": 9000
+    },
+    {
+      "project": "beta",
+      "repeat": 0,
+      "retries": 0,
+      "repeatEach": 1,
+      "timeout": 0,
+      "viewport": [
+        600,
+        400
+      ],
+      "currentTimeout": 9000
+    }
+  ],
+  "selected": [
+    {
+      "project": "beta",
+      "repeat": 0,
+      "retries": 0,
+      "repeatEach": 1,
+      "timeout": 0,
+      "viewport": [
+        600,
+        400
+      ],
+      "currentTimeout": 9000
+    }
+  ]
+}

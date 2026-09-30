@@ -68,6 +68,7 @@ mod operation;
 mod page;
 mod popup_capture;
 mod report;
+mod resolved_config;
 mod route_options;
 mod routing;
 mod runner;
@@ -133,6 +134,7 @@ pub use report::{
     SourceLocation, StepAnnotation, StepCategory, StepContext, StepInfo, StepOptions, StepOutcome,
     StepStatus, TestError, TestReport, TestResult, TestStatus,
 };
+pub use resolved_config::{ResolvedProjectConfig, ResolvedRunConfig, ResolvedTestSettings};
 pub use route_options::{RouteBodyState, RouteFetchOptions, RouteFulfillOptions};
 pub use routing::{UnrouteBehavior, UnrouteOptions};
 pub use runner::{
@@ -149,4 +151,4 @@ pub use url_wait::UrlWaitOptions;
 pub use video::{find_ffmpeg, find_ffprobe, VideoFormat, VideoFrame, VideoMode, VideoOptions};
 pub use webserver::{wait_for_url, RunningWebServer, WebServer};
 
-pub use ferrite_config::{E2eConfig, ViewportConfig, WebServerConfig};
+pub use ferrite_config::{E2eConfig, E2eProjectConfig, ViewportConfig, WebServerConfig};

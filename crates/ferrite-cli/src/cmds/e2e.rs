@@ -30,6 +30,7 @@ pub(crate) async fn e2e(
     let (mut resolved, _) = config.resolve().await?;
     apply_flag_overrides(&mut resolved.e2e, &args);
 
+    ferrite::e2e::Runner::try_from_config(&resolved.e2e).map_err(ferrite::FerriteError::from)?;
     // Validate the engine early (loud on webkit/unknown).
     let kind = ferrite::e2e::BrowserKind::parse(&resolved.e2e.browser)
         .map_err(ferrite::FerriteError::from)?;
@@ -62,23 +63,7 @@ pub(crate) async fn e2e(
 
     let command = test_command(&root, &args.command)?;
     println!("e2e run: {}", command.join(" "));
-    let status = std::process::Command::new(&command[0])
-        .args(&command[1..])
-        .current_dir(&root)
-        .env(
-            "FERRITE_E2E_BASE_URL",
-            resolved.e2e.base_url.as_deref().unwrap_or(&booted.url),
-        )
-        .env("FERRITE_E2E_CONFIG", serde_json::to_string(&resolved.e2e)?)
-        .env("FERRITE_E2E_BROWSER", kind.name())
-        .env("FERRITE_E2E_VIDEO", &resolved.e2e.video)
-        .env("FERRITE_E2E_REPORTER", &resolved.e2e.reporter)
-        .env("FERRITE_E2E_WORKERS", resolved.e2e.workers.to_string())
-        .env("FERRITE_E2E_RETRIES", resolved.e2e.retries.to_string())
-        .env("FERRITE_UPDATE_SNAPSHOTS", &resolved.e2e.update_snapshots)
-        .stdin(std::process::Stdio::inherit())
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
+    let status = child_command(&root, &resolved.e2e, &command)?
         .status()
         .map_err(|error| {
             ferrite::FerriteError::Other(format!("run {}: {error}", command.join(" ")))
@@ -86,6 +71,60 @@ pub(crate) async fn e2e(
     booted.shutdown().await;
     let code = status.code().unwrap_or(1);
     std::process::exit(code);
+}
+
+fn child_command(
+    root: &Path,
+    config: &ferrite::config::E2eConfig,
+    command: &[String],
+) -> ferrite::Result<std::process::Command> {
+    let program = command
+        .first()
+        .ok_or_else(|| ferrite::FerriteError::Other("empty E2E test command".into()))?;
+    let mut child = std::process::Command::new(program);
+    child
+        .args(&command[1..])
+        .current_dir(root)
+        .env("FERRITE_E2E_CONFIG", serde_json::to_string(config)?)
+        .env("FERRITE_E2E_BROWSER", &config.browser)
+        .env("FERRITE_E2E_VIDEO", &config.video)
+        .env("FERRITE_E2E_REPORTER", &config.reporter)
+        .env("FERRITE_E2E_WORKERS", config.workers.to_string())
+        .env("FERRITE_E2E_RETRIES", config.retries.to_string())
+        .env("FERRITE_E2E_REPEAT_EACH", config.repeat_each.to_string())
+        .env("FERRITE_E2E_OUTPUT_DIR", &config.output_dir)
+        .env("FERRITE_UPDATE_SNAPSHOTS", &config.update_snapshots)
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit());
+    for (name, value) in [
+        ("TIMEOUT_MS", config.timeout_ms),
+        ("EXPECT_TIMEOUT_MS", config.expect_timeout_ms),
+        ("GLOBAL_TIMEOUT_MS", config.global_timeout_ms),
+        ("MAX_FAILURES", config.max_failures as u64),
+        ("CLEANUP_TIMEOUT_MS", config.cleanup_timeout_ms),
+        ("VIDEO_FPS", u64::from(config.video_fps)),
+    ] {
+        child.env(format!("FERRITE_E2E_{name}"), value.to_string());
+    }
+    for (name, value) in [
+        ("FERRITE_E2E_BASE_URL", &config.base_url),
+        ("FERRITE_E2E_FILTER", &config.filter),
+        ("FERRITE_E2E_GREP", &config.grep),
+        ("FERRITE_E2E_GREP_INVERT", &config.grep_invert),
+        ("FERRITE_SNAPSHOT_DIR", &config.snapshot_dir),
+    ] {
+        if let Some(value) = value {
+            child.env(name, value);
+        }
+    }
+    if let Some((index, total)) = config.shard {
+        child.env("FERRITE_E2E_SHARD", format!("{index}/{total}"));
+    }
+    if !config.selected_projects.is_empty() {
+        child.env("FERRITE_E2E_PROJECT", config.selected_projects.join(","));
+    }
+    Ok(child)
 }
 
 fn apply_flag_overrides(e2e: &mut ferrite::config::E2eConfig, args: &E2eArgs) {
@@ -125,24 +164,29 @@ fn apply_flag_overrides(e2e: &mut ferrite::config::E2eConfig, args: &E2eArgs) {
     if let Some(update_snapshots) = &args.update_snapshots {
         e2e.update_snapshots = update_snapshots.clone();
     }
-    if args.filter.is_some() {
-        // The filter travels to the test process; `Runner::filter` applies it.
-        std::env::set_var(
-            "FERRITE_E2E_FILTER",
-            args.filter.as_deref().unwrap_or_default(),
-        );
+    if let Some(value) = args.repeat_each {
+        e2e.repeat_each = value.max(1);
     }
-    if let Some(grep) = &args.grep {
-        std::env::set_var("FERRITE_E2E_GREP", grep);
+    if let Some(value) = &args.output_dir {
+        e2e.output_dir = value.display().to_string();
     }
-    if let Some(grep_invert) = &args.grep_invert {
-        std::env::set_var("FERRITE_E2E_GREP_INVERT", grep_invert);
+    if let Some(value) = &args.snapshot_dir {
+        e2e.snapshot_dir = Some(value.display().to_string());
     }
-    if let Some((index, total)) = args.shard {
-        std::env::set_var("FERRITE_E2E_SHARD", format!("{index}/{total}"));
+    if let Some(value) = &args.filter {
+        e2e.filter = Some(value.clone());
+    }
+    if let Some(value) = &args.grep {
+        e2e.grep = Some(value.clone());
+    }
+    if let Some(value) = &args.grep_invert {
+        e2e.grep_invert = Some(value.clone());
+    }
+    if let Some(value) = args.shard {
+        e2e.shard = Some(value);
     }
     if !args.project.is_empty() {
-        std::env::set_var("FERRITE_E2E_PROJECT", args.project.join(","));
+        e2e.selected_projects = args.project.clone();
     }
 }
 
@@ -331,6 +375,148 @@ fn test_command(root: &Path, explicit: &[String]) -> ferrite::Result<Vec<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn project_flags_override_without_mutating_parent_environment() {
+        use clap::Parser;
+        let before = std::env::var_os("FERRITE_E2E_GREP");
+        let crate::cli::Command::E2e(args) = crate::cli::Cli::parse_from([
+            "ferrite",
+            "e2e",
+            "--repeat-each",
+            "0",
+            "--output-dir",
+            "cli-output",
+            "--snapshot-dir",
+            "cli-baseline",
+            "--filter",
+            "",
+            "--grep",
+            "included",
+            "--grep-invert",
+            "excluded",
+            "--shard",
+            "2/3",
+            "--project",
+            "desktop",
+        ])
+        .command
+        else {
+            panic!("e2e args")
+        };
+        let mut config = ferrite::config::E2eConfig {
+            repeat_each: 4,
+            output_dir: "old-output".into(),
+            grep: Some("old".into()),
+            projects: vec![ferrite::config::E2eProjectConfig {
+                name: "desktop".into(),
+                repeat_each: Some(2),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        apply_flag_overrides(&mut config, &args);
+        assert_eq!(config.repeat_each, 1);
+        assert_eq!(config.output_dir, "cli-output");
+        assert_eq!(config.snapshot_dir.as_deref(), Some("cli-baseline"));
+        assert_eq!(config.filter.as_deref(), Some(""));
+        assert_eq!(config.grep.as_deref(), Some("included"));
+        assert_eq!(config.grep_invert.as_deref(), Some("excluded"));
+        assert_eq!(config.shard, Some((2, 3)));
+        assert_eq!(config.selected_projects, ["desktop"]);
+        assert_eq!(config.projects[0].repeat_each, Some(2));
+        assert_eq!(std::env::var_os("FERRITE_E2E_GREP"), before);
+        ferrite::e2e::Runner::try_from_config(&config).unwrap();
+    }
+
+    #[test]
+    fn child_environment_preserves_json_and_all_explicit_legacy_settings() {
+        let config = ferrite::config::E2eConfig {
+            timeout_ms: 811,
+            expect_timeout_ms: 433,
+            global_timeout_ms: 900,
+            cleanup_timeout_ms: 199,
+            max_failures: 2,
+            video_fps: 17,
+            repeat_each: 3,
+            base_url: Some("http://localhost:7777".into()),
+            snapshot_dir: Some("snapshots with spaces".into()),
+            filter: Some("".into()),
+            grep: Some("good".into()),
+            grep_invert: Some("bad".into()),
+            shard: Some((1, 2)),
+            selected_projects: vec!["desktop".into()],
+            projects: vec![ferrite::config::E2eProjectConfig {
+                name: "desktop".into(),
+                output_dir: Some("project out".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let child =
+            child_command(Path::new("."), &config, &["cargo".into(), "test".into()]).unwrap();
+        let env = child
+            .get_envs()
+            .map(|(name, value)| {
+                (
+                    name.to_string_lossy().into_owned(),
+                    value.unwrap().to_string_lossy().into_owned(),
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let forwarded: ferrite::config::E2eConfig =
+            serde_json::from_str(&env["FERRITE_E2E_CONFIG"]).unwrap();
+        assert_eq!(
+            serde_json::to_value(&forwarded).unwrap(),
+            serde_json::to_value(&config).unwrap()
+        );
+        for (name, value) in [
+            ("TIMEOUT_MS", "811"),
+            ("EXPECT_TIMEOUT_MS", "433"),
+            ("GLOBAL_TIMEOUT_MS", "900"),
+            ("CLEANUP_TIMEOUT_MS", "199"),
+            ("MAX_FAILURES", "2"),
+            ("VIDEO_FPS", "17"),
+            ("REPEAT_EACH", "3"),
+            ("FILTER", ""),
+            ("GREP", "good"),
+            ("GREP_INVERT", "bad"),
+            ("SHARD", "1/2"),
+            ("PROJECT", "desktop"),
+        ] {
+            assert_eq!(env[&format!("FERRITE_E2E_{name}")], value);
+        }
+        assert_eq!(env["FERRITE_SNAPSHOT_DIR"], "snapshots with spaces");
+        assert_eq!(child.get_args().next().unwrap(), "test");
+        assert!(child_command(Path::new("."), &config, &[]).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn actual_child_gets_forwarded_values_with_spaces() {
+        let config = ferrite::config::E2eConfig {
+            repeat_each: 3,
+            timeout_ms: 811,
+            snapshot_dir: Some("baseline space".into()),
+            projects: vec![ferrite::config::E2eProjectConfig {
+                name: "desktop".into(),
+                repeat_each: Some(2),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let mut child = child_command(Path::new("."), &config, &["sh".into(),"-c".into(),
+            "printf '%s\\n%s\\n%s\\n%s\\n' \"$FERRITE_E2E_CONFIG\" \"$FERRITE_E2E_REPEAT_EACH\" \"$FERRITE_E2E_TIMEOUT_MS\" \"$FERRITE_SNAPSHOT_DIR\"".into()]).unwrap();
+        child.stdout(std::process::Stdio::piped());
+        let output = child.output().unwrap();
+        assert!(output.status.success());
+        let output = String::from_utf8(output.stdout).unwrap();
+        let mut lines = output.lines();
+        let forwarded: ferrite::config::E2eConfig =
+            serde_json::from_str(lines.next().unwrap()).unwrap();
+        assert_eq!(forwarded.projects[0].repeat_each, Some(2));
+        assert_eq!(lines.collect::<Vec<_>>(), ["3", "811", "baseline space"]);
+    }
 
     #[test]
     fn runner_limit_flags_override_config() {

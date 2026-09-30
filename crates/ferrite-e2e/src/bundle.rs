@@ -136,6 +136,7 @@ mod tests {
     use crate::{Attachment, TestResult, TestStatus};
     fn report(path: String) -> TestReport {
         TestReport {
+            configuration: None,
             run_steps: vec![],
             results: vec![TestResult {
                 name: "export".into(),

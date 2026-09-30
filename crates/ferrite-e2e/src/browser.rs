@@ -18,7 +18,8 @@ use crate::error::{E2eError, E2eResult};
 use crate::page::{Page, PageEvent};
 
 /// Supported browser engines.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum BrowserKind {
     /// Chromium over CDP.
     #[default]
@@ -53,7 +54,8 @@ impl BrowserKind {
 }
 
 /// Options for launching a browser.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct LaunchOptions {
     /// Engine to launch.
     pub browser: BrowserKind,
@@ -1176,8 +1178,17 @@ impl Browser {
         }
     }
 
+    /// Inheritance used by both native contexts and runner configuration snapshots.
+    pub(crate) fn effective_context_options(&self, mut options: ContextOptions) -> ContextOptions {
+        options.proxy_server = options
+            .proxy_server
+            .or_else(|| self.inner.proxy_server.clone());
+        options.ignore_https_errors |= self.inner.ignore_https_errors;
+        options
+    }
+
     /// Create an isolated browser context (incognito-equivalent).
-    pub async fn new_context(&self, mut options: ContextOptions) -> E2eResult<BrowserContext> {
+    pub async fn new_context(&self, options: ContextOptions) -> E2eResult<BrowserContext> {
         if !self.is_connected() {
             return Err(E2eError::Disconnected("browser is closed".into()));
         }
@@ -1191,10 +1202,7 @@ impl Browser {
                     .to_string(),
             ));
         }
-        options.proxy_server = options
-            .proxy_server
-            .or_else(|| self.inner.proxy_server.clone());
-        options.ignore_https_errors |= self.inner.ignore_https_errors;
+        let options = self.effective_context_options(options);
         let id = match &self.inner.backend {
             Backend::Cdp(cdp) => {
                 let result = cdp

@@ -29,6 +29,54 @@ The runner bounds setup/hooks/fixtures/body together, then gives each cleanup
 operation its own budget. Already active tests finish when max failures is
 reached; global timeout interrupts them and still runs cleanup.
 
+Named project configuration is carried into `Runner::default()` by the CLI:
+
+```toml
+[e2e]
+repeat_each = 2
+output_dir = "test-results"
+snapshot_dir = "baselines"
+grep_invert = "slow"
+selected_projects = ["desktop"]
+
+[[e2e.projects]]
+name = "desktop"
+grep = "greeting"
+repeat_each = 3
+retries = 1
+timeout_ms = 10000
+output_dir = "test-results/desktop"
+snapshot_dir = "baselines/desktop"
+
+[e2e.projects.viewport]
+width = 1280
+height = 720
+```
+
+Add these settings to the existing `[e2e]` table rather than declaring it twice.
+`--repeat-each`, `--output-dir`, `--snapshot-dir`, `--grep-invert`, `--shard` and
+`--project` override global CLI inputs. Project values override global defaults;
+test/suite retries, timeout and whole context overrides take precedence over
+project defaults. Filters use name/tag substrings. Zero repetitions normalize
+to one; zero timeout disables the deadline. Snapshot assertion options can
+override the resolved directory/update mode.
+
+Inside a `test_with_context` closure, inspect or attach effective settings:
+
+```rust,no_run
+let settings = ctx.info.settings();
+let project_defaults = ctx.info.project_config();
+println!("{:?} {:?}", settings.browser, project_defaults.map(|p| &p.name));
+println!("run output: {}", ctx.info.config().output_dir);
+ctx.info.attach("effective settings", format!("{settings:#?}").as_bytes(), "text/plain")?;
+```
+
+These snapshots describe actual selection, native browser versions and absolute
+artifact/snapshot directories. Copies cannot change scheduling; `settings()`
+reflects `set_timeout` updates. The final report stores run/attempt settings;
+HTML shows them in expandable sections. `resolve_config(&browser).await` offers
+a plan before native project startup, with dedicated versions still absent.
+
 For API authentication, save `context.request().save_storage_state(path)` and
 restore through `ContextOptions::storage_state`, or configure a standalone
 `ApiClientOptions::storage_state`. Context clients inherit transport defaults

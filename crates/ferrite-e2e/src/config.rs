@@ -70,15 +70,186 @@ fn config_from_variables(read: impl Fn(&str) -> Option<String>) -> E2eResult<E2e
             }
         }
     }
+    for (name, field) in [
+        ("FILTER", &mut config.filter),
+        ("GREP", &mut config.grep),
+        ("GREP_INVERT", &mut config.grep_invert),
+        ("SNAPSHOT_DIR", &mut config.snapshot_dir),
+    ] {
+        let variable = if name == "SNAPSHOT_DIR" {
+            "FERRITE_SNAPSHOT_DIR".into()
+        } else {
+            format!("FERRITE_E2E_{name}")
+        };
+        if let Some(value) = read(&variable).filter(|value| !value.is_empty()) {
+            *field = Some(value);
+        }
+    }
+    if let Some(value) = read("FERRITE_E2E_REPEAT_EACH") {
+        config.repeat_each = value
+            .parse()
+            .map_err(|_| E2eError::Config(format!("invalid FERRITE_E2E_REPEAT_EACH: {value:?}")))?;
+    }
+    if let Some(value) = read("FERRITE_E2E_PROJECT") {
+        config.selected_projects = value
+            .split(',')
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .collect();
+    }
+    if let Some(value) = read("FERRITE_E2E_SHARD") {
+        let (index, total) = value
+            .split_once('/')
+            .ok_or_else(|| E2eError::Config(format!("invalid FERRITE_E2E_SHARD: {value:?}")))?;
+        config.shard = Some((
+            index
+                .trim()
+                .parse()
+                .map_err(|_| E2eError::Config("invalid shard index".into()))?,
+            total
+                .trim()
+                .parse()
+                .map_err(|_| E2eError::Config("invalid shard total".into()))?,
+        ));
+    }
+    validate_config(&config)?;
+    Ok(config)
+}
+
+pub(crate) fn validate_config(config: &E2eConfig) -> E2eResult<()> {
     crate::BrowserKind::parse(&config.browser)?;
     crate::VideoMode::parse(&config.video)?;
     crate::SnapshotUpdate::parse(&config.update_snapshots)?;
-    Ok(config)
+    let paths = std::iter::once(config.output_dir.as_str())
+        .chain(config.snapshot_dir.as_deref())
+        .chain(config.projects.iter().flat_map(|project| {
+            project
+                .output_dir
+                .as_deref()
+                .into_iter()
+                .chain(project.snapshot_dir.as_deref())
+        }));
+    if paths.into_iter().any(str::is_empty) {
+        return Err(E2eError::Config(
+            "artifact/snapshot directory cannot be empty".into(),
+        ));
+    }
+    if let Some((index, total)) = config.shard {
+        if index == 0 || total == 0 || index > total {
+            return Err(E2eError::Config(
+                "shard index must be within 1..=total".into(),
+            ));
+        }
+    }
+    let mut names = std::collections::HashSet::new();
+    for project in &config.projects {
+        if project.name.trim().is_empty() || !names.insert(project.name.clone()) {
+            return Err(E2eError::Config(format!(
+                "empty or duplicate project name {:?}",
+                project.name
+            )));
+        }
+        if let Some(browser) = &project.browser {
+            crate::BrowserKind::parse(browser)?;
+        }
+    }
+    // Selection is validated at the run boundary: consumers may register named
+    // projects with Runner::project after loading shared/environment settings.
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn project_selection_paths_and_repetitions_survive_bridge() {
+        let json = serde_json::json!({
+            "repeat_each": 3, "filter": "", "grep": "json", "snapshot_dir": "baseline",
+            "projects": [{"name":"desktop", "browser":"firefox", "grep_invert":"skip",
+                "repeat_each":0, "retries":0, "timeout_ms":0, "output_dir":"desktop-output",
+                "snapshot_dir":"desktop-baseline", "viewport":{"width":600,"height":400}}],
+            "selected_projects":["desktop"], "shard":[1,2]
+        })
+        .to_string();
+        let config = config_from_variables(|name| match name {
+            "FERRITE_E2E_CONFIG" => Some(json.clone()),
+            "FERRITE_E2E_REPEAT_EACH" => Some("5".into()),
+            "FERRITE_E2E_GREP" => Some("legacy".into()),
+            "FERRITE_E2E_GREP_INVERT" => Some("excluded".into()),
+            "FERRITE_E2E_FILTER" => Some("".into()),
+            "FERRITE_SNAPSHOT_DIR" => Some("legacy-baseline".into()),
+            "FERRITE_E2E_SHARD" => Some(" 2 / 3 ".into()),
+            "FERRITE_E2E_PROJECT" => Some(" desktop, ".into()),
+            _ => None,
+        })
+        .unwrap();
+        assert_eq!(config.repeat_each, 5);
+        assert_eq!(config.filter.as_deref(), Some(""));
+        assert_eq!(config.grep.as_deref(), Some("legacy"));
+        assert_eq!(config.grep_invert.as_deref(), Some("excluded"));
+        assert_eq!(config.snapshot_dir.as_deref(), Some("legacy-baseline"));
+        assert_eq!(config.shard, Some((2, 3)));
+        assert_eq!(config.selected_projects, ["desktop"]);
+        let project = &config.projects[0];
+        assert_eq!(project.repeat_each, Some(0));
+        assert_eq!(project.retries, Some(0));
+        assert_eq!(project.timeout_ms, Some(0));
+        assert_eq!(project.viewport.as_ref().unwrap().width, 600);
+        let runner = crate::Runner::try_from_config(&config).unwrap();
+        drop(runner);
+        let manual = config_from_variables(|name| {
+            (name == "FERRITE_E2E_PROJECT").then(|| "registered-in-rust".into())
+        })
+        .unwrap();
+        assert!(manual.projects.is_empty());
+        let _runner = crate::Runner::try_from_config(&manual)
+            .unwrap()
+            .project(crate::Project::new("registered-in-rust"));
+        let empty = config_from_variables(|name| {
+            matches!(name, "FERRITE_E2E_FILTER" | "FERRITE_E2E_GREP_INVERT").then(String::new)
+        })
+        .unwrap();
+        assert!(empty.filter.is_none());
+        assert!(empty.grep_invert.is_none());
+    }
+
+    #[test]
+    fn invalid_project_selection_paths_and_counts_fail_before_run() {
+        for json in [
+            r#"{"projects":[{"name":""}]}"#,
+            r#"{"projects":[{"name":"x"},{"name":"x"}]}"#,
+            r#"{"projects":[{"name":"x","browser":"webkit"}]}"#,
+            r#"{"projects":[{"name":"x","output_dir":""}]}"#,
+            r#"{"snapshot_dir":""}"#,
+            r#"{"shard":[0,2]}"#,
+            r#"{"shard":[3,2]}"#,
+        ] {
+            assert!(
+                config_from_variables(|name| (name == "FERRITE_E2E_CONFIG").then(|| json.into()))
+                    .is_err(),
+                "{json}"
+            );
+        }
+        for (name, value) in [
+            ("FERRITE_E2E_REPEAT_EACH", "4294967296"),
+            ("FERRITE_E2E_REPEAT_EACH", "-1"),
+            ("FERRITE_E2E_SHARD", "1/x"),
+            ("FERRITE_E2E_SHARD", "1/0"),
+        ] {
+            assert!(config_from_variables(|key| (key == name).then(|| value.into())).is_err());
+        }
+        let mut invalid = E2eConfig::default();
+        invalid.projects.push(crate::E2eProjectConfig {
+            name: "bad".into(),
+            browser: Some("webkit".into()),
+            ..Default::default()
+        });
+        assert!(crate::Runner::try_from_config(&invalid).is_err());
+        // The non-fallible constructor remains available; run reports the validation error.
+        let _ = crate::Runner::from_config(&invalid);
+    }
 
     #[test]
     fn runner_limits_survive_json_and_legacy_overrides() {

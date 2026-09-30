@@ -39,6 +39,24 @@ FERRITE_E2E_REQUIRE_BOTH_BROWSERS=1 cargo test -p ferrite-e2e --test core_confor
 Node/Playwright are optional development tooling and are not dependencies of
 Ferrite's library or its normal Rust test command.
 
+`configuration-reference.mjs` / `configuration-reference.json` run actual pinned
+project selection, inclusion/exclusion, repetition, viewport, retry and timeout
+cases through the Playwright test runner. Three initial observations and one
+selected-project observation include a runtime timeout change. Regenerate with
+`npm run reference:configuration` or the external installation above and
+`node scripts/e2e-conformance/configuration-reference.mjs`.
+
+`cargo test -p ferrite-e2e --test effective_configuration` covers five native
+groups on Chromium/Firefox: pinned configuration and combined sharding; suite/
+test precedence, retries and owned snapshots; dedicated native engine identity,
+project artifact/snapshot directories and portable reports; validation/early
+setup failure; and legacy environment resolution frozen before hooks in a
+separate child process. The parent test environment is not mutated. Native
+versions are available after actual project startup; unlaunched dedicated
+projects retain None. Substring tag filters and whole ContextOptions replacement
+are Rust contracts, not claims of upstream regex/options merging equivalence.
+Snapshot path templates/stabilized capture remain separate TODO work.
+
 `soft-assertion-reference.mjs` / `soft-assertion-reference.json` run five actual
 Playwright 1.63.0 test-runner cases: two mismatches followed by a passing retry,
 expected failure, cleanup mismatch, parallel clean test and skip after mismatch.

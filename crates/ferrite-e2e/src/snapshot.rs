@@ -2,12 +2,13 @@
 //! `toHaveScreenshot` / `toMatchSnapshot`).
 //!
 //! Snapshots live under `<output_dir>/snapshots/` as `<slug>.png` / `<slug>.snap`.
-//! The directory resolves as: explicit [`SnapshotOptions::dir`],
-//! `FERRITE_SNAPSHOT_DIR` (set by [`Runner`](crate::runner::Runner) runs),
-//! then `test-results/snapshots`. Update behavior resolves as: explicit
-//! [`SnapshotOptions::update`], `FERRITE_UPDATE_SNAPSHOTS`
-//! (`missing`/`all`/`none`, set by `ferrite e2e --update-snapshots`), then
-//! [`SnapshotUpdate::Missing`].
+//! The directory resolves as explicit [`SnapshotOptions::dir`], then the page's
+//! resolved runner/project seed. Standalone pages use `FERRITE_SNAPSHOT_DIR`
+//! followed by `test-results/snapshots`. Update behavior resolves as explicit
+//! [`SnapshotOptions::update`], then the runner's captured mode. Standalone pages
+//! use `FERRITE_UPDATE_SNAPSHOTS` (`missing`/`all`/`none`), then
+//! [`SnapshotUpdate::Missing`]. Runner inputs are fixed at run startup; they do
+//! not mutate the process environment. Explicit assertion options take precedence.
 
 use std::path::{Path, PathBuf};
 
@@ -17,7 +18,8 @@ use crate::error::{E2eError, E2eResult};
 use crate::runner::slug;
 
 /// What to do about snapshot files.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum SnapshotUpdate {
     /// Write new snapshots, compare existing ones (default).
     #[default]

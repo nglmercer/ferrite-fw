@@ -44,6 +44,7 @@ Partial means the listed limitation must be retained in API/docs/test evidence.
 | Video / frame streams | Supported | Supported | Chromium video requires ffmpeg; Firefox records natively |
 | Browser CDP connections / raw sessions | Supported | Unsupported | Scoped session ownership is a separate extension |
 | Attempt-owned soft assertions | Supported | Supported | Only assertion mismatches are softened; operational/control errors propagate. Source/step/message data and failure status survive cleanup/retries. Atomic sealing rejects late writes; Rust runtime modifiers remain attempt-local. |
+| Resolved project/run/attempt configuration | Supported | Supported | Library/shared TOML/JSON/CLI selection and precedence; whole context overrides, actual owner versions, project artifact/snapshot paths, read-only TestInfo snapshots and serde-defaulted report metadata. Dedicated versions stay absent before launch; no project dependency scheduling. |
 | Portable reports, runner/fixtures/retries | Supported | Supported | Tokio workers, cooperative cancellation, current artifact formats |
 
 ## Evidence and validation gates
@@ -65,6 +66,15 @@ shared defaults, failed storage setup cleanup, final-owner release, persistent
 profiles, canceled/concurrent shutdown and actual transport loss. Linux checks
 the launched process and temporary profile are released. Remote Chromium owner
 close leaves its source process running; weak contexts do not retain a browser.
+
+[effective_configuration.rs](crates/ferrite-e2e/tests/effective_configuration.rs)
+compares four pinned runner observations and verifies five native groups on both
+engines. Actual selected settings, whole-context/suite/test precedence, runtime
+timeout changes, retry isolation, dedicated owner identity/release, project
+artifact/snapshot directories, old JSON, early setup and portable reports are
+covered. A separate child process verifies legacy environment values are fixed
+before hooks without changing the parent's environment. All 29 integration
+targets and strict E2E/CLI/configuration gates passed for this phase.
 
 [soft_assertions.rs](crates/ferrite-e2e/tests/soft_assertions.rs) compares five
 actual pinned runner cases and verifies contextual sources/steps, retained weak

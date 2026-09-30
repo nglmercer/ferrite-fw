@@ -16,7 +16,8 @@ use crate::page::{
 use std::future::Future;
 
 /// Service-worker policy for a context.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ServiceWorkerMode {
     /// Workers run normally.
     #[default]
@@ -27,7 +28,8 @@ pub enum ServiceWorkerMode {
 }
 
 /// Options for a new browser context.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct ContextOptions {
     /// Default viewport applied to every page in the context.
     pub viewport: Option<Viewport>,

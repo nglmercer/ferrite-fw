@@ -19,9 +19,9 @@ reporter, Android and Electron APIs:
 | Classification | Members | Meaning |
 |---|---:|---|
 | Equivalent | 15 | Counterpart for the basic operation/value, without full options or engine compatibility |
-| Partial | 620 | Related exposed operation with material semantic, option or engine differences |
+| Partial | 630 | Related exposed operation with material semantic, option or engine differences |
 | Idiomatic | 41 | Comparable operation through Rust language/library facilities |
-| Missing | 342 | No dedicated public counterpart |
+| Missing | 332 | No dedicated public counterpart |
 
 These counts describe an inventory, **not a behavioral compatibility
 percentage**. The earlier inventory had 458 Partial and 503 Missing members.
@@ -1164,4 +1164,104 @@ the await fixed the issue, and the affected native group plus final strict
 E2E/CLI all-target Clippy passed. Package formatting, matrix symbol anchors and
 local links passed. Expanded reports from both engines were inspected and all
 three links per relocated bundle resolved with escaped text intact. B12 is
-complete; B14/B13 and G04 remain open.
+complete; B14 is verified below, with B13 and G04 still open.
+
+
+## Effective project configuration and execution settings
+
+`E2eConfig` now carries named `E2eProjectConfig` values, global filter/grep/invert,
+repetition, selection/shard and snapshot-directory inputs through TOML/JSON and
+the CLI child-process bridge. `Project` adds inverted grep, repetition and
+output/snapshot directories. The CLI adds `--repeat-each`, `--output-dir` and
+`--snapshot-dir`; filters and project selection travel through child environment
+and complete JSON without mutating the parent process. All scalar legacy bridge
+values, including timeout/cleanup/expect/global limits and video FPS, are set on
+the child so inherited values cannot override explicit CLI settings.
+
+`Runner::try_from_config` validates configuration immediately; the existing
+non-fallible `from_config` retains validation errors and reports them before
+run setup. Unknown selected projects are checked at run resolution, allowing
+consumers to register projects in Rust after loading CLI/environment inputs.
+Duplicate project definitions and conflicting library engine/launch settings
+fail before launch. Repeated selection names are deduplicated. Workers and
+repetition zero normalize to one; retries zero stays zero, and timeout zero
+remains unlimited. Name/tag inclusion and exclusion are substring matching;
+this is not upstream regular-expression grep compatibility.
+
+`Runner::resolve_config(&browser)` returns owned `ResolvedRunConfig` and selected
+`ResolvedProjectConfig` snapshots without launching dedicated browsers. Runtime
+versions are native: supplied owner identity takes precedence over unrelated
+E2eConfig launch inputs, and planned dedicated versions are None until successful
+startup. Dedicated launch options describe requests, not auto-detected executable
+provenance. Explicit same-engine launch options still create a dedicated owner.
+Projects without overrides reuse the supplied owner. The supplied owner's base
+URL is authoritative, including changes made by startup hooks before attempts.
+
+Precedence for retries/timeout/context is explicit test, inherited inner/outer
+suite, project, then runner. Context overrides replace the whole ContextOptions
+value; proxy inheritance and TLS acceptance use the same helper as actual native
+context creation. These are resolved creation inputs, not a dump of every native
+browser preference or later page/context mutations. Shared project configuration
+currently includes viewport and launch overrides; other context fields remain
+available through library Project/Suite/Test builders. Existing backend errors
+for unsupported context settings remain effective.
+
+Read-only `TestInfo::config()` and `project_config()` expose scheduling/default
+snapshots. `settings()` returns an owned `ResolvedTestSettings` copy with actual
+attempt engine/version, context creation options, repetition, retry settings,
+resolved directories and current runtime timeout. Editing the copy or mutable
+legacy TestInfo identity fields cannot alter scheduling/default snapshots.
+Attempt settings are stored at finalization in `AttemptResult::settings`;
+`TestReport::configuration` stores the resolved run snapshot. Static skip/fixme
+results retain the existing one-entry-per-project/no-attempt behavior.
+
+Filters, selected projects, shard, CI focus protection and snapshot fallback
+inputs are fixed once at the run boundary. Explicit builders/configuration win
+over fallback environment values; `from_env` first applies legacy overrides to
+shared JSON. Optional unset filter/path/selection inputs may inherit legacy
+values. Global snapshot directory overrides project-output-derived defaults;
+an explicit project snapshot directory wins. Otherwise each project uses its
+resolved output directory plus `/snapshots`. Directories resolve against the run
+working directory to absolute paths, without requiring them to exist. Explicit
+assertion SnapshotOptions override page seeds; standalone snapshot helpers keep
+their environment fallback. Capture stabilization/path templates remain B10.
+
+Reporter `on_configuration` fires once after project startup and before attempts;
+if startup aborts, it emits the available planned snapshot before cleanup.
+Configuration validation failures have no fabricated snapshot. Attempt
+`on_test_configuration` fires immediately before `on_test_begin` and describes
+initial values, whereas the retained attempt settings include runtime timeout
+updates. JSON serialization and escaped collapsible HTML retain both run and
+attempt settings; portable bundles rewrite artifact links while preserving the
+original configuration paths as execution metadata.
+
+Migration: exhaustive Project and E2eConfig literals need the new fields or
+`..Default::default()`. New `E2eProjectConfig` also supports defaults. Exhaustive
+TestReport literals need `configuration: None`; AttemptResult literals need
+`settings: None`. Both report fields have serde defaults so historical JSON
+remains readable. Configuration snapshots, BrowserKind/LaunchOptions,
+ContextOptions, ServiceWorkerMode, VideoMode and SnapshotUpdate now serialize;
+serde's Duration format on LaunchOptions is `{secs,nanos}`, while resolved
+runner/attempt timeout fields use milliseconds. New Reporter callbacks have
+default implementations, preserving existing custom reporters.
+
+
+B14 validation: all **365 E2E checks** passed (164 units, 197 integrations across
+all 29 targets and four doctests), plus **27 CLI/configuration checks**. The
+58-check runner batch used full Chrome 153/Firefox 157; core187/browser93/
+routing23 used installed Headless Shell/Firefox. Strict E2E/CLI/configuration
+all-target Clippy and package formatting passed. Five native configuration
+groups and four actual pinned runner observations cover precedence, zero values,
+project/tag exclusion, repetition/sharding, runtime timeout/retries, dedicated
+owner identity/release, artifact/snapshot inputs and early setup errors. Legacy
+environment fallback is frozen before hooks in an isolated child; empty legacy
+filters stay ignored, while explicit empty JSON filters are retained. Four
+additional E2E unit checks and shared TOML/CLI/actual-child checks cover conversion,
+validation, old JSON and bridge values. Final units were rerun after the empty
+legacy compatibility fix. Initial test compilation needed two borrows; the first
+native run used the intentionally panicking invalid-shard builder instead of
+shared configuration, and passed after that test setup was corrected. Expanded
+run/attempt settings reports from both engines were visually inspected, all 12
+artifact links per preview bundle resolved, and native relocated bundles retained
+configuration paths as execution metadata. Regenerated matrix inventory is
+73 classes/1,018 members: Partial630/Missing332/Equivalent15/Idiomatic41.

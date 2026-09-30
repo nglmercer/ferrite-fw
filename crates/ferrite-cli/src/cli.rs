@@ -261,6 +261,15 @@ pub(crate) struct E2eArgs {
     /// Cleanup timeout in milliseconds.
     #[arg(long)]
     pub(crate) cleanup_timeout: Option<u64>,
+    /// Repeat each selected test (project overrides remain available).
+    #[arg(long)]
+    pub(crate) repeat_each: Option<u32>,
+    /// Artifact/report directory.
+    #[arg(long)]
+    pub(crate) output_dir: Option<PathBuf>,
+    /// Snapshot baseline directory.
+    #[arg(long)]
+    pub(crate) snapshot_dir: Option<PathBuf>,
     /// Only run tests whose name contains this.
     #[arg(long)]
     pub(crate) filter: Option<String>,

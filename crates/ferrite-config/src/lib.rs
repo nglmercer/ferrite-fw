@@ -389,6 +389,25 @@ impl Default for RuntimeConfig {
     }
 }
 
+/// Serializable project settings for the E2E CLI/library bridge.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct E2eProjectConfig {
+    pub name: String,
+    pub browser: Option<String>,
+    pub headless: Option<bool>,
+    pub executable_path: Option<String>,
+    pub args: Option<Vec<String>>,
+    pub viewport: Option<ViewportConfig>,
+    pub grep: Option<String>,
+    pub grep_invert: Option<String>,
+    pub retries: Option<u32>,
+    pub timeout_ms: Option<u64>,
+    pub repeat_each: Option<u32>,
+    pub output_dir: Option<String>,
+    pub snapshot_dir: Option<String>,
+}
+
 /// End-to-end test options (`ferrite e2e`, Chromium-first).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -430,6 +449,19 @@ pub struct E2eConfig {
     pub reporter: String,
     /// Artifact directory (screenshots, traces, reports).
     pub output_dir: String,
+    /// Snapshot baseline directory; unset uses output_dir/snapshots.
+    pub snapshot_dir: Option<String>,
+    /// Repetitions per selected test (zero normalizes to one).
+    pub repeat_each: u32,
+    /// Name-or-tag substring filters.
+    pub filter: Option<String>,
+    pub grep: Option<String>,
+    pub grep_invert: Option<String>,
+    /// One-based shard index and count.
+    pub shard: Option<(usize, usize)>,
+    /// Named project settings and optional selection.
+    pub projects: Vec<E2eProjectConfig>,
+    pub selected_projects: Vec<String>,
     /// Screenshot policy (`on`, `off`, `only-on-failure`).
     pub screenshot: String,
     /// Video policy (`on`, `off`, `only-on-failure`).
@@ -467,6 +499,14 @@ impl Default for E2eConfig {
             workers: 4,
             reporter: "list".to_string(),
             output_dir: "test-results".to_string(),
+            snapshot_dir: None,
+            repeat_each: 1,
+            filter: None,
+            grep: None,
+            grep_invert: None,
+            shard: None,
+            projects: Vec::new(),
+            selected_projects: Vec::new(),
             screenshot: "only-on-failure".to_string(),
             video: "off".to_string(),
             video_fps: 10,
@@ -1020,6 +1060,57 @@ pub fn resolve_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn e2e_project_toml_roundtrip_and_old_json_defaults() {
+        let user: UserConfig = toml::from_str(
+            r#"
+            [e2e]
+            repeat_each=3
+            snapshot_dir="baselines"
+            grep="smoke"
+            grep_invert="slow"
+            shard=[1,2]
+            selected_projects=["desktop"]
+            [[e2e.projects]]
+            name="desktop"
+            browser="firefox"
+            retries=0
+            timeout_ms=0
+            repeat_each=0
+            output_dir="desktop output"
+            snapshot_dir="desktop baselines"
+            grep="app"
+            grep_invert="blocked"
+            args=[]
+            [e2e.projects.viewport]
+            width=640
+            height=480
+        "#,
+        )
+        .unwrap();
+        let config = &user.e2e;
+        assert_eq!(config.repeat_each, 3);
+        assert_eq!(config.shard, Some((1, 2)));
+        assert_eq!(config.selected_projects, ["desktop"]);
+        let project = &config.projects[0];
+        assert_eq!(project.retries, Some(0));
+        assert_eq!(project.timeout_ms, Some(0));
+        assert_eq!(project.repeat_each, Some(0));
+        assert_eq!(project.viewport.as_ref().unwrap().width, 640);
+        let decoded: E2eConfig =
+            serde_json::from_str(&serde_json::to_string(config).unwrap()).unwrap();
+        assert_eq!(
+            serde_json::to_value(decoded).unwrap(),
+            serde_json::to_value(config).unwrap()
+        );
+        let old: E2eConfig = serde_json::from_str(r#"{"workers":2,"retries":1}"#).unwrap();
+        assert_eq!(old.workers, 2);
+        assert_eq!(old.repeat_each, 1);
+        assert!(old.projects.is_empty());
+        assert!(old.snapshot_dir.is_none());
+        assert!(old.grep_invert.is_none());
+    }
 
     #[test]
     fn defaults_resolve() {
