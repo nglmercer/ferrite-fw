@@ -1742,7 +1742,7 @@ where
             || capture(capture_options.clone(), options.wait_for_fonts),
         )
         .await;
-        match comparison.result {
+        let result = match comparison.result {
             Ok(()) if negated => Ok(()),
             Ok(()) => assert_snapshot_png(
                 name,
@@ -1752,31 +1752,30 @@ where
                     .expect("successful comparison has a capture"),
                 &options,
             ),
-            Err(error) => {
-                // Preserve typed control errors. Never take another capture after
-                // exhaustion just to write an artifact, or update an unstable baseline.
-                if error.code() == "FERRITE_E2E_EXPECT" {
-                    if let Some(actual) = comparison.actual {
-                        let actual_path = path.with_extension("actual.png");
-                        let write = (|| -> std::io::Result<()> {
-                            if let Some(parent) = actual_path.parent() {
-                                std::fs::create_dir_all(parent)?;
-                            }
-                            std::fs::write(&actual_path, actual)
-                        })();
-                        if let Err(write_error) = write {
-                            return Err(error.with_context(&format!(
-                                "writing screenshot failure artifact also failed: {write_error}"
-                            )));
-                        }
-                        return Err(
-                            error.with_context(&format!("actual: {}", actual_path.display()))
-                        );
-                    }
+            Err(error) => Err(error),
+        };
+        result.map_err(|error| {
+            // Preserve typed control errors. Never take another capture after
+            // exhaustion just to write an artifact, or update an unstable baseline.
+            match comparison.actual.as_deref() {
+                Some(actual) if error.code() == "FERRITE_E2E_EXPECT" => {
+                    crate::snapshot_artifacts::record(
+                        page,
+                        crate::snapshot_artifacts::FailureImages {
+                            name,
+                            path: &path,
+                            expected: expected.as_deref(),
+                            actual,
+                            previous: comparison.previous.as_deref(),
+                            stable: comparison.stable,
+                            threshold: options.threshold,
+                        },
+                        error,
+                    )
                 }
-                Err(error)
+                _ => error,
             }
-        }
+        })
     })
     .await
 }

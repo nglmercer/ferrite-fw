@@ -796,7 +796,68 @@ pub struct TestInfo {
     settings: crate::ResolvedTestSettings,
 }
 
+/// A page may outlive its attempt. Keep attachment/lifecycle owners weak and
+/// reject publication once the attempt has sealed its report.
+#[derive(Clone)]
+pub(crate) struct SnapshotAttachmentSink {
+    state: std::sync::Weak<tokio::sync::watch::Sender<RuntimeState>>,
+    attachments: std::sync::Weak<Mutex<Vec<Attachment>>>,
+    output_dir: String,
+    title: String,
+    reporters: crate::report::ReporterHub,
+    attempt: crate::report::AttemptInfo,
+    steps: Option<crate::report::StepSession>,
+}
+impl SnapshotAttachmentSink {
+    pub(crate) fn attach(&self, name: &str, body: &[u8]) -> E2eResult<String> {
+        let state = self
+            .state
+            .upgrade()
+            .ok_or_else(|| E2eError::Config("snapshot attachment attempt has ended".into()))?;
+        // Retain this read guard through file creation and publication, so
+        // AttemptGuard's sealing cannot race an accepted attachment.
+        let lifecycle = state.borrow();
+        if lifecycle.soft_sealed {
+            return Err(E2eError::Config(
+                "snapshot attachment attempt has ended".into(),
+            ));
+        }
+        let attachments = self
+            .attachments
+            .upgrade()
+            .ok_or_else(|| E2eError::Config("snapshot attachment owner has ended".into()))?;
+        let mut attachments = attachments.lock().unwrap_or_else(|e| e.into_inner());
+        let attachment = write_attachment(
+            &self.output_dir,
+            &self.title,
+            name,
+            body,
+            "image/png",
+            &mut attachments,
+        )?;
+        drop(attachments);
+        if let Some(steps) = &self.steps {
+            steps.attach(&attachment);
+        }
+        drop(lifecycle);
+        self.reporters
+            .emit(|r| r.on_attachment(&self.attempt, &attachment));
+        Ok(attachment.path)
+    }
+}
+
 impl TestInfo {
+    fn snapshot_attachment_sink(&self) -> SnapshotAttachmentSink {
+        SnapshotAttachmentSink {
+            state: Arc::downgrade(&self.runtime.state),
+            attachments: Arc::downgrade(&self.attachments),
+            output_dir: self.output_dir.clone(),
+            title: self.title.clone(),
+            reporters: self.reporters.clone(),
+            attempt: self.attempt.clone(),
+            steps: self.steps.clone(),
+        }
+    }
     /// Immutable run snapshot used for scheduling this attempt.
     pub fn config(&self) -> &crate::ResolvedRunConfig {
         &self.configuration
@@ -1042,32 +1103,22 @@ impl TestInfo {
     /// content types (`.txt`, `.json`, `.png`, `.html`); anything else keeps
     /// the slugged name without an extension.
     pub fn attach(&self, name: &str, body: &[u8], content_type: &str) -> E2eResult<String> {
-        let dir = std::path::Path::new(&self.output_dir).join("attachments");
-        std::fs::create_dir_all(&dir)?;
         let mut attachments = self.attachments.lock().unwrap_or_else(|e| e.into_inner());
-        let stem = format!("{}-{}", slug(&self.title), slug(name));
-        let extension = attach_extension(content_type);
-        let mut path = dir.join(format!("{stem}{extension}"));
-        let mut suffix = 1;
-        while path.exists() {
-            path = dir.join(format!("{stem}-{suffix}{extension}"));
-            suffix += 1;
-        }
-        std::fs::write(&path, body)?;
-        let path = path.display().to_string();
-        let attachment = Attachment {
-            name: name.to_string(),
-            path: path.clone(),
-            content_type: content_type.to_string(),
-        };
-        attachments.push(attachment.clone());
+        let attachment = write_attachment(
+            &self.output_dir,
+            &self.title,
+            name,
+            body,
+            content_type,
+            &mut attachments,
+        )?;
         drop(attachments);
         if let Some(steps) = &self.steps {
             steps.attach(&attachment);
         }
         self.reporters
             .emit(|r| r.on_attachment(&self.attempt, &attachment));
-        Ok(path)
+        Ok(attachment.path)
     }
 
     /// Attachments recorded so far (across attempts).
@@ -1078,6 +1129,34 @@ impl TestInfo {
             .map(|a| a.clone())
             .unwrap_or_default()
     }
+}
+
+fn write_attachment(
+    output_dir: &str,
+    title: &str,
+    name: &str,
+    body: &[u8],
+    content_type: &str,
+    attachments: &mut Vec<Attachment>,
+) -> E2eResult<Attachment> {
+    let dir = std::path::Path::new(output_dir).join("attachments");
+    std::fs::create_dir_all(&dir)?;
+    let stem = format!("{}-{}", slug(title), slug(name));
+    let extension = attach_extension(content_type);
+    let mut path = dir.join(format!("{stem}{extension}"));
+    let mut suffix = 1;
+    while path.exists() {
+        path = dir.join(format!("{stem}-{suffix}{extension}"));
+        suffix += 1;
+    }
+    std::fs::write(&path, body)?;
+    let attachment = Attachment {
+        name: name.to_string(),
+        path: path.display().to_string(),
+        content_type: content_type.to_string(),
+    };
+    attachments.push(attachment.clone());
+    Ok(attachment)
 }
 
 /// Extension suffix for well-known attachment content types.
@@ -3925,6 +4004,7 @@ async fn run_one(
         page.snapshot_path_template = snapshot_options.path_template;
         page.snapshot_path_context = snapshot_options.path_context.unwrap_or_default();
         page.reporter = info.steps.clone();
+        page.snapshot_attachments = Some(info.snapshot_attachment_sink());
         let request = match crate::ApiClient::with_options(context.api_options()) {
             Ok(request) => request,
             Err(error) => {
@@ -5561,6 +5641,32 @@ mod fixture_cancellation_tests {
         info.body_outcome(&Err(E2eError::Skipped("skip".into())), "body");
         assert_eq!(info.status(), Some(AttemptStatus::TimedOut));
     }
+    #[test]
+    fn snapshot_attachment_sink_rejects_sealed_attempts_and_retains_no_owners() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut info = runtime_info(Duration::ZERO);
+        info.output_dir = directory.path().display().to_string();
+        let sink = info.snapshot_attachment_sink();
+        let first = sink.attach("card-actual", b"first").unwrap();
+        let second = sink.attach("card-actual", b"second").unwrap();
+        assert_ne!(first, second);
+        assert_eq!(std::fs::read(first).unwrap(), b"first");
+        assert_eq!(std::fs::read(second).unwrap(), b"second");
+        assert_eq!(info.attachments().len(), 2);
+        info.runtime
+            .state
+            .send_modify(|state| state.soft_sealed = true);
+        assert_eq!(
+            sink.attach("late", b"third").unwrap_err().code(),
+            "FERRITE_E2E_CONFIG"
+        );
+        assert_eq!(info.attachments().len(), 2);
+        drop(info);
+        assert!(sink.state.upgrade().is_none());
+        assert!(sink.attachments.upgrade().is_none());
+        assert!(sink.attach("released", b"fourth").is_err());
+    }
+
     #[test]
     fn attempt_soft_sealing_is_atomic_and_collectors_do_not_retain_the_runtime() {
         let info = runtime_info(Duration::ZERO);

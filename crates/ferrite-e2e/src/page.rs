@@ -1629,6 +1629,7 @@ impl Download {
 pub struct Page {
     pub(crate) screenshot_state: Arc<crate::screenshot::ScreenshotState>,
     pub(crate) reporter: Option<crate::report::StepSession>,
+    pub(crate) snapshot_attachments: Option<crate::runner::SnapshotAttachmentSink>,
     expect_timeout: Arc<Mutex<Duration>>,
     action_timeout: Arc<Mutex<Duration>>,
     navigation_timeout: Arc<Mutex<Option<Duration>>>,
@@ -1753,6 +1754,7 @@ impl Page {
         Self {
             screenshot_state: Arc::new(crate::screenshot::ScreenshotState::default()),
             reporter: None,
+            snapshot_attachments: None,
             driver,
             coverage_state: Arc::new(tokio::sync::Mutex::new(Default::default())),
             sink,

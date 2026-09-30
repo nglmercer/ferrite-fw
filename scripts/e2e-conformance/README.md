@@ -127,7 +127,8 @@ versions are available after actual project startup; unlaunched dedicated
 projects retain None. Substring tag filters and whole ContextOptions replacement
 are Rust contracts, not claims of upstream regex/options merging equivalence.
 Snapshot path templates and stabilized capture now have focused B10 evidence;
-report diff attachments and final B10 verification remain open.
+attempt-owned diff attachments also have focused B10 evidence; final B10
+verification remains open.
 
 `soft-assertion-reference.mjs` / `soft-assertion-reference.json` run five actual
 Playwright 1.63.0 test-runner cases: two mismatches followed by a passing retry,
@@ -390,8 +391,9 @@ Both engines show that `all`/`changed` can replace an existing baseline with the
 last image after stability times out, while a never-stable missing baseline fails
 without creation. Rust requires stable generation for both existing and missing
 baselines and preserves its earlier write-and-pass `missing` policy. Its per-
-channel comparator also remains different. B10 is not complete: report artifact
-work, actual delayed fonts and final phase gates remain.
+channel comparator also remains different. Expected/actual/diff copies now use
+attempt-owned report attachments; actual delayed fonts, budget audits and final
+phase gates remain before B10 is complete.
 
 ### Snapshot path reference (B10 in progress)
 

@@ -1226,7 +1226,8 @@ resolved output directory plus `/snapshots`. Directories resolve against the run
 working directory to absolute paths, without requiring them to exist. Explicit
 assertion SnapshotOptions override page seeds; standalone snapshot helpers keep
 their environment fallback. B10 now implements stabilization and explicit path
-templates; report diffs and final phase verification remain open.
+templates and report image copies; clock/resource audits and final phase
+verification remain open.
 
 Reporter `on_configuration` fires once after project startup and before attempts;
 if startup aborts, it emits the available planned snapshot before cleanup.
@@ -1538,8 +1539,8 @@ pair, and retains retrying initially stable mismatches within the shared window.
 Per-channel comparison remains different from upstream's perceived-color/YIQ
 algorithm. These are documented differences, not full matcher parity.
 
-B10 remains unchecked. Expected/actual/diff report
-attachments, real delayed-font/animation evidence and final broad verification
+B10 remains unchecked. Real delayed-font/animation evidence, CPU/filesystem
+budget work and final broad verification
 are still required. Focused draft checks do not replace the completed B09
 checkpoint or prove completion of the expanded current test inventory.
 
@@ -1567,7 +1568,8 @@ explicit `SnapshotOptions` directory/template/context values override page seeds
 Runner metadata and the relative base are fixed at startup. `TestInfo::snapshot_path`
 returns a path without writing; `snapshot_options()` supplies the same inputs to
 standalone helpers. Retries/repeats share baseline identity. Failure `.actual`
-files follow the resolved baseline; per-attempt report diff attachments remain open.
+files follow the resolved baseline. Per-attempt report copies now preserve these
+diagnostics independently of later baseline changes.
 
 Supported tokens are `{arg}`, `{ext}`, `{platform}`, `{projectName}`,
 `{browserName}`, `{snapshotDir}`, `{testDir}`, `{testFileDir}`,
@@ -1616,3 +1618,56 @@ formatting, matrix generation, 738 parity-document links and 655 source anchors
 passed. The final unit run also verifies visible failure-artifact write errors
 without losing the original mismatch. Full current-inventory verification and
 the remaining B10 acceptance criteria are still pending.
+
+### B10 draft: attempt-owned screenshot diagnostics
+
+Page/locator screenshot mismatches now copy the expected bytes read before
+capture, the last completed actual image and a visual diff into the attempt's
+attachment directory. They also attach to the active assertion step and emit
+live reporter attachment events. Names retain the supplied snapshot name plus
+`-expected`, `-actual` or `-diff`; filenames use the existing attachment slug and
+collision suffix rules. Subsequent baseline updates cannot rewrite earlier
+report evidence. `write_bundle` copies/deduplicates these files alongside traces
+and rewrites both attempt and step links for portable HTML/JSON.
+
+Never-stable captures retain the last two completed images without taking a new
+post-expiry screenshot. Attachments add `-previous` and `-stability-diff`; an
+existing baseline also receives its expected/baseline diff. Missing baselines
+have no expected image. Visual diffs use the same per-channel threshold: changed
+pixels are red, nonoverlapping size regions magenta, matching pixels muted gray
+and areas outside both images transparent. The union raster has its own 64-million-
+pixel cap. This is a Rust diagnostic format, not Playwright's YIQ/pixelmatch output.
+
+The attachment sink keeps lifecycle/attachment owners weak, holds sealing off
+through each accepted file publication, and rejects ended attempts. It never
+retains a browser/context owner. Write/encode failures add diagnostic context to
+the original mismatch code; typed timeout/cancellation/disconnect failures do not
+publish new failure images. The legacy baseline-adjacent `.actual.png` remains
+available, including on standalone pages; standalone text/PNG helpers retain their
+existing explicit attachment boundary.
+
+Generic retry probes suppress intermediate report images because their enclosing
+assertion can later pass; their legacy actual path is still retained. Deferred
+final-only publication for a failing enclosing generic poll remains part of the
+cross-feature audit. Synchronous decode/diff/encode/file work also still needs
+the B10 clock/resource audit. This increment does not close B10.
+
+The [native diagnostic groups](crates/ferrite-e2e/tests/snapshot_artifacts.rs)
+verify immutable retry copies after a lime baseline replaces a red one, exact
+PNG pixels and size regions, negated/soft assertion ownership, never-stable
+existing/missing baselines, reporter events, visible I/O failures and control
+errors with restoration. They move the portable bundle and delete source output
+before checking all attachment/step/trace links. The fixture explicitly expects
+three image files plus the runner's two existing attempt traces; an early harness
+mistakenly counted only the images. Final-only generic probe scopes are checked
+alongside the existing D02 native polling regressions.
+
+Final focused diagnostic-increment gates passed: 194 units, 42 native integrations
+across eleven targets, four doctests and 28 CLI/configuration checks (268 combined).
+The final native artifact/polling run covers eight groups; related gates cover
+snapshot_paths2, snapshot_stability3, browser3, effective_configuration5,
+runtime_and_reporters4, screenshot_capabilities1, screenshot_options7,
+soft_assertions5 and step_controls_and_bundles4. Every native group requires full
+Chrome 153 and Firefox 157. Final strict all-target Clippy, formatting, matrix
+generation and parity-document links passed. This remains focused evidence;
+the expanded full integration inventory is not yet a completed B10 phase gate.

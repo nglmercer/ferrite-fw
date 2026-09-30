@@ -74,6 +74,7 @@ mod routing;
 mod runner;
 mod screenshot;
 mod snapshot;
+mod snapshot_artifacts;
 mod snapshot_capture;
 mod snapshot_path;
 mod url_matcher;

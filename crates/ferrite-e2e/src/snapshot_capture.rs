@@ -7,6 +7,8 @@ use crate::{operation::Deadline, snapshot::SnapshotOptions, E2eError, E2eResult}
 pub(crate) struct Comparison {
     pub result: E2eResult<()>,
     pub actual: Option<Vec<u8>>,
+    pub previous: Option<Vec<u8>>,
+    pub stable: bool,
 }
 
 /// Capture twice before accepting a baseline or a match. An existing baseline
@@ -25,6 +27,7 @@ where
     Fut: Future<Output = E2eResult<Vec<u8>>>,
 {
     let mut actual: Option<Vec<u8>> = None;
+    let mut previous: Option<Vec<u8>> = None;
     let mut last = "no completed capture".to_string();
     let mut stable = false;
     let result = deadline
@@ -46,12 +49,12 @@ where
                     }
                     let next = capture().await?;
                     crate::compare_png(&next, &next, options.threshold)?;
-                    let previous = actual.replace(next);
+                    previous = actual.replace(next);
                     stable = false;
-                    if let Some(previous) = previous {
+                    if let Some(previous) = previous.as_deref() {
                         match crate::compare_png(
                             actual.as_deref().unwrap(),
-                            &previous,
+                            previous,
                             options.threshold,
                         ) {
                             Ok(diff) => {
@@ -112,7 +115,12 @@ where
         ))),
         Err(error) => Err(error.with_context(description)),
     };
-    Comparison { result, actual }
+    Comparison {
+        result,
+        actual,
+        previous,
+        stable,
+    }
 }
 
 #[cfg(test)]
@@ -224,6 +232,14 @@ mod tests {
             assert_eq!(
                 tokio::time::Instant::now() - start,
                 Duration::from_millis(125)
+            );
+            assert_eq!(result.stable, change_size);
+            assert_eq!(
+                result.previous.as_deref().unwrap(),
+                png(
+                    if change_size { 3 } else { 2 },
+                    if change_size { 0 } else { 1 }
+                )
             );
             let error = result.result.unwrap_err();
             assert_eq!(error.code(), "FERRITE_E2E_EXPECT");

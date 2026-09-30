@@ -57,7 +57,7 @@ batch; its cause remains an explicit G04 audit item.
 
 The matrix remains 73 classes/1,018 members: Partial635/Missing327/Equivalent15/
 Idiomatic41. Capture mappings now describe these options and engine differences;
-they do not imply full compatibility. Current matrix generation, 738 parity-document
+they do not imply full compatibility. Current matrix generation, 740 parity-document
 local links and 655 source anchors passed for the path increment.
 
 **Current handoff:** B10 is in progress. The verified increment `499c274` in
@@ -78,10 +78,16 @@ snapshot_options supplies standalone helpers with the same identity. Two require
 two-engine native groups verify page/locator/text paths and retries; 36 actual
 pinned path-only calls document naming differences. This remains partial parity.
 
-Continue B10 by attaching expected/actual/diff artifacts through report/bundle plumbing;
-retain prior/last images for never-stable and dimension diagnostics. Add an actual
-delayed downloadable-font fixture, animation cases, report/soft/retry/cancellation
-coverage, and audit CPU/decode/filesystem bounds under the shared assertion clock.
+The diagnostic increment copies expected/actual/diff images into attempt and
+assertion-step attachments, retains previous/stability-diff images for unstable
+content and preserves portability after baseline updates/source removal. Native
+groups cover retry/soft ownership, exact pixels/dimensions, live events, visible
+I/O failures and cancellation/restoration. Generic retry probes suppress intermediate
+report images; final-only deferred publication for a failed outer poll remains
+an audit item.
+
+Continue B10 with an actual delayed downloadable-font fixture and animation cases,
+and audit CPU/decode/encode/filesystem bounds under the shared assertion clock.
 Run final complete phase gates, update matrix/capability evidence and commit only
 verified work before checking B10. Preserve entry points and document input-struct
 migration. B18/B11 follow after B10 is complete.
@@ -848,10 +854,13 @@ their dependencies are ready. References include
   mode/negation/stability differences; three required two-engine groups and
   virtual-time checks cover the draft. Path templates now cover global/project/
   assertion precedence, frozen metadata, CLI/env and TestInfo access (`b34174d`); two native
-  groups and 36 pinned path-only cases verify them. Report diff attachments,
-  real font/animation cases and final complete phase gates are still required.
-  Latest focused increment gates passed: 192 units, 29 native integrations/eight
-  targets, four doctests and 28 CLI/configuration checks (253 combined), strict
+  groups and 36 pinned path-only cases verify them. Attempt/step-owned expected/
+  actual/diff and last-pair stability attachments now preserve immutable retry
+  evidence and portable links, with four native diagnostic groups. Real font/
+  animation cases, final-only outer-poll diagnostics, resource/clock audits and
+  final complete phase gates are still required.
+  Latest focused increment gates passed: 194 units, 42 native integrations/eleven
+  targets, four doctests and 28 CLI/configuration checks (268 combined), strict
   Clippy, formatting, regenerated matrix and local links. Font waits now follow
   owned style preparation across reachable same-origin documents, with held-
   promise cancellation/restoration coverage. These are not full phase gates;

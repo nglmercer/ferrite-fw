@@ -261,6 +261,48 @@ fn decode_png(bytes: &[u8], label: &str) -> E2eResult<image::DynamicImage> {
         .map_err(|error| E2eError::Config(format!("cannot decode {label} PNG: {error}")))
 }
 
+/// Visual diagnostic, using the same per-channel threshold as comparison.
+/// Different pixels are red; nonoverlapping dimension regions are magenta.
+/// Unchanged pixels are muted grayscale. The union raster is bounded separately.
+pub(crate) fn diff_png(actual: &[u8], expected: &[u8], threshold: u8) -> E2eResult<Vec<u8>> {
+    let actual = decode_png(actual, "actual")?.to_rgba8();
+    let expected = decode_png(expected, "snapshot")?.to_rgba8();
+    let width = actual.width().max(expected.width());
+    let height = actual.height().max(expected.height());
+    if u64::from(width) * u64::from(height) > 64_000_000 {
+        return Err(E2eError::Config(
+            "snapshot diff exceeds the 64 million pixel limit".into(),
+        ));
+    }
+    let diff = image::RgbaImage::from_fn(width, height, |x, y| {
+        let in_actual = x < actual.width() && y < actual.height();
+        let in_expected = x < expected.width() && y < expected.height();
+        if !in_actual && !in_expected {
+            return image::Rgba([255, 255, 255, 0]);
+        }
+        if in_actual != in_expected {
+            return image::Rgba([255, 0, 255, 255]);
+        }
+        let a = actual.get_pixel(x, y);
+        let e = expected.get_pixel(x, y);
+        if a.0
+            .iter()
+            .zip(e.0.iter())
+            .any(|(a, e)| a.abs_diff(*e) > threshold)
+        {
+            image::Rgba([255, 0, 0, 255])
+        } else {
+            let gray = (u16::from(e[0]) + u16::from(e[1]) + u16::from(e[2])) / 3;
+            let muted = (128 + gray / 2) as u8;
+            image::Rgba([muted, muted, muted, 255])
+        }
+    });
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    diff.write_to(&mut bytes, image::ImageFormat::Png)
+        .map_err(|error| E2eError::Config(format!("encoding snapshot diff PNG: {error}")))?;
+    Ok(bytes.into_inner())
+}
+
 /// Resolve the snapshot directory (explicit > env > default).
 pub(crate) fn resolve_dir(explicit: Option<&Path>) -> PathBuf {
     if let Some(dir) = explicit {
@@ -448,6 +490,36 @@ fn truncate(line: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn visual_diff_uses_threshold_and_marks_dimension_regions() {
+        let png = |image: image::RgbaImage| {
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            image.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+            bytes.into_inner()
+        };
+        let expected = png(image::RgbaImage::from_pixel(
+            2,
+            2,
+            image::Rgba([100, 100, 100, 255]),
+        ));
+        let mut actual = image::RgbaImage::from_pixel(3, 1, image::Rgba([102, 100, 100, 255]));
+        actual.put_pixel(1, 0, image::Rgba([200, 0, 0, 255]));
+        let actual = png(actual);
+        let diff = image::load_from_memory(&diff_png(&actual, &expected, 2).unwrap())
+            .unwrap()
+            .to_rgba8();
+        assert_eq!(diff.dimensions(), (3, 2));
+        assert_eq!(diff.get_pixel(0, 0).0, [178, 178, 178, 255]);
+        assert_eq!(diff.get_pixel(1, 0).0, [255, 0, 0, 255]);
+        assert_eq!(diff.get_pixel(2, 0).0, [255, 0, 255, 255]);
+        assert_eq!(diff.get_pixel(0, 1).0, [255, 0, 255, 255]);
+        assert_eq!(diff.get_pixel(2, 1).0, [255, 255, 255, 0]);
+        assert_eq!(
+            diff_png(b"invalid", &expected, 0).unwrap_err().code(),
+            "FERRITE_E2E_CONFIG"
+        );
+    }
     use image::ImageFormat;
     use std::io::Cursor;
 
