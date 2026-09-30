@@ -1,13 +1,13 @@
 # Ferrite E2E implementation TODO
 
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
-Session plan refreshed: 2026-09-30, from verified B19 implementation `34890cc`.
+Session plan refreshed: 2026-09-30, from verified B16 implementation `1e4d3bb`.
 Uncommitted implementations are not counted complete.
 
 Implement **G, then A, then B**, followed by the supported C extensions. This
-backlog contains **45 tasks (29 complete, 16 remaining)**: four foundations,
+backlog contains **45 tasks (30 complete, 15 remaining)**: four foundations,
 16 core tasks, 19 follow-ups and six optional extensions. All A tasks and
-B01–B08/B15/B19 are now verified; continue with ownership and runner APIs, then
+B01–B08/B15/B16/B19 are now verified; continue with locator and runner APIs, then
 captures, reports and supported C extensions. The ordering and effort
 assessments are recommendations based on the current source and parity audit.
 
@@ -19,36 +19,39 @@ limits remain in [PLAYWRIGHT-PARITY.md](PLAYWRIGHT-PARITY.md).
 
 ## Recommended next implementation
 
-Start **B16 — context/browser ownership introspection**, then **B17 — locator
-descriptions**. B19 is verified in `34890cc`: bounded native argument previews,
-optional error fields, supplied stack frames and structured trace payloads retain
-owned source data through popup/context history and every attempt report.
-Preserve the verified callback/event/routing and popup-capture lifecycle behavior.
+Start **B17 — locator descriptions**, then **B12 — runner-integrated soft
+assertions**. B16 is verified in `1e4d3bb`: real shared Browser owners, weak
+context access, one process/profile/default/registry, accurate terminal state
+and cleanup which survives a canceled close future. Preserve the verified
+callback/event/routing, popup capture and structured console behavior.
 
-The structured-console phase passed all 338 E2E and 23 CLI/configuration checks,
-with strict Clippy, formatting and regenerated matrix links. Three new native
-console groups and the runner/report/popup batch ran on full Chrome 153/Firefox
-157; broad browser/core/routing batches used Headless Shell/Firefox. The complete
-inventory is 155 units, 180 integrations across all 25 targets, three doctests
-and 23 CLI/configuration checks. Expanded error/argument reports were inspected;
-seven artifact links per relocated bundle resolved. The two actual pinned cases
-compare shared primitives and available Chromium error fields. Native bigint
-retention differs explicitly from the pinned undefined console handle; Firefox
-name/message fields stay unavailable. Ordinary typed nesting survives BiDi
-wrappers while byte/node/entry limits remain verified.
+The ownership phase passed all 342 E2E and 23 CLI/configuration checks, with
+strict Clippy, formatting and regenerated matrix links. The complete inventory
+is 155 units, 184 integrations across all 26 targets and three doctests, plus
+23 CLI/configuration checks. The runner/diagnostics batch ran on full Chrome
+153/Firefox 157; broad browser/core/routing batches used Headless Shell/Firefox.
+Four native ownership groups and two actual pinned cases cover explicit,
+convenience, persistent and retained closed-context owners. Actual operations,
+shared defaults, failed-storage setup, cancellation/concurrent close, process/
+profile release and remote source disconnection were verified. Linux argv
+inspection first needed correction, then exposed an immediate-kill profile leak;
+bounded native shutdown before reaping fixed it. The final attached-client
+loss check additionally passed on full Chrome/Firefox. No report layout changed.
 
-**Current handoff:** audit `Browser`'s child/profile ownership, shared backend and
-context registry before adding weak context owner access. `Browser` is currently
-a process-owning value, while contexts/pages already share transports and use
-weak registries. Avoid creating a second independent process owner or introducing
-a strong browser/context cycle. Preserve explicit close and final-owner drop
-semantics when choosing the shared ownership design. Verify actual owner access
-for explicit, convenience, persistent and remote contexts; context closure and
-unexpected transport loss must produce accurate is-closed/is-connected results.
-Retain empty-context waiter wake-up and idempotent cleanup. G04 remains open for
-channel lag, partial setup, detached in-flight requests and the final audit.
+**Current handoff:** start B17 in `Locator`, its constructors/chaining helpers,
+`Page::auto_step`/`auto_step_local`, and assertion `poll` descriptions. Keep user
+labels separate from selector text and DOM resolution. Use pinned observations
+to define label replacement/removal and clone/filter/pick/scoped/combined
+behavior; audit every `Self` constructor and frame conversion. Carry operation
+names and labels into action/assertion errors while preserving error kinds,
+cancellation/defaults and automatic-step deduplication. Verify labeled retries,
+source metadata, escaping and report serialization on both native engines.
+Preserve B16's actual shared owner and weak context graph; `base_url()` now
+returns an owned Option<String>, and existing contexts retain their seed.
+G04 remains open for channel lag, partial setup, detached in-flight requests
+and the final cross-feature/resource audit.
 
-The scope of the longer session is **all 16 open tasks below**. Completed tasks
+The scope of the longer session is **all 15 open tasks below**. Completed tasks
 remain regression requirements. The deferred projects are future work; completing
 this checklist means practical parity within the stated engine capabilities,
 not complete Playwright compatibility.
@@ -61,22 +64,21 @@ there. G04 applies during every phase and closes after the final audit.
 
 | Order | Task | Implementation result | Dependency or capability gate |
 |---|---|---|---|
-| 1 | B16 | Context owner access and reliable connection state | Weak ownership; disposal and transport-close tests |
-| 2 | B17 | Locator descriptions in steps and operation errors | Existing automatic step/source recording |
-| 3 | B12 | Attempt-owned soft assertions that affect test results | Retry and parallel-attempt isolation |
-| 4 | B14 | Effective project settings and read-only resolved configuration | Library/CLI precedence and serialization |
-| 5 | B13 | Fixture timeouts and one shared teardown budget | Runner cancellation, failed setup and reverse teardown |
-| 6 | B09 | Supported screenshot options with reversible temporary changes | Native capture capabilities on each engine |
-| 7 | B10 | Stable screenshot comparisons, paths and update modes | B09; project/path settings from B14 |
-| 8 | B18 | Bounded ARIA snapshots with optional boxes and state | Existing DOM approximation; no full ARIA/YAML implementation |
-| 9 | B11 | Searchable portable reports with per-attempt network diagnostics | B02/B03 complete; B19; browser visual inspection |
-| 10 | C01 | Validated PDF options | Chromium; explicit Firefox unsupported result |
-| 11 | C02 | Bounded captured-body bytes, text and JSON helpers | B02/B03 complete; Chromium body capture |
-| 12 | C03 | Coverage navigation/source options and restart lifecycle | Chromium JS/CSS coverage |
-| 13 | C04 | HAR matching, not-found and supported content options | A14 complete; B06; engine body/rewrite capabilities |
-| 14 | C05 | Supported media/device emulation options and resets | Chromium native capabilities |
-| 15 | C06 | Independently detachable CDP target sessions | Chromium transport and session ownership |
-| 16 | G04 | Final lifecycle, compatibility and resource-release audit | Evidence from every completed phase |
+| 1 | B17 | Locator descriptions in steps and operation errors | Existing automatic step/source recording |
+| 2 | B12 | Attempt-owned soft assertions that affect test results | Retry and parallel-attempt isolation |
+| 3 | B14 | Effective project settings and read-only resolved configuration | Library/CLI precedence and serialization |
+| 4 | B13 | Fixture timeouts and one shared teardown budget | Runner cancellation, failed setup and reverse teardown |
+| 5 | B09 | Supported screenshot options with reversible temporary changes | Native capture capabilities on each engine |
+| 6 | B10 | Stable screenshot comparisons, paths and update modes | B09; project/path settings from B14 |
+| 7 | B18 | Bounded ARIA snapshots with optional boxes and state | Existing DOM approximation; no full ARIA/YAML implementation |
+| 8 | B11 | Searchable portable reports with per-attempt network diagnostics | B02/B03 complete; B19; browser visual inspection |
+| 9 | C01 | Validated PDF options | Chromium; explicit Firefox unsupported result |
+| 10 | C02 | Bounded captured-body bytes, text and JSON helpers | B02/B03 complete; Chromium body capture |
+| 11 | C03 | Coverage navigation/source options and restart lifecycle | Chromium JS/CSS coverage |
+| 12 | C04 | HAR matching, not-found and supported content options | A14 complete; B06; engine body/rewrite capabilities |
+| 13 | C05 | Supported media/device emulation options and resets | Chromium native capabilities |
+| 14 | C06 | Independently detachable CDP target sessions | Chromium transport and session ownership |
+| 15 | G04 | Final lifecycle, compatibility and resource-release audit | Evidence from every completed phase |
 
 ## Concrete implementation deliverables
 
@@ -106,8 +108,8 @@ contracts and pinned behavior; prefer extending existing options and helpers.
 | C06 | `cdp.rs`, `driver.rs` | Own target sessions independently; detaching one must settle its pending calls while other sessions/pages keep working. |
 | G04 | `operation.rs`, affected tests and parity documents | Audit every new API's deadlines/cancellation/disposal/retries, resource release and serialization; reconcile the complete test inventory and matrix. |
 
-The diagnostics group **B01/B04/B19** is complete. The next delivery is the runner group
-**B16/B17/B12/B14/B13**, and the capture/report
+The diagnostics group **B01/B04/B19** and ownership task **B16** are complete.
+The next delivery is the runner group **B17/B12/B14/B13**, and the capture/report
 group **B09/B10/B18/B11**. Implement the six C extensions after checking native
 capabilities, and finish with G04. Each delivery should have usable public APIs,
 examples and verified behavior before its implementation commit.
@@ -276,6 +278,14 @@ they do not constitute differential Playwright conformance coverage.
   Expanded error/argument reports and seven relocated artifact links per engine
   verified. Final limits/trace checks preserve ordinary BiDi nesting and old JSON.
   Combined inventory: 361 checks. Continue with B16/B17; G04 stays open.
+- `1e4d3bb`: B16. All 342 E2E and 23 CLI/configuration checks passed, with strict
+  Clippy, formatting and regenerated links. Four native owner groups and two
+  actual pinned cases cover shared owners, weak context references, convenience/
+  persistent/default/remote identity, actual operations, storage failure cleanup,
+  final-owner process/profile release, canceled/concurrent close, empty-context
+  waits and native transport loss. A supplemental attached-client disconnect
+  passed on full Chrome/Firefox. Shared base-URL getter migration documented.
+  Combined inventory: 365 checks. Continue with B17/B12; G04 stays open.
 - G04 remains open until lifecycle coverage across all additions is complete.
 
 ## G — Foundations for the larger session
@@ -665,13 +675,20 @@ their dependencies are ready. References include
   companions and owning page ID without retaining a live page. Options bound file
   reads/opening; subsequent Tokio stream reads can be wrapped in caller cancellation.
   Firefox active download metadata and per-download cancellation remain deferred.
-- [ ] **B16 — Context/browser ownership introspection (M).** Add a context owner
+- [x] **B16 — Context/browser ownership introspection (M).** Add a context owner
   accessor and review disconnection semantics of existing is-closed/is-connected
   APIs. Done when convenience-page contexts, explicit contexts and remote browser
-  disconnection are covered, with no strong-reference ownership cycle. The current
-  process-owning Browser makes this an ownership change rather than just a getter;
-  include worker handles and final-owner cleanup in the review. Reference:
+  disconnection are covered, with no strong-reference ownership cycle. Include
+  worker handles and final-owner cleanup in the ownership review. Reference:
   [context owner](https://playwright.dev/docs/api/class-browsercontext#browser-context-browser).
+  Evidence: `1e4d3bb`; four `browser_ownership.rs` native groups on full Chrome/
+  Firefox plus two actual pinned Playwright cases. Arc-shared real owners and
+  weak context access, common defaults/registry, native context cleanup after
+  storage failure, retained operations, last-owner process/profile release,
+  cancellation/concurrent close, persistent profiles, empty-context wake-up
+  and native/attached disconnection verified. All 342 E2E/23 CLI checks, strict
+  Clippy/fmt/generated links and complete 26-target inventory passed. Getter
+  migration to owned Option<String> and outside-runtime fallback are documented.
 - [ ] **B17 — Locator descriptions and diagnostic call sites (S).** Add optional
   locator descriptions and propagate them into automatic steps/errors. Done when
   cloning/chaining preserves intended labels and action/assertion errors identify
@@ -773,7 +790,7 @@ waiting for every future feature before starting independent work.
 | 1. Network observations | B02, B03 — complete | Typed per-hop request/response identity and completion independent of body capture. Verified in `1a9e875`; continue with phase 2. |
 | 2. HTTP and routing correctness | B05/B06/B07/B08 — complete | Context-linked fetch/fulfill options verified in `c88c14b`. Preserve shared HTTP, route lifecycle, duplicate-header forwarding and pinned precedence regressions. |
 | 3. Native event diagnostics | B01/B04/B19 — complete | Preserve frame/load/dialog observations (`f8c12de`), earliest popup traffic (`1ec7e3e`) and structured console/error data (`34890cc`) through ownership and runner changes. |
-| 4. Runner and developer APIs | B16, B17, B12, B14, B13 | Add ownership and locator descriptions, attempt-owned soft assertions, effective configuration, then fixture/shared cleanup budgets. Changes to budgets need broader runner regressions. |
+| 4. Runner and developer APIs | B16 complete; B17, B12, B14, B13 remaining | Preserve shared ownership (`1e4d3bb`), then add locator descriptions, attempt-owned soft assertions, effective configuration and fixture/shared cleanup budgets. Budget changes need broader runner regressions. |
 | 5. Captures and reports | B09, B10, B18, B11 | Implement capture options before stabilized comparisons; add bounded ARIA output and searchable per-attempt reports using the earlier network/error data. |
 | 6. Supported backend extensions | C01, C02, C03, C04, C05, C06 | Extend PDF, captured bodies, coverage, HAR, emulation and scoped CDP sessions. Check capability before accepting each option; verify explicit errors on the other engine. |
 | 7. Final lifecycle and compatibility audit | G04 | Verify cancellation, zero/enclosing deadlines, retries, disposal and released resources across the additions, then run the complete regression and documentation gates. |
