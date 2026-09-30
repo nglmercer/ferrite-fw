@@ -220,7 +220,11 @@ where
                 ))),
                 Err(error) => Err(error.with_context(&context)),
             };
-            crate::snapshot_artifacts::finish(result, last_images)
+            let finish = crate::snapshot_artifacts::finish(result, last_images);
+            match &options.cancellation {
+                Some(token) => token.run(finish).await,
+                None => finish.await,
+            }
         },
     )
     .await
@@ -344,6 +348,8 @@ where
 /// Retry an assertion block with custom polling controls. Intermediate soft
 /// checks return their mismatch to retry; wrap this entire helper in soft.run
 /// to collect only its final mismatch. Operational/control errors never soften.
+/// Final screenshot diagnostics have one additional five-second file/rendering
+/// budget, subject to caller cancellation and enclosing step/test deadlines.
 pub async fn expect_to_pass_with<F, Fut>(
     description: impl Into<String>,
     options: &PollingOptions,
@@ -608,7 +614,9 @@ impl PageExpect {
     ///
     /// Accepts only successive stable captures within one assertion window,
     /// including generation under missing/all/changed. Operational errors retain
-    /// their type; failure artifacts use the last completed capture.
+    /// their type; failure artifacts use the last completed capture. Final failure
+    /// diagnostics share a separate five-second file/rendering budget, subject
+    /// to page cancellation and enclosing step/test deadlines.
     pub async fn screenshot_with(&self, name: &str, opts: &SnapshotOptions) -> E2eResult<()> {
         self.page
             .auto_step(
@@ -1650,6 +1658,8 @@ impl LocatorExpect {
 
     /// [`LocatorExpect::screenshot`] with capture and snapshot options.
     /// Uses successive stable element captures within one assertion window.
+    /// Final failure diagnostics share a separate five-second file/rendering
+    /// budget, subject to page cancellation and enclosing step/test deadlines.
     pub async fn screenshot_with(&self, name: &str, opts: &SnapshotOptions) -> E2eResult<()> {
         self.locator
             .diagnostic_step(
@@ -1775,28 +1785,33 @@ where
             .map_err(|error| error.with_context(&description)),
             Err(error) => Err(error),
         };
-        result.map_err(|error| {
-            // Preserve typed control errors. Never take another capture after
-            // exhaustion just to write an artifact, or update an unstable baseline.
-            match comparison.actual.as_deref().map(Vec::as_slice) {
-                Some(actual) if error.code() == "FERRITE_E2E_EXPECT" => {
-                    crate::snapshot_artifacts::record(
-                        page,
-                        crate::snapshot_artifacts::FailureImages {
-                            name,
-                            path: &path,
-                            expected: expected.as_deref().map(Vec::as_slice),
-                            actual,
-                            previous: comparison.previous.as_deref().map(Vec::as_slice),
-                            stable: comparison.stable,
-                            threshold: options.threshold,
-                        },
-                        error,
-                    )
-                }
-                _ => error,
+        match result {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                // Preserve typed control errors. Never take another capture after
+                // exhaustion just to write an artifact, or update an unstable baseline.
+                let error = match comparison.actual {
+                    Some(actual) if error.code() == "FERRITE_E2E_EXPECT" => {
+                        crate::snapshot_artifacts::record(
+                            page,
+                            crate::snapshot_artifacts::FailureImages {
+                                name: name.to_owned(),
+                                path,
+                                expected,
+                                actual,
+                                previous: comparison.previous,
+                                stable: comparison.stable,
+                                threshold: options.threshold,
+                            },
+                            error,
+                        )
+                        .await
+                    }
+                    _ => error,
+                };
+                Err(error)
             }
-        })
+        }
     })
     .await
 }

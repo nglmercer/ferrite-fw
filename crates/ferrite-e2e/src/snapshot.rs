@@ -318,9 +318,22 @@ pub(crate) fn decode_image(
 /// Visual diagnostic, using the same per-channel threshold as comparison.
 /// Different pixels are red; nonoverlapping dimension regions are magenta.
 /// Unchanged pixels are muted grayscale. The union raster is bounded separately.
+#[cfg(test)]
 pub(crate) fn diff_png(actual: &[u8], expected: &[u8], threshold: u8) -> E2eResult<Vec<u8>> {
+    diff_png_checked(actual, expected, threshold, || Ok(()))
+}
+
+pub(crate) fn diff_png_checked(
+    actual: &[u8],
+    expected: &[u8],
+    threshold: u8,
+    mut check: impl FnMut() -> E2eResult<()>,
+) -> E2eResult<Vec<u8>> {
+    check()?;
     let actual = decode_png(actual, "actual")?.into_rgba8();
+    check()?;
     let expected = decode_png(expected, "snapshot")?.into_rgba8();
+    check()?;
     let width = actual.width().max(expected.width());
     let height = actual.height().max(expected.height());
     if u64::from(width) * u64::from(height) > 64_000_000 {
@@ -328,18 +341,25 @@ pub(crate) fn diff_png(actual: &[u8], expected: &[u8], threshold: u8) -> E2eResu
             "snapshot diff exceeds the 64 million pixel limit".into(),
         ));
     }
-    let diff = image::RgbaImage::from_fn(width, height, |x, y| {
+    let mut diff = image::RgbaImage::new(width, height);
+    for (index, (x, y, output)) in diff.enumerate_pixels_mut().enumerate() {
+        if index & 4095 == 0 {
+            check()?;
+        }
         let in_actual = x < actual.width() && y < actual.height();
         let in_expected = x < expected.width() && y < expected.height();
         if !in_actual && !in_expected {
-            return image::Rgba([255, 255, 255, 0]);
+            *output = image::Rgba([255, 255, 255, 0]);
+            continue;
         }
         if in_actual != in_expected {
-            return image::Rgba([255, 0, 255, 255]);
+            *output = image::Rgba([255, 0, 255, 255]);
+            continue;
         }
         let a = actual.get_pixel(x, y);
         let e = expected.get_pixel(x, y);
-        if a.0
+        *output = if a
+            .0
             .iter()
             .zip(e.0.iter())
             .any(|(a, e)| a.abs_diff(*e) > threshold)
@@ -349,11 +369,13 @@ pub(crate) fn diff_png(actual: &[u8], expected: &[u8], threshold: u8) -> E2eResu
             let gray = (u16::from(e[0]) + u16::from(e[1]) + u16::from(e[2])) / 3;
             let muted = (128 + gray / 2) as u8;
             image::Rgba([muted, muted, muted, 255])
-        }
-    });
+        };
+    }
+    check()?;
     let mut bytes = std::io::Cursor::new(Vec::new());
     diff.write_to(&mut bytes, image::ImageFormat::Png)
         .map_err(|error| E2eError::Config(format!("encoding snapshot diff PNG: {error}")))?;
+    check()?;
     Ok(bytes.into_inner())
 }
 

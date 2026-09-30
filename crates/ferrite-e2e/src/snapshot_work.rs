@@ -1,5 +1,5 @@
 //! Bounded active image/read work with cancellation on dropped waits. No
-//! browser or context is captured by image/read jobs. Baseline staging jobs
+//! browser or context is captured by image/read jobs. Baseline/attachment staging jobs
 //! write only temporary files; their caller owns foreground installation.
 //! The admission limit bounds active callbacks, not Tokio's blocking threads
 //! or queued input bytes. Codec, resize and OS calls are opaque phases; a
@@ -24,6 +24,42 @@ const ACTIVE_LIMIT: usize = 2;
 // slot while waiting for the other. Ordinary production jobs never do this.
 #[cfg(test)]
 pub(crate) static TEST_ADMISSION_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Stage an attachment in its output directory. No attempt/lifecycle/step
+/// owner crosses the worker boundary; publication is a foreground operation.
+pub(crate) fn stage_attachment(
+    directory: std::path::PathBuf,
+    bytes: Arc<Vec<u8>>,
+) -> impl std::future::Future<Output = E2eResult<tempfile::NamedTempFile>> {
+    run(move |stop| stage_attachment_checked(directory, &bytes, || stop.check()))
+}
+
+fn stage_attachment_checked(
+    directory: std::path::PathBuf,
+    bytes: &[u8],
+    mut check: impl FnMut() -> E2eResult<()>,
+) -> E2eResult<tempfile::NamedTempFile> {
+    use std::io::Write;
+    check()?;
+    std::fs::create_dir_all(&directory)?;
+    check()?;
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(".ferrite-attachment-");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        builder.permissions(std::fs::Permissions::from_mode(0o666));
+    }
+    let mut file = builder.tempfile_in(directory)?;
+    for chunk in bytes.chunks(65_536) {
+        check()?;
+        file.write_all(chunk)?;
+    }
+    check()?;
+    file.flush()?;
+    check()?;
+    Ok(file)
+}
 
 #[derive(Clone)]
 pub(crate) struct StopCheck(Arc<AtomicBool>);
@@ -254,6 +290,74 @@ mod tests {
                 .unwrap(),
             "FERRITE_E2E_CANCELLED"
         );
+    }
+
+    #[tokio::test]
+    async fn diagnostic_diff_and_chunk_write_stop_after_abandoned_waits() {
+        for rendering in [true, false] {
+            let root = tempfile::tempdir().unwrap();
+            let directory = root.path().join("attachments");
+            let staging = directory.clone();
+            let mut png = Cursor::new(Vec::new());
+            image::RgbaImage::from_pixel(128, 128, image::Rgba([255, 0, 0, 255]))
+                .write_to(&mut png, image::ImageFormat::Png)
+                .unwrap();
+            let bytes = png.into_inner();
+            let (entered, entry) = tokio::sync::oneshot::channel();
+            let (resume, resumed) = std::sync::mpsc::channel();
+            let (stopped, done) = tokio::sync::oneshot::channel();
+            let mut job = Box::pin(run(move |stop| {
+                let mut entered = Some(entered);
+                let mut calls = 0;
+                let mut check = || {
+                    calls += 1;
+                    // Diff: first raster chunk after decoding. Staging: second
+                    // chunk after the first 64 KiB has reached the temporary file.
+                    if calls == 4 {
+                        entered.take().unwrap().send(()).unwrap();
+                        resumed.recv().unwrap();
+                    }
+                    stop.check()
+                };
+                let result = if rendering {
+                    crate::snapshot::diff_png_checked(&bytes, &bytes, 0, &mut check).map(drop)
+                } else {
+                    stage_attachment_checked(staging, &vec![42; 200_000], &mut check).map(drop)
+                };
+                stopped.send(result.as_ref().unwrap_err().code()).unwrap();
+                result
+            }));
+            tokio::select! {
+                result=&mut job=>panic!("diagnostic returned before barrier: {result:?}"),
+                entered=entry=>entered.unwrap(),
+            }
+            if !rendering {
+                let entries = std::fs::read_dir(&directory)
+                    .unwrap()
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap();
+                assert_eq!(entries.len(), 1);
+                assert_eq!(entries[0].metadata().unwrap().len(), 65_536);
+            }
+            let start = tokio::time::Instant::now();
+            let error = crate::operation::Deadline::new(Duration::from_millis(25))
+                .run("diagnostic job", job)
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), "FERRITE_E2E_TIMEOUT");
+            assert!(start.elapsed() < Duration::from_millis(500));
+            resume.send(()).unwrap();
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(1), done)
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                "FERRITE_E2E_CANCELLED"
+            );
+            if !rendering {
+                assert_eq!(std::fs::read_dir(directory).unwrap().count(), 0);
+            }
+        }
     }
 
     #[tokio::test]

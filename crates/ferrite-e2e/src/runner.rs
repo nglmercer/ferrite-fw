@@ -809,13 +809,22 @@ pub(crate) struct SnapshotAttachmentSink {
     steps: Option<crate::report::StepSession>,
 }
 impl SnapshotAttachmentSink {
-    pub(crate) fn attach(&self, name: &str, body: &[u8]) -> E2eResult<String> {
+    pub(crate) fn staging_dir(&self) -> std::path::PathBuf {
+        std::path::Path::new(&self.output_dir).join("attachments")
+    }
+
+    pub(crate) fn attach_staged(
+        &self,
+        name: &str,
+        mut file: tempfile::NamedTempFile,
+        deadline: crate::operation::Deadline,
+    ) -> E2eResult<String> {
         let state = self
             .state
             .upgrade()
             .ok_or_else(|| E2eError::Config("snapshot attachment attempt has ended".into()))?;
-        // Retain this read guard through file creation and publication, so
-        // AttemptGuard's sealing cannot race an accepted attachment.
+        // No guard is held while worker I/O stages bytes. This short foreground
+        // guard excludes sealing only during installation and metadata publication.
         let lifecycle = state.borrow();
         if lifecycle.soft_sealed {
             return Err(E2eError::Config(
@@ -827,14 +836,41 @@ impl SnapshotAttachmentSink {
             .upgrade()
             .ok_or_else(|| E2eError::Config("snapshot attachment owner has ended".into()))?;
         let mut attachments = attachments.lock().unwrap_or_else(|e| e.into_inner());
-        let attachment = write_attachment(
-            &self.output_dir,
-            &self.title,
-            name,
-            body,
-            "image/png",
-            &mut attachments,
-        )?;
+        let stem = format!("{}-{}", slug(&self.title), slug(name));
+        let directory = self.staging_dir();
+        let mut installed = None;
+        for suffix in 0..1024 {
+            if deadline.expired() {
+                return Err(E2eError::Timeout(
+                    5000,
+                    "screenshot diagnostic publication".into(),
+                ));
+            }
+            let path = directory.join(if suffix == 0 {
+                format!("{stem}.png")
+            } else {
+                format!("{stem}-{suffix}.png")
+            });
+            match file.persist_noclobber(&path) {
+                Ok(_) => {
+                    installed = Some(path);
+                    break;
+                }
+                Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    file = error.file
+                }
+                Err(error) => return Err(error.error.into()),
+            }
+        }
+        let path = installed.ok_or_else(|| {
+            E2eError::Config("screenshot attachment exceeds 1024 filename collisions".into())
+        })?;
+        let attachment = Attachment {
+            name: name.to_owned(),
+            path: path.display().to_string(),
+            content_type: "image/png".into(),
+        };
+        attachments.push(attachment.clone());
         drop(attachments);
         if let Some(steps) = &self.steps {
             steps.attach(&attachment);
@@ -5641,30 +5677,92 @@ mod fixture_cancellation_tests {
         info.body_outcome(&Err(E2eError::Skipped("skip".into())), "body");
         assert_eq!(info.status(), Some(AttemptStatus::TimedOut));
     }
-    #[test]
-    fn snapshot_attachment_sink_rejects_sealed_attempts_and_retains_no_owners() {
+    #[tokio::test]
+    async fn snapshot_attachment_sink_rejects_sealed_attempts_and_retains_no_owners() {
         let directory = tempfile::tempdir().unwrap();
         let mut info = runtime_info(Duration::ZERO);
         info.output_dir = directory.path().display().to_string();
         let sink = info.snapshot_attachment_sink();
-        let first = sink.attach("card-actual", b"first").unwrap();
-        let second = sink.attach("card-actual", b"second").unwrap();
+        let stage = |bytes: &'static [u8]| {
+            crate::snapshot_work::stage_attachment(sink.staging_dir(), Arc::new(bytes.to_vec()))
+        };
+        let deadline = || crate::operation::Deadline::new(Duration::from_secs(5));
+        let external = sink
+            .staging_dir()
+            .join(format!("{}-card-actual.png", slug(&info.title)));
+        std::fs::create_dir_all(sink.staging_dir()).unwrap();
+        std::fs::write(&external, b"external winner").unwrap();
+        let first = sink
+            .attach_staged("card-actual", stage(b"first").await.unwrap(), deadline())
+            .unwrap();
+        let second = sink
+            .attach_staged("card-actual", stage(b"second").await.unwrap(), deadline())
+            .unwrap();
         assert_ne!(first, second);
         assert_eq!(std::fs::read(first).unwrap(), b"first");
         assert_eq!(std::fs::read(second).unwrap(), b"second");
         assert_eq!(info.attachments().len(), 2);
+        assert_eq!(std::fs::read(&external).unwrap(), b"external winner");
+        let expired_file = stage(b"expired").await.unwrap();
+        let expired_path = expired_file.path().to_owned();
+        let expired = crate::operation::Deadline::new(Duration::from_millis(1));
+        tokio::time::sleep(Duration::from_millis(2)).await;
+        assert_eq!(
+            sink.attach_staged("expired", expired_file, expired)
+                .unwrap_err()
+                .code(),
+            "FERRITE_E2E_TIMEOUT"
+        );
+        assert!(!expired_path.exists());
+        assert_eq!(info.attachments().len(), 2);
+        let collision_stem = format!("{}-crowded", slug(&info.title));
+        for suffix in 0..1024 {
+            let name = if suffix == 0 {
+                format!("{collision_stem}.png")
+            } else {
+                format!("{collision_stem}-{suffix}.png")
+            };
+            std::fs::write(sink.staging_dir().join(name), b"winner").unwrap();
+        }
+        let crowded = stage(b"loser").await.unwrap();
+        let crowded_path = crowded.path().to_owned();
+        let error = sink
+            .attach_staged("crowded", crowded, deadline())
+            .unwrap_err();
+        assert_eq!(error.code(), "FERRITE_E2E_CONFIG");
+        assert!(error.to_string().contains("1024"));
+        assert!(!crowded_path.exists());
+        assert_eq!(info.attachments().len(), 2);
+        for entry in std::fs::read_dir(sink.staging_dir()).unwrap().flatten() {
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(&collision_stem)
+            {
+                assert_eq!(std::fs::read(entry.path()).unwrap(), b"winner");
+            }
+        }
+        let late = stage(b"third").await.unwrap();
+        let temporary = late.path().to_owned();
+        // Sealing succeeds while a staged file awaits foreground publication.
         info.runtime
             .state
             .send_modify(|state| state.soft_sealed = true);
         assert_eq!(
-            sink.attach("late", b"third").unwrap_err().code(),
+            sink.attach_staged("late", late, deadline())
+                .unwrap_err()
+                .code(),
             "FERRITE_E2E_CONFIG"
         );
         assert_eq!(info.attachments().len(), 2);
+        assert!(!temporary.exists());
+        let released = stage(b"fourth").await.unwrap();
         drop(info);
         assert!(sink.state.upgrade().is_none());
         assert!(sink.attachments.upgrade().is_none());
-        assert!(sink.attach("released", b"fourth").is_err());
+        assert!(sink
+            .attach_staged("released", released, deadline())
+            .is_err());
     }
 
     #[test]
