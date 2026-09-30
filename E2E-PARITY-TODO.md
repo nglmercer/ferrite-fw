@@ -1,13 +1,13 @@
 # Ferrite E2E implementation TODO
 
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
-Session plan refreshed: 2026-09-30, from verified B16 implementation `1e4d3bb`.
+Session plan refreshed: 2026-09-30, from verified B17 implementation `8ae438c`.
 Uncommitted implementations are not counted complete.
 
 Implement **G, then A, then B**, followed by the supported C extensions. This
-backlog contains **45 tasks (30 complete, 15 remaining)**: four foundations,
+backlog contains **45 tasks (31 complete, 14 remaining)**: four foundations,
 16 core tasks, 19 follow-ups and six optional extensions. All A tasks and
-B01–B08/B15/B16/B19 are now verified; continue with locator and runner APIs, then
+B01–B08/B15/B16/B17/B19 are now verified; continue with runner APIs, then
 captures, reports and supported C extensions. The ordering and effort
 assessments are recommendations based on the current source and parity audit.
 
@@ -19,39 +19,48 @@ limits remain in [PLAYWRIGHT-PARITY.md](PLAYWRIGHT-PARITY.md).
 
 ## Recommended next implementation
 
-Start **B17 — locator descriptions**, then **B12 — runner-integrated soft
-assertions**. B16 is verified in `1e4d3bb`: real shared Browser owners, weak
-context access, one process/profile/default/registry, accurate terminal state
-and cleanup which survives a canceled close future. Preserve the verified
+Start **B12 — runner-integrated soft assertions**, then **B14 — effective
+project/configuration metadata**, followed by B13's fixture and cleanup budgets.
+B17 is verified in `8ae438c`: labels are separate from DOM selectors, pinned
+chaining rules are defined, and the outer action/assertion owns label diagnostics
+in errors, steps, retries and traces. Preserve the verified shared browser,
 callback/event/routing, popup capture and structured console behavior.
 
-The ownership phase passed all 342 E2E and 23 CLI/configuration checks, with
-strict Clippy, formatting and regenerated matrix links. The complete inventory
-is 155 units, 184 integrations across all 26 targets and three doctests, plus
-23 CLI/configuration checks. The runner/diagnostics batch ran on full Chrome
-153/Firefox 157; broad browser/core/routing batches used Headless Shell/Firefox.
-Four native ownership groups and two actual pinned cases cover explicit,
-convenience, persistent and retained closed-context owners. Actual operations,
-shared defaults, failed-storage setup, cancellation/concurrent close, process/
-profile release and remote source disconnection were verified. Linux argv
-inspection first needed correction, then exposed an immediate-kill profile leak;
-bounded native shutdown before reaping fixed it. The final attached-client
-loss check additionally passed on full Chrome/Firefox. No report layout changed.
+The locator phase passed all 347 E2E and 23 CLI/configuration checks, with strict
+Clippy, package formatting and regenerated matrix links. The complete inventory
+is 157 units, 187 integrations across all 27 targets and three doctests, plus
+23 CLI/configuration checks. The 48-check runner/diagnostics batch ran on full
+Chrome 153/Firefox 157; broad browser/core/routing batches used Headless Shell/
+Firefox. Three native locator groups and three actual pinned cases cover
+replacement/removal, derived selectors and frame owners, unchanged resolution,
+early validation, typed causes, cancellation, assertions and non-Send values/
+callbacks. Retry/live-step/source metadata, trace deduplication and JSON passed;
+expanded reports were inspected and all three links per relocated bundle resolved.
+The pinned timeout omits the label; richer Rust errors deliberately differ.
+An extra whole-workspace fmt probe reports existing unrelated formatting
+differences; the required E2E/CLI/config package checks passed.
 
-**Current handoff:** start B17 in `Locator`, its constructors/chaining helpers,
-`Page::auto_step`/`auto_step_local`, and assertion `poll` descriptions. Keep user
-labels separate from selector text and DOM resolution. Use pinned observations
-to define label replacement/removal and clone/filter/pick/scoped/combined
-behavior; audit every `Self` constructor and frame conversion. Carry operation
-names and labels into action/assertion errors while preserving error kinds,
-cancellation/defaults and automatic-step deduplication. Verify labeled retries,
-source metadata, escaping and report serialization on both native engines.
-Preserve B16's actual shared owner and weak context graph; `base_url()` now
-returns an owned Option<String>, and existing contexts retain their seed.
-G04 remains open for channel lag, partial setup, detached in-flight requests
-and the final cross-feature/resource audit.
+**Current handoff:** start B12 in `SoftAsserts`, `TestInfo`, `RuntimeState`,
+`run_one` and `AttemptGuard`, plus `StepSession`/report metadata. Preserve existing
+standalone `check`/`failures`/`assert_all` behavior while adding attempt-owned
+collection and contextual messages. A successful body must not overwrite
+collected failures with Passed; cleanup hooks must see them, and raw status,
+expected-failure handling, retries and final/live reports must agree. Define
+source/step ownership at collection, setup/cleanup behavior, sealing against
+late writes after an attempt ends, and isolation of retained handles across
+parallel workers/retries. Do not turn cancellation, disconnection or skip control
+into an ordinary successful soft check. Verify cleanup and interrupted attempts,
+all collected messages, escaping, JSON migration and standalone use.
 
-The scope of the longer session is **all 15 open tasks below**. Completed tasks
+Preserve B17's label derivation and single outer error/step/trace behavior.
+`E2eError::Diagnostic` retains opaque typed causes/codes; exhaustive matches need
+its new variant. Automatic locations remain test definitions, explicit user
+steps retain their caller location. Preserve B16's actual shared owner and weak
+context graph; `base_url()` returns an owned Option<String>, and existing contexts
+retain their seed. G04 remains open for channel lag, partial setup, detached
+in-flight requests and the final cross-feature/resource audit.
+
+The scope of the longer session is **all 14 open tasks below**. Completed tasks
 remain regression requirements. The deferred projects are future work; completing
 this checklist means practical parity within the stated engine capabilities,
 not complete Playwright compatibility.
@@ -64,21 +73,20 @@ there. G04 applies during every phase and closes after the final audit.
 
 | Order | Task | Implementation result | Dependency or capability gate |
 |---|---|---|---|
-| 1 | B17 | Locator descriptions in steps and operation errors | Existing automatic step/source recording |
-| 2 | B12 | Attempt-owned soft assertions that affect test results | Retry and parallel-attempt isolation |
-| 3 | B14 | Effective project settings and read-only resolved configuration | Library/CLI precedence and serialization |
-| 4 | B13 | Fixture timeouts and one shared teardown budget | Runner cancellation, failed setup and reverse teardown |
-| 5 | B09 | Supported screenshot options with reversible temporary changes | Native capture capabilities on each engine |
-| 6 | B10 | Stable screenshot comparisons, paths and update modes | B09; project/path settings from B14 |
-| 7 | B18 | Bounded ARIA snapshots with optional boxes and state | Existing DOM approximation; no full ARIA/YAML implementation |
-| 8 | B11 | Searchable portable reports with per-attempt network diagnostics | B02/B03 complete; B19; browser visual inspection |
-| 9 | C01 | Validated PDF options | Chromium; explicit Firefox unsupported result |
-| 10 | C02 | Bounded captured-body bytes, text and JSON helpers | B02/B03 complete; Chromium body capture |
-| 11 | C03 | Coverage navigation/source options and restart lifecycle | Chromium JS/CSS coverage |
-| 12 | C04 | HAR matching, not-found and supported content options | A14 complete; B06; engine body/rewrite capabilities |
-| 13 | C05 | Supported media/device emulation options and resets | Chromium native capabilities |
-| 14 | C06 | Independently detachable CDP target sessions | Chromium transport and session ownership |
-| 15 | G04 | Final lifecycle, compatibility and resource-release audit | Evidence from every completed phase |
+| 1 | B12 | Attempt-owned soft assertions that affect test results | Retry and parallel-attempt isolation |
+| 2 | B14 | Effective project settings and read-only resolved configuration | Library/CLI precedence and serialization |
+| 3 | B13 | Fixture timeouts and one shared teardown budget | Runner cancellation, failed setup and reverse teardown |
+| 4 | B09 | Supported screenshot options with reversible temporary changes | Native capture capabilities on each engine |
+| 5 | B10 | Stable screenshot comparisons, paths and update modes | B09; project/path settings from B14 |
+| 6 | B18 | Bounded ARIA snapshots with optional boxes and state | Existing DOM approximation; no full ARIA/YAML implementation |
+| 7 | B11 | Searchable portable reports with per-attempt network diagnostics | B02/B03 complete; B19; browser visual inspection |
+| 8 | C01 | Validated PDF options | Chromium; explicit Firefox unsupported result |
+| 9 | C02 | Bounded captured-body bytes, text and JSON helpers | B02/B03 complete; Chromium body capture |
+| 10 | C03 | Coverage navigation/source options and restart lifecycle | Chromium JS/CSS coverage |
+| 11 | C04 | HAR matching, not-found and supported content options | A14 complete; B06; engine body/rewrite capabilities |
+| 12 | C05 | Supported media/device emulation options and resets | Chromium native capabilities |
+| 13 | C06 | Independently detachable CDP target sessions | Chromium transport and session ownership |
+| 14 | G04 | Final lifecycle, compatibility and resource-release audit | Evidence from every completed phase |
 
 ## Concrete implementation deliverables
 
@@ -108,8 +116,8 @@ contracts and pinned behavior; prefer extending existing options and helpers.
 | C06 | `cdp.rs`, `driver.rs` | Own target sessions independently; detaching one must settle its pending calls while other sessions/pages keep working. |
 | G04 | `operation.rs`, affected tests and parity documents | Audit every new API's deadlines/cancellation/disposal/retries, resource release and serialization; reconcile the complete test inventory and matrix. |
 
-The diagnostics group **B01/B04/B19** and ownership task **B16** are complete.
-The next delivery is the runner group **B17/B12/B14/B13**, and the capture/report
+The diagnostics group **B01/B04/B19**, ownership **B16** and locator labels
+**B17** are complete. The next delivery is the runner group **B12/B14/B13**, and the capture/report
 group **B09/B10/B18/B11**. Implement the six C extensions after checking native
 capabilities, and finish with G04. Each delivery should have usable public APIs,
 examples and verified behavior before its implementation commit.
@@ -286,6 +294,18 @@ they do not constitute differential Playwright conformance coverage.
   waits and native transport loss. A supplemental attached-client disconnect
   passed on full Chrome/Firefox. Shared base-URL getter migration documented.
   Combined inventory: 365 checks. Continue with B17/B12; G04 stays open.
+- `8ae438c`: B17. All 347 E2E and 23 CLI/configuration checks passed, with strict
+  E2E/CLI Clippy, package formatting and regenerated links. Inventory: 157 units,
+  187 integrations across all 27 targets and three doctests; no ignored/failed
+  groups. The 48-check runner/diagnostics batch ran on full Chrome/Firefox;
+  browser93/core180/routing23 used Headless Shell/Firefox. Three actual pinned
+  cases plus three native groups verify derivation/resolution, labeled errors,
+  typed causes/codes, cancellation, local values/callbacks, retry/live/source/
+  trace/JSON diagnostics. Expanded reports from both engines were inspected;
+  all three links per relocated bundle resolved with escaped labels intact.
+  Two error units preserve typed causes, identity and skip reasons. Combined
+  inventory: 370 checks. B12 is next; G04 stays open. Whole-workspace fmt has
+  unrelated existing differences, while required package formatting passed.
 - G04 remains open until lifecycle coverage across all additions is complete.
 
 ## G — Foundations for the larger session
@@ -689,11 +709,23 @@ their dependencies are ready. References include
   and native/attached disconnection verified. All 342 E2E/23 CLI checks, strict
   Clippy/fmt/generated links and complete 26-target inventory passed. Getter
   migration to owned Option<String> and outside-runtime fallback are documented.
-- [ ] **B17 — Locator descriptions and diagnostic call sites (S).** Add optional
+- [x] **B17 — Locator descriptions and diagnostic call sites (S).** Add optional
   locator descriptions and propagate them into automatic steps/errors. Done when
   cloning/chaining preserves intended labels and action/assertion errors identify
   the calling operation. Keep automatic-step deduplication and existing source data.
   Reference: [locator descriptions](https://playwright.dev/docs/api/class-locator#locator-describe).
+  Evidence: `8ae438c`; three native `locator_descriptions.rs` groups on full
+  Chrome/Firefox and three actual pinned Playwright cases. Replacement/removal,
+  clone/decorator retention, derived-selector clearing and frame-owner conversion,
+  unchanged resolution, early validation, typed JSON causes, cancellation,
+  labeled assertions and non-Send values/callbacks verified. Error codes/identity
+  and skip reasons are preserved; opaque errors retain their cause via the new
+  Diagnostic variant. Retry/live-step/source data, one outer trace/step, JSON
+  and escaped HTML verified. All 347 E2E/23 CLI checks, strict Clippy, package
+  formatting and regenerated links passed. Expanded/relocated reports inspected;
+  all three links per engine resolved. The pinned timeout omits labels; Rust's
+  richer errors and enum migration are documented. Automatic locations remain
+  test definitions, with explicit user-step caller locations unchanged.
 - [ ] **B18 — Bounded ARIA snapshot options (M).** Extend the current structured
   DOM snapshots with depth limits and optional boxes/state fields. Done when
   nested/open-shadow/same-origin-frame cases are consistent, limits are explicit
@@ -790,7 +822,7 @@ waiting for every future feature before starting independent work.
 | 1. Network observations | B02, B03 — complete | Typed per-hop request/response identity and completion independent of body capture. Verified in `1a9e875`; continue with phase 2. |
 | 2. HTTP and routing correctness | B05/B06/B07/B08 — complete | Context-linked fetch/fulfill options verified in `c88c14b`. Preserve shared HTTP, route lifecycle, duplicate-header forwarding and pinned precedence regressions. |
 | 3. Native event diagnostics | B01/B04/B19 — complete | Preserve frame/load/dialog observations (`f8c12de`), earliest popup traffic (`1ec7e3e`) and structured console/error data (`34890cc`) through ownership and runner changes. |
-| 4. Runner and developer APIs | B16 complete; B17, B12, B14, B13 remaining | Preserve shared ownership (`1e4d3bb`), then add locator descriptions, attempt-owned soft assertions, effective configuration and fixture/shared cleanup budgets. Budget changes need broader runner regressions. |
+| 4. Runner and developer APIs | B16/B17 complete; B12, B14, B13 remaining | Preserve shared ownership (`1e4d3bb`) and labeled diagnostics (`8ae438c`), then add attempt-owned soft assertions, effective configuration and fixture/shared cleanup budgets. Budget changes need broader runner regressions. |
 | 5. Captures and reports | B09, B10, B18, B11 | Implement capture options before stabilized comparisons; add bounded ARIA output and searchable per-attempt reports using the earlier network/error data. |
 | 6. Supported backend extensions | C01, C02, C03, C04, C05, C06 | Extend PDF, captured bodies, coverage, HAR, emulation and scoped CDP sessions. Check capability before accepting each option; verify explicit errors on the other engine. |
 | 7. Final lifecycle and compatibility audit | G04 | Verify cancellation, zero/enclosing deadlines, retries, disposal and released resources across the additions, then run the complete regression and documentation gates. |
