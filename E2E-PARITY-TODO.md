@@ -2,14 +2,18 @@
 
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
 Session plan refreshed: 2026-09-30, from verified B12 implementation `0ee8245`.
+Expanded on request for a longer implementation session; B14 remains a draft.
 Uncommitted implementations are not counted complete.
 
-Implement **G, then A, then B**, followed by the supported C extensions. This
-backlog contains **45 tasks (32 complete, 13 remaining)**: four foundations,
-16 core tasks, 19 follow-ups and six optional extensions. All A tasks and
-B01–B08/B12/B15/B16/B17/B19 are now verified; continue with configuration and runner budgets, then
-captures, reports and supported C extensions. The ordering and effort
+The initial G/A foundations are complete except for the final G04 audit. Follow
+the remaining-work index below through B/D improvements and supported C extensions.
+This backlog contains **51 tasks (32 complete, 19 remaining)**: four foundations,
+16 core tasks, 19 follow-ups, six optional extensions and six practical additions.
+All A tasks and B01–B08/B12/B15/B16/B17/B19 are now verified; continue with
+configuration and runner budgets, then captures, reports and supported C extensions. The ordering and effort
 assessments are recommendations based on the current source and parity audit.
+D01–D06 add bounded improvements found in the missing/partial member inventory;
+they do not imply that every upstream member needs a separate Rust API.
 
 The target is a useful, reliable Rust API on the existing Chromium/CDP and
 Firefox/BiDi backends. Full Playwright compatibility remains a separate,
@@ -42,13 +46,18 @@ three links per relocated engine bundle resolved. Clippy initially caught a
 test-only guard across shutdown; releasing it before await fixed it, and the
 native group and strict check passed afterward.
 
-**Current handoff:** start B14 in `Project`, `WorkItem`, `build_work_items`,
-`Runner::from_config`/`run_inner`, `TestInfo`, report metadata, shared E2eConfig
-and the CLI `src/cmds/e2e.rs` bridge. Project currently has grep/retries/timeout
-but lacks grep-invert, repetition and output/snapshot paths. Shared E2eConfig
-lacks those project settings and global repetition/filter/snapshot-directory
-fields; Runner::from_config currently starts projects/filters empty and repetition
-at one. Extend existing settings rather than creating a disconnected second
+**Current handoff:** finish the uncommitted B14 draft in `Project`, `WorkItem`,
+`build_work_items`, `Runner::from_config`/`run_inner`, `TestInfo`, report metadata, shared E2eConfig
+and the CLI `src/cmds/e2e.rs` bridge. At the last verified commit, Project had
+grep/retries/timeout but lacked grep-invert, repetition and output/snapshot paths.
+Shared E2eConfig lacked those project settings and global repetition/filter/
+snapshot-directory fields; Runner::from_config started projects/filters empty
+and repetition at one. The working tree now contains draft configuration DTOs,
+project/CLI fields, resolution and report wiring. The last recorded compile
+check failed on report test literals missing the new configuration field;
+B14 has no new verified native evidence. Repair compilation, review precedence
+and add the required checks before counting or committing that implementation.
+Extend existing settings rather than creating a disconnected second
 configuration path. Resolve global/project/suite/test values once for actual
 work items, preserve explicit overrides and define when legacy environment
 filters, project selection and snapshot-directory overrides are applied.
@@ -71,7 +80,7 @@ outer label/error/step/trace and Diagnostic typed causes, and B16's shared owner
 weak context graph and owned base_url getter. G04 remains open for channel lag,
 partial setup, detached in-flight requests and the final cross-feature audit.
 
-The scope of the longer session is **all 13 open tasks below**. Completed tasks
+The scope of the longer session is **all 19 open tasks below**. Completed tasks
 remain regression requirements. The deferred projects are future work; completing
 this checklist means practical parity within the stated engine capabilities,
 not complete Playwright compatibility.
@@ -84,19 +93,30 @@ there. G04 applies during every phase and closes after the final audit.
 
 | Order | Task | Implementation result | Dependency or capability gate |
 |---|---|---|---|
-| 1 | B14 | Effective project settings and read-only resolved configuration | Library/CLI precedence and serialization |
+| 1 | B14 | Effective project settings and read-only resolved configuration | Finish existing draft; library/CLI precedence and serialization |
 | 2 | B13 | Fixture timeouts and one shared teardown budget | Runner cancellation, failed setup and reverse teardown |
-| 3 | B09 | Supported screenshot options with reversible temporary changes | Native capture capabilities on each engine |
-| 4 | B10 | Stable screenshot comparisons, paths and update modes | B09; project/path settings from B14 |
-| 5 | B18 | Bounded ARIA snapshots with optional boxes and state | Existing DOM approximation; no full ARIA/YAML implementation |
-| 6 | B11 | Searchable portable reports with per-attempt network diagnostics | B02/B03 complete; B19; browser visual inspection |
-| 7 | C01 | Validated PDF options | Chromium; explicit Firefox unsupported result |
-| 8 | C02 | Bounded captured-body bytes, text and JSON helpers | B02/B03 complete; Chromium body capture |
-| 9 | C03 | Coverage navigation/source options and restart lifecycle | Chromium JS/CSS coverage |
-| 10 | C04 | HAR matching, not-found and supported content options | A14 complete; B06; engine body/rewrite capabilities |
-| 11 | C05 | Supported media/device emulation options and resets | Chromium native capabilities |
-| 12 | C06 | Independently detachable CDP target sessions | Chromium transport and session ownership |
-| 13 | G04 | Final lifecycle, compatibility and resource-release audit | Evidence from every completed phase |
+| 3 | D01 | Optional CI failure on flaky tests and consistent focus protection | B14; existing retry/flaky classification |
+| 4 | D02 | Configurable assertion polling and retry intervals | Existing polling helpers, B12 and B13 budgets |
+| 5 | B09 | Supported screenshot options with reversible temporary changes | Native capture capabilities on each engine |
+| 6 | B10 | Stable screenshot comparisons, paths and update modes | B09; project/path settings from B14 |
+| 7 | B18 | Bounded ARIA snapshots with optional boxes and state | Existing DOM approximation; no full ARIA/YAML implementation |
+| 8 | B11 | Searchable portable reports with per-attempt network diagnostics | B02/B03/B19 complete; browser visual inspection |
+| 9 | D03 | Explicit artifact retention policies with valid report links | B14/B11; final attempt classification and bundle export |
+| 10 | D04 | Run/project metadata and configurable slow-test summaries | B14/B11; existing live/JSON/JUnit/HTML reporters |
+| 11 | D05 | Local/session storage enumeration and typed bulk helpers | Existing page storage APIs on both engines |
+| 12 | D06 | Socket identity, errors, closed state and bounded typed waits | Existing Chromium socket events; Firefox unsupported |
+| 13 | C01 | Validated PDF options | Chromium; explicit Firefox unsupported result |
+| 14 | C02 | Bounded captured-body bytes, text and JSON helpers | B02/B03 complete; Chromium body capture |
+| 15 | C03 | Coverage navigation/source options and restart lifecycle | Chromium JS/CSS coverage |
+| 16 | C04 | HAR matching, not-found and supported content options | A14/B06 complete; engine body/rewrite capabilities |
+| 17 | C05 | Supported media/device emulation options and resets | Chromium native capabilities |
+| 18 | C06 | Independently detachable CDP target sessions | Chromium transport and session ownership |
+| 19 | G04 | Final lifecycle, compatibility and resource-release audit | Evidence from every completed phase |
+
+Immediate delivery: finish **B14**, then **B13**. D01/D02 strengthen CI and
+assertions without adding a browser backend. Capture/report work comes next;
+D03/D04 consume its final artifact/report behavior. D05/D06 and the supported C
+extensions can then proceed independently. G04 is applied throughout and closed last.
 
 ## Concrete implementation deliverables
 
@@ -124,11 +144,18 @@ contracts and pinned behavior; prefer extending existing options and helpers.
 | C04 | `har.rs`, `routing.rs` | Apply shared URL matchers and explicit miss policy to supported HAR content/timing options; test duplicate URLs, redirects and binary replay. |
 | C05 | `page.rs`, `driver.rs` | Add only native supported media/metrics/user-agent options; verify observable values and resets, including explicit unsupported errors. |
 | C06 | `cdp.rs`, `driver.rs` | Own target sessions independently; detaching one must settle its pending calls while other sessions/pages keep working. |
+| D01 | `runner.rs`, `report.rs`; CLI/config packages | Wire opt-in flaky-run failure and existing focus protection through configuration and exit status without rewriting attempt outcomes. |
+| D02 | `expect.rs`, `operation.rs` | Extend existing poll/to-pass helpers with validated interval options and one shared budget, preserving local future support and soft failure rules. |
+| D03 | `runner.rs`, `bundle.rs`, `report.rs` | Apply retention only to runner-owned output after capture settles; represent removed artifacts explicitly and preserve portable links. |
+| D04 | `resolved_config.rs`, `runner.rs`, `report.rs`; CLI/config packages | Carry user-supplied metadata and bounded slow-test summaries through existing reporter formats without adding a new reporter framework. |
+| D05 | `page.rs`, `driver.rs` | Enumerate local/session storage and add typed bulk operations with deterministic serialization and normal operation guards. |
+| D06 | `page.rs`, `driver.rs`, `network.rs` | Extend existing Chromium socket observations with identity, native errors and bounded lifecycle/wait helpers; do not implement interception. |
 | G04 | `operation.rs`, affected tests and parity documents | Audit every new API's deadlines/cancellation/disposal/retries, resource release and serialization; reconcile the complete test inventory and matrix. |
 
 The diagnostics group **B01/B04/B19**, ownership **B16** and locator labels
 **B17** and soft assertions **B12** are complete. The next delivery is the runner group **B14/B13**, and the capture/report
-group **B09/B10/B18/B11**. Implement the six C extensions after checking native
+group **B09/B10/B18/B11**, with D01–D06 placed as in the remaining-work index.
+Implement the six C extensions after checking native
 capabilities, and finish with G04. Each delivery should have usable public APIs,
 examples and verified behavior before its implementation commit.
 
@@ -156,8 +183,8 @@ suggested below are proposals, unless explicitly described as existing.
 effort estimates, not promises about session length.
 
 G/A/B target both engines unless the item explicitly describes an engine limit.
-C items need a capability check before implementation. Existing unsupported
-Firefox behavior must stay explicit; a missing native capability can move that
+C items and D06 need a capability check before implementation. Other D items
+target both engines. Existing unsupported Firefox behavior must stay explicit; a missing native capability can move that
 portion to the deferred list while supported, independent work continues.
 
 For every completed task, record the implementation commit, focused regression
@@ -819,6 +846,93 @@ complete this section.
   fail cleanly and repeated disposal is safe. Cross-backend protocol session
   equivalence is deferred. Reference: [CDPSession](https://playwright.dev/docs/api/class-cdpsession).
 
+## D — Additional practical features for the longer session
+
+These are new recommendations, all unchecked. Extend existing APIs and reports;
+do not duplicate already implemented JUnit, storage access, socket observation,
+focus protection, generic assertion polling or retry/flaky classification.
+Current official documentation supports the feature comparisons below; differential
+behavior claims must still use the repository's pinned Playwright v1.63.0 corpus.
+
+- [ ] **D01 — CI flaky-test policy and focus protection wiring (M; needs B14).**
+  Add opt-in `fail_on_flaky_tests` through shared configuration, Runner and CLI.
+  Reuse existing `forbid_only`, including suite focus, and expose its effective
+  setting consistently. Default behavior must remain compatible. A retry that
+  eventually passes remains a flaky pass in individual results; the enabled CI
+  policy makes the aggregate run/CLI exit unsuccessful without fabricating a
+  failed attempt. Define interactions with expected failures, skip, repetition,
+  max-failures and global timeout. Done when library/child exit status, live
+  reporters and JSON/JUnit/HTML agree, and focused tests cover policy on/off,
+  retry success, ordinary success/failure and focus rejection before test bodies.
+  Reference: [failOnFlakyTests and forbidOnly](https://playwright.dev/docs/api/class-testconfig).
+
+- [ ] **D02 — Assertion polling options (M; needs B12/B13).** Extend existing
+  `expect_poll` and `expect_to_pass` with options-based companions for interval
+  sequences and contextual messages; retain existing helper defaults/signatures.
+  Define empty/zero interval validation, exhaustion of the interval sequence,
+  first-probe timing and last-mismatch diagnostics. All probes and sleeps share
+  one caller/enclosing budget, including a hung probe and cancellation during
+  a wait. Preserve supported non-Send assertion blocks. Retrying intermediate
+  mismatches must not create separate soft failures or duplicate assertion steps;
+  only the final mismatch may be collected by B12. Operational errors must
+  remain distinct from assertion failures. Done when timed regressions verify
+  cadence, success, exhaustion, zero/enclosing deadlines, cancellation, disposal,
+  soft collection and a caller-provided message. Document Rust timeout/default
+  differences instead of adopting upstream defaults silently.
+  Reference: [polling and retry intervals](https://playwright.dev/docs/test-assertions).
+
+- [ ] **D03 — Output retention policies (M; needs B14/B11).** Add validated
+  always/never/failures-only policies for runner-owned attempt outputs, with a
+  compatible default. Decide and document whether failures-only retains failed
+  attempts of a flaky test, expected failures and interrupted attempts; compare
+  against pinned observations where claiming matching semantics. Finish capture,
+  reporter notifications and bundle copying before removing owned files that
+  are no longer needed. Snapshot baselines and caller-owned attachment sources
+  must survive. Restrict deletion to verified runner-owned attempt directories;
+  handle overlapping project paths and symlinks without deleting unrelated data.
+  Done when retries, cancellation and cleanup errors retain the declared files,
+  JSON/HTML/bundles have no unexplained broken artifact links, and repeat runs
+  do not remove each other's outputs. No automatic historical-run pruning.
+  Reference: [preserveOutput](https://playwright.dev/docs/api/class-testconfig#test-config-preserve-output).
+
+- [ ] **D04 — Run metadata and slow-test reporting (M; needs B14/B11).** Add
+  optional JSON-safe user metadata/run name and project metadata, propagated
+  into resolved configuration, worker/test read-only access and existing
+  reports. Keep report schemas backward-readable with serde defaults. Add
+  configurable duration threshold and bounded top-N slow-test summaries;
+  explicitly document aggregation by Rust test/project rather than claiming
+  upstream file scheduling semantics. Escape values in HTML/XML and preserve
+  data through portable bundles; duplicate names and retries must not merge
+  distinct tests accidentally. Done when configuration/CLI precedence, empty
+  metadata, old JSON, custom/live reporters and relocated HTML agree. Automatic
+  Git diff capture and process-wide stdout/stderr attribution remain deferred.
+  Reference: [metadata and reportSlowTests](https://playwright.dev/docs/api/class-testconfig).
+
+- [ ] **D05 — Typed Web Storage enumeration/bulk helpers (S–M, both engines).**
+  Extend current local/session get/set/remove/clear methods with item enumeration
+  and typed bulk set operations. Returned data is an owned snapshot of the
+  current page origin; use deterministic serialization without promising native
+  key ordering. Validate input before mutation and document that bulk writes
+  are not transactional: quota/security failures can leave earlier writes.
+  Done when both engines cover empty stores, Unicode/empty keys, overwrite,
+  navigation, same-origin sharing, session page isolation, opaque-origin errors,
+  quotas, cancellation and disposal. Preserve storage-state round trips; this
+  does not add session storage to browser-context state or IndexedDB/OPFS support.
+  Reference: [WebStorage operations](https://playwright.dev/docs/api/class-webstorage).
+
+- [ ] **D06 — Chromium WebSocket diagnostic lifecycle (M; capability gated).**
+  Extend current socket observations with native socket identity, error events,
+  closed state and scoped typed wait helpers. Two sockets at the same URL must
+  remain distinguishable. Preserve text versus binary opcode/payload semantics;
+  cap retained payloads/history and expose truncation/lost observation explicitly.
+  Do not invent a successful close when transport observation is lost. Waiters
+  must settle on close, native error, channel lag, page disposal, disconnect and
+  caller/enclosing cancellation. Done when Chromium tests cover concurrent
+  sockets, binary/text frames, errors, closure and retries, and Firefox returns
+  an explicit unsupported result. Any new public fields/enums need compatibility
+  notes. Routing, message injection and service-worker sockets remain deferred.
+  Reference: [WebSocket observation API](https://playwright.dev/docs/api/class-websocket).
+
 ## Deferred substantial work
 
 Keep these outside the default large-session scope. Record a capability/design
@@ -831,7 +945,7 @@ finding here if a task above exposes a dependency on one of these projects.
 | Playwright remote protocol/browser server | New transport/server lifecycle, ownership and compatibility commitments. |
 | Cross-origin/OOPIF lazy selectors, bindings and unified target events | Realm/target routing and frame replacement/identity need a dedicated backend design. B01 observes the current Chromium target; session swap is not unified DOM-frame removal. |
 | Complete ElementHandle and arbitrary JS value serialization | Remote identity, nested handle arguments and object lifetime management across engines. |
-| Workers/service workers and WebSocket routing | New evaluation/interception object graphs and uneven native backend capabilities. |
+| Workers/service workers and WebSocket routing | New evaluation/interception object graphs and uneven native backend capabilities. D06 extends current Chromium observation only. |
 | Native file chooser and directory uploads | Event-driven chooser ownership, filesystem directory semantics and backend support. |
 | Firefox response bodies, response rewriting and emulation gaps | Verify a supported native capability first; DOM approximations do not establish equivalent behavior. |
 | Context-wide synchronized clock | Shared virtual-time semantics across documents/pages/frames need a separate design. Existing page clocks remain supported. |
@@ -839,6 +953,8 @@ finding here if a task above exposes a dependency on one of these projects.
 | IndexedDB/OPFS state | Storage schema/version, transactions and cross-origin persistence are separate projects. |
 | Process workers, project dependency graph and fixture override hierarchy | Runner architecture and failure isolation changes; retain current Tokio workers and typed fixtures. |
 | Trace Viewer archives, blob reports and distributed merging | New artifact formats, source/DOM capture and merge semantics. |
+| Automatic Git diff capture and process-wide stdout/stderr attribution | Source capture and per-attempt attribution need a separate design with Tokio workers; user-supplied metadata is D04. |
+| JavaScript transpilation, test-file discovery and npm reporter plugin compatibility | Rust compilation, registered tests and Rust reporter traits have different contracts; superficial aliases would not establish parity. |
 | Inspector/UI mode, codegen and component mounting | Dedicated tooling and framework integration projects. |
 | Electron, Android/ADB/WebView and WebAuthn | Additional targets or specialized backend capabilities outside everyday web testing. |
 
@@ -859,7 +975,9 @@ waiting for every future feature before starting independent work.
 | 2. HTTP and routing correctness | B05/B06/B07/B08 — complete | Context-linked fetch/fulfill options verified in `c88c14b`. Preserve shared HTTP, route lifecycle, duplicate-header forwarding and pinned precedence regressions. |
 | 3. Native event diagnostics | B01/B04/B19 — complete | Preserve frame/load/dialog observations (`f8c12de`), earliest popup traffic (`1ec7e3e`) and structured console/error data (`34890cc`) through ownership and runner changes. |
 | 4. Runner and developer APIs | B16/B17/B12 complete; B14, B13 remaining | Preserve shared ownership (`1e4d3bb`), labeled diagnostics (`8ae438c`) and soft collection (`0ee8245`), then add effective configuration and fixture/shared cleanup budgets. Budget changes need broader runner regressions. |
+| 4a. CI and assertion reliability | D01, D02 | Extend flaky-run policy/focus wiring and generic polling options using the resolved configuration and fixture/operation budgets. |
 | 5. Captures and reports | B09, B10, B18, B11 | Implement capture options before stabilized comparisons; add bounded ARIA output and searchable per-attempt reports using the earlier network/error data. |
+| 5a. Practical storage and diagnostics | D03, D04, D05, D06 | Complete output retention, run metadata/slow summaries, typed Web Storage helpers and bounded Chromium socket diagnostics after their prerequisites. |
 | 6. Supported backend extensions | C01, C02, C03, C04, C05, C06 | Extend PDF, captured bodies, coverage, HAR, emulation and scoped CDP sessions. Check capability before accepting each option; verify explicit errors on the other engine. |
 | 7. Final lifecycle and compatibility audit | G04 | Verify cancellation, zero/enclosing deadlines, retries, disposal and released resources across the additions, then run the complete regression and documentation gates. |
 
@@ -886,7 +1004,7 @@ does not count as complete unless the task explicitly excludes it.
 1. Recheck current code and native capability evidence under G01/G02. Do not
    rebuild features added since this document was created.
 2. All A tasks are complete. Continue with the remaining-work index and phase
-   order above, respecting dependencies. Complete independent B work as
+   order above, respecting dependencies. Complete independent B/D work as
    prerequisites become available; implement C
    only within the existing native capabilities. Keep changes reviewable and
    update checkboxes after verification, preferably committing at phase boundaries.
@@ -912,8 +1030,8 @@ export FERRITE_E2E_REQUIRE_BOTH_BROWSERS=1
 export TMPDIR=/path/to/writable-temp
 cargo test -p ferrite-e2e --no-fail-fast -- --test-threads=4
 cargo test -p ferrite-cli -p ferrite-config
-cargo clippy -p ferrite-e2e -p ferrite-cli --all-targets -- -D warnings
-cargo fmt -p ferrite-e2e --check
+cargo clippy -p ferrite-e2e -p ferrite-cli -p ferrite-config --all-targets -- -D warnings
+cargo fmt -p ferrite-e2e -p ferrite-cli -p ferrite-config --check
 python3 scripts/playwright-parity/build_matrix.py
 git diff --check
 ```
@@ -932,7 +1050,8 @@ also need formatting checks for the modified packages.
 
 Copyable request for the implementation session:
 
-> Implement every open task in E2E-PARITY-TODO.md using the recommended remaining
+> Implement all 19 open tasks (B14/B13, D01/D02, B09/B10/B18/B11, D03–D06,
+> C01–C06 and G04) in E2E-PARITY-TODO.md using the recommended remaining
 > phases, dependencies and completion criteria. Preserve the already verified
 > features. Implement all practical
 > features supported by the existing Chromium/Firefox backends. Keep the deferred
