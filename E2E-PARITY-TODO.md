@@ -10,8 +10,9 @@ the remaining-work index below through B/D improvements and supported C extensio
 This backlog contains **51 tasks (33 complete, 18 remaining)**: four foundations,
 16 core tasks, 19 follow-ups, six optional extensions and six practical additions.
 All A tasks and B01–B08/B12/B14/B15/B16/B17/B19 are now verified; continue with
-configuration and runner budgets, then captures, reports and supported C extensions. The ordering and effort
-assessments are recommendations based on the current source and parity audit.
+runner budgets and CI/assertion reliability, then captures, reports and supported
+C extensions. The ordering and effort assessments are recommendations based on
+the current source and parity audit.
 D01–D06 add bounded improvements found in the missing/partial member inventory;
 they do not imply that every upstream member needs a separate Rust API.
 
@@ -110,6 +111,31 @@ Immediate delivery: **B13**; B14 is complete. D01/D02 strengthen CI and
 assertions without adding a browser backend. Capture/report work comes next;
 D03/D04 consume its final artifact/report behavior. D05/D06 and the supported C
 extensions can then proceed independently. G04 is applied throughout and closed last.
+
+### First delivery: B13 implementation sequence
+
+These are steps within B13, not additional completion checkboxes. Finish the
+whole delivery before marking B13 complete or starting dependent D02 work.
+
+| Step | Concrete work | Evidence required |
+|---|---|---|
+| 1. Establish accounting | Record pinned Playwright cases for ordinary/explicit fixture limits, worker fixtures and setup/teardown failure. Define Ferrite's attempt, worker retirement and run-final cleanup scopes before changing clocks. | Observable setup/body/teardown ordering and final errors; document any different accounting. |
+| 2. Extend existing fixtures | Add optional setup and teardown limits to `Fixture<T>` and its existing registration paths. Preserve defaults, dependency ordering and zero semantics. | Default/explicit/zero limits, inherited finite limits, lazy and automatic test/worker fixtures, and failed setup after completed dependencies. |
+| 3. Share cleanup deadlines | Thread one deadline through each cleanup scope instead of renewing it for every hook, fixture, capture or close. Define what can still execute after exhaustion and report every unfinished operation. | Several slow cleanups stay within one finite budget; reverse dependency release still runs when possible, with distinct errors for unfinished work. |
+| 4. Make disposal survive a dropped wait | Review context/page close futures alongside the existing browser close owner. A timed-out caller must not leave native disposal permanently skipped because the handle was marked closed before an await. | Repeated/concurrent close and an intentionally dropped close wait; verify native targets/user contexts and listener/task ownership are actually released on both engines. |
+| 5. Integrate and verify | Preserve attempt soft-error sealing, expected-failure classification, retries and effective settings; update examples, parity notes and matrix evidence. | Focused native cases followed by the complete runner/integration inventory, serialization checks, strict Clippy, formatting and link validation. |
+
+Current inspection found that `BrowserContext::close` marks the context closed
+before awaited callback/page/native disposal. Step 4 must establish safe completion
+when that wait is dropped; a repeated call returning success alone is insufficient
+evidence of native release. Keep this lifecycle work inside B13 rather than
+deferring it until after introducing shorter shared cleanup deadlines.
+
+The upstream reference describes separate fixture limits and shared test/cleanup
+accounting in [fixture timeouts](https://playwright.dev/docs/test-fixtures#fixture-timeout)
+and [test timeouts](https://playwright.dev/docs/test-timeouts). Use the pinned
+runner observations to establish precise behavior; current documentation is a
+design reference, not proof that Ferrite matches it.
 
 ## Concrete implementation deliverables
 
@@ -399,6 +425,11 @@ Work in [the audit generator](scripts/playwright-parity/build_matrix.py),
   Audit popup-pump lag and pending-capture eviction as well: every paused Chromium
   target must be resumed or closed, and retained adoption outcomes must agree
   with actual setup results. A bounded buffer must not create an unbounded wait.
+  Verify native context/page disposal after dropping close waits, including the
+  shared-budget paths added by B13. Probe assertion cancellation/disconnection
+  and interrupted step reporting: preserve the control error rather than
+  retrying it as an ordinary mismatch. These are audit cases, not claims that
+  every suspected failure has already been reproduced.
 
 ## A — Core features to implement first
 
@@ -988,7 +1019,7 @@ waiting for every future feature before starting independent work.
 | 1. Network observations | B02, B03 — complete | Typed per-hop request/response identity and completion independent of body capture. Verified in `1a9e875`; continue with phase 2. |
 | 2. HTTP and routing correctness | B05/B06/B07/B08 — complete | Context-linked fetch/fulfill options verified in `c88c14b`. Preserve shared HTTP, route lifecycle, duplicate-header forwarding and pinned precedence regressions. |
 | 3. Native event diagnostics | B01/B04/B19 — complete | Preserve frame/load/dialog observations (`f8c12de`), earliest popup traffic (`1ec7e3e`) and structured console/error data (`34890cc`) through ownership and runner changes. |
-| 4. Runner and developer APIs | B16/B17/B12/B14 complete; B13 remaining | Preserve shared ownership (`1e4d3bb`), labeled diagnostics (`8ae438c`) and soft collection (`0ee8245`), effective configuration (`a7f1e45`) is verified; add fixture/shared cleanup budgets next. Budget changes need broader runner regressions. |
+| 4. Runner and developer APIs | B16/B17/B12/B14 complete; B13 remaining | Preserve shared ownership (`1e4d3bb`), labeled diagnostics (`8ae438c`), soft collection (`0ee8245`) and effective configuration (`a7f1e45`); add fixture/shared cleanup budgets and safe disposal after dropped close waits next. Budget changes need broader runner regressions. |
 | 4a. CI and assertion reliability | D01, D02 | Extend flaky-run policy/focus wiring and generic polling options using the resolved configuration and fixture/operation budgets. |
 | 5. Captures and reports | B09, B10, B18, B11 | Implement capture options before stabilized comparisons; add bounded ARIA output and searchable per-attempt reports using the earlier network/error data. |
 | 5a. Practical storage and diagnostics | D03, D04, D05, D06 | Complete output retention, run metadata/slow summaries, typed Web Storage helpers and bounded Chromium socket diagnostics after their prerequisites. |
