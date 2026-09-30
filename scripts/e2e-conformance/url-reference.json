@@ -1,0 +1,153 @@
+{
+  "playwright": "1.63.0",
+  "engine": "chromium",
+  "browser": "153.0.8010.12",
+  "cases": [
+    {
+      "kind": "glob",
+      "pattern": "**/api/item.js",
+      "path": "/api/item.js",
+      "matches": true
+    },
+    {
+      "kind": "glob",
+      "pattern": "**/api/**/item.js",
+      "path": "/api/item.js",
+      "matches": true
+    },
+    {
+      "kind": "glob",
+      "pattern": "**/api/**/item.js",
+      "path": "/api/deep/nested/item.js",
+      "matches": true
+    },
+    {
+      "kind": "glob",
+      "pattern": "**/api/*.js",
+      "path": "/api/deep/item.js",
+      "matches": false
+    },
+    {
+      "kind": "glob",
+      "pattern": "**/api/{item,other}.js",
+      "path": "/api/other.js",
+      "matches": true
+    },
+    {
+      "kind": "glob",
+      "pattern": "**/api/{item,other}.js",
+      "path": "/api/missing.js",
+      "matches": false
+    },
+    {
+      "kind": "glob",
+      "pattern": "/api/*.js",
+      "path": "/api/item.js",
+      "matches": true
+    },
+    {
+      "kind": "glob",
+      "pattern": "api/*.js",
+      "path": "/base/api/item.js",
+      "matches": true
+    },
+    {
+      "kind": "glob",
+      "pattern": "../api/*.js",
+      "path": "/api/item.js",
+      "matches": true
+    },
+    {
+      "kind": "glob",
+      "pattern": "/api/*?active=*",
+      "path": "/api/item?active=yes",
+      "matches": true
+    },
+    {
+      "kind": "glob",
+      "pattern": "/api/*?active=*",
+      "path": "/api/itemXactive=yes",
+      "matches": false
+    },
+    {
+      "kind": "glob",
+      "pattern": "/literal\\*",
+      "path": "/literal*",
+      "matches": true
+    },
+    {
+      "kind": "glob",
+      "pattern": "/literal\\*",
+      "path": "/literal-other",
+      "matches": false
+    },
+    {
+      "kind": "glob",
+      "pattern": "$ORIGIN/API/*.js",
+      "path": "/API/item.js",
+      "matches": true
+    },
+    {
+      "kind": "glob",
+      "pattern": "$ORIGIN/API/*.js",
+      "path": "/api/item.js",
+      "matches": false
+    },
+    {
+      "kind": "glob",
+      "pattern": "http://*/api/item.js",
+      "path": "/api/item.js",
+      "matches": true
+    },
+    {
+      "kind": "glob",
+      "pattern": "{http,https}://*/api/item.js",
+      "path": "/api/item.js",
+      "matches": true
+    },
+    {
+      "kind": "exact",
+      "pattern": "/api/item.js",
+      "path": "/api/item.js",
+      "matches": true
+    },
+    {
+      "kind": "exact",
+      "pattern": "api/item.js",
+      "path": "/base/api/item.js",
+      "matches": true
+    },
+    {
+      "kind": "regex",
+      "pattern": "item",
+      "path": "/api/item.js",
+      "matches": true
+    },
+    {
+      "kind": "regex",
+      "pattern": "^item$",
+      "path": "/api/item.js",
+      "matches": false
+    },
+    {
+      "kind": "regex",
+      "pattern": "/api/item\\.js$",
+      "path": "/api/item.js",
+      "matches": true
+    }
+  ],
+  "invalid_globs": [
+    {
+      "pattern": "{unfinished",
+      "rejected": true
+    },
+    {
+      "pattern": "extra}",
+      "rejected": true
+    },
+    {
+      "pattern": "{nested,{brace}}",
+      "rejected": true
+    }
+  ]
+}

@@ -260,6 +260,43 @@ impl PageExpect {
             .await
     }
 
+    /// Assert using the shared exact/glob/regex/contains matcher.
+    pub async fn url_matching(&self, matcher: &crate::UrlMatcher) -> E2eResult<()> {
+        let matcher = matcher.resolved(|url| self.page.resolve_url(url))?;
+        self.url_where(move |url| matcher.matches(url)).await
+    }
+
+    /// Retry a URL predicate; respects assertion negation and cancellation.
+    pub async fn url_where<F>(&self, predicate: F) -> E2eResult<()>
+    where
+        F: Fn(&str) -> bool + Send + Sync,
+    {
+        self.page
+            .auto_step(
+                "expect.url_matching",
+                crate::StepCategory::Assertion,
+                async {
+                    let scoped = self.page.with_timeout(self.timeout);
+                    scoped
+                        .run_operation(poll(
+                            self.timeout,
+                            "URL matcher/predicate".into(),
+                            || async {
+                                scoped.run_locator_handlers().await?;
+                                let actual = scoped.url().await?;
+                                Ok(if predicate(&actual) != self.negated {
+                                    None
+                                } else {
+                                    Some(format!("URL was {actual}"))
+                                })
+                            },
+                        ))
+                        .await
+                },
+            )
+            .await
+    }
+
     /// Assert the URL with a Rust regular expression.
     pub async fn url_matches(&self, pattern: &str) -> E2eResult<()> {
         self.page

@@ -354,6 +354,10 @@ put('BrowserContext','clearCookies','BrowserContext.clear_cookies_with','ANDed e
 for m,t in {'click':'click_with_options','hover':'hover_with_options','check':'check_with_options','uncheck':'uncheck_with_options','setChecked':'set_checked_with_options','dragTo':'drag_to_with_options'}.items():
  put('Locator',m,'Locator.'+t,'Trusted pointer input with padding-box positions, modifiers, trial readiness and scoped timeout. Trial may scroll but sends no input; action-acquired keys/buttons are released on failure/cancellation. Same-origin offsets and positive axis scaling supported; rotated/perspective frames and cross-origin coordinates unsupported. Other upstream options remain narrower.')
 # Fill every remaining upstream member explicitly as absent, with class-specific explanations.
+put('PageAssertions','toHaveURL','PageExpect.url_matching','Shared exact/base URL, glob, Rust regex or url_where predicate; retrying negation and cancellation. Legacy assertion helpers retain string contracts; explicit globs are a Rust extension, and URLPattern/case option parity remains absent.')
+for c in ['Page','BrowserContext']:
+ for m,t in {'route':'route_matching','unroute':'unroute_matching','routeFromHAR':'route_from_har'}.items():
+  put(c,m,c+'.'+t,'Shared resolved UrlMatcher for rules/handlers/HAR filters, with match limits and identity-based removal; legacy string/globset contracts preserved. Invalid patterns fail before registration, including empty contexts; native response/URL override differences remain. In-flight removal and fuller HAR policies tracked separately.')
 def default_note(c,e):
  if c.startswith('Android') or c in ['Electron','ElectronApplication']:return 'Experimental upstream API; Ferrite has no Android/ADB/WebView or Electron backend.'
  if c=='ElementHandle':return 'No ElementHandle abstraction; locator replacements cover many DOM actions but do not reproduce handle identity/lifetime semantics.'

@@ -1106,9 +1106,15 @@ pub type RouteHandler = Arc<
 pub struct RouteFromHarOptions {
     /// Only load entries whose URL matches this glob (`None` = all).
     pub url_filter: Option<String>,
+    /// Shared URL matching; mutually exclusive with the legacy glob filter.
+    pub url_matcher: Option<crate::UrlMatcher>,
 }
 
 impl RouteFromHarOptions {
+    pub fn matching(mut self, matcher: crate::UrlMatcher) -> Self {
+        self.url_matcher = Some(matcher);
+        self
+    }
     /// Only load entries whose URL matches `glob`.
     #[must_use]
     pub fn url_filter(mut self, glob: impl Into<String>) -> Self {
@@ -1122,6 +1128,8 @@ impl RouteFromHarOptions {
 pub struct RouteHandlerEntry {
     /// Glob pattern (`**/api/*`).
     pub pattern: String,
+    /// Explicit shared matcher; None keeps the legacy glob contract.
+    pub matcher: Option<crate::UrlMatcher>,
     /// Handler deciding matching requests.
     pub handler: RouteHandler,
     /// Match at most this many requests (`None` = unlimited).
@@ -1228,6 +1236,8 @@ impl RouteAction {
 pub struct RouteRule {
     /// Glob pattern (`**/api/*`).
     pub pattern: String,
+    /// Explicit shared matcher; None keeps the legacy glob contract.
+    pub matcher: Option<crate::UrlMatcher>,
     /// Action for matching requests.
     pub action: RouteAction,
     /// Match at most this many requests (`None` = unlimited).
@@ -1241,10 +1251,17 @@ impl RouteRule {
     fn with_action(pattern: impl Into<String>, action: RouteAction) -> Self {
         Self {
             pattern: pattern.into(),
+            matcher: None,
             action,
             times: None,
             hits: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         }
+    }
+
+    /// Use exact/glob/regex/contains matching instead of the legacy pattern.
+    pub fn matching(mut self, matcher: crate::UrlMatcher) -> Self {
+        self.matcher = Some(matcher);
+        self
     }
 
     /// Whether the rule still matches (`times` not exhausted).
@@ -3912,6 +3929,7 @@ impl Page {
     pub async fn route(&self, rules: Vec<RouteRule>) -> E2eResult<()> {
         self.driver
             .run(async {
+                let rules = crate::url_matcher::prepare_rules(rules, |url| self.resolve_url(url))?;
                 *self.routes.lock().unwrap_or_else(|e| e.into_inner()) = rules;
                 self.restart_routing().await
             })
@@ -3928,7 +3946,7 @@ impl Page {
         Fut: Future<Output = E2eResult<RouteAction>> + Send + 'static,
     {
         self.driver
-            .run(async { self.route_entry(pattern, handler, None).await })
+            .run(async { self.route_entry(pattern, handler, None, None).await })
             .await
     }
 
@@ -3944,7 +3962,41 @@ impl Page {
         Fut: Future<Output = E2eResult<RouteAction>> + Send + 'static,
     {
         self.driver
-            .run(async { self.route_entry(pattern, handler, Some(n)).await })
+            .run(async { self.route_entry(pattern, handler, Some(n), None).await })
+            .await
+    }
+
+    /// Register a shared exact/glob/regex matcher, resolved before mutation.
+    pub async fn route_matching<F, Fut>(
+        &self,
+        matcher: &crate::UrlMatcher,
+        handler: F,
+    ) -> E2eResult<()>
+    where
+        F: Fn(RouteInfo) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = E2eResult<RouteAction>> + Send + 'static,
+    {
+        self.driver
+            .run(self.route_entry(&matcher.description(), handler, None, Some(matcher.clone())))
+            .await
+    }
+    pub async fn route_matching_times<F, Fut>(
+        &self,
+        matcher: &crate::UrlMatcher,
+        n: u32,
+        handler: F,
+    ) -> E2eResult<()>
+    where
+        F: Fn(RouteInfo) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = E2eResult<RouteAction>> + Send + 'static,
+    {
+        self.driver
+            .run(self.route_entry(
+                &matcher.description(),
+                handler,
+                Some(n),
+                Some(matcher.clone()),
+            ))
             .await
     }
 
@@ -3954,17 +4006,25 @@ impl Page {
         pattern: &str,
         handler: F,
         times: Option<u32>,
+        matcher: Option<crate::UrlMatcher>,
     ) -> E2eResult<()>
     where
         F: Fn(RouteInfo) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = E2eResult<RouteAction>> + Send + 'static,
     {
+        let matcher = matcher
+            .map(|matcher| matcher.resolved(|url| self.resolve_url(url)))
+            .transpose()?;
+        if matcher.is_none() {
+            crate::url_matcher::legacy_glob(pattern)?;
+        }
         let handler: RouteHandler = Arc::new(move |info| Box::pin(handler(info)));
         self.handlers
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .push(RouteHandlerEntry {
                 pattern: pattern.to_string(),
+                matcher,
                 handler,
                 times,
                 hits: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -4031,6 +4091,30 @@ impl Page {
             .await
     }
 
+    /// Remove rules/handlers with this resolved matcher identity.
+    pub async fn unroute_matching(&self, matcher: &crate::UrlMatcher) -> E2eResult<usize> {
+        self.driver
+            .run(async {
+                let matcher = matcher.resolved(|url| self.resolve_url(url))?;
+                let mut removed = 0;
+                {
+                    let mut rules = self.routes.lock().unwrap_or_else(|e| e.into_inner());
+                    let before = rules.len();
+                    rules.retain(|r| r.matcher.as_ref() != Some(&matcher));
+                    removed += before - rules.len();
+                }
+                {
+                    let mut handlers = self.handlers.lock().unwrap_or_else(|e| e.into_inner());
+                    let before = handlers.len();
+                    handlers.retain(|r| r.matcher.as_ref() != Some(&matcher));
+                    removed += before - handlers.len();
+                }
+                self.restart_routing().await?;
+                Ok(removed)
+            })
+            .await
+    }
+
     /// Replay responses from a HAR 1.2 file (Playwright `routeFromHAR`).
     ///
     /// Entries match on exact method + URL and fulfill status, headers, and
@@ -4045,16 +4129,11 @@ impl Page {
         self.driver
             .run(async {
                 let file = crate::har::HarFile::load(path)?;
-                let matcher = match options.url_filter.as_deref() {
-                    Some(glob) => Some(globset::Glob::new(glob).map_err(|error| {
-                        E2eError::Config(format!("invalid HAR url filter {glob:?}: {error}"))
-                    })?),
-                    None => None,
-                }
-                .map(|glob| glob.compile_matcher());
+                let matcher =
+                    crate::url_matcher::har_filter(&options, |url| self.resolve_url(url))?;
                 let mut map = file.lookup();
                 if let Some(matcher) = &matcher {
-                    map.retain(|_, entry| matcher.is_match(&entry.url));
+                    map.retain(|_, entry| matcher.matches(&entry.url));
                 }
                 let count = map.len();
                 if count == 0 {
@@ -5131,6 +5210,7 @@ mod tests {
     fn handler_entry_times() {
         let entry = RouteHandlerEntry {
             pattern: "**".to_string(),
+            matcher: None,
             handler: Arc::new(|_| Box::pin(async { Ok(RouteAction::Fallback) })),
             times: Some(2),
             hits: Arc::new(std::sync::atomic::AtomicU32::new(0)),

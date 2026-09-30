@@ -702,6 +702,11 @@ impl BrowserContext {
             .lock()
             .map(|routes| routes.is_empty())
             .unwrap_or(true)
+            || !self
+                .handlers
+                .lock()
+                .map(|handlers| handlers.is_empty())
+                .unwrap_or(true)
         {
             page.restart_routing().await?;
         }
@@ -859,6 +864,7 @@ impl BrowserContext {
     /// rejects the rules (e.g. a Firefox-unsupported override), the stored
     /// set is left unchanged and the error surfaces.
     pub async fn route(&self, rules: Vec<RouteRule>) -> E2eResult<()> {
+        let rules = crate::url_matcher::prepare_rules(rules, |url| self.resolve_url(url))?;
         let old = self
             .routes
             .lock()
@@ -890,7 +896,7 @@ impl BrowserContext {
         F: Fn(RouteInfo) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = E2eResult<RouteAction>> + Send + 'static,
     {
-        self.route_entry(pattern, handler, None).await
+        self.route_entry(pattern, handler, None, None).await
     }
 
     /// [`BrowserContext::route_with_handler`] limited to `n` matches.
@@ -904,7 +910,55 @@ impl BrowserContext {
         F: Fn(RouteInfo) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = E2eResult<RouteAction>> + Send + 'static,
     {
-        self.route_entry(pattern, handler, Some(n)).await
+        self.route_entry(pattern, handler, Some(n), None).await
+    }
+
+    fn resolve_url(&self, url: &str) -> E2eResult<String> {
+        if let Ok(url) = reqwest::Url::parse(url) {
+            return Ok(url.to_string());
+        }
+        let base = self
+            .base_url
+            .clone()
+            .or_else(|| std::env::var("FERRITE_E2E_BASE_URL").ok())
+            .ok_or_else(|| E2eError::Config("relative URL matcher requires a base_url".into()))?;
+        reqwest::Url::parse(&base)
+            .and_then(|base| base.join(url))
+            .map(|url| url.to_string())
+            .map_err(|e| E2eError::Config(format!("URL matcher base resolution: {e}")))
+    }
+
+    pub async fn route_matching<F, Fut>(
+        &self,
+        matcher: &crate::UrlMatcher,
+        handler: F,
+    ) -> E2eResult<()>
+    where
+        F: Fn(RouteInfo) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = E2eResult<RouteAction>> + Send + 'static,
+    {
+        self.cancellation
+            .run(self.route_entry(&matcher.description(), handler, None, Some(matcher.clone())))
+            .await
+    }
+    pub async fn route_matching_times<F, Fut>(
+        &self,
+        matcher: &crate::UrlMatcher,
+        n: u32,
+        handler: F,
+    ) -> E2eResult<()>
+    where
+        F: Fn(RouteInfo) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = E2eResult<RouteAction>> + Send + 'static,
+    {
+        self.cancellation
+            .run(self.route_entry(
+                &matcher.description(),
+                handler,
+                Some(n),
+                Some(matcher.clone()),
+            ))
+            .await
     }
 
     /// Register a context handler entry with an optional match limit.
@@ -913,17 +967,25 @@ impl BrowserContext {
         pattern: &str,
         handler: F,
         times: Option<u32>,
+        matcher: Option<crate::UrlMatcher>,
     ) -> E2eResult<()>
     where
         F: Fn(RouteInfo) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = E2eResult<RouteAction>> + Send + 'static,
     {
+        let matcher = matcher
+            .map(|matcher| matcher.resolved(|url| self.resolve_url(url)))
+            .transpose()?;
+        if matcher.is_none() {
+            crate::url_matcher::legacy_glob(pattern)?;
+        }
         let handler: RouteHandler = Arc::new(move |info| Box::pin(handler(info)));
         self.handlers
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .push(RouteHandlerEntry {
                 pattern: pattern.to_owned(),
+                matcher,
                 handler,
                 times,
                 hits: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -1048,6 +1110,31 @@ impl BrowserContext {
         Ok(removed_rules + removed_handlers)
     }
 
+    pub async fn unroute_matching(&self, matcher: &crate::UrlMatcher) -> E2eResult<usize> {
+        self.cancellation
+            .run(async {
+                let matcher = matcher.resolved(|url| self.resolve_url(url))?;
+                let mut removed = 0;
+                {
+                    let mut rules = self.routes.lock().unwrap_or_else(|e| e.into_inner());
+                    let before = rules.len();
+                    rules.retain(|r| r.matcher.as_ref() != Some(&matcher));
+                    removed += before - rules.len();
+                }
+                {
+                    let mut handlers = self.handlers.lock().unwrap_or_else(|e| e.into_inner());
+                    let before = handlers.len();
+                    handlers.retain(|r| r.matcher.as_ref() != Some(&matcher));
+                    removed += before - handlers.len();
+                }
+                for page in self.pages() {
+                    page.restart_routing().await?;
+                }
+                Ok(removed)
+            })
+            .await
+    }
+
     /// Replay responses from a HAR 1.2 file on every current and future page.
     ///
     /// Entries match on exact method + URL; misses fall through. Returns how
@@ -1058,16 +1145,10 @@ impl BrowserContext {
         options: crate::page::RouteFromHarOptions,
     ) -> E2eResult<usize> {
         let file = crate::har::HarFile::load(path)?;
-        let matcher = match options.url_filter.as_deref() {
-            Some(glob) => Some(globset::Glob::new(glob).map_err(|error| {
-                E2eError::Config(format!("invalid HAR url filter {glob:?}: {error}"))
-            })?),
-            None => None,
-        }
-        .map(|glob| glob.compile_matcher());
+        let matcher = crate::url_matcher::har_filter(&options, |url| self.resolve_url(url))?;
         let mut map = file.lookup();
         if let Some(matcher) = &matcher {
-            map.retain(|_, entry| matcher.is_match(&entry.url));
+            map.retain(|_, entry| matcher.matches(&entry.url));
         }
         let count = map.len();
         if count == 0 {

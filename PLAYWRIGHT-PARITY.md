@@ -349,11 +349,37 @@ coverage; it does not establish complete behavioral parity.
 `UrlMatcher::exact`, `glob`, `regex` and `contains` are reusable across
 `Page::wait_for_url_matching`, `wait_for_request_matching` and
 `wait_for_response_matching`; Frame supports matching URL waits too. Exact
-relative URLs resolve against the configured base URL. Globs match the whole
+relative URLs and relative glob paths resolve against the configured base URL.
+Absolute matchers normalize URL host/scheme syntax; leading-star globs retain
+their full-URL scope. Globs match the whole
 URL: `*` excludes slashes, `**` includes them, `{a,b}` selects alternatives,
 `?` is literal and backslashes escape characters. Regex anchoring follows the
 supplied pattern. Invalid patterns fail at construction. Existing string waits
 retain their explicit substring behavior.
+
+`PageExpect::url_matching` / `url_where` share matching with URL waits; assertion
+negation, retry budgets and cancellation apply. `Page` / `BrowserContext`
+`route_matching`, `route_matching_times` and `unroute_matching` use the same
+resolved matcher identity. `RouteRule::matching` replaces its legacy selection
+pattern; `RouteFromHarOptions::matching` selects entries by the shared matcher.
+Limits consume matching requests only. Context handlers are installed on current
+and future pages even when no declarative rules exist.
+
+Legacy string routing and HAR `url_filter` keep their globset contract; legacy
+assertion strings stay exact/regex/contains as documented. Shared HAR matchers
+and the legacy filter are mutually exclusive. Invalid shared matchers fail at
+construction; legacy patterns are now checked before registration, including
+contexts with no pages. Relative matchers require a base URL. Rust regex syntax
+and strict trailing-backslash rejection remain explicit differences.
+
+Migration: `RouteRule` and `RouteHandlerEntry` literals need `matcher: None` for
+legacy behavior; prefer rule constructors/builders. `RouteFromHarOptions` literals
+need `url_matcher: None` or `..Default::default()`. HAR replay still uses its
+existing method+URL lookup and first-entry behavior; further replay/content
+options and in-flight removal policy are tracked separately in the TODO.
+The [22-case reference](scripts/e2e-conformance/url-reference.json) records actual
+Playwright 1.63 Chromium wait/route behavior; [native regressions](crates/ferrite-e2e/tests/shared_url_matching.rs)
+verify both Ferrite engines and assert invalid registration leaves no handler.
 
 `wait_for_url_where` accepts a URL predicate. Network `_where` methods accept
 synchronous predicates over `RecordedRequest`, and `_async` methods accept an
@@ -532,11 +558,12 @@ cargo clippy -p ferrite-e2e -p ferrite-cli --all-targets -- -D warnings
 
 Validation for URL/network matching, generated uploads and browser diagnostics:
 
-- `ferrite-e2e`: **139 unit tests, 3 API tests, 93 browser tests, 7 attempt-diagnostics
+- Combined verified `ferrite-e2e` inventory: **140 unit tests, 3 API tests, 93 browser tests, 7 attempt-diagnostics
   groups, 4 reliability groups, 4 runtime/reporter groups, 6 fixture/network
   groups, 4 step-control/bundle groups, 5 wait/upload/console groups,
   3 core conformance/capability groups, 4 callback lifecycle groups,
-  1 daily API group, 2 action option groups, 3 URL readiness groups and 2 doctests** (280 checks total).
+  1 daily API group, 2 action option groups, 3 URL readiness groups,
+  2 shared URL matching groups and 2 doctests** (283 checks total).
   Headless Shell and Firefox were installed and exercised; unsupported-engine branches remain explicit.
 - The five new groups additionally passed with full Chrome and Firefox, covering
   exact/glob/regex and predicate URL matching, frame history, request-start and
@@ -562,7 +589,7 @@ Validation for URL/network matching, generated uploads and browser diagnostics:
 - Existing trace and first-attachment names remain compatible; retry trace files
   and repeated attachment names preserve their individual contents.
 - CLI/configuration checks passed again: 5 CLI tests, 17 configuration tests and
-  1 doctest (303 checks across E2E/CLI/configuration). This change adds no CLI
+  1 doctest (306 checks across E2E/CLI/configuration). This change adds no CLI
   options. A real portable HTML report with expanded automatic/user/hook trees,
   skipped steps, annotations and run lifecycle was rendered in Chromium and
   visually inspected. The console section was also rendered and visually

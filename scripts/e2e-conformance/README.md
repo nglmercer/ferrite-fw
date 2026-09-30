@@ -38,3 +38,21 @@ FERRITE_E2E_REQUIRE_BOTH_BROWSERS=1 cargo test -p ferrite-e2e --test core_confor
 
 Node/Playwright are optional development tooling and are not dependencies of
 Ferrite's library or its normal Rust test command.
+
+`url-reference.mjs` / `url-reference.json` add 22 pinned URL cases spanning base
+paths, escaped/literal glob characters, brace alternatives, zero-segment double
+stars, case-sensitive paths and anchored/unanchored regexes. Native Playwright
+URL waits and routes must agree; exact/regex assertion results are also checked.
+Three malformed globs record native rejection. This is an actual Chromium
+reference; Ferrite additionally checks the shared behavior on Firefox.
+
+```bash
+TMPDIR=/path/to/writable-temp \
+FERRITE_PLAYWRIGHT_MODULE=/absolute/path/to/node_modules/playwright \
+FERRITE_CHROMIUM_PATH=/path/to/chromium node scripts/e2e-conformance/url-reference.mjs
+```
+
+Run `cargo test -p ferrite-e2e --test shared_url_matching` with both browsers
+required. It compares waits, explicit matcher assertions and routes, plus context
+match limits/removal, future pages and HAR filters. Legacy string routing/HAR
+retains globset semantics; the explicit matcher follows the pinned corpus.

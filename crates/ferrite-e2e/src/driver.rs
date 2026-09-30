@@ -2657,8 +2657,16 @@ impl CdpDriver {
         rules: Arc<Vec<RouteRule>>,
         handlers: Arc<Vec<RouteHandlerEntry>>,
     ) -> E2eResult<tokio::task::AbortHandle> {
-        let set = routing_glob_set(rules.iter().map(|rule| rule.pattern.as_str()))?;
-        let handler_set = routing_glob_set(handlers.iter().map(|entry| entry.pattern.as_str()))?;
+        let set = routing_matchers(
+            rules
+                .iter()
+                .map(|rule| (rule.pattern.as_str(), rule.matcher.as_ref())),
+        )?;
+        let handler_set = routing_matchers(
+            handlers
+                .iter()
+                .map(|entry| (entry.pattern.as_str(), entry.matcher.as_ref())),
+        )?;
         // Handler decisions may modify responses, so handlers imply the
         // response stage (rules alone only need it for ModifyResponse).
         let wants_response = !handlers.is_empty()
@@ -4384,8 +4392,16 @@ impl BidiDriver {
         rules: Arc<Vec<RouteRule>>,
         handlers: Arc<Vec<RouteHandlerEntry>>,
     ) -> E2eResult<tokio::task::AbortHandle> {
-        let set = routing_glob_set(rules.iter().map(|rule| rule.pattern.as_str()))?;
-        let handler_set = routing_glob_set(handlers.iter().map(|entry| entry.pattern.as_str()))?;
+        let set = routing_matchers(
+            rules
+                .iter()
+                .map(|rule| (rule.pattern.as_str(), rule.matcher.as_ref())),
+        )?;
+        let handler_set = routing_matchers(
+            handlers
+                .iter()
+                .map(|entry| (entry.pattern.as_str(), entry.matcher.as_ref())),
+        )?;
         // Firefox accepts `url` overrides but aborts the redirected request,
         // so fail fast instead of breaking the page's fetch.
         if rules
@@ -5589,29 +5605,37 @@ fn decide_dialog(
     }
 }
 
-/// Build a glob set over routing patterns (rules and handlers share it).
-fn routing_glob_set<'a>(
-    patterns: impl IntoIterator<Item = &'a str>,
-) -> E2eResult<globset::GlobSet> {
-    use globset::{Glob, GlobSetBuilder};
-    let mut builder = GlobSetBuilder::new();
-    for pattern in patterns {
-        builder.add(Glob::new(pattern).map_err(|error| E2eError::Config(error.to_string()))?);
-    }
-    builder
-        .build()
-        .map_err(|error| E2eError::Config(error.to_string()))
+enum RouteMatcher {
+    Shared(crate::UrlMatcher),
+    Legacy(globset::GlobMatcher),
 }
-
-/// Glob match indices in registration order (fallback chains are ordered).
-fn sorted_matches(set: &globset::GlobSet, url: &str) -> Vec<usize> {
-    let mut hits = set.matches(url);
-    hits.sort_unstable();
-    hits
+fn routing_matchers<'a>(
+    patterns: impl IntoIterator<Item = (&'a str, Option<&'a crate::UrlMatcher>)>,
+) -> E2eResult<Vec<RouteMatcher>> {
+    patterns
+        .into_iter()
+        .map(|(pattern, matcher)| match matcher {
+            Some(matcher) => Ok(RouteMatcher::Shared(matcher.clone())),
+            None => crate::url_matcher::legacy_glob(pattern).map(RouteMatcher::Legacy),
+        })
+        .collect()
+}
+/// Registration order is shared by typed matchers and legacy glob fallbacks.
+fn sorted_matches(set: &[RouteMatcher], url: &str) -> Vec<usize> {
+    set.iter()
+        .enumerate()
+        .filter_map(|(index, matcher)| {
+            let matches = match matcher {
+                RouteMatcher::Shared(m) => m.matches(url),
+                RouteMatcher::Legacy(m) => m.is_match(url),
+            };
+            matches.then_some(index)
+        })
+        .collect()
 }
 
 /// First non-fallback rule action for `url` (registration order; honors `times`).
-fn rule_action_for(rules: &[RouteRule], set: &globset::GlobSet, url: &str) -> Option<RouteAction> {
+fn rule_action_for(rules: &[RouteRule], set: &[RouteMatcher], url: &str) -> Option<RouteAction> {
     for index in sorted_matches(set, url) {
         let rule = &rules[index];
         if !rule.allows_match() {

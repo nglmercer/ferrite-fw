@@ -207,6 +207,28 @@ exports retain their prior source paths. Missing artifact files fail export.
 URL/network matching accepts `UrlMatcher::exact`, `glob` and `regex`; legacy
 string waits keep substring matching. Exact relative URLs resolve against base URL.
 
+Reuse `UrlMatcher` for assertions, routing and HAR selection:
+
+```rust,ignore
+use ferrite_e2e::UrlMatcher;
+
+let api = UrlMatcher::glob("/api/**/item")?;
+ctx.page.route_matching(&api, |_| async {
+    Ok(ferrite_e2e::RouteAction::fulfill(200, "fixture", "text/plain"))
+}).await?;
+ctx.page.unroute_matching(&api).await?;
+ctx.page.expect().url_matching(&UrlMatcher::exact("/account")).await?;
+ctx.context.route_from_har("fixture.har",
+    ferrite_e2e::RouteFromHarOptions::default().matching(api),
+).await?;
+```
+
+Relative glob paths resolve against base URL. Existing string routing/HAR filters
+keep their globset semantics. `RouteRule::matching` opts a declarative rule into
+the shared matcher; context matching handlers also apply to future pages. Manual
+rule/handler literals need the new `matcher: None` field for legacy behavior;
+HAR option literals need `url_matcher: None` or `..Default::default()`.
+
 URL readiness options use one navigation budget for matching and loading:
 
 ```rust,ignore
