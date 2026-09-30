@@ -1,16 +1,16 @@
 # Ferrite E2E implementation TODO
 
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
-Session plan refreshed: 2026-09-30, from verified D01 implementation `a2fd29b`.
-Expanded on request for a longer implementation session; B13/B14 and D01 are verified.
+Session plan refreshed: 2026-09-30, from verified D02 implementation `312090d`.
+Expanded on request for a longer implementation session; B13/B14 and D01/D02 are verified.
 Uncommitted implementations are not counted complete.
 
 The initial G/A foundations are complete except for the final G04 audit. Follow
 the remaining-work index below through B/D improvements and supported C extensions.
-This backlog contains **51 tasks (35 complete, 16 remaining)**: four foundations,
+This backlog contains **51 tasks (36 complete, 15 remaining)**: four foundations,
 16 core tasks, 19 follow-ups, six optional extensions and six practical additions.
-All A tasks, B01–B08/B12–B17/B19 and D01 are verified; continue with
-CI/assertion reliability, then captures, reports and supported
+All A tasks, B01–B08/B12–B17/B19 and D01/D02 are verified; continue with
+captures, reports and supported
 C extensions. The ordering and effort assessments are recommendations based on
 the current source and parity audit.
 D01–D06 add bounded improvements found in the missing/partial member inventory;
@@ -24,43 +24,54 @@ limits remain in [PLAYWRIGHT-PARITY.md](PLAYWRIGHT-PARITY.md).
 
 ## Recommended next implementation
 
-Start **D02 — assertion polling options**, then **B09 — screenshot capture
-options** and B10/B18/B11. D01 is verified in `a2fd29b`: shared config/Runner/
-CLI flaky-run policy, registered focus protection before filters/shards, immutable
-effective policy settings and consistent aggregate exits/reports. Original passed/
-flaky results and successful final attempts are retained. JUnit policy violations
-are explicit; upstream filtered-focus/JUnit/expected-pass differences are documented.
+Start **B09 — screenshot capture options**, then **B10/B18/B11**.
+D02 is verified in `312090d`: options-based generic polling companions,
+validated interval sequences, contextual messages, cancellation and one shared
+window across probes and sleeps. Existing signatures and 50 ms cadence remain;
+operational errors now propagate immediately. Scoped probes retain only a final
+soft mismatch and one outer assertion step, with retry isolation.
 
-The D01 phase passed **386 E2E and 28 CLI/configuration checks**: 173 units,
-209 integrations across all 31 targets and four doctests; combined inventory 414.
-Runner70 used full Chrome 153/Firefox 157; core196/browser93/routing23 used
-matching Headless Shell/Firefox. Twelve actual CLI cases (six per engine) verified
-config/flag on/off, inherited environment overrides, hidden focus, CI enforcement,
-child exits and parsed JUnit counts. Fourteen pinned runner cases were regenerated.
-Native HTML previews were inspected on both engines. Late units/native policy and
-fixture budget checks reran after reference comparisons and legacy focus; the
-policy target reran after narrowing a test mutex scope. Strict all-target Clippy,
-package formatting and generated evidence links passed. A B13 immediate native
-query assumption was corrected to require actual target removal within the
-existing finite budget. Ignored native close/detach errors remain a G04 audit.
+The D02 phase passed **397 E2E and 28 CLI/configuration checks**: 180 units,
+213 integrations across all 32 targets and four doctests; combined inventory 425.
+Runner74 used full Chrome 153/Firefox 157; core203/browser93/routing23 used
+matching Headless Shell/Firefox. Seven new virtual-time groups and four native
+polling groups cover exact cadence, hung probes, zero/enclosing budgets,
+cancellation/disposal, typed errors, local non-Send values, final-only soft
+collection, joined-work scope, retry reports and actual context removal.
+Thirteen actual pinned polling observations document defaults, validation,
+cutoff, thrown-error, nested-soft and step differences. HTML previews were
+inspected on both engines. Strict all-target Clippy, package formatting,
+regenerated matrix and evidence links passed. Two existing native fixtures were
+corrected: a fresh image URL keeps document replacement pending before load;
+the pointer timeout requires actual input acquisition within a finite budget
+before checking key/button release. No runtime navigation/input behavior changed.
 
-The matrix now has 73 classes/1,018 members: Partial632/Missing330/Equivalent15/
-Idiomatic41. These labels do not imply complete behavioral compatibility.
+The matrix remains 73 classes/1,018 members: Partial632/Missing330/Equivalent15/
+Idiomatic41. Generic polling options are feature evidence under Test.expect;
+they do not add invented upstream API members or imply full compatibility.
 
-**Current handoff:** start D02 in `expect.rs`, public exports, native assertion/
-soft-report regressions and pinned polling cases. `expect_poll` and `expect_to_pass`
-already share `poll`/`poll_raw` with an immediate first probe and fixed 50 ms sleeps.
-Add options-based companions for interval sequences and contextual messages while
-keeping the current signatures/defaults. Define empty/zero validation and reuse
-of the final interval. Bound every probe and sleep by the same caller/enclosing
-operation budget, including hung probes, cancellation, disposal and zero timeout.
-Preserve non-Send assertion blocks. Intermediate retries must not add soft errors
-or duplicate steps; only the final assertion mismatch may be softened. Audit
-`poll_raw`'s current broad error retry: operational/control errors must remain
-distinct, including Diagnostic-wrapped causes, rather than becoming assertion
-mismatches. Keep meaningful last-mismatch diagnostics and caller messages. Record
-pinned timing/default differences explicitly; do not silently adopt upstream
-poll/toPass defaults or change unrelated locator assertions without evidence.
+**Current handoff:** start B09 in `page.rs`, `locator.rs` and `driver.rs` with
+native capture capability probes and pinned screenshot cases. Extend existing
+ScreenshotOptions and add a locator options companion while preserving current
+entry points. Validate finite positive clips, JPEG quality, scale/background,
+mask color and temporary styles before side effects. Define CSS/document/device
+coordinates for scrolled, clipped and full-page captures. Current full-page CDP
+capture changes device metrics then clears them; preserve the actual caller's
+viewport/emulation instead. Current preparation uses shared DOM IDs/classes and
+ignores cleanup errors: use owned temporary state, restore it after success,
+failure, cancellation and dropped waits, and keep restoration failures visible.
+Serialize overlapping captures where necessary; do not remove application-owned
+nodes or let restoration outlive its owning page/context. Check native engine
+support before accepting each option and report unsupported subsets explicitly.
+Verify actual image dimensions/pixels, masks and restored state on both engines.
+B10 follows after capture semantics are stable.
+
+Preserve D02's strict typed generic probe errors, immediate/final-repeat cadence,
+5-second defaults, shared local/enclosing clocks, contextual last mismatches,
+non-Send companions and final-only soft/report scopes. Bind an explicit context
+cancellation token when an idle generic poll must wake on disposal. Unrelated
+locator polling still needs its G04 error/cancellation audit; do not broaden
+its semantics without separate evidence.
 
 Preserve B13's ready cleanup after exhaustion, individual pending errors,
 reverse dependency release, worker retirement draining, once-only native disposal
@@ -77,7 +88,7 @@ outer label/error/step/trace and Diagnostic typed causes, and B16's shared owner
 weak context graph and owned base_url getter. G04 remains open for channel lag,
 partial setup, detached in-flight requests and the final cross-feature audit.
 
-The scope of the longer session is **all 16 open tasks below**. Completed tasks
+The scope of the longer session is **all 15 open tasks below**. Completed tasks
 remain regression requirements. The deferred projects are future work; completing
 this checklist means practical parity within the stated engine capabilities,
 not complete Playwright compatibility.
@@ -90,24 +101,23 @@ there. G04 applies during every phase and closes after the final audit.
 
 | Order | Task | Implementation result | Dependency or capability gate |
 |---|---|---|---|
-| 1 | D02 | Configurable assertion polling and retry intervals | Existing polling helpers, B12 and B13 budgets |
-| 2 | B09 | Supported screenshot options with reversible temporary changes | Native capture capabilities on each engine |
-| 3 | B10 | Stable screenshot comparisons, paths and update modes | B09; project/path settings from B14 |
-| 4 | B18 | Bounded ARIA snapshots with optional boxes and state | Existing DOM approximation; no full ARIA/YAML implementation |
-| 5 | B11 | Searchable portable reports with per-attempt network diagnostics | B02/B03/B19 complete; browser visual inspection |
-| 6 | D03 | Explicit artifact retention policies with valid report links | B14/B11; final attempt classification and bundle export |
-| 7 | D04 | Run/project metadata and configurable slow-test summaries | B14/B11; existing live/JSON/JUnit/HTML reporters |
-| 8 | D05 | Local/session storage enumeration and typed bulk helpers | Existing page storage APIs on both engines |
-| 9 | D06 | Socket identity, errors, closed state and bounded typed waits | Existing Chromium socket events; Firefox unsupported |
-| 10 | C01 | Validated PDF options | Chromium; explicit Firefox unsupported result |
-| 11 | C02 | Bounded captured-body bytes, text and JSON helpers | B02/B03 complete; Chromium body capture |
-| 12 | C03 | Coverage navigation/source options and restart lifecycle | Chromium JS/CSS coverage |
-| 13 | C04 | HAR matching, not-found and supported content options | A14/B06 complete; engine body/rewrite capabilities |
-| 14 | C05 | Supported media/device emulation options and resets | Chromium native capabilities |
-| 15 | C06 | Independently detachable CDP target sessions | Chromium transport and session ownership |
-| 16 | G04 | Final lifecycle, compatibility and resource-release audit | Evidence from every completed phase |
+| 1 | B09 | Supported screenshot options with reversible temporary changes | Native capture capabilities on each engine |
+| 2 | B10 | Stable screenshot comparisons, paths and update modes | B09; project/path settings from B14 |
+| 3 | B18 | Bounded ARIA snapshots with optional boxes and state | Existing DOM approximation; no full ARIA/YAML implementation |
+| 4 | B11 | Searchable portable reports with per-attempt network diagnostics | B02/B03/B19 complete; browser visual inspection |
+| 5 | D03 | Explicit artifact retention policies with valid report links | B14/B11; final attempt classification and bundle export |
+| 6 | D04 | Run/project metadata and configurable slow-test summaries | B14/B11; existing live/JSON/JUnit/HTML reporters |
+| 7 | D05 | Local/session storage enumeration and typed bulk helpers | Existing page storage APIs on both engines |
+| 8 | D06 | Socket identity, errors, closed state and bounded typed waits | Existing Chromium socket events; Firefox unsupported |
+| 9 | C01 | Validated PDF options | Chromium; explicit Firefox unsupported result |
+| 10 | C02 | Bounded captured-body bytes, text and JSON helpers | B02/B03 complete; Chromium body capture |
+| 11 | C03 | Coverage navigation/source options and restart lifecycle | Chromium JS/CSS coverage |
+| 12 | C04 | HAR matching, not-found and supported content options | A14/B06 complete; engine body/rewrite capabilities |
+| 13 | C05 | Supported media/device emulation options and resets | Chromium native capabilities |
+| 14 | C06 | Independently detachable CDP target sessions | Chromium transport and session ownership |
+| 15 | G04 | Final lifecycle, compatibility and resource-release audit | Evidence from every completed phase |
 
-Immediate delivery: **D02**, then **B09/B10/B18/B11**. B13/B14/D01 are complete.
+Immediate delivery: **B09/B10/B18/B11**. B13/B14/D01/D02 are complete.
 Capture/report work follows; D03/D04 consume its final artifact/report behavior.
 D05/D06 and the supported C extensions can then proceed independently. G04 is
 applied throughout and closed last.
@@ -151,7 +161,7 @@ contracts and pinned behavior; prefer extending existing options and helpers.
 | C05 | `page.rs`, `driver.rs` | Add only native supported media/metrics/user-agent options; verify observable values and resets, including explicit unsupported errors. |
 | C06 | `cdp.rs`, `driver.rs` | Own target sessions independently; detaching one must settle its pending calls while other sessions/pages keep working. |
 | D01 — complete | `runner.rs`, `report.rs`; CLI/config packages | Preserve opt-in flaky-run failure and registered focus protection in `a2fd29b`, effective settings and original attempt outcomes. |
-| D02 | `expect.rs`, `operation.rs` | Extend existing poll/to-pass helpers with validated interval options and one shared budget, preserving local future support and soft failure rules. |
+| D02 — complete | `expect.rs`, `operation.rs` | Preserve `312090d` polling companions, validated intervals/messages/cancellation, one shared window, typed probe errors and scoped final-only soft retries. |
 | D03 | `runner.rs`, `bundle.rs`, `report.rs` | Apply retention only to runner-owned output after capture settles; represent removed artifacts explicitly and preserve portable links. |
 | D04 | `resolved_config.rs`, `runner.rs`, `report.rs`; CLI/config packages | Carry user-supplied metadata and bounded slow-test summaries through existing reporter formats without adding a new reporter framework. |
 | D05 | `page.rs`, `driver.rs` | Enumerate local/session storage and add typed bulk operations with deterministic serialization and normal operation guards. |
@@ -159,7 +169,7 @@ contracts and pinned behavior; prefer extending existing options and helpers.
 | G04 | `operation.rs`, affected tests and parity documents | Audit every new API's deadlines/cancellation/disposal/retries, resource release and serialization; reconcile the complete test inventory and matrix. |
 
 The diagnostics group **B01/B04/B19**, ownership **B16** and locator labels
-**B17/B12/B13/B14/D01** are complete; the next delivery is **D02** and the capture/report
+**B17/B12/B13/B14/D01/D02** are complete; the next delivery is the capture/report
 group **B09/B10/B18/B11**, with D01–D06 placed as in the remaining-work index.
 Implement the six C extensions after checking native
 capabilities, and finish with G04. Each delivery should have usable public APIs,
@@ -400,6 +410,15 @@ they do not constitute differential Playwright conformance coverage.
   tests passed after legacy-focus/reference changes; the policy target and final
   strict Clippy passed after narrowing a test mutex scope. Package formatting,
   regenerated matrix and links passed. D02 is next; 16 tasks remain open.
+
+- `312090d`: D02. All 397 E2E and 28 CLI/configuration checks passed;
+  combined total 425. Inventory: 180 units, 213 integrations/all 32 targets,
+  four doctests. Runner74 used full Chrome/Firefox; core203/browser93/routing23
+  used Headless Shell/Firefox. Seven added virtual-time and four native groups,
+  13 actual pinned polling cases, soft/retry/report/lifecycle evidence and both
+  HTML previews verified. Cached navigation image and short pointer acquisition
+  assumptions were corrected; all native assertions remain. Strict all-target
+  Clippy, formatting, matrix and links passed. B09 is next; 15 tasks remain open.
 
 ## G — Foundations for the larger session
 
@@ -951,9 +970,9 @@ behavior claims must still use the repository's pinned Playwright v1.63.0 corpus
   projects, max-failures, timeout/interruption and hidden focus. Full inventory:
   386 E2E plus 28 CLI/config checks, strict Clippy and package formatting; HTML
   inspected on both engines. Upstream filtering/JUnit/expected-pass differences
-  and public-field migration are documented. D02 is next; G04 remains open.
+  and public-field migration are documented. D02 is also verified; G04 remains open.
 
-- [ ] **D02 — Assertion polling options (M; needs B12/B13).** Extend existing
+- [x] **D02 — Assertion polling options (M; needs B12/B13).** Extend existing
   `expect_poll` and `expect_to_pass` with options-based companions for interval
   sequences and contextual messages; retain existing helper defaults/signatures.
   Define empty/zero interval validation, exhaustion of the interval sequence,
@@ -967,6 +986,19 @@ behavior claims must still use the repository's pinned Playwright v1.63.0 corpus
   soft collection and a caller-provided message. Document Rust timeout/default
   differences instead of adopting upstream defaults silently.
   Reference: [polling and retry intervals](https://playwright.dev/docs/test-assertions).
+  Evidence: `312090d`; seven virtual-time unit groups and four native
+  `polling_options.rs` groups on full Chrome/Firefox. Exact immediate/final-reuse
+  cadence, validation before probe construction, mutable/borrowed/non-Send values,
+  hung probes, local/enclosing zero and finite clocks, explicit/owner cancellation,
+  disposal with actual removed native context IDs and typed wrapped operational
+  errors verified. Intermediate soft checks return mismatches without collection;
+  one final failure, joined-work scope isolation, retry histories and escaped
+  JSON/HTML reports verified. Thirteen pinned Playwright observations document
+  deliberate defaults/validation/cutoff/soft/step/thrown-error differences.
+  All 397 E2E and 28 CLI/config checks, strict Clippy, package formatting,
+  matrix/links and both-engine HTML previews passed. Existing cached-image and
+  input-acquisition fixture assumptions were corrected with stronger native
+  evidence; no runtime navigation/input changes. B09 is next; G04 remains open.
 
 - [ ] **D03 — Output retention policies (M; needs B14/B11).** Add validated
   always/never/failures-only policies for runner-owned attempt outputs, with a
@@ -1061,8 +1093,8 @@ waiting for every future feature before starting independent work.
 | 1. Network observations | B02, B03 — complete | Typed per-hop request/response identity and completion independent of body capture. Verified in `1a9e875`; continue with phase 2. |
 | 2. HTTP and routing correctness | B05/B06/B07/B08 — complete | Context-linked fetch/fulfill options verified in `c88c14b`. Preserve shared HTTP, route lifecycle, duplicate-header forwarding and pinned precedence regressions. |
 | 3. Native event diagnostics | B01/B04/B19 — complete | Preserve frame/load/dialog observations (`f8c12de`), earliest popup traffic (`1ec7e3e`) and structured console/error data (`34890cc`) through ownership and runner changes. |
-| 4. Runner and developer APIs | B16/B17/B12/B13/B14 — complete | Preserve shared ownership (`1e4d3bb`), labeled diagnostics (`8ae438c`), soft collection (`0ee8245`) and effective configuration (`a7f1e45`) and shared fixture/cleanup budgets with safe disposal (`e2e3ecc`). D01 is complete; continue with D02 while preserving the broader runner regressions. |
-| 4a. CI and assertion reliability | D01 — complete; D02 | Preserve policy/focus wiring in `a2fd29b`; extend generic polling options using resolved configuration and fixture/operation budgets. |
+| 4. Runner and developer APIs | B16/B17/B12/B13/B14 — complete | Preserve shared ownership (`1e4d3bb`), labeled diagnostics (`8ae438c`), soft collection (`0ee8245`) and effective configuration (`a7f1e45`) and shared fixture/cleanup budgets with safe disposal (`e2e3ecc`). D01/D02 are complete; preserve the broader runner and polling regressions through capture/report work. |
+| 4a. CI and assertion reliability | D01/D02 — complete | Preserve policy/focus wiring in `a2fd29b` and polling controls/scoped final-only soft retries in `312090d`. |
 | 5. Captures and reports | B09, B10, B18, B11 | Implement capture options before stabilized comparisons; add bounded ARIA output and searchable per-attempt reports using the earlier network/error data. |
 | 5a. Practical storage and diagnostics | D03, D04, D05, D06 | Complete output retention, run metadata/slow summaries, typed Web Storage helpers and bounded Chromium socket diagnostics after their prerequisites. |
 | 6. Supported backend extensions | C01, C02, C03, C04, C05, C06 | Extend PDF, captured bodies, coverage, HAR, emulation and scoped CDP sessions. Check capability before accepting each option; verify explicit errors on the other engine. |
@@ -1137,7 +1169,7 @@ also need formatting checks for the modified packages.
 
 Copyable request for the implementation session:
 
-> Implement all 16 open tasks (D02, B09/B10/B18/B11, D03–D06,
+> Implement all 15 open tasks (B09/B10/B18/B11, D03–D06,
 > C01–C06 and G04) in E2E-PARITY-TODO.md using the recommended remaining
 > phases, dependencies and completion criteria. Preserve the already verified
 > features. Implement all practical
