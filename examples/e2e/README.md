@@ -680,3 +680,36 @@ download.delete().await?;
 Stream option timeouts/cancellation cover opening. Wrap the complete reading
 future in `CancellationToken::run` for caller cancellation across reads.
 Missing-file deletion succeeds; other filesystem errors propagate.
+
+Retrieve the actual browser owner from a context:
+
+```rust,no_run
+let context = browser.new_context(ferrite_e2e::ContextOptions::default()).await?;
+let owner = context.browser().expect("browser owner is retained");
+let another_page = owner.new_page().await?;
+context.close().await?;
+assert!(owner.is_connected());
+owner.close().await?;
+assert!(!browser.is_connected());
+assert!(another_page.is_closed());
+```
+
+Browser clones and retrieved owners share the process, profile, context registry
+and default context. Closing one shuts down all; dropping a handle keeps the
+browser alive while another owner remains. A context holds a weak reference,
+so `context.browser()` returns None after the last owner is dropped. Explicit
+close continues cleanup if its future is canceled. Final-owner release performs
+bounded native shutdown and process/profile cleanup on the active Tokio runtime.
+Persistent profile directories remain user-owned; remote Chromium attachment
+disconnects Ferrite without terminating the remote browser.
+
+`is_connected()` and context/page `is_closed()` reflect actual native transport
+loss. A disconnected context's Closed wait can return the known terminal state;
+an already-pending event wait reports a disconnection error. No native popup
+closure fact is inferred from losing a transport.
+
+Migration: `Browser::base_url()` now returns `Option<String>` so shared defaults
+can change safely through another handle. Replace
+`browser.base_url().map(str::to_string)` with `browser.base_url()`; bind the owned
+value before using `as_deref()` when a borrowed string is needed. Setting the base
+URL changes future contexts across handles; existing contexts keep their seed.

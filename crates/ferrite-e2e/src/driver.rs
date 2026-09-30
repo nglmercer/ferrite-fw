@@ -701,6 +701,12 @@ pub enum Driver {
 }
 
 impl Driver {
+    pub(crate) fn is_disconnected(&self) -> bool {
+        match self {
+            Self::Cdp(driver) => !driver.cdp.is_open(),
+            Self::Bidi(driver) => !driver.bidi.is_open(),
+        }
+    }
     pub(crate) fn share_timeout(&mut self, timeout: Arc<Mutex<Duration>>) {
         match self {
             Self::Cdp(driver) => driver.timeout = timeout,

@@ -19,9 +19,9 @@ reporter, Android and Electron APIs:
 | Classification | Members | Meaning |
 |---|---:|---|
 | Equivalent | 15 | Counterpart for the basic operation/value, without full options or engine compatibility |
-| Partial | 617 | Related exposed operation with material semantic, option or engine differences |
+| Partial | 618 | Related exposed operation with material semantic, option or engine differences |
 | Idiomatic | 41 | Comparable operation through Rust language/library facilities |
-| Missing | 345 | No dedicated public counterpart |
+| Missing | 344 | No dedicated public counterpart |
 
 These counts describe an inventory, **not a behavioral compatibility
 percentage**. The earlier inventory had 458 Partial and 503 Missing members.
@@ -50,7 +50,7 @@ implementation.
 |---|---|---|
 | Test isolation | Fresh context/page/request per attempt; typed built-in dependencies, lazy fixtures, hook injection, worker/project lifetimes and reverse teardown | Explicit Rust requests; no named fixture overrides or callback parameter inference |
 | Page ownership | `Browser::new_page()` owns a fresh context and closes its popups on disposal | Use `default_context().new_page()` for intentional shared storage |
-| Browser lifecycle | Persistent Chromium/Firefox profiles, graceful close, Chromium HTTP/WebSocket CDP connections | No Playwright remote protocol, browser server, channels or managed browser installer |
+| Browser lifecycle | Shared Browser owners, weak context owner access, native disconnection state, persistent profiles, graceful close and Chromium HTTP/WebSocket CDP connections | No Playwright remote protocol, browser server, channels or managed browser installer |
 | Configuration | Complete resolved CLI configuration forwarded as JSON; browser launch/runner consume it, with legacy overrides | Suite/test context, timeout, retry and tag inheritance; no named fixture option override hierarchy |
 | Projects and scheduling | Independent project browsers/launch/context settings; parallel Tokio tasks, retries, repetition, filters and named resource locks | No process workers, project dependency graph or distributed locks |
 | Artifacts | Per-attempt output directories, validated paths, unique attachment files, screenshots/video, live Reporter callbacks and portable HTML/JSON/JUnit bundles | Synchronous callbacks; no complete upstream reporter graph, stdout capture or status override |
@@ -1010,3 +1010,54 @@ silently discarded those failures. Firefox URL/failure/active cancellation
 metadata stays unsupported; it is not inferred from the downloaded filename.
 These are completed-file companions to the [official download API](https://playwright.dev/docs/api/class-download#download-create-read-stream),
 with a narrower active-download lifecycle.
+
+### Shared browser owners and disconnection state
+
+`BrowserContext::browser()` upgrades a weak reference to the actual shared
+Browser owner. Explicit, convenience, default/persistent and attached Chromium
+contexts all support it. A retained context can identify its owner after context
+disposal, but returns None after the final Browser owner handle is gone.
+Browser clones and retrieved owners share the process, profile, context registry,
+base URL and default context. Worker/fixture handles use that same state.
+Closing one handle shuts down all handles; dropping one retains the process
+while another owner is alive. Context/page references alone do not retain it.
+
+Explicit close starts one shutdown, which continues after its waiting future is
+dropped; repeated/concurrent close calls await that shutdown. Temporary profiles
+are released after the launched child exits. Final-owner drop uses bounded native
+shutdown and reaping on an active Tokio runtime, with synchronous kill-on-drop
+as the fallback outside a runtime. Persistent paths are never deleted. Attached
+Chromium owners disconnect Ferrite without terminating the remote browser.
+
+`Browser::is_connected()` includes shared shutdown and native transport state;
+context/page `is_closed()` also reflect native disconnection. An empty context's
+pending event wait wakes with Disconnected rather than waiting forever. A Closed
+wait started after loss returns its already-known terminal state. Losing a
+transport does not fabricate native popup closure observations or restore live
+operations. The upstream emitter/reason surface remains narrower.
+
+Migration: `Browser::base_url()` returns `Option<String>`, replacing its borrowed
+string result so another shared handle can safely change future-context defaults.
+Replace `.base_url().map(str::to_string)` with `.base_url()`; bind the returned
+value before borrowing with `as_deref()`. Existing contexts retain their original
+base-URL seed.
+
+The actual pinned [ownership reference](scripts/e2e-conformance/ownership-reference.json)
+records two Playwright 1.63.0 Chromium cases. Four
+[native ownership groups](crates/ferrite-e2e/tests/browser_ownership.rs) passed on
+Chrome 153/Firefox 157, covering retrieved-owner operations, defaults/registry,
+convenience disposal, retained closed-context identity, last-owner release,
+canceled/concurrent shutdown, persistent profiles, remote attachment and native
+transport loss. Linux checks actual process reaping and temporary-profile release.
+An initial test lookup failed because Chrome rewrites Linux argv; the corrected
+lookup then exposed a profile leak with immediate process kill. Bounded graceful
+final-owner shutdown fixed that leak, and the complete native group passed.
+
+Validation: all 342 E2E checks passed (155 units, 184 integrations across all
+26 targets and three doctests), plus 23 CLI/configuration checks. The runner/
+diagnostics batch, including ownership and failed-storage setup, ran on full
+Chrome 153/Firefox 157; browser/core/routing batches used Headless Shell/Firefox.
+A final full-Chrome/Firefox check additionally verified an attached client's
+unexpected source-browser disconnect. Strict E2E/CLI Clippy, formatting,
+regenerated matrix links and local evidence links passed. B16 is complete;
+G04 remains open for the final cross-feature lifecycle audit.

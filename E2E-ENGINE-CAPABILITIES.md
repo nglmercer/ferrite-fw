@@ -8,6 +8,7 @@ Partial means the listed limitation must be retained in API/docs/test evidence.
 | Operation | Chromium / CDP | Firefox / stock BiDi | Scope or metadata limit |
 |---|---|---|---|
 | Launch, fresh/persistent contexts, native input | Supported | Supported | Stock browser ownership; no managed installer/channels |
+| Context browser owner and connection state | Supported | Supported | Weak context-to-owner access; retrieved/cloned Browser handles share one process, profile, defaults and registry. Context/page state reflects native disconnects; attached Chromium close leaves the remote process running. |
 | Strict locators and same-origin frame locators | Supported | Supported | Cross-origin/OOPIF lazy traversal excluded |
 | Raw/rendered text, list/class/state assertions | Supported | Supported | Rust regex syntax; accessibility remains a DOM approximation |
 | Typed synthetic event dispatch | Supported | Supported | JSON initialization; synthetic events are untrusted; live handle arguments excluded |
@@ -55,6 +56,13 @@ context/emulation/routing/coverage/download/screenshot/video restrictions;
 [network and context lifecycle](crates/ferrite-e2e/tests/scopes_and_network.rs)
 and [wait/upload/console](crates/ferrite-e2e/tests/waits_uploads_and_console.rs)
 groups cover metadata and lifecycle semantics.
+
+[browser_ownership.rs](crates/ferrite-e2e/tests/browser_ownership.rs) compares two
+pinned Chromium observations on both engines and verifies real owner operations,
+shared defaults, failed storage setup cleanup, final-owner release, persistent
+profiles, canceled/concurrent shutdown and actual transport loss. Linux checks
+the launched process and temporary profile are released. Remote Chromium owner
+close leaves its source process running; weak contexts do not retain a browser.
 
 [lifecycle_events.rs](crates/ferrite-e2e/tests/lifecycle_events.rs) compares four
 pinned frame/readiness/dialog cases and verifies stable native identity,

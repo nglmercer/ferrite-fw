@@ -230,7 +230,9 @@ put('TestOptions','trace','BrowserContext.start_tracing','Manual custom JSON tra
 for m in ['colorScheme','reducedMotion']:put('TestOptions',m,'Page.emulate_media','Chromium page-level manual emulation; no context/test option binding.')
 # Practical parity implementation updates (2026-09-29).
 put('Page','close','Page.close','Closes the target and its owning convenience context; no runBeforeUnload/reason options.',kind='method')
-put('BrowserContext','isClosed','BrowserContext.is_closed','Tracks explicit context disposal; no full remote-disconnection lifecycle semantics.')
+put('BrowserContext','browser','BrowserContext.browser','Option<Browser> upgrades the actual weak shared owner for explicit, convenience, default/persistent and attached contexts. Retrieved handles retain the process; None after its last owner drops. No Android/Electron contexts or JavaScript identity semantics.')
+put('BrowserContext','isClosed','BrowserContext.is_closed','Tracks explicit context disposal, shared browser shutdown, last-owner drop and native transport loss. Enum event waits distinguish disconnect errors from observed native events; no full upstream emitter/reason surface.')
+put('Browser','isConnected','Browser.is_connected','Shared owner shutdown and actual transport reader/writer state. Clones share one process/profile/context registry; closing any handle shuts down all. Remote attachment closes Ferrite without killing the source process.')
 put('Locator','visible','Locator.visible','Lazy visibility filter reapplied when resolving; uses the shared DOM visibility approximation.')
 put('Browser','newPage','Browser.new_page','Fresh owning context; closing the page disposes it, including its popups.')
 put('BrowserType','launchPersistentContext','LaunchOptions.user_data_dir','Reusable Chromium/Firefox profile; obtain browser.default_context(). Dedicated contexts remain isolated from persistent storage.')

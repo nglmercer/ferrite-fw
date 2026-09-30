@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::browser::Backend;
+use crate::browser::{Backend, Browser, BrowserInner};
 use crate::driver::{base64_encode, now_ms, BidiDriver, CdpDriver, ConsoleSink, Driver};
 use crate::error::{E2eError, E2eResult};
 use crate::page::{
@@ -409,6 +409,7 @@ pub struct BrowserContext {
     base_url: Option<String>,
     pages: Arc<Mutex<Vec<Page>>>,
     registry: Weak<Mutex<Vec<BrowserContext>>>,
+    owner: Option<Weak<BrowserInner>>,
     /// Routing rules shared with every page (page rules win on overlap).
     routes: Arc<Mutex<Vec<RouteRule>>>,
     /// Route handlers shared with every page.
@@ -456,6 +457,7 @@ impl BrowserContext {
             base_url,
             pages: Arc::new(Mutex::new(Vec::new())),
             registry,
+            owner: None,
             routes: Arc::new(Mutex::new(Vec::new())),
             handlers: Arc::new(Mutex::new(Vec::new())),
             permissions: Arc::new(Mutex::new(permissions)),
@@ -466,6 +468,19 @@ impl BrowserContext {
             console: Arc::new(Mutex::new(Vec::new())),
             popup_history: Arc::new(Mutex::new(crate::popup_capture::PopupHistory::default())),
         }
+    }
+
+    pub(crate) fn with_browser_owner(mut self, owner: Weak<BrowserInner>) -> Self {
+        self.owner = Some(owner);
+        self
+    }
+
+    /// The shared browser which created this context, while an owner handle
+    /// remains alive. Holding a context alone does not keep a process alive.
+    /// A closed context can still identify a retained browser owner.
+    #[must_use]
+    pub fn browser(&self) -> Option<Browser> {
+        self.owner.as_ref()?.upgrade().map(Browser::from_owner)
     }
 
     /// Console/error history across this context, including closed pages and
@@ -1608,8 +1623,19 @@ impl BrowserContext {
         Ok(())
     }
 
+    /// Whether this context was explicitly closed, its browser is closing,
+    /// its last owner was dropped, or the native transport disconnected.
+    #[must_use]
     pub fn is_closed(&self) -> bool {
         self.closed.load(std::sync::atomic::Ordering::Acquire)
+            || self
+                .owner
+                .as_ref()
+                .is_some_and(|owner| owner.upgrade().is_none_or(|owner| owner.is_closing()))
+            || match &self.backend {
+                Backend::Cdp(connection) => !connection.is_open(),
+                Backend::Bidi { conn, .. } => !conn.is_open(),
+            }
     }
 
     pub(crate) async fn add_callback_preload(&self, source: &str) -> E2eResult<Option<String>> {

@@ -10,7 +10,8 @@
     "reference:route-options": "node route-options-reference.mjs",
     "reference:events": "node event-reference.mjs",
     "reference:popups": "node popup-reference.mjs",
-    "reference:console": "node console-reference.mjs"
+    "reference:console": "node console-reference.mjs",
+    "reference:ownership": "node ownership-reference.mjs"
   },
   "devDependencies": {
     "playwright": "1.63.0"

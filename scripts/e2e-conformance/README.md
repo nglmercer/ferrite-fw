@@ -39,6 +39,21 @@ FERRITE_E2E_REQUIRE_BOTH_BROWSERS=1 cargo test -p ferrite-e2e --test core_confor
 Node/Playwright are optional development tooling and are not dependencies of
 Ferrite's library or its normal Rust test command.
 
+`ownership-reference.mjs` / `ownership-reference.json` record two actual
+Playwright 1.63.0 Chromium ownership cases: explicit/convenience/closed contexts
+and a persistent context's browser connection after shutdown. Regenerate with
+`npm run reference:ownership`, or the external installation above and
+`node scripts/e2e-conformance/ownership-reference.mjs`.
+
+`cargo test -p ferrite-e2e --test browser_ownership` compares those shared
+observations on Chromium/Firefox and exercises actual operations through the
+retrieved owner, shared defaults, native transport loss, remote attachment,
+shutdown-future cancellation and persistent-profile preservation. Linux also
+checks release of this test's actual launched process and temporary profile.
+Rust owner handles retain the process through `Arc`; contexts hold weak owner
+references and return None after the final owner handle is gone. These ownership
+semantics are Rust-specific, beyond the two pinned JavaScript observations.
+
 `console-reference.mjs` / `console-reference.json` record two actual Playwright
 1.63.0 Chromium cases: typed primitive console arguments and an uncaught TypeError
 whose mutable name differs from its constructor. Regenerate with

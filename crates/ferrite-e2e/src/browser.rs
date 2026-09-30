@@ -316,22 +316,101 @@ pub(crate) fn find_owner(
     None
 }
 
-/// A launched browser instance.
+/// A shared browser owner. Cloning retains the launched process and profile.
+/// Contexts hold weak owner references; closing any handle closes all handles.
+#[derive(Clone)]
 pub struct Browser {
-    child: Option<tokio::process::Child>,
+    pub(crate) inner: Arc<BrowserInner>,
+}
+
+pub(crate) struct BrowserInner {
+    child: tokio::sync::Mutex<Option<tokio::process::Child>>,
     backend: Backend,
     kind: BrowserKind,
-    _profile: Option<tempfile::TempDir>,
+    _profile: Mutex<Option<tempfile::TempDir>>,
     debug_port: u16,
     slow_mo: Duration,
     timeout: Duration,
-    base_url: Option<String>,
+    base_url: Mutex<Option<String>>,
     proxy_server: Option<String>,
     product: String,
     contexts: Arc<Mutex<Vec<BrowserContext>>>,
     default: OnceLock<BrowserContext>,
     launch_download_dir: Option<PathBuf>,
     ignore_https_errors: bool,
+    closing: std::sync::atomic::AtomicBool,
+    shutdown_finished: crate::CancellationToken,
+}
+
+impl BrowserInner {
+    pub(crate) fn is_closing(&self) -> bool {
+        self.closing.load(std::sync::atomic::Ordering::Acquire)
+    }
+}
+
+// Both explicit close and final-owner release use the same bounded process
+// shutdown. Graceful exit lets Chromium join its profile-writing subprocesses.
+async fn terminate_process(backend: &Backend, child: &mut tokio::process::Child) {
+    match backend {
+        Backend::Cdp(cdp) => {
+            cdp.call(
+                None,
+                "Browser.close",
+                serde_json::json!({}),
+                Duration::from_secs(5),
+            )
+            .await
+            .ok();
+        }
+        Backend::Bidi { conn, .. } => {
+            conn.call(
+                "browser.close",
+                serde_json::json!({}),
+                Duration::from_secs(5),
+            )
+            .await
+            .ok();
+        }
+    }
+    match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
+        Ok(Ok(_)) => {}
+        _ => {
+            child.kill().await.ok();
+            child.wait().await.ok();
+        }
+    }
+}
+
+fn close_transport(backend: &Backend) {
+    match backend {
+        Backend::Cdp(connection) => connection.close(),
+        Backend::Bidi { conn, .. } => conn.close(),
+    }
+}
+
+impl Drop for BrowserInner {
+    fn drop(&mut self) {
+        let profile = self
+            ._profile
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        if let Some(mut child) = self.child.get_mut().take() {
+            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                let backend = self.backend.clone();
+                runtime.spawn(async move {
+                    terminate_process(&backend, &mut child).await;
+                    close_transport(&backend);
+                    drop(profile);
+                });
+                return;
+            }
+            // Outside a running Tokio runtime only synchronous kill-on-drop
+            // is available. Normal native operations require an active runtime.
+            let _ = child.start_kill();
+        }
+        close_transport(&self.backend);
+    }
 }
 
 impl Browser {
@@ -343,24 +422,13 @@ impl Browser {
         Ok(browser)
     }
 
-    /// A non-owning handle used by runner workers while the original owns the process.
+    /// Shared owner used by runner workers and typed fixtures.
     pub(crate) fn worker_handle(&self) -> Self {
-        Self {
-            child: None,
-            backend: self.backend.clone(),
-            kind: self.kind,
-            _profile: None,
-            debug_port: self.debug_port,
-            slow_mo: self.slow_mo,
-            timeout: self.timeout,
-            base_url: self.base_url.clone(),
-            proxy_server: self.proxy_server.clone(),
-            product: self.product.clone(),
-            contexts: Arc::clone(&self.contexts),
-            default: OnceLock::new(),
-            launch_download_dir: self.launch_download_dir.clone(),
-            ignore_https_errors: self.ignore_https_errors,
-        }
+        self.clone()
+    }
+
+    pub(crate) fn from_owner(inner: Arc<BrowserInner>) -> Self {
+        Self { inner }
     }
 
     /// Launch the configured engine and connect over its protocol.
@@ -471,27 +539,31 @@ impl Browser {
             .to_string();
         tracing::info!(%product, "chromium launched");
         let browser = Self {
-            child: Some(child),
-            backend: Backend::Cdp(cdp),
-            kind: BrowserKind::Chromium,
-            _profile: if options.keep_profile {
-                if let Some(profile) = profile.take() {
-                    let _ = profile.keep();
-                }
-                None
-            } else {
-                profile
-            },
-            debug_port,
-            slow_mo: options.slow_mo,
-            timeout: options.timeout,
-            base_url: None,
-            proxy_server: options.proxy_server,
-            product,
-            contexts: Arc::new(Mutex::new(Vec::new())),
-            default: OnceLock::new(),
-            launch_download_dir: options.download_dir.clone(),
-            ignore_https_errors: options.ignore_https_errors,
+            inner: Arc::new(BrowserInner {
+                child: tokio::sync::Mutex::new(Some(child)),
+                backend: Backend::Cdp(cdp),
+                kind: BrowserKind::Chromium,
+                _profile: Mutex::new(if options.keep_profile {
+                    if let Some(profile) = profile.take() {
+                        let _ = profile.keep();
+                    }
+                    None
+                } else {
+                    profile
+                }),
+                debug_port,
+                slow_mo: options.slow_mo,
+                timeout: options.timeout,
+                base_url: Mutex::new(None),
+                proxy_server: options.proxy_server,
+                product,
+                contexts: Arc::new(Mutex::new(Vec::new())),
+                default: OnceLock::new(),
+                launch_download_dir: options.download_dir.clone(),
+                ignore_https_errors: options.ignore_https_errors,
+                closing: std::sync::atomic::AtomicBool::new(false),
+                shutdown_finished: crate::CancellationToken::new(),
+            }),
         };
         browser.spawn_popup_pump().await?;
         Ok(browser)
@@ -656,30 +728,34 @@ impl Browser {
         let _=bidi.call("session.subscribe",serde_json::json!({"events":["browsingContext.downloadWillBegin","browsingContext.downloadEnd"]}),options.timeout).await;
         tracing::info!(%product, "firefox launched");
         let browser = Self {
-            child: Some(child),
-            backend: Backend::Bidi {
-                conn: bidi,
-                insecure_certs: options.ignore_https_errors,
-            },
-            kind: BrowserKind::Firefox,
-            _profile: if options.keep_profile {
-                if let Some(profile) = profile.take() {
-                    let _ = profile.keep();
-                }
-                None
-            } else {
-                profile
-            },
-            debug_port,
-            slow_mo: options.slow_mo,
-            timeout: options.timeout,
-            base_url: None,
-            proxy_server: options.proxy_server,
-            product,
-            contexts: Arc::new(Mutex::new(Vec::new())),
-            default: OnceLock::new(),
-            launch_download_dir: options.download_dir.clone(),
-            ignore_https_errors: options.ignore_https_errors,
+            inner: Arc::new(BrowserInner {
+                child: tokio::sync::Mutex::new(Some(child)),
+                backend: Backend::Bidi {
+                    conn: bidi,
+                    insecure_certs: options.ignore_https_errors,
+                },
+                kind: BrowserKind::Firefox,
+                _profile: Mutex::new(if options.keep_profile {
+                    if let Some(profile) = profile.take() {
+                        let _ = profile.keep();
+                    }
+                    None
+                } else {
+                    profile
+                }),
+                debug_port,
+                slow_mo: options.slow_mo,
+                timeout: options.timeout,
+                base_url: Mutex::new(None),
+                proxy_server: options.proxy_server,
+                product,
+                contexts: Arc::new(Mutex::new(Vec::new())),
+                default: OnceLock::new(),
+                launch_download_dir: options.download_dir.clone(),
+                ignore_https_errors: options.ignore_https_errors,
+                closing: std::sync::atomic::AtomicBool::new(false),
+                shutdown_finished: crate::CancellationToken::new(),
+            }),
         };
         browser.spawn_popup_pump().await?;
         Ok(browser)
@@ -718,20 +794,24 @@ impl Browser {
             .unwrap_or(0);
         let cdp = CdpConnection::connect(&ws_url).await?;
         let browser = Self {
-            child: None,
-            backend: Backend::Cdp(cdp),
-            kind: BrowserKind::Chromium,
-            _profile: None,
-            debug_port,
-            slow_mo: Duration::ZERO,
-            timeout,
-            base_url: None,
-            proxy_server: None,
-            product: "chromium".to_string(),
-            contexts: Arc::new(Mutex::new(Vec::new())),
-            default: OnceLock::new(),
-            launch_download_dir: None,
-            ignore_https_errors: false,
+            inner: Arc::new(BrowserInner {
+                child: tokio::sync::Mutex::new(None),
+                backend: Backend::Cdp(cdp),
+                kind: BrowserKind::Chromium,
+                _profile: Mutex::new(None),
+                debug_port,
+                slow_mo: Duration::ZERO,
+                timeout,
+                base_url: Mutex::new(None),
+                proxy_server: None,
+                product: "chromium".to_string(),
+                contexts: Arc::new(Mutex::new(Vec::new())),
+                default: OnceLock::new(),
+                launch_download_dir: None,
+                ignore_https_errors: false,
+                closing: std::sync::atomic::AtomicBool::new(false),
+                shutdown_finished: crate::CancellationToken::new(),
+            }),
         };
         browser.spawn_popup_pump().await?;
         Ok(browser)
@@ -740,13 +820,13 @@ impl Browser {
     /// Engine kind.
     #[must_use]
     pub fn kind(&self) -> BrowserKind {
-        self.kind
+        self.inner.kind
     }
 
     /// Remote-debugging port.
     #[must_use]
     pub fn debug_port(&self) -> u16 {
-        self.debug_port
+        self.inner.debug_port
     }
 
     /// Adopt popup pages (`window.open` / link targets) into the opener's
@@ -756,27 +836,27 @@ impl Browser {
     /// double-adopted; popups without a tracked opener are left alone.
     async fn spawn_popup_pump(&self) -> E2eResult<()> {
         let captures = Arc::new(crate::popup_capture::PopupCaptures::new(Arc::downgrade(
-            &self.contexts,
+            &self.inner.contexts,
         )));
-        match &self.backend {
+        match &self.inner.backend {
             Backend::Cdp(connection) => connection.set_popup_captures(captures.clone()),
             Backend::Bidi { conn, .. } => conn.set_popup_captures(captures.clone()),
         }
         let mut cdp_events = None;
-        if let Backend::Cdp(cdp) = &self.backend {
+        if let Backend::Cdp(cdp) = &self.inner.backend {
             cdp_events = Some(cdp.subscribe());
             cdp.call(
                 None,
                 "Target.setDiscoverTargets",
                 serde_json::json!({"discover":true}),
-                self.timeout,
+                self.inner.timeout,
             )
             .await?;
-            cdp.call(None,"Target.setAutoAttach",serde_json::json!({"autoAttach":true,"waitForDebuggerOnStart":true,"flatten":true,"filter":[{"type":"page","exclude":false},{"exclude":true}]}),self.timeout).await?;
+            cdp.call(None,"Target.setAutoAttach",serde_json::json!({"autoAttach":true,"waitForDebuggerOnStart":true,"flatten":true,"filter":[{"type":"page","exclude":false},{"exclude":true}]}),self.inner.timeout).await?;
         }
-        let backend = self.backend.clone();
-        let contexts = Arc::downgrade(&self.contexts);
-        let timeout = self.timeout;
+        let backend = self.inner.backend.clone();
+        let contexts = Arc::downgrade(&self.inner.contexts);
+        let timeout = self.inner.timeout;
         tokio::spawn(async move {
             match backend {
                 Backend::Cdp(cdp) => {
@@ -1032,30 +1112,39 @@ impl Browser {
     /// Default protocol timeout.
     #[must_use]
     pub fn timeout(&self) -> Duration {
-        self.timeout
+        self.inner.timeout
     }
 
     /// Per-action slow-mo delay.
     #[must_use]
     pub fn slow_mo(&self) -> Duration {
-        self.slow_mo
+        self.inner.slow_mo
     }
 
     /// Set the base URL used to resolve relative navigations.
     pub fn set_base_url(&mut self, base_url: Option<String>) {
-        self.base_url = base_url;
+        *self
+            .inner
+            .base_url
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = base_url;
     }
 
-    /// Base URL for relative navigations.
+    /// Current shared base URL, copied without retaining an internal lock.
+    /// Existing contexts keep the base URL with which they were created.
     #[must_use]
-    pub fn base_url(&self) -> Option<&str> {
-        self.base_url.as_deref()
+    pub fn base_url(&self) -> Option<String> {
+        self.inner
+            .base_url
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Raw CDP handle (`Some` on Chromium only).
     #[must_use]
     pub fn cdp(&self) -> Option<&CdpConnection> {
-        match &self.backend {
+        match &self.inner.backend {
             Backend::Cdp(cdp) => Some(cdp),
             Backend::Bidi { .. } => None,
         }
@@ -1064,7 +1153,7 @@ impl Browser {
     /// Raw BiDi handle (`Some` on Firefox only).
     #[must_use]
     pub fn bidi(&self) -> Option<&BidiConnection> {
-        match &self.backend {
+        match &self.inner.backend {
             Backend::Cdp(_) => None,
             Backend::Bidi { conn, .. } => Some(conn),
         }
@@ -1072,13 +1161,16 @@ impl Browser {
 
     /// Browser product version (captured at launch).
     pub async fn version(&self) -> E2eResult<String> {
-        Ok(self.product.clone())
+        Ok(self.inner.product.clone())
     }
 
     /// Whether the protocol connection is still open.
     #[must_use]
     pub fn is_connected(&self) -> bool {
-        match &self.backend {
+        if self.inner.is_closing() {
+            return false;
+        }
+        match &self.inner.backend {
             Backend::Cdp(cdp) => cdp.is_open(),
             Backend::Bidi { conn, .. } => conn.is_open(),
         }
@@ -1086,9 +1178,12 @@ impl Browser {
 
     /// Create an isolated browser context (incognito-equivalent).
     pub async fn new_context(&self, mut options: ContextOptions) -> E2eResult<BrowserContext> {
+        if !self.is_connected() {
+            return Err(E2eError::Disconnected("browser is closed".into()));
+        }
         // Stock engines apply proxies browser-wide at launch; a context that
         // asks for a different proxy fails loudly instead of lying.
-        if options.proxy_server.is_some() && options.proxy_server != self.proxy_server {
+        if options.proxy_server.is_some() && options.proxy_server != self.inner.proxy_server {
             return Err(E2eError::Config(
                 "per-context proxy differs from the launch proxy (stock engines \
                  apply proxies browser-wide); set LaunchOptions::proxy_server or \
@@ -1096,16 +1191,18 @@ impl Browser {
                     .to_string(),
             ));
         }
-        options.proxy_server = options.proxy_server.or_else(|| self.proxy_server.clone());
-        options.ignore_https_errors |= self.ignore_https_errors;
-        let id = match &self.backend {
+        options.proxy_server = options
+            .proxy_server
+            .or_else(|| self.inner.proxy_server.clone());
+        options.ignore_https_errors |= self.inner.ignore_https_errors;
+        let id = match &self.inner.backend {
             Backend::Cdp(cdp) => {
                 let result = cdp
                     .call(
                         None,
                         "Target.createBrowserContext",
                         serde_json::json!({ "disposeOnDetach": true }),
-                        self.timeout,
+                        self.inner.timeout,
                     )
                     .await?;
                 Some(
@@ -1121,7 +1218,7 @@ impl Browser {
                     .call(
                         "browser.createUserContext",
                         serde_json::json!({}),
-                        self.timeout,
+                        self.inner.timeout,
                     )
                     .await?;
                 Some(
@@ -1135,50 +1232,75 @@ impl Browser {
         };
         let storage_state = options.storage_state.clone();
         let context = BrowserContext::new(
-            self.backend.clone(),
+            self.inner.backend.clone(),
             id,
             options,
-            self.slow_mo,
-            self.timeout,
-            self.base_url.clone(),
-            Arc::downgrade(&self.contexts),
-            self.launch_download_dir.clone(),
-        );
+            self.inner.slow_mo,
+            self.inner.timeout,
+            self.base_url(),
+            Arc::downgrade(&self.inner.contexts),
+            self.inner.launch_download_dir.clone(),
+        )
+        .with_browser_owner(Arc::downgrade(&self.inner));
         // Fail loudly on a bad storage file instead of opening pages
         // without it.
         if let Some(path) = &storage_state {
-            context.load_storage_state(path).await?;
+            if let Err(error) = context.load_storage_state(path).await {
+                context.close().await.ok();
+                return Err(error);
+            }
         }
-        self.contexts
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(context.clone());
+        let registered = {
+            let mut registry = self
+                .inner
+                .contexts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if self.is_connected() {
+                registry.push(context.clone());
+                true
+            } else {
+                false
+            }
+        };
+        if !registered {
+            context.close().await.ok();
+            return Err(E2eError::Disconnected(
+                "browser closed during context creation".into(),
+            ));
+        }
         Ok(context)
     }
 
     /// Default (shared) browser context.
     #[must_use]
     pub fn default_context(&self) -> BrowserContext {
-        self.default
+        self.inner
+            .default
             .get_or_init(|| {
                 let context = BrowserContext::new(
-                    self.backend.clone(),
+                    self.inner.backend.clone(),
                     None,
                     ContextOptions {
-                        proxy_server: self.proxy_server.clone(),
-                        ignore_https_errors: self.ignore_https_errors,
+                        proxy_server: self.inner.proxy_server.clone(),
+                        ignore_https_errors: self.inner.ignore_https_errors,
                         ..ContextOptions::default()
                     },
-                    self.slow_mo,
-                    self.timeout,
-                    self.base_url.clone(),
-                    Arc::downgrade(&self.contexts),
-                    self.launch_download_dir.clone(),
-                );
-                self.contexts
+                    self.inner.slow_mo,
+                    self.inner.timeout,
+                    self.base_url(),
+                    Arc::downgrade(&self.inner.contexts),
+                    self.inner.launch_download_dir.clone(),
+                )
+                .with_browser_owner(Arc::downgrade(&self.inner));
+                let mut registry = self
+                    .inner
+                    .contexts
                     .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .push(context.clone());
+                    .unwrap_or_else(|e| e.into_inner());
+                if self.is_connected() {
+                    registry.push(context.clone());
+                }
                 context
             })
             .clone()
@@ -1187,7 +1309,8 @@ impl Browser {
     /// Open contexts (default context included once used).
     #[must_use]
     pub fn contexts(&self) -> Vec<BrowserContext> {
-        self.contexts
+        self.inner
+            .contexts
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
@@ -1218,50 +1341,41 @@ impl Browser {
         }
     }
 
-    /// Close the browser (ends the BiDi session, kills the child when this
-    /// instance launched it).
-    pub async fn close(mut self) -> E2eResult<()> {
+    /// Close every shared handle and context. A launched process is terminated;
+    /// an attached remote browser is left running. Cleanup continues if this
+    /// future is dropped; repeated calls await the same shutdown.
+    pub async fn close(self) -> E2eResult<()> {
+        if !self
+            .inner
+            .closing
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
+            let owner = self.clone();
+            tokio::spawn(async move {
+                owner.shutdown().await;
+                owner.inner.shutdown_finished.cancel();
+            });
+        }
+        self.inner.shutdown_finished.cancelled().await;
+        Ok(())
+    }
+
+    async fn shutdown(&self) {
         for context in self.contexts() {
             let _ = tokio::time::timeout(Duration::from_secs(5), context.close()).await;
         }
         // Graceful shutdown flushes persistent cookies and storage to disk.
-        if self.child.is_some() {
-            match &self.backend {
-                Backend::Cdp(cdp) => {
-                    cdp.call(
-                        None,
-                        "Browser.close",
-                        serde_json::json!({}),
-                        Duration::from_secs(5),
-                    )
-                    .await
-                    .ok();
-                }
-                Backend::Bidi { conn, .. } => {
-                    conn.call(
-                        "browser.close",
-                        serde_json::json!({}),
-                        Duration::from_secs(5),
-                    )
-                    .await
-                    .ok();
-                }
-            }
-            if let Some(mut child) = self.child.take() {
-                if tokio::time::timeout(Duration::from_secs(5), child.wait())
-                    .await
-                    .is_err()
-                {
-                    child.kill().await.ok();
-                    child.wait().await.ok();
-                }
-            }
+        let mut process = self.inner.child.lock().await;
+        if let Some(child) = process.as_mut() {
+            terminate_process(&self.inner.backend, child).await;
+            process.take();
         }
-        match &self.backend {
-            Backend::Cdp(cdp) => cdp.close(),
-            Backend::Bidi { conn, .. } => conn.close(),
-        }
-        Ok(())
+        self.inner
+            ._profile
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        close_transport(&self.inner.backend);
     }
 }
 

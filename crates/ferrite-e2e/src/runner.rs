@@ -2172,7 +2172,7 @@ impl Runner {
                 .await
                 {
                     Ok(mut launched) => {
-                        launched.set_base_url(browser.base_url().map(str::to_string));
+                        launched.set_base_url(browser.base_url());
                         let launched = Arc::new(launched);
                         owned_browsers.push(launched.clone());
                         project_browsers.insert(project.name.clone(), launched);

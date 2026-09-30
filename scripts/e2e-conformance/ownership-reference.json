@@ -1,0 +1,24 @@
+{
+  "playwright": "1.63.0",
+  "engine": "chromium",
+  "browser": "153.0.8010.12",
+  "cases": [
+    {
+      "name": "context-owners",
+      "result": {
+        "explicitOwner": true,
+        "convenienceOwner": true,
+        "connected": true,
+        "convenienceClosed": true,
+        "closedContextOwner": true
+      }
+    },
+    {
+      "name": "persistent-owner",
+      "result": {
+        "persistentOwner": true,
+        "disconnected": true
+      }
+    }
+  ]
+}

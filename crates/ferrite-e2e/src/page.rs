@@ -2083,10 +2083,12 @@ impl Page {
         self.driver.cancel_lifecycle();
     }
 
-    /// Whether the page was closed (explicitly or by the browser).
+    /// Whether the page was closed or its native transport disconnected.
     #[must_use]
     pub fn is_closed(&self) -> bool {
-        self.sink.native_closed() || self.closed.lock().map(|c| *c).unwrap_or(false)
+        self.driver.is_disconnected()
+            || self.sink.native_closed()
+            || self.closed.lock().map(|c| *c).unwrap_or(false)
     }
 
     /// Wait until `selector` matches, then return the [`Locator`].
