@@ -1,7 +1,7 @@
 # Ferrite E2E implementation TODO
 
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
-Session plan refreshed: 2026-09-30, with B10 capture, path, diagnostic, native font/animation, final-poll diagnostic and active image/read work increments.
+Session plan refreshed: 2026-09-30, with B10 capture, path, diagnostic, native font/animation, final-poll diagnostic, active image/read and staged baseline increments.
 Expanded on request for a longer implementation session; B09/B13/B14 and D01/D02 are verified.
 Uncommitted implementations are not counted complete.
 
@@ -108,7 +108,7 @@ unit regressions bring the unit inventory to 200, including retaining the last
 completed stability assessment while a newer native image awaits CPU work.
 Opaque codec/resize/OS phases
 are not hard-preempted, and admission does not bound queued bytes or blocking
-threads. The success baseline path now compares `Changed` against frozen expected
+threads. Verified staged baseline increment `4e35613` compares `Changed` against frozen expected
 bytes using scalar tolerances and stages chunked temporary files. The foreground
 owner checks the shared deadline before installing; `Missing` cannot overwrite
 a competing file; a matching winner is accepted after bounded validation.
@@ -518,6 +518,24 @@ they do not constitute differential Playwright conformance coverage.
   source anchors passed. B10 remains open for success commits, diagnostics and
   complete phase verification; 14 tasks remain open.
 
+- `4e35613`: B10 staged baseline installation. Success assertions reuse validated
+  stable bytes and frozen expected buffers, with scalar Changed comparisons and
+  chunked temporary writes in data-only workers. The foreground owner checks the
+  original deadline before replacing a baseline; Missing never overwrites a
+  winner and accepts matching competitors after bounded validation, including
+  read-only files/directories. Writable permissions and existing/dangling aliases
+  are preserved. Six unit groups verify update/tolerance/file identity, real
+  partial-write interruption, cancelled ready handoff, expired installation,
+  invalid/corrupt/read-only inputs, permissions, aliases and race outcomes.
+  One new native path group verifies page/locator alias updates, open readers and
+  identical parallel Missing generation. Combined focused gates passed: 206 units,
+  54 native integrations/12 targets, four doctests and 28 CLI/config checks
+  (292 combined), full Chrome/Firefox required. Final-source replay of all 22
+  font/path/artifact/polling groups passed after the last preparation changes.
+  Strict Clippy, package formatting, matrix, 727 Markdown links and 655 source
+  anchors passed. B10 stays open for diagnostic processing and complete phase
+  verification; 14 tasks remain open. Public synchronous helpers are unchanged.
+
 ## G — Foundations for the larger session
 
 Work in [the audit generator](scripts/playwright-parity/build_matrix.py),
@@ -919,7 +937,7 @@ their dependencies are ready. References include
   unfinished/soft/parallel/retry/export and publication I/O behavior. Active
   image/read work (`92b5a66`) now has two callback slots, cooperative cancellation, immutable
   buffers, bounded regular baseline reads and PNG/JPEG/resize input guards, with
-  five additional unit regressions. Success baseline commits now stage data-only
+  five additional unit regressions. Success baseline commits (`4e35613`) now stage data-only
   temporary files and install in the foreground under the shared clock. Frozen
   Changed comparisons, non-overwriting Missing generation/matching race winners,
   writable permissions and existing/dangling aliases are verified by six more

@@ -1862,7 +1862,7 @@ success commits, diagnostics and complete phase verification still keep B10 open
 
 ### B10 staged baseline installation
 
-Page/locator screenshot assertions now finish through the private
+Increment `4e35613` makes page/locator screenshot assertions finish through the private
 [baseline commit helper](crates/ferrite-e2e/src/snapshot_commit.rs). They reuse the
 validated stable native bytes and frozen expected baseline instead of calling
 the synchronous helper to read/decode both images again. `None` and existing
