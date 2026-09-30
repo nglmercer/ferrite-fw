@@ -12,9 +12,11 @@ Partial means the listed limitation must be retained in API/docs/test evidence.
 | Raw/rendered text, list/class/state assertions | Supported | Supported | Rust regex syntax; accessibility remains a DOM approximation |
 | Typed synthetic event dispatch | Supported | Supported | JSON initialization; synthetic events are untrusted; live handle arguments excluded |
 | Native intersection ratios | Supported | Supported | Owning-document IntersectionObserver and native clipping |
-| URL/request/response predicates | Supported | Supported | Snapshot observations; 256-event channel fails explicitly on lag |
+| URL/request/response predicates | Supported | Supported | Legacy snapshots plus typed handle waits; 256-event channel fails explicitly on lag |
 | URL wait document readiness | Supported | Supported | Commit, DOMContentLoaded, Load; page-only observed HTTP idle for 500ms, frame idle unsupported |
 | Request/response lifecycle and redirects | Supported | Supported | IDs are scoped to a page; optional native metadata must stay optional |
+| Typed request/response metadata and completion | Supported | Supported | Per-hop identity, page/frame ownership, bounded weak redirect history; completion independent of body capture |
+| Native headers and request POST text | Partial | Partial | Chromium extra headers require native hop flags; Firefox can fold repeated fields and omit POST text/resource destination; completeness remains optional |
 | Console/error metadata and attempt history | Supported | Supported | Unknown source/timestamp fields remain None; page identity retained |
 | In-memory/path uploads | Supported | Supported | DOM File/DataTransfer injection, 64 MiB total; no chooser/directories |
 | Page/context functions and bindings | Supported | Supported | JSON sync/async callbacks; main/same-origin frames; startup preload and named removal; cross-origin/handles excluded |
@@ -48,6 +50,12 @@ context/emulation/routing/coverage/download/screenshot/video restrictions;
 [network and context lifecycle](crates/ferrite-e2e/tests/scopes_and_network.rs)
 and [wait/upload/console](crates/ferrite-e2e/tests/waits_uploads_and_console.rs)
 groups cover metadata and lifecycle semantics.
+
+[typed network metadata](crates/ferrite-e2e/tests/network_metadata.rs) verifies
+concurrent requests, child frames, redirects, JSON/form request text, duplicate
+cookies, headers-before-completion, HTTP/transport errors, disposal, disconnect,
+zero/caller/enclosing deadlines and runner retries on both engines. Missing
+Firefox fields are checked as absent rather than inferred.
 
 Run the portable gate with both executable paths supplied:
 

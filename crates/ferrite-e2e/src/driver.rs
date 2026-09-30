@@ -29,6 +29,12 @@ type ContextEventForwarding = (
     std::sync::Weak<Mutex<Vec<ConsoleMessage>>>,
 );
 type IdleRequestScope = (Option<String>, Option<String>);
+struct NetworkListenerGuard(ConsoleSink);
+impl Drop for NetworkListenerGuard {
+    fn drop(&mut self) {
+        self.0.close_network("native event listener ended");
+    }
+}
 
 /// Live request-start/response-header observation, separate from HAR/body capture.
 #[derive(Clone)]
@@ -54,6 +60,7 @@ pub struct ConsoleSink {
     active_requests: Arc<Mutex<HashMap<String, NetworkRequest>>>,
     idle_requests: Arc<Mutex<HashMap<String, IdleRequestScope>>>,
     observed_network: Arc<Mutex<HashMap<String, RecordedRequest>>>,
+    pub(crate) network_log: Arc<Mutex<crate::network::NetworkLog>>,
     network_events: tokio::sync::broadcast::Sender<NetworkObservation>,
     /// WebSocket request id to URL (resolves frame events to sockets).
     sockets: Arc<Mutex<HashMap<String, String>>>,
@@ -90,6 +97,7 @@ impl ConsoleSink {
             active_requests: Arc::new(Mutex::new(HashMap::new())),
             idle_requests: Arc::new(Mutex::new(HashMap::new())),
             observed_network: Arc::new(Mutex::new(HashMap::new())),
+            network_log: Arc::new(Mutex::new(crate::network::NetworkLog::default())),
             network_events: tokio::sync::broadcast::channel(MAX_EVENT_BUFFER).0,
             events: tokio::sync::broadcast::channel(MAX_EVENT_BUFFER).0,
             context_events: Arc::new(Mutex::new(None)),
@@ -127,7 +135,18 @@ impl ConsoleSink {
     pub(crate) fn subscribe_network(&self) -> tokio::sync::broadcast::Receiver<NetworkObservation> {
         self.network_events.subscribe()
     }
-    fn observe_request(&self, request: RecordedRequest) {
+    fn observe_request(&self, request: RecordedRequest, details: crate::network::RequestDetails) {
+        self.network_log
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .start(
+                request.clone(),
+                details,
+                self.page_id
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone(),
+            );
         if let Some(id) = &request.request_id {
             self.observed_network
                 .lock()
@@ -139,7 +158,13 @@ impl ConsoleSink {
             response: false,
         });
     }
-    fn observe_response(&self, id: &str, response: &Value, headers: Vec<(String, String)>) {
+    fn observe_response(
+        &self,
+        id: &str,
+        response: &Value,
+        headers: Vec<(String, String)>,
+        extra: Option<bool>,
+    ) {
         let mut records = self
             .observed_network
             .lock()
@@ -158,6 +183,10 @@ impl ConsoleSink {
             request.duration_ms = request
                 .started_ms
                 .map(|start| now_ms().saturating_sub(start));
+            self.network_log
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .response(id, request.clone(), extra);
             let _ = self.network_events.send(NetworkObservation {
                 request: request.clone(),
                 response: true,
@@ -165,6 +194,18 @@ impl ConsoleSink {
         }
     }
     fn finish_network_request(&self, id: &str, failure: Option<(String, Option<bool>)>) {
+        self.network_log
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .finish(
+                id,
+                failure
+                    .as_ref()
+                    .map(|(error_text, cancelled)| crate::RequestFailure {
+                        error_text: error_text.clone(),
+                        cancelled: *cancelled,
+                    }),
+            );
         self.observed_network
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -194,6 +235,26 @@ impl ConsoleSink {
                 None => PageEvent::RequestFinished(request),
             });
         }
+    }
+
+    fn close_network(&self, reason: &str) {
+        self.network_log
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .close(reason);
+        self.active_requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        self.observed_network
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        self.idle_requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        self.inflight.store(0, Ordering::SeqCst);
     }
 
     pub(crate) fn network_activity(&self) -> (usize, u64) {
@@ -517,6 +578,13 @@ impl Driver {
                 Self::Cdp(d) => (&d.lifecycle, &d.context_cancellation, &d.cancellation),
                 Self::Bidi(d) => (&d.lifecycle, &d.context_cancellation, &d.cancellation),
             };
+            let transport = match self {
+                Self::Cdp(driver) => driver.cdp.disconnection(),
+                Self::Bidi(driver) => driver.bidi.disconnection(),
+            };
+            if let Some(reason) = transport.reason() {
+                return Err(E2eError::Disconnected(reason));
+            }
             lifecycle.check()?;
             context.check()?;
             cancellation.check()?;
@@ -524,6 +592,7 @@ impl Driver {
                 reason=lifecycle.cancelled()=>Err(E2eError::Cancelled(reason)),
                 reason=context.cancelled()=>Err(E2eError::Cancelled(reason)),
                 reason=cancellation.cancelled()=>Err(E2eError::Cancelled(reason)),
+                reason=transport.cancelled()=>Err(E2eError::Disconnected(reason)),
                 result=future=>result,
             }
         }
@@ -624,10 +693,12 @@ impl CdpDriver {
         let target = self.target.clone();
         let worlds = self.main_worlds.clone();
         let lifecycle = self.lifecycle.clone();
+        let transport = self.cdp.disconnection();
         tokio::spawn(async move {
+            let _guard = NetworkListenerGuard(sink.clone());
             let mut frames = std::collections::HashSet::from([target]);
             let mut downloads = HashMap::new();
-            while let Ok(event) = tokio::select! { biased; _ = lifecycle.cancelled() => Err(tokio::sync::broadcast::error::RecvError::Closed), event = events.recv() => event }
+            while let Ok(event) = tokio::select! { biased; _ = lifecycle.cancelled() => Err(tokio::sync::broadcast::error::RecvError::Closed), _=transport.cancelled()=>Err(tokio::sync::broadcast::error::RecvError::Closed), event = events.recv() => event }
             {
                 if event.method == "Browser.downloadWillBegin"
                     && event.params["frameId"]
@@ -733,15 +804,30 @@ impl BidiDriver {
         let mut events = self.bidi.subscribe();
         let context = self.context.clone();
         let sink = self.sink.clone();
+        let lifecycle = self.lifecycle.clone();
+        let transport = self.bidi.disconnection();
         tokio::spawn(async move {
+            let _guard = NetworkListenerGuard(sink.clone());
+            let mut frames = std::collections::HashSet::from([context.clone()]);
             let mut downloads = HashMap::new();
-            loop {
-                let event = match events.recv().await {
-                    Ok(event) => event,
-                    Err(_) => break,
-                };
-                if event.context() != Some(context.as_str()) {
+            while let Ok(event) = tokio::select! {biased; _=lifecycle.cancelled()=>Err(tokio::sync::broadcast::error::RecvError::Closed), _=transport.cancelled()=>Err(tokio::sync::broadcast::error::RecvError::Closed), event=events.recv()=>event}
+            {
+                if event.method == "browsingContext.contextCreated"
+                    && event.params["parent"]
+                        .as_str()
+                        .is_some_and(|parent| frames.contains(parent))
+                {
+                    if let Some(id) = event.params["context"].as_str() {
+                        frames.insert(id.into());
+                    }
+                }
+                if !event.context().is_some_and(|id| frames.contains(id)) {
                     continue;
+                }
+                if event.method == "browsingContext.contextDestroyed" {
+                    if let Some(id) = event.params["context"].as_str() {
+                        frames.remove(id);
+                    }
                 }
                 if event.method == "browsingContext.downloadWillBegin" {
                     downloads.insert(
@@ -5135,31 +5221,43 @@ fn handle_bidi_event(event: &BidiEvent, sink: &ConsoleSink) {
                 event.params["context"].as_str().map(str::to_owned),
                 event.params["navigation"].as_str().map(str::to_owned),
             );
-            sink.observe_request(RecordedRequest {
-                method: event.params["request"]["method"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .into(),
-                url: event.params["request"]["url"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .into(),
-                status: 0,
-                headers: bidi_header_pairs(&event.params["request"]["headers"]),
-                post_data: event.params["request"]["postData"]
-                    .as_str()
-                    .map(str::to_owned),
-                started_ms: Some(now_ms()),
-                request_id: event.params["request"]["request"]
-                    .as_str()
-                    .map(str::to_owned),
-                status_text: String::new(),
-                mime_type: String::new(),
-                response_headers: Vec::new(),
-                duration_ms: None,
-                body: None,
-                body_truncated: false,
-            });
+            sink.observe_request(
+                RecordedRequest {
+                    method: event.params["request"]["method"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .into(),
+                    url: event.params["request"]["url"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .into(),
+                    status: 0,
+                    headers: bidi_header_pairs(&event.params["request"]["headers"]),
+                    post_data: event.params["request"]["postData"]
+                        .as_str()
+                        .map(str::to_owned),
+                    started_ms: Some(now_ms()),
+                    request_id: event.params["request"]["request"]
+                        .as_str()
+                        .map(str::to_owned),
+                    status_text: String::new(),
+                    mime_type: String::new(),
+                    response_headers: Vec::new(),
+                    duration_ms: None,
+                    body: None,
+                    body_truncated: false,
+                },
+                crate::network::RequestDetails {
+                    frame_id: event.params["context"].as_str().map(str::to_owned),
+                    resource_type: event.params["request"]["destination"]
+                        .as_str()
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_owned),
+                    is_navigation: event.params.get("navigation").map(|value| !value.is_null()),
+                    redirect: event.params["redirectCount"].as_u64().unwrap_or(0) > 0,
+                    raw_headers: false,
+                },
+            );
         }
         "network.responseStarted" => {
             sink.observe_response(
@@ -5168,6 +5266,7 @@ fn handle_bidi_event(event: &BidiEvent, sink: &ConsoleSink) {
                     .unwrap_or_default(),
                 &event.params["response"],
                 bidi_header_pairs(&event.params["response"]["headers"]),
+                None,
             );
             sink.emit(PageEvent::Response {
                 request_id: event.params["request"]["request"]
@@ -5433,7 +5532,13 @@ fn cdp_header_pairs(headers: &Value) -> Vec<(String, String)> {
         .as_object()
         .map(|map| {
             map.iter()
-                .map(|(name, value)| (name.clone(), value.as_str().unwrap_or_default().to_string()))
+                .flat_map(|(name, value)| {
+                    value
+                        .as_str()
+                        .unwrap_or_default()
+                        .split('\n')
+                        .map(move |value| (name.clone(), value.trim_end_matches('\r').to_owned()))
+                })
                 .collect()
         })
         .unwrap_or_default()
@@ -5455,6 +5560,11 @@ fn bidi_header_pairs(headers: &Value) -> Vec<(String, String)> {
                         _ => value.get("value")?.as_str()?.to_string(),
                     };
                     Some((name, text))
+                })
+                .flat_map(|(name, text)| {
+                    text.split('\n')
+                        .map(|value| (name.clone(), value.trim_end_matches('\r').to_owned()))
+                        .collect::<Vec<_>>()
                 })
                 .collect()
         })
@@ -5765,7 +5875,12 @@ fn handle_cdp_event(event: &CdpEvent, sink: &ConsoleSink) {
         "Network.requestWillBeSent" => {
             let id = event.params["requestId"].as_str().unwrap_or_default();
             if let Some(response) = event.params.get("redirectResponse") {
-                sink.observe_response(id, response, cdp_header_pairs(&response["headers"]));
+                sink.observe_response(
+                    id,
+                    response,
+                    cdp_header_pairs(&response["headers"]),
+                    event.params["redirectHasExtraInfo"].as_bool(),
+                );
                 sink.emit(PageEvent::Response {
                     request_id: id.into(),
                     url: response["url"].as_str().unwrap_or_default().into(),
@@ -5787,35 +5902,58 @@ fn handle_cdp_event(event: &CdpEvent, sink: &ConsoleSink) {
                 event.params["frameId"].as_str().map(str::to_owned),
                 event.params["loaderId"].as_str().map(str::to_owned),
             );
-            sink.observe_request(RecordedRequest {
-                method: event.params["request"]["method"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .into(),
-                url: event.params["request"]["url"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .into(),
-                status: 0,
-                headers: cdp_header_pairs(&event.params["request"]["headers"]),
-                post_data: event.params["request"]["postData"]
-                    .as_str()
-                    .map(str::to_owned),
-                started_ms: Some(now_ms()),
-                request_id: event.params["requestId"].as_str().map(str::to_owned),
-                status_text: String::new(),
-                mime_type: String::new(),
-                response_headers: Vec::new(),
-                duration_ms: None,
-                body: None,
-                body_truncated: false,
-            });
+            sink.observe_request(
+                RecordedRequest {
+                    method: event.params["request"]["method"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .into(),
+                    url: event.params["request"]["url"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .into(),
+                    status: 0,
+                    headers: cdp_header_pairs(&event.params["request"]["headers"]),
+                    post_data: event.params["request"]["postData"]
+                        .as_str()
+                        .map(str::to_owned),
+                    started_ms: Some(now_ms()),
+                    request_id: event.params["requestId"].as_str().map(str::to_owned),
+                    status_text: String::new(),
+                    mime_type: String::new(),
+                    response_headers: Vec::new(),
+                    duration_ms: None,
+                    body: None,
+                    body_truncated: false,
+                },
+                crate::network::RequestDetails {
+                    frame_id: event.params["frameId"].as_str().map(str::to_owned),
+                    resource_type: event.params["type"].as_str().map(str::to_ascii_lowercase),
+                    is_navigation: event.params["type"]
+                        .as_str()
+                        .map(|value| value == "Document"),
+                    redirect: event.params.get("redirectResponse").is_some(),
+                    raw_headers: true,
+                },
+            );
+        }
+        "Network.requestWillBeSentExtraInfo" | "Network.responseReceivedExtraInfo" => {
+            let id = event.params["requestId"].as_str().unwrap_or_default();
+            sink.network_log
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .extra_headers(
+                    id,
+                    event.method == "Network.responseReceivedExtraInfo",
+                    cdp_header_pairs(&event.params["headers"]),
+                );
         }
         "Network.responseReceived" => {
             sink.observe_response(
                 event.params["requestId"].as_str().unwrap_or_default(),
                 &event.params["response"],
                 cdp_header_pairs(&event.params["response"]["headers"]),
+                event.params["hasExtraInfo"].as_bool(),
             );
             sink.emit(PageEvent::Response {
                 request_id: event.params["requestId"]

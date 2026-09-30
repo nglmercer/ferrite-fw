@@ -4366,6 +4366,123 @@ impl Page {
         self.sink.requests()
     }
 
+    /// Typed request observations since page creation, oldest first (4096 cap).
+    /// Independent of HAR/body capture; each redirect hop has a unique ID.
+    pub fn network_requests(&self) -> Vec<crate::Request> {
+        self.sink
+            .network_log
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .states()
+            .into_iter()
+            .map(|state| crate::Request::new(self.clone(), state))
+            .collect()
+    }
+
+    /// Future native request/header/terminal events with typed live metadata.
+    pub fn subscribe_network(&self) -> crate::NetworkEvents {
+        crate::NetworkEvents {
+            page: self.owning_page(),
+            receiver: self
+                .sink
+                .network_log
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .subscribe(),
+        }
+    }
+
+    /// Wait for a future typed request matching a full-URL matcher.
+    pub async fn wait_for_request_handle(
+        &self,
+        matcher: &crate::UrlMatcher,
+        options: crate::OperationOptions,
+    ) -> E2eResult<crate::Request> {
+        let matcher = matcher.resolved(|url| self.resolve_url(url))?;
+        self.wait_for_request_handle_where(move |request| matcher.matches(request.url()), options)
+            .await
+    }
+    pub async fn wait_for_request_handle_where<F>(
+        &self,
+        mut predicate: F,
+        options: crate::OperationOptions,
+    ) -> E2eResult<crate::Request>
+    where
+        F: FnMut(&crate::Request) -> bool,
+    {
+        let timeout = options.timeout.unwrap_or_else(|| self.timeout());
+        let page = self.operation_page(&options);
+        self.auto_step_local(
+            "page.wait_for_request_handle",
+            crate::StepCategory::Action,
+            async {
+                page.run_operation(crate::operation::Deadline::new(timeout).run(
+                    "typed request",
+                    async {
+                        let mut events = page.subscribe_network();
+                        loop {
+                            if let crate::NetworkEvent::Request(request) = events.recv().await? {
+                                if predicate(&request) {
+                                    return Ok(crate::Request::new(
+                                        self.clone(),
+                                        request.state.clone(),
+                                    ));
+                                }
+                            }
+                        }
+                    },
+                ))
+                .await
+            },
+        )
+        .await
+    }
+    /// Wait for future response headers; completion is a separate finished() wait.
+    pub async fn wait_for_response_handle(
+        &self,
+        matcher: &crate::UrlMatcher,
+        options: crate::OperationOptions,
+    ) -> E2eResult<crate::Response> {
+        let matcher = matcher.resolved(|url| self.resolve_url(url))?;
+        self.wait_for_response_handle_where(
+            move |response| matcher.matches(response.url()),
+            options,
+        )
+        .await
+    }
+    pub async fn wait_for_response_handle_where<F>(
+        &self,
+        mut predicate: F,
+        options: crate::OperationOptions,
+    ) -> E2eResult<crate::Response>
+    where
+        F: FnMut(&crate::Response) -> bool,
+    {
+        let timeout = options.timeout.unwrap_or_else(|| self.timeout());
+        let page = self.operation_page(&options);
+        self.auto_step_local(
+            "page.wait_for_response_handle",
+            crate::StepCategory::Action,
+            async {
+                page.run_operation(crate::operation::Deadline::new(timeout).run(
+                    "typed response headers",
+                    async {
+                        let mut events = page.subscribe_network();
+                        loop {
+                            if let crate::NetworkEvent::Response(response) = events.recv().await? {
+                                if predicate(&response) {
+                                    return Ok(response.with_page(self.clone()));
+                                }
+                            }
+                        }
+                    },
+                ))
+                .await
+            },
+        )
+        .await
+    }
+
     /// Export recorded traffic as a HAR 1.2 file (Playwright `recordHar`).
     ///
     /// Bodies are omitted (content-`omit` mode): only URLs, methods,

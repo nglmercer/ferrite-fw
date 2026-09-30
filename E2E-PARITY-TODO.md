@@ -455,6 +455,43 @@ The Linux distinction follows the official [browser support documentation](https
 
 ## Large-session execution and completion
 
+### Recommended remaining phases
+
+Use this order for the next long implementation session. The original task IDs
+stay stable so commits, regressions and follow-up sessions can refer to them.
+G04 is a check throughout the session and a final audit; it does not require
+waiting for every future feature before starting independent work.
+
+| Phase | Tasks | Outcome and reason for this order |
+|---|---|---|
+| 1. Network observations | B02, B03 | Typed per-hop request/response identity and completion independent of body capture. Establish the data needed by report diagnostics and body helpers. Currently in progress; keep unchecked until verification is complete. |
+| 2. HTTP and routing correctness | B05, B06, B07, B08 | Define active-handler removal, fetch/fulfill overrides, duplicate header preservation and request/redirect semantics together. Verify forwarding as well as getter APIs. |
+| 3. Native event diagnostics | B01, B04, B19 | Capture frame/load/dialog events, earliest popup traffic and structured error/console data with consistent ownership and ordering. |
+| 4. Runner and developer APIs | B16, B17, B12, B14, B13 | Add ownership and locator descriptions, attempt-owned soft assertions, effective configuration, then fixture/shared cleanup budgets. Changes to budgets need broader runner regressions. |
+| 5. Captures and reports | B09, B10, B18, B11 | Implement capture options before stabilized comparisons; add bounded ARIA output and searchable per-attempt reports using the earlier network/error data. |
+| 6. Supported backend extensions | C01, C02, C03, C04, C05, C06 | Extend PDF, captured bodies, coverage, HAR, emulation and scoped CDP sessions. Check capability before accepting each option; verify explicit errors on the other engine. |
+| 7. Final lifecycle and compatibility audit | G04 | Verify cancellation, zero/enclosing deadlines, retries, disposal and released resources across the additions, then run the complete regression and documentation gates. |
+
+Within a phase, prefer correctness and lifecycle work over convenience methods.
+Independent tasks may move earlier when their prerequisites are verified. A
+native capability gap should leave a precise remaining subset, rather than
+blocking unrelated work or becoming a successful no-op. B15 is already complete
+and does not need to be implemented again.
+
+### Record for every phase
+
+Keep the relevant checkbox evidence concise and include:
+
+- Implementation commit and public API/example changes.
+- Focused regression names and actual Chromium/Firefox execution.
+- Timeout, cancellation, disposal and serialization compatibility results.
+- Native limitations, remaining subsets and the next ready task IDs.
+
+A phase is reviewable when its implementation, examples and evidence agree.
+Finish with the full suite after cross-cutting transport/runner changes. Keep
+completion counts based on checked tasks; an unsupported or blocked subset
+does not count as complete unless the task explicitly excludes it.
+
 1. Recheck current code and native capability evidence under G01/G02. Do not
    rebuild features added since this document was created.
 2. Implement A in order, respecting the callback and matching dependencies.
@@ -495,8 +532,9 @@ also need formatting checks for the modified packages.
 
 Copyable request for the implementation session:
 
-> Implement the open tasks in E2E-PARITY-TODO.md in G → A → B → C order,
-> following the dependencies and completion criteria. Implement all practical
+> Implement every open task in E2E-PARITY-TODO.md using the recommended remaining
+> phases, dependencies and completion criteria. Preserve the already verified
+> features. Implement all practical
 > features supported by the existing Chromium/Firefox backends. Keep the deferred
 > substantial projects outside scope; document any blocked subset and continue
 > independent ready tasks. Verify native behavior, update the examples and parity

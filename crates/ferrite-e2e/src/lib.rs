@@ -61,6 +61,7 @@ mod function_wait;
 mod har;
 mod jshandle;
 mod locator;
+mod network;
 mod operation;
 mod page;
 mod report;
@@ -100,6 +101,10 @@ pub use jshandle::JSHandle;
 pub use locator::{
     set_test_id_attribute, test_id_attribute, FilterOptions, GetByRoleOptions, Locator,
     LocatorOptions, SelectOption, Selector, WaitForState,
+};
+pub use network::{
+    HttpHeader, NetworkEvent, NetworkEvents, Request, RequestCompletion, RequestFailure,
+    RequestSnapshot, Response,
 };
 pub use operation::{CancellationToken, OperationOptions};
 pub use page::{

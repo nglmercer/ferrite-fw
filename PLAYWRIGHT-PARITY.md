@@ -19,9 +19,9 @@ reporter, Android and Electron APIs:
 | Classification | Members | Meaning |
 |---|---:|---|
 | Equivalent | 15 | Counterpart for the basic operation/value, without full options or engine compatibility |
-| Partial | 589 | Related exposed operation with material semantic, option or engine differences |
-| Idiomatic | 42 | Comparable operation through Rust language/library facilities |
-| Missing | 372 | No dedicated public counterpart |
+| Partial | 603 | Related exposed operation with material semantic, option or engine differences |
+| Idiomatic | 41 | Comparable operation through Rust language/library facilities |
+| Missing | 359 | No dedicated public counterpart |
 
 These counts describe an inventory, **not a behavioral compatibility
 percentage**. The earlier inventory had 458 Partial and 503 Missing members.
@@ -60,7 +60,7 @@ implementation.
 | Semantic locators | Associated labels target controls; roles and accessible names use shared DOM helpers; open shadow-root traversal | Full accessible-name specification and closed shadow roots remain outside this implementation |
 | Actions | Retry readiness and requested-point hit testing, trusted input, positions/modifiers/trial/scoped timeouts for click/hover/check/drag; delayed fill/select and contenteditable support | Same-origin offsets and positive axis scaling; rotated/perspective frames and cross-origin coordinates unsupported. Some actions use DOM setters/events |
 | Uploads | Path and in-memory filename/MIME/binary payloads, multiple/empty batches and input/change events on both engines | DOM injection, 64 MiB total cap; native chooser and directory uploads remain deferred |
-| URL/network waits | Exact/glob/regex, predicates and URL document readiness options; async network predicates | Snapshot records; frame network idle and URLPattern unsupported; no complete live Request/Response objects |
+| URL/network waits | Exact/glob/regex, predicates, URL document readiness and typed per-hop Request/Response companions; async snapshot predicates | Optional native metadata, bounded redirect history; frame network idle, URLPattern and full body/worker graph unsupported |
 | DOM access | Separate textContent/innerText, arrays, evaluate-all/JSON arguments, highlight removal; single-target getters wait and enforce strictness | JSON values only, without arbitrary JS/JSHandle argument serialization |
 | Frames and handles | Same-origin lazy/nested/replacement `FrameLocator`, frame ownership, content/function/URL/load/selector helpers, remote handle evaluation/properties | Cross-origin/OOPIF lazy selection and ElementHandle are deferred |
 | Assertions | Exact/regex page title/URL, raw regex/normalized or rendered text options, mixed lists, ordered text subsets, exact classes/class tokens, values, state/indeterminate options, native intersection ratios, accessible regex, custom predicates and `expect_to_pass` | Rust regex syntax; accessibility approximation; no custom matcher registry/asymmetric matchers or full options parity |
@@ -93,8 +93,9 @@ permission controls, screenshots/PDF, video/live frames, JSON traces, soft
 assertion collection and fixed report serializers remain available. Their
 presence does not establish full Playwright behavior:
 
-- Captured requests/responses are records rather than a rich live object
-  graph. Chromium response bodies are capped; Firefox has no body capture.
+- Legacy captured requests/responses remain records; typed observations add
+  live per-hop metadata and native completion without a full worker/body graph.
+  Chromium captured response bodies are capped; Firefox has no body capture.
   WebSocket observation is Chromium-only; interception/mocking is absent.
 - HAR recording/replay has narrower timing, body, update and archive support.
   Routes do not reproduce every response/redirect/header transformation option.
@@ -346,6 +347,56 @@ coverage; it does not establish complete behavioral parity.
 
 ## URL/network matching, generated uploads and browser diagnostics
 
+### Typed native request and response observations
+
+`Page::network_requests` exposes recent typed observations without enabling HAR
+or body capture. `subscribe_network` returns Request/Response/Finished/Failed
+events, while `wait_for_request_handle` / `wait_for_response_handle` and their
+typed predicate companions resolve at request start/response headers. Existing
+`RecordedRequest`, capture APIs, Page/context enum payloads and synchronous/async
+snapshot waits retain their contracts.
+
+Each redirect hop has a unique typed ID, a native ID, optional native frame and
+page identity, weak previous/next links, and a serializable `RequestSnapshot`.
+Request methods expose observed headers, method/URL, JSON or form POST text,
+navigation/resource metadata, failure and an existing optional response. The
+response exposes status/text/2xx, request/frame/page references and header lookup.
+`Request::response` is a snapshot of whether headers exist, not an implicit wait.
+Frame resolution uses the current native tree and may return None after detachment.
+
+`Response::finished` awaits native completion independently of body capture on
+both engines. HTTP 4xx/5xx finish successfully; native transport errors return
+`E2eError::Network` (`FERRITE_E2E_NETWORK`). Pending waits obey the owning Page
+action timeout, options, zero timeout, enclosing budgets and cancellation.
+Closing/disconnecting wakes pending completion/event waits; already finished
+observations remain readable after page closure. Dropping a wait leaves no
+per-wait background task. Listener shutdown releases pending native metadata.
+
+Header arrays preserve observed pairs; lookup is case-insensitive and joins
+duplicate Set-Cookie values with newlines, other values with comma-space.
+Chromium raw request/response headers use native extra-event availability flags
+to correlate redirects even when extra rows arrive before or after base events.
+Completeness is Some(true) only for received raw rows, Some(false) when missing
+or unavailable, and None without a native signal. Failed pre-header requests
+retain primary headers without claiming raw completeness. Firefox may fold
+duplicates or omit POST text/resource destination; ambiguous comma-delimited
+values remain intact. API responses share the array/value lookup helpers;
+duplicate-preserving route forwarding remains a separate task.
+
+Metadata history is bounded to 4,096 hops and 16 MiB. Each POST/header list is
+limited to 64 KiB and header lists to 256 pairs; snapshots identify truncation.
+Evicted pending observations settle as unavailable, and weak redirect IDs survive
+with an explicit history-truncated flag. Header correlation has a separate
+16 MiB/4,096-ID budget and a 64-row per-ID backlog; overflow disables raw
+correlation for that page rather than assigning rows to the wrong hop. Native
+event buffers hold 256 entries and report lag explicitly. Bodies remain in the
+existing bounded capture API; typed body helpers are still C02.
+
+Evidence: [network_metadata.rs](crates/ferrite-e2e/tests/network_metadata.rs)
+and focused FIFO/budget/weak-history units in [network.rs](crates/ferrite-e2e/src/network.rs).
+
+### URL matchers and snapshot waits
+
 `UrlMatcher::exact`, `glob`, `regex` and `contains` are reusable across
 `Page::wait_for_url_matching`, `wait_for_request_matching` and
 `wait_for_response_matching`; Frame supports matching URL waits too. Exact
@@ -558,13 +609,13 @@ cargo clippy -p ferrite-e2e -p ferrite-cli --all-targets -- -D warnings
 
 Validation for URL/network matching, generated uploads and browser diagnostics:
 
-- Combined verified `ferrite-e2e` inventory: **140 unit tests, 3 API tests, 93 browser tests, 7 attempt-diagnostics
+- Combined verified `ferrite-e2e` inventory: **142 unit tests, 3 API tests, 93 browser tests, 7 attempt-diagnostics
   groups, 4 reliability groups, 4 runtime/reporter groups, 6 fixture/network
   groups, 4 step-control/bundle groups, 5 wait/upload/console groups,
   3 core conformance/capability groups, 4 callback lifecycle groups,
   1 daily API group, 2 action option groups, 3 URL readiness groups,
-  2 shared URL matching groups, 3 function wait groups, 1 frame lookup group
-  2 completed download groups and 2 doctests** (289 checks total).
+  2 shared URL matching groups, 3 function wait groups, 1 frame lookup group,
+  2 completed download groups, 4 typed network metadata groups and 2 doctests** (295 checks total).
   Headless Shell and Firefox were installed and exercised; unsupported-engine branches remain explicit.
 - The five new groups additionally passed with full Chrome and Firefox, covering
   exact/glob/regex and predicate URL matching, frame history, request-start and
@@ -590,7 +641,7 @@ Validation for URL/network matching, generated uploads and browser diagnostics:
 - Existing trace and first-attachment names remain compatible; retry trace files
   and repeated attachment names preserve their individual contents.
 - CLI/configuration checks passed again: 5 CLI tests, 17 configuration tests and
-  1 doctest (312 checks across E2E/CLI/configuration). This change adds no CLI
+  1 doctest (318 checks across E2E/CLI/configuration). This change adds no CLI
   options. A real portable HTML report with expanded automatic/user/hook trees,
   skipped steps, annotations and run lifecycle was rendered in Chromium and
   visually inspected. The console section was also rendered and visually

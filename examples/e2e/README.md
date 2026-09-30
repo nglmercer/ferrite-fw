@@ -264,6 +264,38 @@ headers, including in-flight requests. Returned records are metadata snapshots;
 body capture remains separate. Poll waits before triggering traffic. Timeout,
 cancellation and disposal also bound pending predicates; lag is an explicit error.
 
+Typed companions return live per-hop request/response observations. Receiving
+headers and finishing a streamed body are separate operations:
+
+```rust,ignore
+use ferrite_e2e::{OperationOptions, UrlMatcher};
+
+let save = ctx.page.get_by_role("button", "Save");
+let (response, clicked) = tokio::join!(
+    ctx.page.wait_for_response_handle(
+        &UrlMatcher::exact("/api/save"), OperationOptions::default(),
+    ),
+    save.click(),
+);
+clicked?;
+let response = response?;
+response.finished().await?;
+assert!(response.ok());
+let request = response.request();
+println!("{} {}", request.method(), request.url());
+let cookies = response.header_values("set-cookie");
+let snapshot = request.snapshot();
+```
+
+`subscribe_network()` yields typed Request/Response/Finished/Failed events;
+`network_requests()` returns bounded recent metadata without enabling body
+capture. `finished()` uses the owning Page action timeout; its options companion
+supports zero timeout and caller cancellation. HTTP error statuses complete
+successfully, while native transport failures return `E2eError::Network`.
+Firefox may omit POST text/resource type or fold duplicate headers; inspect
+snapshot completeness/truncation flags. Body helpers remain separate. API
+responses also provide `headers_array`, `header_values` and `header_value`.
+
 Pointer action options provide positions, modifiers, trial readiness and scoped
 timeouts without changing Page defaults:
 

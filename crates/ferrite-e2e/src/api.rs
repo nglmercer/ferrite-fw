@@ -65,6 +65,19 @@ impl ApiResponse {
             .map(|(_, value)| value.as_str())
     }
 
+    /// Native header entries, including duplicate names, with JSON serialization.
+    pub fn headers_array(&self) -> Vec<crate::HttpHeader> {
+        crate::network::header_array(&self.headers)
+    }
+    /// All values for a case-insensitive name, preserving duplicate entries.
+    pub fn header_values(&self, name: &str) -> Vec<String> {
+        crate::network::header_values(&self.headers, name)
+    }
+    /// Joined values (Set-Cookie uses newline; other names use comma-space).
+    pub fn header_value(&self, name: &str) -> Option<String> {
+        crate::network::header_value(&self.headers, name)
+    }
+
     /// Raw body bytes.
     #[must_use]
     pub fn bytes(&self) -> &[u8] {

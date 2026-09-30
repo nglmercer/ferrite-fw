@@ -48,6 +48,7 @@ enum Outbound {
 }
 
 struct Inner {
+    closed: crate::CancellationToken,
     user_context_preloads: AtomicBool,
     tx: mpsc::UnboundedSender<Outbound>,
     pending: Mutex<HashMap<u64, oneshot::Sender<E2eResult<Value>>>>,
@@ -86,6 +87,7 @@ impl BidiConnection {
         let (tx, mut rx) = mpsc::unbounded_channel::<Outbound>();
         let (events, _) = broadcast::channel::<BidiEvent>(4096);
         let inner = Arc::new(Inner {
+            closed: crate::CancellationToken::new(),
             user_context_preloads: AtomicBool::new(false),
             tx,
             pending: Mutex::new(HashMap::new()),
@@ -133,6 +135,10 @@ impl BidiConnection {
         self.inner.events.subscribe()
     }
 
+    pub(crate) fn disconnection(&self) -> crate::CancellationToken {
+        self.inner.closed.clone()
+    }
+
     pub(crate) fn set_browser_version(&self, version: &str) {
         let supported = version
             .split('.')
@@ -149,6 +155,9 @@ impl BidiConnection {
 
     /// Send a command and await its `result`.
     pub async fn call(&self, method: &str, params: Value, timeout: Duration) -> E2eResult<Value> {
+        if let Some(reason) = self.inner.closed.reason() {
+            return Err(E2eError::Disconnected(reason));
+        }
         let id = self.inner.next_id.fetch_add(1, Ordering::SeqCst);
         let frame = serde_json::json!({
             "id": id,
@@ -172,8 +181,10 @@ impl BidiConnection {
             .map_err(|_| E2eError::Disconnected("bidi writer gone".to_string()))?;
         crate::operation::Deadline::new(timeout)
             .run(format!("bidi {method}"), async {
-                rx.await
-                    .map_err(|_| E2eError::Disconnected(format!("bidi {method} dropped")))?
+                tokio::select! {biased;
+                    reason=self.inner.closed.cancelled()=>Err(E2eError::Disconnected(reason)),
+                    result=rx=>result.map_err(|_|E2eError::Disconnected(format!("bidi {method} dropped")))?,
+                }
             })
             .await
     }
@@ -183,10 +194,10 @@ impl BidiConnection {
         let _ = self.inner.tx.send(Outbound::Close);
     }
 
-    /// Whether the writer end is still open.
+    /// Whether the transport reader and writer are still connected.
     #[must_use]
     pub fn is_open(&self) -> bool {
-        !self.inner.tx.is_closed()
+        !self.inner.tx.is_closed() && !self.inner.closed.is_cancelled()
     }
 }
 
@@ -234,6 +245,7 @@ fn handle_frame(inner: &Arc<Inner>, text: &str) {
 }
 
 fn fail_all(inner: &Arc<Inner>, reason: &str) {
+    inner.closed.cancel_with_reason(reason);
     let senders = inner
         .pending
         .lock()
@@ -306,6 +318,7 @@ mod tests {
         let (events, _) = broadcast::channel(4);
         let (tx, mut outgoing) = mpsc::unbounded_channel();
         let inner = Arc::new(Inner {
+            closed: crate::CancellationToken::new(),
             user_context_preloads: AtomicBool::new(false),
             tx,
             pending: Mutex::new(HashMap::new()),

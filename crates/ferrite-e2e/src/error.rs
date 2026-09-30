@@ -57,6 +57,9 @@ pub enum E2eError {
     /// Web server did not become ready.
     #[error("web server not ready: {0}")]
     WebServer(String),
+    /// A native browser request failed at the transport layer.
+    #[error("network request failed for `{url}`: {message}")]
+    Network { url: String, message: String },
     /// Configuration error.
     #[error("config error: {0}")]
     Config(String),
@@ -88,6 +91,7 @@ impl E2eError {
             Self::Expect(_) => "FERRITE_E2E_EXPECT",
             Self::Navigation { .. } => "FERRITE_E2E_NAVIGATION",
             Self::WebServer(_) => "FERRITE_E2E_WEB_SERVER",
+            Self::Network { .. } => "FERRITE_E2E_NETWORK",
             Self::Config(_) => "FERRITE_E2E_CONFIG",
             Self::Io(_) => "FERRITE_E2E_IO",
             Self::Json(_) => "FERRITE_E2E_JSON",
