@@ -3,7 +3,7 @@
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
 
 Implement **G, then A, then B**, followed by the supported C extensions. This
-backlog contains **45 tasks (19 complete, 26 remaining)**: four foundations, 16 core tasks, 19 follow-ups
+backlog contains **45 tasks (20 complete, 25 remaining)**: four foundations, 16 core tasks, 19 follow-ups
 and six optional extensions. All A tasks are now verified; continue with network
 metadata/events and independent B conveniences, then supported C extensions. The ordering and effort assessments
 are recommendations based on the current source and parity audit.
@@ -93,6 +93,12 @@ they do not constitute differential Playwright conformance coverage.
   tree identities, nested frames, base URL matching, predicates, navigation,
   replacement/detachment, closed-page errors and Firefox name absence verified.
   Combined verified inventory: 287 E2E plus 23 CLI/configuration checks.
+- `157ed99`: B15. Both completed-download groups passed: native 2 MiB binary
+  downloads on full Chrome/Firefox and focused I/O lifecycle/error cases. Strict
+  E2E/CLI Clippy, formatting and regenerated evidence links passed. Reading,
+  chunked streaming, source identity after page closure, zero/caller cancellation,
+  recorded failures, missing files and non-NotFound deletion errors verified.
+  Combined verified inventory: 289 E2E plus 23 CLI/configuration checks.
 - G04 remains open until callback and stream lifecycle coverage is complete.
 
 ## G — Foundations for the larger session
@@ -355,12 +361,16 @@ their dependencies are ready. References include
 
 ### Useful convenience and diagnostic APIs
 
-- [ ] **B15 — Completed download streaming and ownership (S).** Add async reading
+- [x] **B15 — Completed download streaming and ownership (S).** Add async reading
   of completed files and owning-page identity without duplicating save-as/delete.
   Done when binary/large files, missing files and cancellation work on both
   engines; deletion is idempotent for missing files but reports other filesystem
   errors. Per-download active cancellation and early failure metadata require
   native capability checks; do not infer unavailable Firefox metadata from filenames.
+  Evidence: `157ed99`; `download_stream.rs` verifies completed-file read/stream
+  companions and owning page ID without retaining a live page. Options bound file
+  reads/opening; subsequent Tokio stream reads can be wrapped in caller cancellation.
+  Firefox active download metadata and per-download cancellation remain deferred.
 - [ ] **B16 — Context/browser ownership introspection (S).** Add a context owner
   accessor and review disconnection semantics of existing is-closed/is-connected
   APIs. Done when convenience-page contexts, explicit contexts and remote browser
