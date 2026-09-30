@@ -60,7 +60,7 @@ implementation.
 | Semantic locators | Associated labels target controls; roles and accessible names use shared DOM helpers; open shadow-root traversal | Full accessible-name specification and closed shadow roots remain outside this implementation |
 | Actions | Retry readiness and requested-point hit testing, trusted input, positions/modifiers/trial/scoped timeouts for click/hover/check/drag; delayed fill/select and contenteditable support | Same-origin offsets and positive axis scaling; rotated/perspective frames and cross-origin coordinates unsupported. Some actions use DOM setters/events |
 | Uploads | Path and in-memory filename/MIME/binary payloads, multiple/empty batches and input/change events on both engines | DOM injection, 64 MiB total cap; native chooser and directory uploads remain deferred |
-| URL/network waits | Exact, glob, regex and URL/request/response predicates, including async network predicates | Explicit Rust APIs and snapshot records; no waitUntil/URLPattern or complete live Request/Response objects |
+| URL/network waits | Exact/glob/regex, predicates and URL document readiness options; async network predicates | Snapshot records; frame network idle and URLPattern unsupported; no complete live Request/Response objects |
 | DOM access | Separate textContent/innerText, arrays, evaluate-all/JSON arguments, highlight removal; single-target getters wait and enforce strictness | JSON values only, without arbitrary JS/JSHandle argument serialization |
 | Frames and handles | Same-origin lazy/nested/replacement `FrameLocator`, frame ownership, content/function/URL/load/selector helpers, remote handle evaluation/properties | Cross-origin/OOPIF lazy selection and ElementHandle are deferred |
 | Assertions | Exact/regex page title/URL, raw regex/normalized or rendered text options, mixed lists, ordered text subsets, exact classes/class tokens, values, state/indeterminate options, native intersection ratios, accessible regex, custom predicates and `expect_to_pass` | Rust regex syntax; accessibility approximation; no custom matcher registry/asymmetric matchers or full options parity |
@@ -371,7 +371,28 @@ Redirect hops preserve method/URL/status association. The observation channel
 holds 256 events; lag fails explicitly instead of accepting incomplete traffic.
 Returned snapshots have no response body; existing request capture remains
 available with its documented engine limits. URL waits also handle hash/history
-changes and frame-scoped navigation. `waitUntil` and URLPattern remain absent.
+changes and frame-scoped navigation. URLPattern remains absent.
+
+`Page` and `Frame` URL `_with_options` companions accept `UrlWaitOptions` for
+Commit, DomContentLoaded, Load (default) or page-only NetworkIdle. Matcher and
+predicate waits share one navigation budget across URL matching and readiness;
+an omitted timeout inherits navigation settings, and zero disables the local
+limit. Legacy duration-based helpers retain URL-only readiness and substring
+strings. Readiness comes from the same document observation as the URL, including
+native navigation timing for DOMContentLoaded (interactive state alone occurs
+before deferred scripts finish). Transient execution-realm replacement is retried;
+detachment, cancellation and unrelated protocol errors remain errors.
+
+NetworkIdle requires Load and 500ms without observed page HTTP activity. An activity
+counter detects requests that start and finish between polls. It does not represent
+all socket, worker or OOPIF connectivity; supported frame waits reject this state
+before waiting. Application assertions remain the stronger readiness signal.
+Chromium document commits exclude replaced-document resources from idle accounting
+without inventing terminal request events; later native completion/failure is still
+reported. Existing load waits use the same DOMContentLoaded observation and idle
+activity counter.
+See the official [URL wait readiness options](https://playwright.dev/docs/api/class-page#page-wait-for-url)
+and [navigation timing event timestamps](https://www.w3.org/TR/navigation-timing-2/).
 
 `FilePayload::new(name, mime_type, bytes)` supplies generated files to
 `Locator::set_input_file_payloads` or the Page selector helper. Bytes, Unicode
@@ -511,11 +532,11 @@ cargo clippy -p ferrite-e2e -p ferrite-cli --all-targets -- -D warnings
 
 Validation for URL/network matching, generated uploads and browser diagnostics:
 
-- `ferrite-e2e`: **138 unit tests, 3 API tests, 93 browser tests, 7 attempt-diagnostics
+- `ferrite-e2e`: **139 unit tests, 3 API tests, 93 browser tests, 7 attempt-diagnostics
   groups, 4 reliability groups, 4 runtime/reporter groups, 6 fixture/network
   groups, 4 step-control/bundle groups, 5 wait/upload/console groups,
   3 core conformance/capability groups, 4 callback lifecycle groups,
-  1 daily API group, 2 action option groups and 2 doctests** (276 checks total).
+  1 daily API group, 2 action option groups, 3 URL readiness groups and 2 doctests** (280 checks total).
   Headless Shell and Firefox were installed and exercised; unsupported-engine branches remain explicit.
 - The five new groups additionally passed with full Chrome and Firefox, covering
   exact/glob/regex and predicate URL matching, frame history, request-start and
@@ -541,7 +562,7 @@ Validation for URL/network matching, generated uploads and browser diagnostics:
 - Existing trace and first-attachment names remain compatible; retry trace files
   and repeated attachment names preserve their individual contents.
 - CLI/configuration checks passed again: 5 CLI tests, 17 configuration tests and
-  1 doctest (299 checks across E2E/CLI/configuration). This change adds no CLI
+  1 doctest (303 checks across E2E/CLI/configuration). This change adds no CLI
   options. A real portable HTML report with expanded automatic/user/hook trees,
   skipped steps, annotations and run lifecycle was rendered in Chromium and
   visually inspected. The console section was also rendered and visually

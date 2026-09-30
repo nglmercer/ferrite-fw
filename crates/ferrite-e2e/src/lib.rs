@@ -66,6 +66,7 @@ mod report;
 mod runner;
 mod snapshot;
 mod url_matcher;
+mod url_wait;
 mod video;
 mod webserver;
 
@@ -123,6 +124,7 @@ pub use snapshot::{
     match_text_snapshot_with, SnapshotDiff, SnapshotOptions, SnapshotUpdate,
 };
 pub use url_matcher::UrlMatcher;
+pub use url_wait::UrlWaitOptions;
 pub use video::{find_ffmpeg, find_ffprobe, VideoFormat, VideoFrame, VideoMode, VideoOptions};
 pub use webserver::{wait_for_url, RunningWebServer, WebServer};
 

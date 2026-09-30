@@ -529,6 +529,37 @@ impl Frame {
             .await
     }
 
+    pub async fn wait_for_url_with_options(
+        &self,
+        fragment: &str,
+        options: crate::UrlWaitOptions,
+    ) -> E2eResult<()> {
+        self.scoped_page()
+            .wait_for_url_with_options(fragment, options)
+            .await
+    }
+    pub async fn wait_for_url_matching_with_options(
+        &self,
+        matcher: &crate::UrlMatcher,
+        options: crate::UrlWaitOptions,
+    ) -> E2eResult<()> {
+        self.scoped_page()
+            .wait_for_url_matching_with_options(matcher, options)
+            .await
+    }
+    pub async fn wait_for_url_where_with_options<F>(
+        &self,
+        predicate: F,
+        options: crate::UrlWaitOptions,
+    ) -> E2eResult<()>
+    where
+        F: FnMut(&str) -> bool,
+    {
+        self.scoped_page()
+            .wait_for_url_where_with_options(predicate, options)
+            .await
+    }
+
     /// Frame name (empty on Firefox).
     #[must_use]
     pub fn name(&self) -> &str {
@@ -2431,20 +2462,115 @@ impl Page {
             .await
     }
     /// Wait for a URL predicate, including history/hash navigation.
-    pub async fn wait_for_url_where<F>(&self, mut predicate: F, timeout: Duration) -> E2eResult<()>
+    pub async fn wait_for_url_where<F>(&self, predicate: F, timeout: Duration) -> E2eResult<()>
     where
         F: FnMut(&str) -> bool,
     {
+        // Preserve the legacy URL-only readiness contract.
+        self.wait_for_url_where_with_options(
+            predicate,
+            crate::UrlWaitOptions::default()
+                .wait_until(LoadState::Commit)
+                .timeout(timeout),
+        )
+        .await
+    }
+
+    /// Legacy substring matching with explicit document readiness controls.
+    pub async fn wait_for_url_with_options(
+        &self,
+        fragment: &str,
+        options: crate::UrlWaitOptions,
+    ) -> E2eResult<()> {
+        self.wait_for_url_matching_with_options(&crate::UrlMatcher::contains(fragment), options)
+            .await
+    }
+    /// Match a full URL and the current document's readiness in one budget.
+    pub async fn wait_for_url_matching_with_options(
+        &self,
+        matcher: &crate::UrlMatcher,
+        options: crate::UrlWaitOptions,
+    ) -> E2eResult<()> {
+        let matcher = matcher.resolved(|url| self.resolve_url(url))?;
+        self.wait_for_url_where_with_options(move |url| matcher.matches(url), options)
+            .await
+    }
+
+    /// Match a URL predicate and readiness from the same document observation.
+    /// NetworkIdle tracks this Page's observed HTTP activity for 500ms, after
+    /// Load; worker/socket/OOPIF traffic is not a complete connectivity signal.
+    /// Frame-scoped NetworkIdle is unsupported and rejected before waiting.
+    pub async fn wait_for_url_where_with_options<F>(
+        &self,
+        mut predicate: F,
+        options: crate::UrlWaitOptions,
+    ) -> E2eResult<()>
+    where
+        F: FnMut(&str) -> bool,
+    {
+        if options.wait_until == LoadState::NetworkIdle
+            && (self.frame_id.is_some() || !self.lazy_frames.is_empty())
+        {
+            return Err(E2eError::Config("frame network-idle tracking is not available; use document load or an application predicate".into()));
+        }
+        let timeout = options.timeout.unwrap_or_else(|| self.navigation_timeout());
+        let mut scoped = self.with_timeout(timeout);
+        if let Some(token) = options.cancellation {
+            scoped = scoped.with_cancellation(token);
+        }
         self.auto_step_local("page.wait_for_url", crate::StepCategory::Action, async {
-            let scoped = self.with_timeout(timeout);
             scoped
                 .run_operation(crate::operation::Deadline::new(timeout).run(
-                    "wait_for_url",
+                    format!("wait_for_url and {:?}", options.wait_until),
                     async {
+                        let mut quiet: Option<(Value, u64, tokio::time::Instant)> = None;
                         loop {
-                            let url = scoped.url().await?;
-                            if predicate(&url) {
-                                return Ok(());
+                            // One evaluation prevents an old URL from being combined
+                            // with the replacement document's readyState.
+                            let observed = scoped
+                                .evaluate_value(crate::url_wait::DOCUMENT_OBSERVATION)
+                                .await;
+                            let observed = match observed {
+                                Ok(value) => value,
+                                Err(error)
+                                    if crate::url_wait::navigation_replaced_realm(&error) =>
+                                {
+                                    quiet = None;
+                                    tokio::time::sleep(Duration::from_millis(25)).await;
+                                    continue;
+                                }
+                                Err(error) => return Err(error),
+                            };
+                            let matched = predicate(observed["url"].as_str().unwrap_or_default());
+                            let ready =
+                                crate::url_wait::document_ready(&observed, options.wait_until);
+                            if matched && ready {
+                                if options.wait_until != LoadState::NetworkIdle {
+                                    return Ok(());
+                                }
+                                let (active, activity) = scoped.sink.network_activity();
+                                if active == 0 {
+                                    match &quiet {
+                                        Some((previous, epoch, since))
+                                            if previous == &observed && *epoch == activity =>
+                                        {
+                                            if since.elapsed() >= Duration::from_millis(500) {
+                                                return Ok(());
+                                            }
+                                        }
+                                        _ => {
+                                            quiet = Some((
+                                                observed,
+                                                activity,
+                                                tokio::time::Instant::now(),
+                                            ))
+                                        }
+                                    }
+                                } else {
+                                    quiet = None;
+                                }
+                            } else {
+                                quiet = None;
                             }
                             tokio::time::sleep(Duration::from_millis(25)).await;
                         }
@@ -2463,7 +2589,7 @@ impl Page {
                 if self.frame_id.is_some() || !self.lazy_frames.is_empty() {
                     let expression = match state {
                         LoadState::Commit => "true",
-                        LoadState::DomContentLoaded => "document.readyState !== 'loading'",
+                        LoadState::DomContentLoaded => crate::url_wait::DOM_CONTENT_LOADED,
                         LoadState::Load => "document.readyState === 'complete'",
                         LoadState::NetworkIdle => return Err(E2eError::Config("frame network-idle tracking is not available; use document load or an application predicate".into())),
                     };

@@ -178,7 +178,7 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 587; 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
 | `BrowserContext.backgroundPage` (deprecated) | event | Missing | — | No matching public event variant/emitter; Page.subscribe exposes only the documented PageEvent variants. |
-| `BrowserContext.clock` | property | Partial | `Page.clock_install` ([source](crates/ferrite-e2e/src/page.rs#L3248)) | Page-document-local clock; no context-wide clock object. |
+| `BrowserContext.clock` | property | Partial | `Page.clock_install` ([source](crates/ferrite-e2e/src/page.rs#L3374)) | Page-document-local clock; no context-wide clock object. |
 | `BrowserContext.credentials` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `BrowserContext.debugger` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `BrowserContext.close` | event | Partial | `BrowserContext.subscribe` ([source](crates/ferrite-e2e/src/context.rs#L474)) | ContextEventKind::Closed; context subscriptions forward observations from every current/future page; enum payloads have a narrower live object/options model. |
@@ -275,13 +275,13 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 587; 
 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
-| `Clock.fastForward` | method | Partial | `Page.clock_fast_forward` ([source](crates/ferrite-e2e/src/page.rs#L3316)) | Distinct timer/Date/jump/progression behavior; document clock persists via init scripts but resets on navigation, is not context-wide, and idle callbacks are approximated. |
-| `Clock.install` | method | Partial | `Page.clock_install_at` ([source](crates/ferrite-e2e/src/page.rs#L3344)) | Distinct timer/Date/jump/progression behavior; document clock persists via init scripts but resets on navigation, is not context-wide, and idle callbacks are approximated. |
-| `Clock.runFor` | method | Partial | `Page.clock_run_for` ([source](crates/ferrite-e2e/src/page.rs#L3323)) | Distinct timer/Date/jump/progression behavior; document clock persists via init scripts but resets on navigation, is not context-wide, and idle callbacks are approximated. |
-| `Clock.pauseAt` | method | Partial | `Page.clock_pause_at` ([source](crates/ferrite-e2e/src/page.rs#L3337)) | Distinct timer/Date/jump/progression behavior; document clock persists via init scripts but resets on navigation, is not context-wide, and idle callbacks are approximated. |
-| `Clock.resume` | method | Partial | `Page.clock_resume` ([source](crates/ferrite-e2e/src/page.rs#L3402)) | Distinct timer/Date/jump/progression behavior; document clock persists via init scripts but resets on navigation, is not context-wide, and idle callbacks are approximated. |
-| `Clock.setFixedTime` | method | Partial | `Page.clock_set_fixed_time` ([source](crates/ferrite-e2e/src/page.rs#L3280)) | Distinct timer/Date/jump/progression behavior; document clock persists via init scripts but resets on navigation, is not context-wide, and idle callbacks are approximated. |
-| `Clock.setSystemTime` | method | Partial | `Page.clock_set_system_time` ([source](crates/ferrite-e2e/src/page.rs#L3330)) | Distinct timer/Date/jump/progression behavior; document clock persists via init scripts but resets on navigation, is not context-wide, and idle callbacks are approximated. |
+| `Clock.fastForward` | method | Partial | `Page.clock_fast_forward` ([source](crates/ferrite-e2e/src/page.rs#L3442)) | Distinct timer/Date/jump/progression behavior; document clock persists via init scripts but resets on navigation, is not context-wide, and idle callbacks are approximated. |
+| `Clock.install` | method | Partial | `Page.clock_install_at` ([source](crates/ferrite-e2e/src/page.rs#L3470)) | Distinct timer/Date/jump/progression behavior; document clock persists via init scripts but resets on navigation, is not context-wide, and idle callbacks are approximated. |
+| `Clock.runFor` | method | Partial | `Page.clock_run_for` ([source](crates/ferrite-e2e/src/page.rs#L3449)) | Distinct timer/Date/jump/progression behavior; document clock persists via init scripts but resets on navigation, is not context-wide, and idle callbacks are approximated. |
+| `Clock.pauseAt` | method | Partial | `Page.clock_pause_at` ([source](crates/ferrite-e2e/src/page.rs#L3463)) | Distinct timer/Date/jump/progression behavior; document clock persists via init scripts but resets on navigation, is not context-wide, and idle callbacks are approximated. |
+| `Clock.resume` | method | Partial | `Page.clock_resume` ([source](crates/ferrite-e2e/src/page.rs#L3528)) | Distinct timer/Date/jump/progression behavior; document clock persists via init scripts but resets on navigation, is not context-wide, and idle callbacks are approximated. |
+| `Clock.setFixedTime` | method | Partial | `Page.clock_set_fixed_time` ([source](crates/ferrite-e2e/src/page.rs#L3406)) | Distinct timer/Date/jump/progression behavior; document clock persists via init scripts but resets on navigation, is not context-wide, and idle callbacks are approximated. |
+| `Clock.setSystemTime` | method | Partial | `Page.clock_set_system_time` ([source](crates/ferrite-e2e/src/page.rs#L3456)) | Distinct timer/Date/jump/progression behavior; document clock persists via init scripts but resets on navigation, is not context-wide, and idle callbacks are approximated. |
 
 ## ConsoleMessage
 
@@ -338,9 +338,9 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 587; 
 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
-| `Dialog.accept` | method | Partial | `DialogDecision.accept_with` ([source](crates/ferrite-e2e/src/page.rs#L1136)) | Handler returns a decision; wait_for_dialog handles the dialog before returning metadata; no live Dialog object/defaultValue/page. |
+| `Dialog.accept` | method | Partial | `DialogDecision.accept_with` ([source](crates/ferrite-e2e/src/page.rs#L1167)) | Handler returns a decision; wait_for_dialog handles the dialog before returning metadata; no live Dialog object/defaultValue/page. |
 | `Dialog.defaultValue` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `Dialog.dismiss` | method | Partial | `DialogDecision.dismiss` ([source](crates/ferrite-e2e/src/page.rs#L1141)) | Handler returns a decision; wait_for_dialog handles the dialog before returning metadata; no live Dialog object/defaultValue/page. |
+| `Dialog.dismiss` | method | Partial | `DialogDecision.dismiss` ([source](crates/ferrite-e2e/src/page.rs#L1172)) | Handler returns a decision; wait_for_dialog handles the dialog before returning metadata; no live Dialog object/defaultValue/page. |
 | `Dialog.message` | method | Partial | `DialogInfo.message` ([source](crates/ferrite-e2e/src/page.rs#L230)) | Handler returns a decision; wait_for_dialog handles the dialog before returning metadata; no live Dialog object/defaultValue/page. |
 | `Dialog.page` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Dialog.type` | method | Partial | `DialogInfo.dialog_type` ([source](crates/ferrite-e2e/src/page.rs#L228)) | Handler returns a decision; wait_for_dialog handles the dialog before returning metadata; no live Dialog object/defaultValue/page. |
@@ -359,15 +359,15 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 587; 
 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
-| `Download.cancel` | method | Partial | `Page.cancel_downloads` ([source](crates/ferrite-e2e/src/page.rs#L4271)) | Cancels page-tracked downloads on Chromium; no per-Download.cancel method. |
+| `Download.cancel` | method | Partial | `Page.cancel_downloads` ([source](crates/ferrite-e2e/src/page.rs#L4397)) | Cancels page-tracked downloads on Chromium; no per-Download.cancel method. |
 | `Download.createReadStream` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `Download.delete` | method | Partial | `Download.delete` ([source](crates/ferrite-e2e/src/page.rs#L1454)) | Represents completed files; URL/failure data are Chromium-only and filename derives from the saved path. |
-| `Download.failure` | method | Partial | `Download.failure` ([source](crates/ferrite-e2e/src/page.rs#L1416)) | Represents completed files; URL/failure data are Chromium-only and filename derives from the saved path. |
+| `Download.delete` | method | Partial | `Download.delete` ([source](crates/ferrite-e2e/src/page.rs#L1485)) | Represents completed files; URL/failure data are Chromium-only and filename derives from the saved path. |
+| `Download.failure` | method | Partial | `Download.failure` ([source](crates/ferrite-e2e/src/page.rs#L1447)) | Represents completed files; URL/failure data are Chromium-only and filename derives from the saved path. |
 | `Download.page` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `Download.path` | method | Partial | `Download.path` ([source](crates/ferrite-e2e/src/page.rs#L1408)) | Represents completed files; URL/failure data are Chromium-only and filename derives from the saved path. |
-| `Download.saveAs` | method | Partial | `Download.save_as` ([source](crates/ferrite-e2e/src/page.rs#L1439)) | Represents completed files; URL/failure data are Chromium-only and filename derives from the saved path. |
-| `Download.suggestedFilename` | method | Partial | `Download.suggested_filename` ([source](crates/ferrite-e2e/src/page.rs#L1410)) | Represents completed files; URL/failure data are Chromium-only and filename derives from the saved path. |
-| `Download.url` | method | Partial | `Download.url` ([source](crates/ferrite-e2e/src/page.rs#L1413)) | Represents completed files; URL/failure data are Chromium-only and filename derives from the saved path. |
+| `Download.path` | method | Partial | `Download.path` ([source](crates/ferrite-e2e/src/page.rs#L1439)) | Represents completed files; URL/failure data are Chromium-only and filename derives from the saved path. |
+| `Download.saveAs` | method | Partial | `Download.save_as` ([source](crates/ferrite-e2e/src/page.rs#L1470)) | Represents completed files; URL/failure data are Chromium-only and filename derives from the saved path. |
+| `Download.suggestedFilename` | method | Partial | `Download.suggested_filename` ([source](crates/ferrite-e2e/src/page.rs#L1441)) | Represents completed files; URL/failure data are Chromium-only and filename derives from the saved path. |
+| `Download.url` | method | Partial | `Download.url` ([source](crates/ferrite-e2e/src/page.rs#L1444)) | Represents completed files; URL/failure data are Chromium-only and filename derives from the saved path. |
 
 ## Electron
 
@@ -473,44 +473,44 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 587; 
 | `Frame.addScriptTag` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Frame.addStyleTag` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Frame.check` | method | Partial | `Locator.check` ([source](crates/ferrite-e2e/src/locator.rs#L2206)) | Frame.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
-| `Frame.childFrames` | method | Partial | `Frame.child_frames` ([source](crates/ferrite-e2e/src/page.rs#L567)) | Frame handles/evaluation exist; Firefox frame names are empty, navigation returns unit, and coordinate actions may miss offset iframes. |
+| `Frame.childFrames` | method | Partial | `Frame.child_frames` ([source](crates/ferrite-e2e/src/page.rs#L598)) | Frame handles/evaluation exist; Firefox frame names are empty, navigation returns unit, and coordinate actions may miss offset iframes. |
 | `Frame.click` | method | Partial | `Locator.click` ([source](crates/ferrite-e2e/src/locator.rs#L1465)) | Frame.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
-| `Frame.content` | method | Equivalent | `Frame.content` ([source](crates/ferrite-e2e/src/page.rs#L597)) | Basic document access. |
+| `Frame.content` | method | Equivalent | `Frame.content` ([source](crates/ferrite-e2e/src/page.rs#L628)) | Basic document access. |
 | `Frame.dblclick` | method | Partial | `Locator.dblclick` ([source](crates/ferrite-e2e/src/locator.rs#L1605)) | Frame.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Frame.dispatchEvent` | method | Partial | `Locator.dispatch_event` ([source](crates/ferrite-e2e/src/locator.rs#L1820)) | Frame.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Frame.dragAndDrop` | method | Partial | `Locator.drag_to` ([source](crates/ferrite-e2e/src/locator.rs#L1740)) | Frame.locator(source).drag_to(target, steps); fewer options and frame-coordinate restrictions. |
 | `Frame.evalOnSelector` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Frame.evalOnSelectorAll` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `Frame.evaluate` | method | Partial | `Frame.evaluate` ([source](crates/ferrite-e2e/src/page.rs#L606)) | Frame handles/evaluation exist; Firefox frame names are empty, navigation returns unit, and coordinate actions may miss offset iframes. |
+| `Frame.evaluate` | method | Partial | `Frame.evaluate` ([source](crates/ferrite-e2e/src/page.rs#L637)) | Frame handles/evaluation exist; Firefox frame names are empty, navigation returns unit, and coordinate actions may miss offset iframes. |
 | `Frame.evaluateHandle` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Frame.fill` | method | Partial | `Locator.fill` ([source](crates/ferrite-e2e/src/locator.rs#L1966)) | Frame.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Frame.focus` | method | Partial | `Locator.focus` ([source](crates/ferrite-e2e/src/locator.rs#L1668)) | Frame.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Frame.frameElement` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Frame.frameLocator` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Frame.getAttribute` | method | Partial | `Locator.attribute` ([source](crates/ferrite-e2e/src/locator.rs#L2435)) | Frame.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
-| `Frame.getByAltText` | method | Partial | `Frame.get_by_alt` ([source](crates/ferrite-e2e/src/page.rs#L664)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
-| `Frame.getByLabel` | method | Partial | `Frame.get_by_label` ([source](crates/ferrite-e2e/src/page.rs#L654)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
-| `Frame.getByPlaceholder` | method | Partial | `Frame.get_by_placeholder` ([source](crates/ferrite-e2e/src/page.rs#L659)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
-| `Frame.getByRole` | method | Partial | `Frame.get_by_role_with` ([source](crates/ferrite-e2e/src/page.rs#L645)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
-| `Frame.getByTestId` | method | Partial | `Frame.get_by_test_id` ([source](crates/ferrite-e2e/src/page.rs#L630)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
-| `Frame.getByText` | method | Partial | `Frame.get_by_text` ([source](crates/ferrite-e2e/src/page.rs#L635)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
-| `Frame.getByTitle` | method | Partial | `Frame.get_by_title` ([source](crates/ferrite-e2e/src/page.rs#L669)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
-| `Frame.goto` | method | Partial | `Frame.goto` ([source](crates/ferrite-e2e/src/page.rs#L545)) | Frame handles/evaluation exist; Firefox frame names are empty, navigation returns unit, and coordinate actions may miss offset iframes. |
+| `Frame.getByAltText` | method | Partial | `Frame.get_by_alt` ([source](crates/ferrite-e2e/src/page.rs#L695)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
+| `Frame.getByLabel` | method | Partial | `Frame.get_by_label` ([source](crates/ferrite-e2e/src/page.rs#L685)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
+| `Frame.getByPlaceholder` | method | Partial | `Frame.get_by_placeholder` ([source](crates/ferrite-e2e/src/page.rs#L690)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
+| `Frame.getByRole` | method | Partial | `Frame.get_by_role_with` ([source](crates/ferrite-e2e/src/page.rs#L676)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
+| `Frame.getByTestId` | method | Partial | `Frame.get_by_test_id` ([source](crates/ferrite-e2e/src/page.rs#L661)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
+| `Frame.getByText` | method | Partial | `Frame.get_by_text` ([source](crates/ferrite-e2e/src/page.rs#L666)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
+| `Frame.getByTitle` | method | Partial | `Frame.get_by_title` ([source](crates/ferrite-e2e/src/page.rs#L700)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
+| `Frame.goto` | method | Partial | `Frame.goto` ([source](crates/ferrite-e2e/src/page.rs#L576)) | Frame handles/evaluation exist; Firefox frame names are empty, navigation returns unit, and coordinate actions may miss offset iframes. |
 | `Frame.hover` | method | Partial | `Locator.hover` ([source](crates/ferrite-e2e/src/locator.rs#L1632)) | Frame.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Frame.innerHTML` | method | Partial | `Locator.inner_html` ([source](crates/ferrite-e2e/src/locator.rs#L2513)) | Frame.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Frame.innerText` | method | Partial | `Locator.inner_text` ([source](crates/ferrite-e2e/src/locator.rs#L916)) | Frame.locator(selector) followed by the distinct rendered/raw text getter; strict resolution and same-origin frame limitations remain. |
 | `Frame.inputValue` | method | Partial | `Locator.input_value` ([source](crates/ferrite-e2e/src/locator.rs#L2383)) | Frame.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Frame.isChecked` | method | Partial | `Locator.is_checked` ([source](crates/ferrite-e2e/src/locator.rs#L2713)) | Frame.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
-| `Frame.isDetached` | method | Partial | `Frame.is_detached` ([source](crates/ferrite-e2e/src/page.rs#L578)) | Frame handles/evaluation exist; Firefox frame names are empty, navigation returns unit, and coordinate actions may miss offset iframes. |
+| `Frame.isDetached` | method | Partial | `Frame.is_detached` ([source](crates/ferrite-e2e/src/page.rs#L609)) | Frame handles/evaluation exist; Firefox frame names are empty, navigation returns unit, and coordinate actions may miss offset iframes. |
 | `Frame.isDisabled` | method | Partial | `Locator.is_disabled` ([source](crates/ferrite-e2e/src/locator.rs#L2695)) | Frame.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Frame.isEditable` | method | Partial | `Locator.is_editable` ([source](crates/ferrite-e2e/src/locator.rs#L2731)) | Frame.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Frame.isEnabled` | method | Partial | `Locator.is_enabled` ([source](crates/ferrite-e2e/src/locator.rs#L2677)) | Frame.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Frame.isHidden` | method | Partial | `Locator.is_hidden` ([source](crates/ferrite-e2e/src/locator.rs#L2656)) | Frame.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Frame.isVisible` | method | Partial | `Locator.is_visible` ([source](crates/ferrite-e2e/src/locator.rs#L2638)) | Frame.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
-| `Frame.locator` | method | Partial | `Frame.locator` ([source](crates/ferrite-e2e/src/page.rs#L625)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
-| `Frame.name` | method | Partial | `Frame.name` ([source](crates/ferrite-e2e/src/page.rs#L534)) | Frame handles/evaluation exist; Firefox frame names are empty, navigation returns unit, and coordinate actions may miss offset iframes. |
+| `Frame.locator` | method | Partial | `Frame.locator` ([source](crates/ferrite-e2e/src/page.rs#L656)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
+| `Frame.name` | method | Partial | `Frame.name` ([source](crates/ferrite-e2e/src/page.rs#L565)) | Frame handles/evaluation exist; Firefox frame names are empty, navigation returns unit, and coordinate actions may miss offset iframes. |
 | `Frame.page` | method | Partial | `Frame.page` ([source](crates/ferrite-e2e/src/page.rs#L465)) | Frame-scoped counterpart; unit-returning waits, fewer predicate/options modes; frame NetworkIdle remains unsupported. current_url() reads navigation updates. |
-| `Frame.parentFrame` | method | Partial | `Frame.parent` ([source](crates/ferrite-e2e/src/page.rs#L554)) | Frame handles/evaluation exist; Firefox frame names are empty, navigation returns unit, and coordinate actions may miss offset iframes. |
+| `Frame.parentFrame` | method | Partial | `Frame.parent` ([source](crates/ferrite-e2e/src/page.rs#L585)) | Frame handles/evaluation exist; Firefox frame names are empty, navigation returns unit, and coordinate actions may miss offset iframes. |
 | `Frame.press` | method | Partial | `Locator.press` ([source](crates/ferrite-e2e/src/locator.rs#L2008)) | Frame.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Frame.querySelector` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Frame.querySelectorAll` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
@@ -520,16 +520,16 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 587; 
 | `Frame.setInputFiles` | method | Partial | `Locator.set_input_file_payloads` ([source](crates/ferrite-e2e/src/locator.rs#L2182)) | FilePayload filename/MIME/bytes or existing path uploads; empty lists clear, multiple files require a multiple input, 64 MiB total cap. DOM File/DataTransfer injection on both engines; no native chooser/directory upload/options parity. Frame uses Frame.locator. |
 | `Frame.tap` | method | Partial | `Locator.tap` ([source](crates/ferrite-e2e/src/locator.rs#L1710)) | Frame.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Frame.textContent` | method | Partial | `Locator.text_content` ([source](crates/ferrite-e2e/src/locator.rs#L892)) | Frame.locator(selector) followed by the distinct rendered/raw text getter; strict resolution and same-origin frame limitations remain. |
-| `Frame.title` | method | Equivalent | `Frame.title` ([source](crates/ferrite-e2e/src/page.rs#L588)) | Basic document access. |
+| `Frame.title` | method | Equivalent | `Frame.title` ([source](crates/ferrite-e2e/src/page.rs#L619)) | Basic document access. |
 | `Frame.type` (deprecated) | method | Partial | `Locator.press_sequentially_with` ([source](crates/ferrite-e2e/src/locator.rs#L2050)) | Frame.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Frame.uncheck` | method | Partial | `Locator.uncheck` ([source](crates/ferrite-e2e/src/locator.rs#L2226)) | Frame.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
-| `Frame.url` | method | Partial | `Frame.url` ([source](crates/ferrite-e2e/src/page.rs#L540)) | Frame handles/evaluation exist; Firefox frame names are empty, navigation returns unit, and coordinate actions may miss offset iframes. |
+| `Frame.url` | method | Partial | `Frame.url` ([source](crates/ferrite-e2e/src/page.rs#L571)) | Frame handles/evaluation exist; Firefox frame names are empty, navigation returns unit, and coordinate actions may miss offset iframes. |
 | `Frame.waitForFunction` | method | Partial | `Frame.wait_for_function` ([source](crates/ferrite-e2e/src/page.rs#L478)) | Frame-scoped counterpart; unit-returning waits, fewer predicate/options modes; frame NetworkIdle remains unsupported. current_url() reads navigation updates. |
 | `Frame.waitForLoadState` | method | Partial | `Frame.wait_for_load_state` ([source](crates/ferrite-e2e/src/page.rs#L503)) | Frame-scoped counterpart; unit-returning waits, fewer predicate/options modes; frame NetworkIdle remains unsupported. current_url() reads navigation updates. |
 | `Frame.waitForNavigation` (deprecated) | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Frame.waitForSelector` | method | Partial | `Frame.wait_for_selector` ([source](crates/ferrite-e2e/src/page.rs#L507)) | Frame-scoped counterpart; unit-returning waits, fewer predicate/options modes; frame NetworkIdle remains unsupported. current_url() reads navigation updates. |
 | `Frame.waitForTimeout` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `Frame.waitForURL` | method | Partial | `Frame.wait_for_url_matching` ([source](crates/ferrite-e2e/src/page.rs#L514)) | Exact (relative to base URL), full-URL glob/regex or wait_for_url_where predicate. Legacy wait_for_url remains substring-based. No waitUntil/URLPattern option object; Rust duration and clone controls govern cancellation. |
+| `Frame.waitForURL` | method | Partial | `Frame.wait_for_url_matching_with_options` ([source](crates/ferrite-e2e/src/page.rs#L541)) | Exact (relative to base URL), full-URL glob/regex or predicate with Commit/DOMContentLoaded/Load readiness in one navigation budget. Page NetworkIdle uses 500ms observed HTTP quiet; frames reject it. Legacy helpers retain substring/URL-only semantics. Zero timeout, cancellation and enclosing budgets supported; URLPattern absent. |
 
 ## FrameLocator
 
@@ -667,11 +667,11 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 587; 
 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
-| `Keyboard.down` | method | Partial | `Page.key_down` ([source](crates/ferrite-e2e/src/page.rs#L2844)) | Basic trusted inputs available via Page/Locator; fewer modifiers/options and different typing defaults. |
-| `Keyboard.insertText` | method | Partial | `Page.insert_text` ([source](crates/ferrite-e2e/src/page.rs#L2764)) | Basic trusted inputs available via Page/Locator; fewer modifiers/options and different typing defaults. |
-| `Keyboard.press` | method | Partial | `Page.press_key_with` ([source](crates/ferrite-e2e/src/page.rs#L2786)) | Basic trusted inputs available via Page/Locator; fewer modifiers/options and different typing defaults. |
+| `Keyboard.down` | method | Partial | `Page.key_down` ([source](crates/ferrite-e2e/src/page.rs#L2970)) | Basic trusted inputs available via Page/Locator; fewer modifiers/options and different typing defaults. |
+| `Keyboard.insertText` | method | Partial | `Page.insert_text` ([source](crates/ferrite-e2e/src/page.rs#L2890)) | Basic trusted inputs available via Page/Locator; fewer modifiers/options and different typing defaults. |
+| `Keyboard.press` | method | Partial | `Page.press_key_with` ([source](crates/ferrite-e2e/src/page.rs#L2912)) | Basic trusted inputs available via Page/Locator; fewer modifiers/options and different typing defaults. |
 | `Keyboard.type` | method | Partial | `Locator.press_sequentially_with` ([source](crates/ferrite-e2e/src/locator.rs#L2050)) | Basic trusted inputs available via Page/Locator; fewer modifiers/options and different typing defaults. |
-| `Keyboard.up` | method | Partial | `Page.key_up` ([source](crates/ferrite-e2e/src/page.rs#L2855)) | Basic trusted inputs available via Page/Locator; fewer modifiers/options and different typing defaults. |
+| `Keyboard.up` | method | Partial | `Page.key_up` ([source](crates/ferrite-e2e/src/page.rs#L2981)) | Basic trusted inputs available via Page/Locator; fewer modifiers/options and different typing defaults. |
 
 ## Location
 
@@ -811,12 +811,12 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 587; 
 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
-| `Mouse.click` | method | Partial | `Page.mouse_click_with` ([source](crates/ferrite-e2e/src/page.rs#L2737)) | Input methods on Page; down/up/wheel also take coordinates; fewer modifier/steps/button options. |
-| `Mouse.dblclick` | method | Partial | `Page.mouse_click` ([source](crates/ferrite-e2e/src/page.rs#L2726)) | Input methods on Page; down/up/wheel also take coordinates; fewer modifier/steps/button options. |
-| `Mouse.down` | method | Partial | `Page.mouse_down` ([source](crates/ferrite-e2e/src/page.rs#L2800)) | Input methods on Page; down/up/wheel also take coordinates; fewer modifier/steps/button options. |
-| `Mouse.move` | method | Partial | `Page.mouse_move` ([source](crates/ferrite-e2e/src/page.rs#L2753)) | Input methods on Page; down/up/wheel also take coordinates; fewer modifier/steps/button options. |
-| `Mouse.up` | method | Partial | `Page.mouse_up` ([source](crates/ferrite-e2e/src/page.rs#L2811)) | Input methods on Page; down/up/wheel also take coordinates; fewer modifier/steps/button options. |
-| `Mouse.wheel` | method | Partial | `Page.mouse_wheel` ([source](crates/ferrite-e2e/src/page.rs#L2833)) | Input methods on Page; down/up/wheel also take coordinates; fewer modifier/steps/button options. |
+| `Mouse.click` | method | Partial | `Page.mouse_click_with` ([source](crates/ferrite-e2e/src/page.rs#L2863)) | Input methods on Page; down/up/wheel also take coordinates; fewer modifier/steps/button options. |
+| `Mouse.dblclick` | method | Partial | `Page.mouse_click` ([source](crates/ferrite-e2e/src/page.rs#L2852)) | Input methods on Page; down/up/wheel also take coordinates; fewer modifier/steps/button options. |
+| `Mouse.down` | method | Partial | `Page.mouse_down` ([source](crates/ferrite-e2e/src/page.rs#L2926)) | Input methods on Page; down/up/wheel also take coordinates; fewer modifier/steps/button options. |
+| `Mouse.move` | method | Partial | `Page.mouse_move` ([source](crates/ferrite-e2e/src/page.rs#L2879)) | Input methods on Page; down/up/wheel also take coordinates; fewer modifier/steps/button options. |
+| `Mouse.up` | method | Partial | `Page.mouse_up` ([source](crates/ferrite-e2e/src/page.rs#L2937)) | Input methods on Page; down/up/wheel also take coordinates; fewer modifier/steps/button options. |
+| `Mouse.wheel` | method | Partial | `Page.mouse_wheel` ([source](crates/ferrite-e2e/src/page.rs#L2959)) | Input methods on Page; down/up/wheel also take coordinates; fewer modifier/steps/button options. |
 
 ## Page
 
@@ -824,135 +824,135 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 587; 
 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
-| `Page.clock` | property | Partial | `Page.clock_install` ([source](crates/ferrite-e2e/src/page.rs#L3248)) | Fake clock is scoped to the current document and resets on navigation; semantic differences below. |
-| `Page.close` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1800)) | PageEvent.Closed via broadcast receiver; smaller payload and lifecycle; socket events are Chromium-only. |
-| `Page.console` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1800)) | PageEvent.Console via broadcast receiver; smaller payload and lifecycle; socket events are Chromium-only. |
+| `Page.clock` | property | Partial | `Page.clock_install` ([source](crates/ferrite-e2e/src/page.rs#L3374)) | Fake clock is scoped to the current document and resets on navigation; semantic differences below. |
+| `Page.close` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1831)) | PageEvent.Closed via broadcast receiver; smaller payload and lifecycle; socket events are Chromium-only. |
+| `Page.console` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1831)) | PageEvent.Console via broadcast receiver; smaller payload and lifecycle; socket events are Chromium-only. |
 | `Page.crash` | event | Missing | — | No matching public event variant/emitter; Page.subscribe exposes only the documented PageEvent variants. |
-| `Page.dialog` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1800)) | PageEvent.Dialog via broadcast receiver; smaller payload and lifecycle; socket events are Chromium-only. |
+| `Page.dialog` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1831)) | PageEvent.Dialog via broadcast receiver; smaller payload and lifecycle; socket events are Chromium-only. |
 | `Page.dialogClosed` | event | Missing | — | No matching public event variant/emitter; Page.subscribe exposes only the documented PageEvent variants. |
 | `Page.DOMContentLoaded` | event | Missing | — | No matching public event variant/emitter; Page.subscribe exposes only the documented PageEvent variants. |
-| `Page.download` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1800)) | PageEvent.Download via broadcast receiver; smaller payload and lifecycle; socket events are Chromium-only. |
+| `Page.download` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1831)) | PageEvent.Download via broadcast receiver; smaller payload and lifecycle; socket events are Chromium-only. |
 | `Page.fileChooser` | event | Missing | — | No matching public event variant/emitter; Page.subscribe exposes only the documented PageEvent variants. |
 | `Page.frameAttached` | event | Missing | — | No matching public event variant/emitter; Page.subscribe exposes only the documented PageEvent variants. |
 | `Page.frameDetached` | event | Missing | — | No matching public event variant/emitter; Page.subscribe exposes only the documented PageEvent variants. |
 | `Page.frameNavigated` | event | Missing | — | No matching public event variant/emitter; Page.subscribe exposes only the documented PageEvent variants. |
 | `Page.load` | event | Missing | — | No matching public event variant/emitter; Page.subscribe exposes only the documented PageEvent variants. |
 | `Page.pageError` | event | Missing | — | No matching public event variant/emitter; Page.subscribe exposes only the documented PageEvent variants. |
-| `Page.popup` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1800)) | PageEvent.Popup via broadcast receiver; smaller payload and lifecycle; socket events are Chromium-only. |
-| `Page.request` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1800)) | PageEvent.Request via broadcast receiver; smaller payload and lifecycle; socket events are Chromium-only. |
-| `Page.requestFailed` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1800)) | RequestFailed enum events on Chromium/Firefox with request IDs and method/URL; failed requests carry transport error text. Context events include page identity. No rich live Request object graph. |
-| `Page.requestFinished` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1800)) | RequestFinished enum events on Chromium/Firefox with request IDs and method/URL; failed requests carry transport error text. Context events include page identity. No rich live Request object graph. |
-| `Page.response` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1800)) | PageEvent.Response via broadcast receiver; smaller payload and lifecycle; socket events are Chromium-only. |
-| `Page.webSocket` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1800)) | PageEvent.WebSocket via broadcast receiver; smaller payload and lifecycle; socket events are Chromium-only. |
+| `Page.popup` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1831)) | PageEvent.Popup via broadcast receiver; smaller payload and lifecycle; socket events are Chromium-only. |
+| `Page.request` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1831)) | PageEvent.Request via broadcast receiver; smaller payload and lifecycle; socket events are Chromium-only. |
+| `Page.requestFailed` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1831)) | RequestFailed enum events on Chromium/Firefox with request IDs and method/URL; failed requests carry transport error text. Context events include page identity. No rich live Request object graph. |
+| `Page.requestFinished` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1831)) | RequestFinished enum events on Chromium/Firefox with request IDs and method/URL; failed requests carry transport error text. Context events include page identity. No rich live Request object graph. |
+| `Page.response` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1831)) | PageEvent.Response via broadcast receiver; smaller payload and lifecycle; socket events are Chromium-only. |
+| `Page.webSocket` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1831)) | PageEvent.WebSocket via broadcast receiver; smaller payload and lifecycle; socket events are Chromium-only. |
 | `Page.worker` | event | Missing | — | No matching public event variant/emitter; Page.subscribe exposes only the documented PageEvent variants. |
-| `Page.addInitScript` | method | Partial | `Page.add_init_script` ([source](crates/ferrite-e2e/src/page.rs#L4098)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.addScriptTag` | method | Partial | `Page.add_script_tag_url` ([source](crates/ferrite-e2e/src/page.rs#L4105)) | URL/content helpers return unit; no ElementHandle return, file/type options; other helper: Page.add_script_tag_content |
-| `Page.addStyleTag` | method | Partial | `Page.add_style_tag_url` ([source](crates/ferrite-e2e/src/page.rs#L4139)) | URL/content helpers return unit; no ElementHandle return, file/type options; other helper: Page.add_style_tag_content |
-| `Page.bringToFront` | method | Partial | `Page.bring_to_front` ([source](crates/ferrite-e2e/src/page.rs#L2285)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.addInitScript` | method | Partial | `Page.add_init_script` ([source](crates/ferrite-e2e/src/page.rs#L4224)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.addScriptTag` | method | Partial | `Page.add_script_tag_url` ([source](crates/ferrite-e2e/src/page.rs#L4231)) | URL/content helpers return unit; no ElementHandle return, file/type options; other helper: Page.add_script_tag_content |
+| `Page.addStyleTag` | method | Partial | `Page.add_style_tag_url` ([source](crates/ferrite-e2e/src/page.rs#L4265)) | URL/content helpers return unit; no ElementHandle return, file/type options; other helper: Page.add_style_tag_content |
+| `Page.bringToFront` | method | Partial | `Page.bring_to_front` ([source](crates/ferrite-e2e/src/page.rs#L2316)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
 | `Page.cancelPickLocator` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Page.check` | method | Partial | `Locator.check` ([source](crates/ferrite-e2e/src/locator.rs#L2206)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Page.click` | method | Partial | `Locator.click` ([source](crates/ferrite-e2e/src/locator.rs#L1465)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
-| `Page.close` | method | Partial | `Page.close` ([source](crates/ferrite-e2e/src/page.rs#L4772)) | Closes the target and its owning convenience context; no runBeforeUnload/reason options. |
-| `Page.content` | method | Equivalent | `Page.content` ([source](crates/ferrite-e2e/src/page.rs#L2254)) | Basic document access. |
-| `Page.context` | method | Partial | `Page.context` ([source](crates/ferrite-e2e/src/page.rs#L1747)) | Owning context while registered; returns Option and becomes None after context disposal. |
-| `Page.coverage` | property | Partial | `Page.coverage` ([source](crates/ferrite-e2e/src/page.rs#L1717)) | Dedicated API exists; coverage is Chromium-only, lazy frame locators are same-origin, exceptions have ConsoleMessage shape. |
+| `Page.close` | method | Partial | `Page.close` ([source](crates/ferrite-e2e/src/page.rs#L4898)) | Closes the target and its owning convenience context; no runBeforeUnload/reason options. |
+| `Page.content` | method | Equivalent | `Page.content` ([source](crates/ferrite-e2e/src/page.rs#L2285)) | Basic document access. |
+| `Page.context` | method | Partial | `Page.context` ([source](crates/ferrite-e2e/src/page.rs#L1778)) | Owning context while registered; returns Option and becomes None after context disposal. |
+| `Page.coverage` | property | Partial | `Page.coverage` ([source](crates/ferrite-e2e/src/page.rs#L1748)) | Dedicated API exists; coverage is Chromium-only, lazy frame locators are same-origin, exceptions have ConsoleMessage shape. |
 | `Page.dblclick` | method | Partial | `Locator.dblclick` ([source](crates/ferrite-e2e/src/locator.rs#L1605)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Page.dispatchEvent` | method | Partial | `Locator.dispatch_event` ([source](crates/ferrite-e2e/src/locator.rs#L1820)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Page.dragAndDrop` | method | Partial | `Locator.drag_to` ([source](crates/ferrite-e2e/src/locator.rs#L1740)) | Page.locator(source).drag_to(target, steps); fewer options and frame-coordinate restrictions. |
-| `Page.emulateMedia` | method | Partial | `Page.emulate_media` ([source](crates/ferrite-e2e/src/page.rs#L3766)) | Chromium only; color scheme/reduced motion only, no full media/forcedColors/contrast surface. |
+| `Page.emulateMedia` | method | Partial | `Page.emulate_media` ([source](crates/ferrite-e2e/src/page.rs#L3892)) | Chromium only; color scheme/reduced motion only, no full media/forcedColors/contrast surface. |
 | `Page.evalOnSelector` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Page.evalOnSelectorAll` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `Page.evaluate` | method | Partial | `Page.evaluate_with_arg` ([source](crates/ferrite-e2e/src/page.rs#L2292)) | JSON-serializable arguments and results; no JSHandle argument or arbitrary JS value serialization. |
-| `Page.evaluateHandle` | method | Partial | `Page.evaluate_handle` ([source](crates/ferrite-e2e/src/page.rs#L2357)) | Remote JSHandle supported; no ElementHandle conversion or separate evaluation argument. |
+| `Page.evaluate` | method | Partial | `Page.evaluate_with_arg` ([source](crates/ferrite-e2e/src/page.rs#L2323)) | JSON-serializable arguments and results; no JSHandle argument or arbitrary JS value serialization. |
+| `Page.evaluateHandle` | method | Partial | `Page.evaluate_handle` ([source](crates/ferrite-e2e/src/page.rs#L2388)) | Remote JSHandle supported; no ElementHandle conversion or separate evaluation argument. |
 | `Page.exposeBinding` | method | Partial | `Page.expose_binding` ([source](crates/ferrite-e2e/src/callbacks.rs#L229)) | Async JSON binding with owning context/page/native frame identity. Same-origin frame dispatch; native startup preloads and navigation/disposal cleanup. Cross-origin/OOPIF callers and handle arguments deferred. |
 | `Page.exposeFunction` | method | Partial | `Page.expose_function_async` ([source](crates/ferrite-e2e/src/callbacks.rs#L217)) | Sync/async JSON callbacks in current/future same-origin documents; independent bounded dispatch, native preload ownership, duplicate-name errors and named removal. Rust errors/panics reject JS promises; cross-origin dispatch/handle arguments deferred. |
 | `Page.fill` | method | Partial | `Locator.fill` ([source](crates/ferrite-e2e/src/locator.rs#L1966)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Page.focus` | method | Partial | `Locator.focus` ([source](crates/ferrite-e2e/src/locator.rs#L1668)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
-| `Page.frame` | method | Partial | `Page.frame_by_name` ([source](crates/ferrite-e2e/src/page.rs#L4196)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.frameLocator` | method | Partial | `Page.frame_locator` ([source](crates/ferrite-e2e/src/page.rs#L1705)) | Dedicated API exists; coverage is Chromium-only, lazy frame locators are same-origin, exceptions have ConsoleMessage shape. |
-| `Page.frames` | method | Partial | `Page.document_frames` ([source](crates/ferrite-e2e/src/page.rs#L4175)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.frame` | method | Partial | `Page.frame_by_name` ([source](crates/ferrite-e2e/src/page.rs#L4322)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.frameLocator` | method | Partial | `Page.frame_locator` ([source](crates/ferrite-e2e/src/page.rs#L1736)) | Dedicated API exists; coverage is Chromium-only, lazy frame locators are same-origin, exceptions have ConsoleMessage shape. |
+| `Page.frames` | method | Partial | `Page.document_frames` ([source](crates/ferrite-e2e/src/page.rs#L4301)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
 | `Page.getAttribute` | method | Partial | `Locator.attribute` ([source](crates/ferrite-e2e/src/locator.rs#L2435)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
-| `Page.getByAltText` | method | Partial | `Page.get_by_alt` ([source](crates/ferrite-e2e/src/page.rs#L2526)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
-| `Page.getByLabel` | method | Partial | `Page.get_by_label` ([source](crates/ferrite-e2e/src/page.rs#L2514)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
-| `Page.getByPlaceholder` | method | Partial | `Page.get_by_placeholder` ([source](crates/ferrite-e2e/src/page.rs#L2520)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
-| `Page.getByRole` | method | Partial | `Page.get_by_role_with` ([source](crates/ferrite-e2e/src/page.rs#L2502)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
-| `Page.getByTestId` | method | Partial | `Page.get_by_test_id` ([source](crates/ferrite-e2e/src/page.rs#L2484)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
-| `Page.getByText` | method | Partial | `Page.get_by_text` ([source](crates/ferrite-e2e/src/page.rs#L2490)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
-| `Page.getByTitle` | method | Partial | `Page.get_by_title` ([source](crates/ferrite-e2e/src/page.rs#L2532)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
-| `Page.goBack` | method | Partial | `Page.go_back` ([source](crates/ferrite-e2e/src/page.rs#L2220)) | Returns unit, not a navigation Response; fewer navigation options. Relative URLs resolve through the configured base URL. |
-| `Page.goForward` | method | Partial | `Page.go_forward` ([source](crates/ferrite-e2e/src/page.rs#L2230)) | Returns unit, not a navigation Response; fewer navigation options. Relative URLs resolve through the configured base URL. |
-| `Page.requestGC` | method | Partial | `Page.request_gc` ([source](crates/ferrite-e2e/src/page.rs#L2719)) | Chromium only; Firefox returns an unsupported error. |
-| `Page.goto` | method | Partial | `Page.goto_with_options` ([source](crates/ferrite-e2e/src/page.rs#L2125)) | Returns unit, not a navigation Response; fewer navigation options. Relative URLs resolve through the configured base URL. |
+| `Page.getByAltText` | method | Partial | `Page.get_by_alt` ([source](crates/ferrite-e2e/src/page.rs#L2652)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
+| `Page.getByLabel` | method | Partial | `Page.get_by_label` ([source](crates/ferrite-e2e/src/page.rs#L2640)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
+| `Page.getByPlaceholder` | method | Partial | `Page.get_by_placeholder` ([source](crates/ferrite-e2e/src/page.rs#L2646)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
+| `Page.getByRole` | method | Partial | `Page.get_by_role_with` ([source](crates/ferrite-e2e/src/page.rs#L2628)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
+| `Page.getByTestId` | method | Partial | `Page.get_by_test_id` ([source](crates/ferrite-e2e/src/page.rs#L2610)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
+| `Page.getByText` | method | Partial | `Page.get_by_text` ([source](crates/ferrite-e2e/src/page.rs#L2616)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
+| `Page.getByTitle` | method | Partial | `Page.get_by_title` ([source](crates/ferrite-e2e/src/page.rs#L2658)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
+| `Page.goBack` | method | Partial | `Page.go_back` ([source](crates/ferrite-e2e/src/page.rs#L2251)) | Returns unit, not a navigation Response; fewer navigation options. Relative URLs resolve through the configured base URL. |
+| `Page.goForward` | method | Partial | `Page.go_forward` ([source](crates/ferrite-e2e/src/page.rs#L2261)) | Returns unit, not a navigation Response; fewer navigation options. Relative URLs resolve through the configured base URL. |
+| `Page.requestGC` | method | Partial | `Page.request_gc` ([source](crates/ferrite-e2e/src/page.rs#L2845)) | Chromium only; Firefox returns an unsupported error. |
+| `Page.goto` | method | Partial | `Page.goto_with_options` ([source](crates/ferrite-e2e/src/page.rs#L2156)) | Returns unit, not a navigation Response; fewer navigation options. Relative URLs resolve through the configured base URL. |
 | `Page.hideHighlight` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Page.hover` | method | Partial | `Locator.hover` ([source](crates/ferrite-e2e/src/locator.rs#L1632)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Page.innerHTML` | method | Partial | `Locator.inner_html` ([source](crates/ferrite-e2e/src/locator.rs#L2513)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Page.innerText` | method | Partial | `Locator.inner_text` ([source](crates/ferrite-e2e/src/locator.rs#L916)) | Page.locator(selector) followed by the distinct rendered/raw text getter; strict resolution and same-origin frame limitations remain. |
 | `Page.inputValue` | method | Partial | `Locator.input_value` ([source](crates/ferrite-e2e/src/locator.rs#L2383)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Page.isChecked` | method | Partial | `Locator.is_checked` ([source](crates/ferrite-e2e/src/locator.rs#L2713)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
-| `Page.isClosed` | method | Partial | `Page.is_closed` ([source](crates/ferrite-e2e/src/page.rs#L1905)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.isClosed` | method | Partial | `Page.is_closed` ([source](crates/ferrite-e2e/src/page.rs#L1936)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
 | `Page.isDisabled` | method | Partial | `Locator.is_disabled` ([source](crates/ferrite-e2e/src/locator.rs#L2695)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Page.isEditable` | method | Partial | `Locator.is_editable` ([source](crates/ferrite-e2e/src/locator.rs#L2731)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Page.isEnabled` | method | Partial | `Locator.is_enabled` ([source](crates/ferrite-e2e/src/locator.rs#L2677)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Page.isHidden` | method | Partial | `Locator.is_hidden` ([source](crates/ferrite-e2e/src/locator.rs#L2656)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Page.isVisible` | method | Partial | `Locator.is_visible` ([source](crates/ferrite-e2e/src/locator.rs#L2638)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
-| `Page.keyboard` | property | Partial | `Page.press_key` ([source](crates/ferrite-e2e/src/page.rs#L2775)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.clearConsoleMessages` | method | Partial | `Page.clear_console_messages` ([source](crates/ferrite-e2e/src/page.rs#L1765)) | Dedicated API exists; coverage is Chromium-only, lazy frame locators are same-origin, exceptions have ConsoleMessage shape. |
-| `Page.clearPageErrors` | method | Partial | `Page.clear_page_errors` ([source](crates/ferrite-e2e/src/page.rs#L1782)) | Dedicated API exists; coverage is Chromium-only, lazy frame locators are same-origin, exceptions have ConsoleMessage shape. |
-| `Page.localStorage` | property | Partial | `Page.local_storage_get` ([source](crates/ferrite-e2e/src/page.rs#L3035)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.sessionStorage` | property | Partial | `Page.session_storage_get` ([source](crates/ferrite-e2e/src/page.rs#L3072)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.consoleMessages` | method | Partial | `Page.console_messages` ([source](crates/ferrite-e2e/src/page.rs#L2072)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.pageErrors` | method | Partial | `Page.page_errors` ([source](crates/ferrite-e2e/src/page.rs#L1774)) | Dedicated API exists; coverage is Chromium-only, lazy frame locators are same-origin, exceptions have ConsoleMessage shape. |
-| `Page.locator` | method | Partial | `Page.locator` ([source](crates/ferrite-e2e/src/page.rs#L2478)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
-| `Page.mainFrame` | method | Partial | `Page.document_frames` ([source](crates/ferrite-e2e/src/page.rs#L4175)) | Enumerate frames and choose the root manually; no dedicated main_frame API. |
-| `Page.mouse` | property | Partial | `Page.mouse_click` ([source](crates/ferrite-e2e/src/page.rs#L2726)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.opener` | method | Partial | `Page.opener` ([source](crates/ferrite-e2e/src/page.rs#L1950)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.keyboard` | property | Partial | `Page.press_key` ([source](crates/ferrite-e2e/src/page.rs#L2901)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.clearConsoleMessages` | method | Partial | `Page.clear_console_messages` ([source](crates/ferrite-e2e/src/page.rs#L1796)) | Dedicated API exists; coverage is Chromium-only, lazy frame locators are same-origin, exceptions have ConsoleMessage shape. |
+| `Page.clearPageErrors` | method | Partial | `Page.clear_page_errors` ([source](crates/ferrite-e2e/src/page.rs#L1813)) | Dedicated API exists; coverage is Chromium-only, lazy frame locators are same-origin, exceptions have ConsoleMessage shape. |
+| `Page.localStorage` | property | Partial | `Page.local_storage_get` ([source](crates/ferrite-e2e/src/page.rs#L3161)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.sessionStorage` | property | Partial | `Page.session_storage_get` ([source](crates/ferrite-e2e/src/page.rs#L3198)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.consoleMessages` | method | Partial | `Page.console_messages` ([source](crates/ferrite-e2e/src/page.rs#L2103)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.pageErrors` | method | Partial | `Page.page_errors` ([source](crates/ferrite-e2e/src/page.rs#L1805)) | Dedicated API exists; coverage is Chromium-only, lazy frame locators are same-origin, exceptions have ConsoleMessage shape. |
+| `Page.locator` | method | Partial | `Page.locator` ([source](crates/ferrite-e2e/src/page.rs#L2604)) | Strict single-target actions; exact/regex matching and open shadow roots supported. Full accessible-name/selector-extension semantics remain narrower. |
+| `Page.mainFrame` | method | Partial | `Page.document_frames` ([source](crates/ferrite-e2e/src/page.rs#L4301)) | Enumerate frames and choose the root manually; no dedicated main_frame API. |
+| `Page.mouse` | property | Partial | `Page.mouse_click` ([source](crates/ferrite-e2e/src/page.rs#L2852)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.opener` | method | Partial | `Page.opener` ([source](crates/ferrite-e2e/src/page.rs#L1981)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
 | `Page.pause` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `Page.pdf` | method | Partial | `Page.pdf` ([source](crates/ferrite-e2e/src/page.rs#L3221)) | PDF export exists; no PDF options builder. Engine behavior differs. |
+| `Page.pdf` | method | Partial | `Page.pdf` ([source](crates/ferrite-e2e/src/page.rs#L3347)) | PDF export exists; no PDF options builder. Engine behavior differs. |
 | `Page.pickLocator` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Page.press` | method | Partial | `Locator.press` ([source](crates/ferrite-e2e/src/locator.rs#L2008)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Page.querySelector` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Page.querySelectorAll` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `Page.requests` | method | Partial | `Page.requests` ([source](crates/ferrite-e2e/src/page.rs#L4026)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.addLocatorHandler` | method | Partial | `Page.add_locator_handler_with` ([source](crates/ferrite-e2e/src/page.rs#L2561)) | Visibility-based overlay handlers run before actions and state/custom assertions; no full dismissal/noWaitAfter semantics. |
+| `Page.requests` | method | Partial | `Page.requests` ([source](crates/ferrite-e2e/src/page.rs#L4152)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.addLocatorHandler` | method | Partial | `Page.add_locator_handler_with` ([source](crates/ferrite-e2e/src/page.rs#L2687)) | Visibility-based overlay handlers run before actions and state/custom assertions; no full dismissal/noWaitAfter semantics. |
 | `Page.removeAllListeners` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `Page.removeLocatorHandler` | method | Partial | `Page.remove_locator_handler` ([source](crates/ferrite-e2e/src/page.rs#L2583)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.reload` | method | Partial | `Page.reload` ([source](crates/ferrite-e2e/src/page.rs#L2212)) | Returns unit, not a navigation Response; fewer navigation options. Relative URLs resolve through the configured base URL. |
-| `Page.request` | property | Partial | `Page.request` ([source](crates/ferrite-e2e/src/page.rs#L1758)) | HTTP client sharing owning-context cookies and inheriting its transport defaults; cancellation follows context disposal. |
-| `Page.route` | method | Partial | `Page.route_with_handler` ([source](crates/ferrite-e2e/src/page.rs#L3799)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.routeFromHAR` | method | Partial | `Page.route_from_har` ([source](crates/ferrite-e2e/src/page.rs#L3914)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.removeLocatorHandler` | method | Partial | `Page.remove_locator_handler` ([source](crates/ferrite-e2e/src/page.rs#L2709)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.reload` | method | Partial | `Page.reload` ([source](crates/ferrite-e2e/src/page.rs#L2243)) | Returns unit, not a navigation Response; fewer navigation options. Relative URLs resolve through the configured base URL. |
+| `Page.request` | property | Partial | `Page.request` ([source](crates/ferrite-e2e/src/page.rs#L1789)) | HTTP client sharing owning-context cookies and inheriting its transport defaults; cancellation follows context disposal. |
+| `Page.route` | method | Partial | `Page.route_with_handler` ([source](crates/ferrite-e2e/src/page.rs#L3925)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.routeFromHAR` | method | Partial | `Page.route_from_har` ([source](crates/ferrite-e2e/src/page.rs#L4040)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
 | `Page.routeWebSocket` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `Page.screencast` | property | Partial | `Page.frames` ([source](crates/ferrite-e2e/src/page.rs#L4736)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.screenshot` | method | Partial | `Page.screenshot` ([source](crates/ferrite-e2e/src/page.rs#L3128)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.screencast` | property | Partial | `Page.frames` ([source](crates/ferrite-e2e/src/page.rs#L4862)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.screenshot` | method | Partial | `Page.screenshot` ([source](crates/ferrite-e2e/src/page.rs#L3254)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
 | `Page.selectOption` | method | Partial | `Locator.select_options` ([source](crates/ferrite-e2e/src/locator.rs#L2298)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Page.setChecked` | method | Partial | `Locator.set_checked` ([source](crates/ferrite-e2e/src/locator.rs#L2829)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
-| `Page.setContent` | method | Partial | `Page.set_content` ([source](crates/ferrite-e2e/src/page.rs#L2264)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.setDefaultNavigationTimeout` | method | Partial | `Page.set_navigation_timeout` ([source](crates/ferrite-e2e/src/page.rs#L2020)) | Navigation default distinct from locator timeout. |
-| `Page.setDefaultTimeout` | method | Partial | `Page.set_timeout` ([source](crates/ferrite-e2e/src/page.rs#L2011)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.setExtraHTTPHeaders` | method | Partial | `Page.set_extra_http_headers` ([source](crates/ferrite-e2e/src/page.rs#L3696)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.setInputFiles` | method | Partial | `Page.set_input_file_payloads` ([source](crates/ferrite-e2e/src/page.rs#L4068)) | FilePayload filename/MIME/bytes or existing path uploads; empty lists clear, multiple files require a multiple input, 64 MiB total cap. DOM File/DataTransfer injection on both engines; no native chooser/directory upload/options parity. Frame uses Frame.locator. |
-| `Page.setViewportSize` | method | Partial | `Page.set_viewport` ([source](crates/ferrite-e2e/src/page.rs#L3228)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.ariaSnapshot` | method | Partial | `Page.aria_snapshot` ([source](crates/ferrite-e2e/src/page.rs#L4321)) | Structured role/name/state DOM approximation, including open shadow roots; no full ARIA/YAML matching, mode/depth/boxes options. |
-| `Page.ariaSnapshotJSON` | method | Partial | `Page.aria_snapshot_json` ([source](crates/ferrite-e2e/src/page.rs#L4311)) | Nested role/name/state DOM tree without name/node truncation; not the complete accessibility algorithm. |
+| `Page.setContent` | method | Partial | `Page.set_content` ([source](crates/ferrite-e2e/src/page.rs#L2295)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.setDefaultNavigationTimeout` | method | Partial | `Page.set_navigation_timeout` ([source](crates/ferrite-e2e/src/page.rs#L2051)) | Navigation default distinct from locator timeout. |
+| `Page.setDefaultTimeout` | method | Partial | `Page.set_timeout` ([source](crates/ferrite-e2e/src/page.rs#L2042)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.setExtraHTTPHeaders` | method | Partial | `Page.set_extra_http_headers` ([source](crates/ferrite-e2e/src/page.rs#L3822)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.setInputFiles` | method | Partial | `Page.set_input_file_payloads` ([source](crates/ferrite-e2e/src/page.rs#L4194)) | FilePayload filename/MIME/bytes or existing path uploads; empty lists clear, multiple files require a multiple input, 64 MiB total cap. DOM File/DataTransfer injection on both engines; no native chooser/directory upload/options parity. Frame uses Frame.locator. |
+| `Page.setViewportSize` | method | Partial | `Page.set_viewport` ([source](crates/ferrite-e2e/src/page.rs#L3354)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.ariaSnapshot` | method | Partial | `Page.aria_snapshot` ([source](crates/ferrite-e2e/src/page.rs#L4447)) | Structured role/name/state DOM approximation, including open shadow roots; no full ARIA/YAML matching, mode/depth/boxes options. |
+| `Page.ariaSnapshotJSON` | method | Partial | `Page.aria_snapshot_json` ([source](crates/ferrite-e2e/src/page.rs#L4437)) | Nested role/name/state DOM tree without name/node truncation; not the complete accessibility algorithm. |
 | `Page.tap` | method | Partial | `Locator.tap` ([source](crates/ferrite-e2e/src/locator.rs#L1710)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Page.textContent` | method | Partial | `Locator.text_content` ([source](crates/ferrite-e2e/src/locator.rs#L892)) | Page.locator(selector) followed by the distinct rendered/raw text getter; strict resolution and same-origin frame limitations remain. |
-| `Page.title` | method | Equivalent | `Page.title` ([source](crates/ferrite-e2e/src/page.rs#L2240)) | Basic document access. |
-| `Page.touchscreen` | property | Partial | `Page.touchscreen_tap` ([source](crates/ferrite-e2e/src/page.rs#L2866)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.title` | method | Equivalent | `Page.title` ([source](crates/ferrite-e2e/src/page.rs#L2271)) | Basic document access. |
+| `Page.touchscreen` | property | Partial | `Page.touchscreen_tap` ([source](crates/ferrite-e2e/src/page.rs#L2992)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
 | `Page.type` (deprecated) | method | Partial | `Locator.press_sequentially_with` ([source](crates/ferrite-e2e/src/locator.rs#L2050)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
 | `Page.uncheck` | method | Partial | `Locator.uncheck` ([source](crates/ferrite-e2e/src/locator.rs#L2226)) | Page.locator(selector) followed by this operation; no selector-method facade. Locator/input semantics remain partial. |
-| `Page.unrouteAll` | method | Partial | `Page.unroute_all` ([source](crates/ferrite-e2e/src/page.rs#L3889)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.unroute` | method | Partial | `Page.unroute` ([source](crates/ferrite-e2e/src/page.rs#L3859)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.url` | method | Equivalent | `Page.url` ([source](crates/ferrite-e2e/src/page.rs#L2247)) | Basic document access. |
-| `Page.video` | method | Partial | `Page.start_video` ([source](crates/ferrite-e2e/src/page.rs#L4663)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.viewportSize` | method | Partial | `Page.viewport_size` ([source](crates/ferrite-e2e/src/page.rs#L2704)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.waitForEvent` | method | Partial | `Page.wait_for_event` ([source](crates/ferrite-e2e/src/page.rs#L1809)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.waitForFunction` | method | Partial | `Page.wait_for_function` ([source](crates/ferrite-e2e/src/page.rs#L2376)) | Awaits Promise predicates correctly; polling returns unit, with no JSHandle/polling-mode/argument options. |
-| `Page.waitForLoadState` | method | Partial | `Page.wait_for_load_state` ([source](crates/ferrite-e2e/src/page.rs#L2459)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.unrouteAll` | method | Partial | `Page.unroute_all` ([source](crates/ferrite-e2e/src/page.rs#L4015)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.unroute` | method | Partial | `Page.unroute` ([source](crates/ferrite-e2e/src/page.rs#L3985)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.url` | method | Equivalent | `Page.url` ([source](crates/ferrite-e2e/src/page.rs#L2278)) | Basic document access. |
+| `Page.video` | method | Partial | `Page.start_video` ([source](crates/ferrite-e2e/src/page.rs#L4789)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.viewportSize` | method | Partial | `Page.viewport_size` ([source](crates/ferrite-e2e/src/page.rs#L2830)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.waitForEvent` | method | Partial | `Page.wait_for_event` ([source](crates/ferrite-e2e/src/page.rs#L1840)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.waitForFunction` | method | Partial | `Page.wait_for_function` ([source](crates/ferrite-e2e/src/page.rs#L2407)) | Awaits Promise predicates correctly; polling returns unit, with no JSHandle/polling-mode/argument options. |
+| `Page.waitForLoadState` | method | Partial | `Page.wait_for_load_state` ([source](crates/ferrite-e2e/src/page.rs#L2585)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
 | `Page.waitForNavigation` (deprecated) | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `Page.waitForRequest` | method | Partial | `Page.wait_for_request_async` ([source](crates/ferrite-e2e/src/page.rs#L4480)) | Exact/glob/regex or sync/async predicates over RecordedRequest fields; request waits resolve at start, response waits at headers including already in-flight requests. Returns a metadata snapshot rather than rich live Request/Response/body objects. Legacy strings retain substring semantics; lag fails explicitly. |
-| `Page.waitForResponse` | method | Partial | `Page.wait_for_response_async` ([source](crates/ferrite-e2e/src/page.rs#L4524)) | Exact/glob/regex or sync/async predicates over RecordedRequest fields; request waits resolve at start, response waits at headers including already in-flight requests. Returns a metadata snapshot rather than rich live Request/Response/body objects. Legacy strings retain substring semantics; lag fails explicitly. |
-| `Page.waitForSelector` | method | Partial | `Page.wait_for_selector_with` ([source](crates/ferrite-e2e/src/page.rs#L1921)) | Waits for requested state and returns Locator, not ElementHandle. |
-| `Page.waitForTimeout` | method | Partial | `Page.wait_for_timeout` ([source](crates/ferrite-e2e/src/page.rs#L2407)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
-| `Page.waitForURL` | method | Partial | `Page.wait_for_url_matching` ([source](crates/ferrite-e2e/src/page.rs#L2424)) | Exact (relative to base URL), full-URL glob/regex or wait_for_url_where predicate. Legacy wait_for_url remains substring-based. No waitUntil/URLPattern option object; Rust duration and clone controls govern cancellation. |
+| `Page.waitForRequest` | method | Partial | `Page.wait_for_request_async` ([source](crates/ferrite-e2e/src/page.rs#L4606)) | Exact/glob/regex or sync/async predicates over RecordedRequest fields; request waits resolve at start, response waits at headers including already in-flight requests. Returns a metadata snapshot rather than rich live Request/Response/body objects. Legacy strings retain substring semantics; lag fails explicitly. |
+| `Page.waitForResponse` | method | Partial | `Page.wait_for_response_async` ([source](crates/ferrite-e2e/src/page.rs#L4650)) | Exact/glob/regex or sync/async predicates over RecordedRequest fields; request waits resolve at start, response waits at headers including already in-flight requests. Returns a metadata snapshot rather than rich live Request/Response/body objects. Legacy strings retain substring semantics; lag fails explicitly. |
+| `Page.waitForSelector` | method | Partial | `Page.wait_for_selector_with` ([source](crates/ferrite-e2e/src/page.rs#L1952)) | Waits for requested state and returns Locator, not ElementHandle. |
+| `Page.waitForTimeout` | method | Partial | `Page.wait_for_timeout` ([source](crates/ferrite-e2e/src/page.rs#L2438)) | Similar operation, with a smaller option/result/event surface; see feature audit. |
+| `Page.waitForURL` | method | Partial | `Page.wait_for_url_matching_with_options` ([source](crates/ferrite-e2e/src/page.rs#L2489)) | Exact (relative to base URL), full-URL glob/regex or predicate with Commit/DOMContentLoaded/Load readiness in one navigation budget. Page NetworkIdle uses 500ms observed HTTP quiet; frames reject it. Legacy helpers retain substring/URL-only semantics. Zero timeout, cancellation and enclosing budgets supported; URLPattern absent. |
 | `Page.workers` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 
 ## PageAssertions
@@ -974,7 +974,7 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 587; 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
 | `Playwright.chromium` | property | Partial | `Browser.launch` ([source](crates/ferrite-e2e/src/browser.rs#L367)) | Select BrowserKind with LaunchOptions; no BrowserType object or bundled browser installer. |
-| `Playwright.devices` | property | Partial | `DeviceDescriptor` ([source](crates/ferrite-e2e/src/page.rs#L698)) | Seven metrics presets; no full device catalog or device user-agent metadata. |
+| `Playwright.devices` | property | Partial | `DeviceDescriptor` ([source](crates/ferrite-e2e/src/page.rs#L729)) | Seven metrics presets; no full device catalog or device user-agent metadata. |
 | `Playwright.errors` | property | Idiomatic | `E2eError` ([source](crates/ferrite-e2e/src/error.rs#L8)) | Rust error enum, with different variants and diagnostics. |
 | `Playwright.firefox` | property | Partial | `Browser.launch` ([source](crates/ferrite-e2e/src/browser.rs#L367)) | Select BrowserKind with LaunchOptions; no BrowserType object or bundled browser installer. |
 | `Playwright.request` | property | Partial | `ApiClient` ([source](crates/ferrite-e2e/src/api.rs#L141)) | Standalone or context-linked HTTP client; smaller APIRequest option surface. |
@@ -1070,12 +1070,12 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 587; 
 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
-| `Route.abort` | method | Partial | `RouteAction.abort_with` ([source](crates/ferrite-e2e/src/page.rs#L1153)) | Rule/action model, with glob patterns and fewer options; response modification and URL override are Chromium-only. |
-| `Route.continue` | method | Partial | `RouteRule.continue_with` ([source](crates/ferrite-e2e/src/page.rs#L1303)) | Rule/action model, with glob patterns and fewer options; response modification and URL override are Chromium-only. |
-| `Route.fallback` | method | Partial | `RouteAction.fallback` ([source](crates/ferrite-e2e/src/page.rs#L1190)) | Rule/action model, with glob patterns and fewer options; response modification and URL override are Chromium-only. |
-| `Route.fetch` | method | Partial | `RouteInfo.fetch` ([source](crates/ferrite-e2e/src/page.rs#L1053)) | Standalone reqwest client, not a shared browser cookie context; no full redirect/retry/options surface. |
-| `Route.fulfill` | method | Partial | `RouteAction.fulfill_full` ([source](crates/ferrite-e2e/src/page.rs#L1169)) | Rule/action model, with glob patterns and fewer options; response modification and URL override are Chromium-only. |
-| `Route.request` | method | Partial | `RouteInfo` ([source](crates/ferrite-e2e/src/page.rs#L1039)) | Rule/action model, with glob patterns and fewer options; response modification and URL override are Chromium-only. |
+| `Route.abort` | method | Partial | `RouteAction.abort_with` ([source](crates/ferrite-e2e/src/page.rs#L1184)) | Rule/action model, with glob patterns and fewer options; response modification and URL override are Chromium-only. |
+| `Route.continue` | method | Partial | `RouteRule.continue_with` ([source](crates/ferrite-e2e/src/page.rs#L1334)) | Rule/action model, with glob patterns and fewer options; response modification and URL override are Chromium-only. |
+| `Route.fallback` | method | Partial | `RouteAction.fallback` ([source](crates/ferrite-e2e/src/page.rs#L1221)) | Rule/action model, with glob patterns and fewer options; response modification and URL override are Chromium-only. |
+| `Route.fetch` | method | Partial | `RouteInfo.fetch` ([source](crates/ferrite-e2e/src/page.rs#L1084)) | Standalone reqwest client, not a shared browser cookie context; no full redirect/retry/options surface. |
+| `Route.fulfill` | method | Partial | `RouteAction.fulfill_full` ([source](crates/ferrite-e2e/src/page.rs#L1200)) | Rule/action model, with glob patterns and fewer options; response modification and URL override are Chromium-only. |
+| `Route.request` | method | Partial | `RouteInfo` ([source](crates/ferrite-e2e/src/page.rs#L1070)) | Rule/action model, with glob patterns and fewer options; response modification and URL override are Chromium-only. |
 
 ## Screencast
 
@@ -1083,8 +1083,8 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 587; 
 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
-| `Screencast.start` | method | Partial | `Page.start_video` ([source](crates/ferrite-e2e/src/page.rs#L4663)) | Video recording/live frames available; fewer formats/options, no screencast overlay/action system. |
-| `Screencast.stop` | method | Partial | `Page.stop_video` ([source](crates/ferrite-e2e/src/page.rs#L4704)) | Explicit output path; Chromium assembles frames with ffmpeg, Firefox records natively. |
+| `Screencast.start` | method | Partial | `Page.start_video` ([source](crates/ferrite-e2e/src/page.rs#L4789)) | Video recording/live frames available; fewer formats/options, no screencast overlay/action system. |
+| `Screencast.stop` | method | Partial | `Page.stop_video` ([source](crates/ferrite-e2e/src/page.rs#L4830)) | Explicit output path; Chromium assembles frames with ffmpeg, Firefox records natively. |
 | `Screencast.showOverlay` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Screencast.showChapter` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Screencast.showActions` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
@@ -1157,8 +1157,8 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 587; 
 | `Test.setTimeout` | method | Partial | `TestInfo.set_timeout` ([source](crates/ferrite-e2e/src/runner.rs#L689)) | Static Test builders plus runtime TestInfo controls; use Rust conditionals and skip(reason)? for immediate closure exit. No JavaScript overload inference. |
 | `Test.skip` | method | Partial | `TestInfo.skip` ([source](crates/ferrite-e2e/src/runner.rs#L659)) | Static Test builders plus runtime TestInfo controls; use Rust conditionals and skip(reason)? for immediate closure exit. No JavaScript overload inference. |
 | `Test.slow` | method | Partial | `TestInfo.slow` ([source](crates/ferrite-e2e/src/runner.rs#L678)) | Static Test builders plus runtime TestInfo controls; use Rust conditionals and skip(reason)? for immediate closure exit. No JavaScript overload inference. |
-| `Test.step` | method | Partial | `Page.step_with` ([source](crates/ferrite-e2e/src/page.rs#L2909)) | Nested controlled steps with local timeout, skip, annotations and title paths through Page.step_with; legacy step_result remains available. Automatic navigation/locator/assertion/hook/fixture scopes; no boxing or subtitle/params options. |
-| `Test.step.skip` | method | Partial | `Page.step_with` ([source](crates/ferrite-e2e/src/page.rs#L2909)) | StepOptions.skip records a skipped user step without constructing its closure; StepOutcome carries the reason. Rust option rather than a separate JS method. |
+| `Test.step` | method | Partial | `Page.step_with` ([source](crates/ferrite-e2e/src/page.rs#L3035)) | Nested controlled steps with local timeout, skip, annotations and title paths through Page.step_with; legacy step_result remains available. Automatic navigation/locator/assertion/hook/fixture scopes; no boxing or subtitle/params options. |
+| `Test.step.skip` | method | Partial | `Page.step_with` ([source](crates/ferrite-e2e/src/page.rs#L3035)) | StepOptions.skip records a skipped user step without constructing its closure; StepOutcome carries the reason. Rust option rather than a separate JS method. |
 | `Test.use` | method | Partial | `Suite.context_options` ([source](crates/ferrite-e2e/src/runner.rs#L429)) | Nested suite/test context inheritance; no general named fixture option overrides. |
 
 ## TestCase
@@ -1307,7 +1307,7 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 587; 
 | `TestOptions.bypassCSP` | property | Partial | `ContextOptions.bypass_csp` ([source](crates/ferrite-e2e/src/context.rs#L199)) | Available through runner defaults and per-project context options; no suite-scoped test.use; Firefox restrictions and narrower options apply. |
 | `TestOptions.channel` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestOptions.clientCertificates` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `TestOptions.colorScheme` | property | Partial | `Page.emulate_media` ([source](crates/ferrite-e2e/src/page.rs#L3766)) | Chromium page-level manual emulation; no context/test option binding. |
+| `TestOptions.colorScheme` | property | Partial | `Page.emulate_media` ([source](crates/ferrite-e2e/src/page.rs#L3892)) | Chromium page-level manual emulation; no context/test option binding. |
 | `TestOptions.connectOptions` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestOptions.contextOptions` | property | Partial | `Project.context_options` ([source](crates/ferrite-e2e/src/runner.rs#L1255)) | Isolated context per attempt, runner defaults and per-project overrides; no full named-fixture test.use model. |
 | `TestOptions.contrast` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
@@ -1327,7 +1327,7 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 587; 
 | `TestOptions.offline` | property | Partial | `ContextOptions.offline` ([source](crates/ferrite-e2e/src/context.rs#L150)) | Available through runner defaults and per-project context options; no suite-scoped test.use; Firefox restrictions and narrower options apply. |
 | `TestOptions.permissions` | property | Partial | `ContextOptions.permissions` ([source](crates/ferrite-e2e/src/context.rs#L143)) | Available through runner defaults and per-project context options; no suite-scoped test.use; Firefox restrictions and narrower options apply. |
 | `TestOptions.proxy` | property | Partial | `ContextOptions.proxy_server` ([source](crates/ferrite-e2e/src/context.rs#L39)) | Available through runner defaults and per-project context options; no suite-scoped test.use; Firefox restrictions and narrower options apply. |
-| `TestOptions.reducedMotion` | property | Partial | `Page.emulate_media` ([source](crates/ferrite-e2e/src/page.rs#L3766)) | Chromium page-level manual emulation; no context/test option binding. |
+| `TestOptions.reducedMotion` | property | Partial | `Page.emulate_media` ([source](crates/ferrite-e2e/src/page.rs#L3892)) | Chromium page-level manual emulation; no context/test option binding. |
 | `TestOptions.reuseContext` | property | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `TestOptions.screenshot` | property | Partial | `E2eConfig.screenshot` ([source](crates/ferrite-config/src/lib.rs#L434)) | Runner/launch config field; no automatic named-fixture/project options equivalence. |
 | `TestOptions.storageState` | property | Partial | `ContextOptions.storage_state` ([source](crates/ferrite-e2e/src/context.rs#L220)) | Available through runner defaults and per-project context options; no suite-scoped test.use; Firefox restrictions and narrower options apply. |
@@ -1440,7 +1440,7 @@ No own JS-applicable member headings. The class/error type is not exposed as a F
 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
-| `Touchscreen.tap` | method | Partial | `Page.touchscreen_tap` ([source](crates/ferrite-e2e/src/page.rs#L2866)) | Coordinate tap available; no separate Touchscreen object. |
+| `Touchscreen.tap` | method | Partial | `Page.touchscreen_tap` ([source](crates/ferrite-e2e/src/page.rs#L2992)) | Coordinate tap available; no separate Touchscreen object. |
 
 ## Tracing
 
@@ -1450,12 +1450,12 @@ No own JS-applicable member headings. The class/error type is not exposed as a F
 |---|---|---|---|---|
 | `Tracing.start` | method | Partial | `BrowserContext.start_tracing` ([source](crates/ferrite-e2e/src/context.rs#L954)) | Custom JSON actions/logs/requests; optional screenshots at Page.step only, no DOM/ARIA/source snapshots. |
 | `Tracing.startChunk` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `Tracing.startHar` | method | Partial | `Page.start_request_capture` ([source](crates/ferrite-e2e/src/page.rs#L4005)) | Page capture + save_har_with; no Tracing.startHar API or full browser/API-request tracing. |
+| `Tracing.startHar` | method | Partial | `Page.start_request_capture` ([source](crates/ferrite-e2e/src/page.rs#L4131)) | Page capture + save_har_with; no Tracing.startHar API or full browser/API-request tracing. |
 | `Tracing.group` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Tracing.groupEnd` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Tracing.stop` | method | Partial | `BrowserContext.stop_tracing` ([source](crates/ferrite-e2e/src/context.rs#L967)) | Writes JSON, not a Trace Viewer-compatible zip archive. |
 | `Tracing.stopChunk` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `Tracing.stopHar` | method | Partial | `Page.save_har_with` ([source](crates/ferrite-e2e/src/page.rs#L4045)) | HAR exporter; no Tracing.stopHar interface, update/rewrite mode or full timing/body coverage. |
+| `Tracing.stopHar` | method | Partial | `Page.save_har_with` ([source](crates/ferrite-e2e/src/page.rs#L4171)) | HAR exporter; no Tracing.stopHar interface, update/rewrite mode or full timing/body coverage. |
 
 ## Video
 
@@ -1465,7 +1465,7 @@ No own JS-applicable member headings. The class/error type is not exposed as a F
 |---|---|---|---|---|
 | `Video.delete` | method | Idiomatic | — | Caller deletes artifact through Rust filesystem operations; no Video object. |
 | `Video.path` | method | Partial | `TestResult.video` ([source](crates/ferrite-e2e/src/report.rs#L735)) | Runner records an optional artifact path, not Page.video()/Video object. |
-| `Video.saveAs` | method | Partial | `Page.stop_video` ([source](crates/ferrite-e2e/src/page.rs#L4704)) | Stop recording to a path; no independently awaitable Video handle. |
+| `Video.saveAs` | method | Partial | `Page.stop_video` ([source](crates/ferrite-e2e/src/page.rs#L4830)) | Stop recording to a path; no independently awaitable Video handle. |
 
 ## WebError
 
@@ -1483,9 +1483,9 @@ No own JS-applicable member headings. The class/error type is not exposed as a F
 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
-| `WebSocket.close` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1800)) | PageEvent::WebSocket direction Closed; Chromium-only observation without a WebSocket object. |
-| `WebSocket.frameReceived` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1800)) | PageEvent::WebSocket direction Received; Chromium-only observation without a WebSocket object. |
-| `WebSocket.frameSent` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1800)) | PageEvent::WebSocket direction Sent; Chromium-only observation without a WebSocket object. |
+| `WebSocket.close` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1831)) | PageEvent::WebSocket direction Closed; Chromium-only observation without a WebSocket object. |
+| `WebSocket.frameReceived` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1831)) | PageEvent::WebSocket direction Received; Chromium-only observation without a WebSocket object. |
+| `WebSocket.frameSent` | event | Partial | `Page.subscribe` ([source](crates/ferrite-e2e/src/page.rs#L1831)) | PageEvent::WebSocket direction Sent; Chromium-only observation without a WebSocket object. |
 | `WebSocket.socketError` | event | Missing | — | No matching public event variant/emitter; Page.subscribe exposes only the documented PageEvent variants. |
 | `WebSocket.isClosed` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `WebSocket.url` | method | Partial | `WebSocketEvent.url` ([source](crates/ferrite-e2e/src/page.rs#L276)) | Captured socket URL, Chromium only. |
@@ -1512,10 +1512,10 @@ No own JS-applicable member headings. The class/error type is not exposed as a F
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
 | `WebStorage.items` | method | Missing | — | No dedicated storage enumeration API; general evaluate can be used as a workaround. |
-| `WebStorage.getItem` | method | Partial | `Page.local_storage_get` ([source](crates/ferrite-e2e/src/page.rs#L3035)) | Page helper methods for local and session storage; no WebStorage object. |
-| `WebStorage.setItem` | method | Partial | `Page.local_storage_set` ([source](crates/ferrite-e2e/src/page.rs#L3042)) | Page helper methods for local and session storage; no WebStorage object. |
-| `WebStorage.removeItem` | method | Partial | `Page.local_storage_remove` ([source](crates/ferrite-e2e/src/page.rs#L3049)) | Page helper methods for local and session storage; no WebStorage object. |
-| `WebStorage.clear` | method | Partial | `Page.local_storage_clear` ([source](crates/ferrite-e2e/src/page.rs#L3062)) | Page helper methods for local and session storage; no WebStorage object. |
+| `WebStorage.getItem` | method | Partial | `Page.local_storage_get` ([source](crates/ferrite-e2e/src/page.rs#L3161)) | Page helper methods for local and session storage; no WebStorage object. |
+| `WebStorage.setItem` | method | Partial | `Page.local_storage_set` ([source](crates/ferrite-e2e/src/page.rs#L3168)) | Page helper methods for local and session storage; no WebStorage object. |
+| `WebStorage.removeItem` | method | Partial | `Page.local_storage_remove` ([source](crates/ferrite-e2e/src/page.rs#L3175)) | Page helper methods for local and session storage; no WebStorage object. |
+| `WebStorage.clear` | method | Partial | `Page.local_storage_clear` ([source](crates/ferrite-e2e/src/page.rs#L3188)) | Page helper methods for local and session storage; no WebStorage object. |
 
 ## Worker
 

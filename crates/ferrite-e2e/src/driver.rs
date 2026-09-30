@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -28,6 +28,7 @@ type ContextEventForwarding = (
     String,
     std::sync::Weak<Mutex<Vec<ConsoleMessage>>>,
 );
+type IdleRequestScope = (Option<String>, Option<String>);
 
 /// Live request-start/response-header observation, separate from HAR/body capture.
 #[derive(Clone)]
@@ -45,11 +46,13 @@ pub struct ConsoleSink {
     pub trace: Arc<Mutex<Vec<TraceEntry>>>,
     /// In-flight network requests (network-idle waits).
     pub inflight: Arc<AtomicUsize>,
+    network_activity: Arc<AtomicU64>,
     /// Dialogs observed while auto-handling (oldest first).
     pub dialogs: Arc<Mutex<Vec<DialogInfo>>>,
     /// Recorded network requests (oldest first, capped).
     requests: Arc<Mutex<VecDeque<RecordedRequest>>>,
     active_requests: Arc<Mutex<HashMap<String, NetworkRequest>>>,
+    idle_requests: Arc<Mutex<HashMap<String, IdleRequestScope>>>,
     observed_network: Arc<Mutex<HashMap<String, RecordedRequest>>>,
     network_events: tokio::sync::broadcast::Sender<NetworkObservation>,
     /// WebSocket request id to URL (resolves frame events to sockets).
@@ -80,10 +83,12 @@ impl ConsoleSink {
             console: Arc::new(Mutex::new(Vec::new())),
             trace: Arc::new(Mutex::new(Vec::new())),
             inflight: Arc::new(AtomicUsize::new(0)),
+            network_activity: Arc::new(AtomicU64::new(0)),
             dialogs: Arc::new(Mutex::new(Vec::new())),
             requests: Arc::new(Mutex::new(VecDeque::new())),
             sockets: Arc::new(Mutex::new(HashMap::new())),
             active_requests: Arc::new(Mutex::new(HashMap::new())),
+            idle_requests: Arc::new(Mutex::new(HashMap::new())),
             observed_network: Arc::new(Mutex::new(HashMap::new())),
             network_events: tokio::sync::broadcast::channel(MAX_EVENT_BUFFER).0,
             events: tokio::sync::broadcast::channel(MAX_EVENT_BUFFER).0,
@@ -94,14 +99,24 @@ impl ConsoleSink {
         }
     }
 
-    fn start_network_request(&self, request: NetworkRequest) {
+    fn start_network_request(
+        &self,
+        request: NetworkRequest,
+        frame: Option<String>,
+        document: Option<String>,
+    ) {
         // CDP reuses identifiers for redirects. The old hop has finished.
         self.finish_network_request(&request.request_id, None);
         self.active_requests
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(request.request_id.clone(), request.clone());
+        self.idle_requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(request.request_id.clone(), (frame, document));
         self.inflight.fetch_add(1, Ordering::SeqCst);
+        self.network_activity.fetch_add(1, Ordering::SeqCst);
         self.emit(PageEvent::Request {
             request_id: request.request_id,
             method: request.method,
@@ -160,7 +175,16 @@ impl ConsoleSink {
             .unwrap_or_else(|e| e.into_inner())
             .remove(id);
         if let Some(request) = request {
-            self.inflight.fetch_sub(1, Ordering::SeqCst);
+            if self
+                .idle_requests
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(id)
+                .is_some()
+            {
+                self.inflight.fetch_sub(1, Ordering::SeqCst);
+            }
+            self.network_activity.fetch_add(1, Ordering::SeqCst);
             self.emit(match failure {
                 Some((error_text, cancelled)) => PageEvent::RequestFailed {
                     request,
@@ -169,6 +193,33 @@ impl ConsoleSink {
                 },
                 None => PageEvent::RequestFinished(request),
             });
+        }
+    }
+
+    pub(crate) fn network_activity(&self) -> (usize, u64) {
+        (
+            self.inflight.load(Ordering::SeqCst),
+            self.network_activity.load(Ordering::SeqCst),
+        )
+    }
+
+    /// A replaced document's suspended/canceled resources must not prevent the
+    /// new document from becoming idle. Keep their native lifecycle observations
+    /// pending: this is idle accounting, not a fabricated terminal event.
+    fn commit_network_document(&self, frame: &str, document: &str, main: bool) {
+        let mut idle = self.idle_requests.lock().unwrap_or_else(|e| e.into_inner());
+        let before = idle.len();
+        idle.retain(|_, (owner, loader)| {
+            if main {
+                owner.as_deref() == Some(frame) && loader.as_deref() == Some(document)
+            } else {
+                owner.as_deref() != Some(frame) || loader.as_deref() == Some(document)
+            }
+        });
+        let removed = before - idle.len();
+        if removed != 0 {
+            self.inflight.fetch_sub(removed, Ordering::SeqCst);
+            self.network_activity.fetch_add(1, Ordering::SeqCst);
         }
     }
 
@@ -2012,15 +2063,6 @@ impl CdpDriver {
         Ok(())
     }
 
-    async fn evaluate_string(&self, expression: &str) -> E2eResult<String> {
-        Ok(self
-            .evaluate(expression)
-            .await?
-            .as_str()
-            .unwrap_or_default()
-            .to_string())
-    }
-
     async fn bring_to_front(&self) -> E2eResult<()> {
         self.call("Page.bringToFront", Value::Null).await?;
         Ok(())
@@ -3169,7 +3211,7 @@ impl CdpDriver {
         };
         let deadline = crate::operation::Deadline::new(timeout);
         if self.load_state_satisfied(state).await {
-            return settle_quiet(&self.sink.inflight, state, deadline).await;
+            return settle_quiet(&self.sink, state, deadline).await;
         }
         loop {
             match deadline
@@ -3184,12 +3226,12 @@ impl CdpDriver {
                 Ok(event)
                     if event.session.as_deref() == Some(&self.session) && event.method == want =>
                 {
-                    return settle_quiet(&self.sink.inflight, state, deadline).await;
+                    return settle_quiet(&self.sink, state, deadline).await;
                 }
                 Ok(_) => {}
                 Err(error) => {
                     if self.load_state_satisfied(state).await {
-                        return settle_quiet(&self.sink.inflight, state, deadline).await;
+                        return settle_quiet(&self.sink, state, deadline).await;
                     }
                     return Err(error);
                 }
@@ -3198,15 +3240,11 @@ impl CdpDriver {
     }
 
     async fn load_state_satisfied(&self, state: LoadState) -> bool {
-        let ready = self
-            .evaluate_string("document.readyState")
+        let observed = self
+            .evaluate(crate::url_wait::DOCUMENT_OBSERVATION)
             .await
-            .unwrap_or_default();
-        match state {
-            LoadState::Commit => true,
-            LoadState::DomContentLoaded => ready == "interactive" || ready == "complete",
-            LoadState::Load | LoadState::NetworkIdle => ready == "complete",
-        }
+            .unwrap_or(Value::Null);
+        crate::url_wait::document_ready(&observed, state)
     }
 
     async fn close(&self) -> E2eResult<()> {
@@ -3513,15 +3551,6 @@ impl BidiDriver {
             })
     }
 
-    async fn evaluate_string(&self, expression: &str) -> E2eResult<String> {
-        Ok(self
-            .evaluate(expression)
-            .await?
-            .as_str()
-            .unwrap_or_default()
-            .to_string())
-    }
-
     async fn navigate(&self, url: &str, wait: LoadState, timeout: Duration) -> E2eResult<()> {
         let wait_param = match wait {
             LoadState::Commit => "none",
@@ -3545,7 +3574,7 @@ impl BidiDriver {
             })?;
         self.sink.record("navigation", format!("goto {url}"));
         let deadline = crate::operation::Deadline::new(timeout);
-        settle_quiet(&self.sink.inflight, wait, deadline).await
+        settle_quiet(&self.sink, wait, deadline).await
     }
 
     async fn reload(&self) -> E2eResult<()> {
@@ -4768,7 +4797,7 @@ impl BidiDriver {
         let deadline = crate::operation::Deadline::new(timeout);
         loop {
             if self.load_state_satisfied(state).await {
-                return settle_quiet(&self.sink.inflight, state, deadline).await;
+                return settle_quiet(&self.sink, state, deadline).await;
             }
             if deadline.expired() {
                 return Err(E2eError::Timeout(
@@ -4781,15 +4810,11 @@ impl BidiDriver {
     }
 
     async fn load_state_satisfied(&self, state: LoadState) -> bool {
-        let ready = self
-            .evaluate_string("document.readyState")
+        let observed = self
+            .evaluate(crate::url_wait::DOCUMENT_OBSERVATION)
             .await
-            .unwrap_or_default();
-        match state {
-            LoadState::Commit => true,
-            LoadState::DomContentLoaded => ready == "interactive" || ready == "complete",
-            LoadState::Load | LoadState::NetworkIdle => ready == "complete",
-        }
+            .unwrap_or(Value::Null);
+        crate::url_wait::document_ready(&observed, state)
     }
 
     async fn close(&self) -> E2eResult<()> {
@@ -5076,20 +5101,24 @@ fn handle_bidi_event(event: &BidiEvent, sink: &ConsoleSink) {
             ));
         }
         "network.beforeRequestSent" => {
-            sink.start_network_request(NetworkRequest {
-                request_id: event.params["request"]["request"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .into(),
-                method: event.params["request"]["method"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .into(),
-                url: event.params["request"]["url"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .into(),
-            });
+            sink.start_network_request(
+                NetworkRequest {
+                    request_id: event.params["request"]["request"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .into(),
+                    method: event.params["request"]["method"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .into(),
+                    url: event.params["request"]["url"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .into(),
+                },
+                event.params["context"].as_str().map(str::to_owned),
+                event.params["navigation"].as_str().map(str::to_owned),
+            );
             sink.observe_request(RecordedRequest {
                 method: event.params["request"]["method"]
                     .as_str()
@@ -5164,7 +5193,7 @@ fn handle_bidi_event(event: &BidiEvent, sink: &ConsoleSink) {
 
 /// Wait for network quiet when `state` is [`LoadState::NetworkIdle`].
 async fn settle_quiet(
-    inflight: &AtomicUsize,
+    sink: &ConsoleSink,
     state: LoadState,
     deadline: crate::operation::Deadline,
 ) -> E2eResult<()> {
@@ -5173,11 +5202,17 @@ async fn settle_quiet(
     }
     let quiet_for = Duration::from_millis(500);
     let mut quiet_since = None;
+    let mut previous_activity = None;
     loop {
         if deadline.expired() {
             return Err(E2eError::Timeout(0, "network never went idle".to_string()));
         }
-        if inflight.load(Ordering::SeqCst) == 0 {
+        let (active, activity) = sink.network_activity();
+        if previous_activity != Some(activity) {
+            quiet_since = None;
+        }
+        previous_activity = Some(activity);
+        if active == 0 {
             match quiet_since {
                 None => quiet_since = Some(tokio::time::Instant::now()),
                 Some(since) if since.elapsed() >= quiet_for => return Ok(()),
@@ -5654,6 +5689,12 @@ fn read_manifest(path: &std::path::Path) -> Vec<SpooledFrame> {
 
 fn handle_cdp_event(event: &CdpEvent, sink: &ConsoleSink) {
     match event.method.as_str() {
+        "Page.frameNavigated" => {
+            let frame = &event.params["frame"];
+            if let (Some(id), Some(loader)) = (frame["id"].as_str(), frame["loaderId"].as_str()) {
+                sink.commit_network_document(id, loader, frame["parentId"].is_null());
+            }
+        }
         "Runtime.consoleAPICalled" => {
             let kind = event.params["type"].as_str().unwrap_or("log").to_string();
             let args = event.params["args"]
@@ -5707,17 +5748,21 @@ fn handle_cdp_event(event: &CdpEvent, sink: &ConsoleSink) {
                     status: response["status"].as_u64().unwrap_or(0) as u16,
                 });
             }
-            sink.start_network_request(NetworkRequest {
-                request_id: id.into(),
-                method: event.params["request"]["method"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .into(),
-                url: event.params["request"]["url"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .into(),
-            });
+            sink.start_network_request(
+                NetworkRequest {
+                    request_id: id.into(),
+                    method: event.params["request"]["method"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .into(),
+                    url: event.params["request"]["url"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .into(),
+                },
+                event.params["frameId"].as_str().map(str::to_owned),
+                event.params["loaderId"].as_str().map(str::to_owned),
+            );
             sink.observe_request(RecordedRequest {
                 method: event.params["request"]["method"]
                     .as_str()
@@ -5912,6 +5957,83 @@ mod network_lifecycle_tests {
             method: method.into(),
             params,
         }
+    }
+    #[test]
+    fn document_replacement_excludes_old_idle_work_without_faking_completion() {
+        let sink = ConsoleSink::new();
+        let mut events = sink.subscribe();
+        for (id, frame, loader) in [
+            ("old", "main", "before"),
+            ("child", "child", "before-child"),
+            ("new", "main", "after"),
+        ] {
+            handle_cdp_event(
+                &cdp(
+                    "Network.requestWillBeSent",
+                    serde_json::json!({"requestId":id,"frameId":frame,"loaderId":loader,"request":{"method":"GET","url":format!("http://host/{id}")}}),
+                ),
+                &sink,
+            );
+            assert!(matches!(
+                events.try_recv().unwrap(),
+                PageEvent::Request { .. }
+            ));
+        }
+        assert_eq!(sink.network_activity().0, 3);
+        handle_cdp_event(
+            &cdp(
+                "Page.frameNavigated",
+                serde_json::json!({"frame":{"id":"main","loaderId":"after"}}),
+            ),
+            &sink,
+        );
+        assert_eq!(sink.network_activity().0, 1);
+        assert!(matches!(
+            events.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
+        handle_cdp_event(
+            &cdp(
+                "Network.loadingFinished",
+                serde_json::json!({"requestId":"old"}),
+            ),
+            &sink,
+        );
+        assert_eq!(sink.network_activity().0, 1);
+        assert!(
+            matches!(events.try_recv().unwrap(),PageEvent::RequestFinished(r) if r.request_id=="old")
+        );
+        handle_cdp_event(
+            &cdp(
+                "Network.loadingFailed",
+                serde_json::json!({"requestId":"child","errorText":"aborted","canceled":true}),
+            ),
+            &sink,
+        );
+        assert_eq!(sink.network_activity().0, 1);
+        assert!(
+            matches!(events.try_recv().unwrap(),PageEvent::RequestFailed {request,..} if request.request_id=="child")
+        );
+        handle_cdp_event(
+            &cdp(
+                "Network.loadingFinished",
+                serde_json::json!({"requestId":"new"}),
+            ),
+            &sink,
+        );
+        assert_eq!(sink.network_activity().0, 0);
+        assert!(
+            matches!(events.try_recv().unwrap(),PageEvent::RequestFinished(r) if r.request_id=="new")
+        );
+        handle_cdp_event(
+            &cdp(
+                "Network.loadingFinished",
+                serde_json::json!({"requestId":"old"}),
+            ),
+            &sink,
+        );
+        assert_eq!(sink.network_activity().0, 0);
+        assert!(events.try_recv().is_err());
     }
     #[test]
     fn redirects_complete_each_hop_and_terminals_do_not_underflow_idle() {

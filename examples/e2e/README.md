@@ -207,6 +207,24 @@ exports retain their prior source paths. Missing artifact files fail export.
 URL/network matching accepts `UrlMatcher::exact`, `glob` and `regex`; legacy
 string waits keep substring matching. Exact relative URLs resolve against base URL.
 
+URL readiness options use one navigation budget for matching and loading:
+
+```rust,ignore
+use ferrite_e2e::{LoadState, UrlMatcher, UrlWaitOptions};
+
+ctx.page.wait_for_url_matching_with_options(
+    &UrlMatcher::exact("/account"),
+    UrlWaitOptions::default().wait_until(LoadState::DomContentLoaded)
+        .timeout(std::time::Duration::from_secs(5)),
+).await?;
+```
+
+The same options are available for URL predicates and Frame waits. Defaults use
+Load and the navigation timeout; legacy duration-based helpers wait only for the
+URL. Zero disables the local timeout while cancellation/enclosing budgets remain
+active. NetworkIdle tracks page HTTP quiet for 500ms after Load, excludes complete
+worker/socket connectivity and is unsupported for frame-scoped waits.
+
 ```rust,ignore
 let wait = ctx.page.wait_for_response_where(
     |r| r.url.ends_with("/api/save") && r.method == "POST" && r.status == 200,

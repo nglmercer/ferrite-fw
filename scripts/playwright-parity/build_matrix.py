@@ -328,7 +328,7 @@ for m,t in {'annotations':'annotations','category':'category','titlePath':'title
  put('TestStep',m,'StepInfo.'+t,'Persisted annotations and full title path; categories user/action/assertion/hook/fixture differ from the upstream category vocabulary and not all Page/protocol operations are wrapped.')
 # URL/network predicates, generated uploads and source-aware browser diagnostics.
 for c in ['Page','Frame']:
- put(c,'waitForURL',c+'.wait_for_url_matching','Exact (relative to base URL), full-URL glob/regex or wait_for_url_where predicate. Legacy wait_for_url remains substring-based. No waitUntil/URLPattern option object; Rust duration and clone controls govern cancellation.')
+ put(c,'waitForURL',c+'.wait_for_url_matching_with_options','Exact (relative to base URL), full-URL glob/regex or predicate with Commit/DOMContentLoaded/Load readiness in one navigation budget. Page NetworkIdle uses 500ms observed HTTP quiet; frames reject it. Legacy helpers retain substring/URL-only semantics. Zero timeout, cancellation and enclosing budgets supported; URLPattern absent.')
 for m,t in {'waitForRequest':'wait_for_request_async','waitForResponse':'wait_for_response_async'}.items():
  put('Page',m,'Page.'+t,'Exact/glob/regex or sync/async predicates over RecordedRequest fields; request waits resolve at start, response waits at headers including already in-flight requests. Returns a metadata snapshot rather than rich live Request/Response/body objects. Legacy strings retain substring semantics; lag fails explicitly.')
 for c,target in [('Page','Page.set_input_file_payloads'),('Locator','Locator.set_input_file_payloads'),('Frame','Locator.set_input_file_payloads')]:

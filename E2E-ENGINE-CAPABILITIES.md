@@ -13,6 +13,7 @@ Partial means the listed limitation must be retained in API/docs/test evidence.
 | Typed synthetic event dispatch | Supported | Supported | JSON initialization; synthetic events are untrusted; live handle arguments excluded |
 | Native intersection ratios | Supported | Supported | Owning-document IntersectionObserver and native clipping |
 | URL/request/response predicates | Supported | Supported | Snapshot observations; 256-event channel fails explicitly on lag |
+| URL wait document readiness | Supported | Supported | Commit, DOMContentLoaded, Load; page-only observed HTTP idle for 500ms, frame idle unsupported |
 | Request/response lifecycle and redirects | Supported | Supported | IDs are scoped to a page; optional native metadata must stay optional |
 | Console/error metadata and attempt history | Supported | Supported | Unknown source/timestamp fields remain None; page identity retained |
 | In-memory/path uploads | Supported | Supported | DOM File/DataTransfer injection, 64 MiB total; no chooser/directories |
