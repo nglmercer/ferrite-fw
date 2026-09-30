@@ -948,3 +948,75 @@ Playwright's default poll intervals are 100/250/500/1000 ms; default toPass has
 zero timeout and ignores configured expect timeout. Pinned empty intervals,
 zero intervals, early deadline cutoff, nested soft collection and step emission
 also differ. See the [actual reference corpus](../../scripts/e2e-conformance/README.md).
+
+
+Screenshot options apply to page and locator captures:
+
+```rust,no_run
+use ferrite_e2e::{ElementRect, ScreenshotOptions, ScreenshotScale};
+let bytes = page.screenshot(ScreenshotOptions {
+    full_page: true,
+    clip: Some(ElementRect { x: 0.0, y: 100.0, width: 300.0, height: 200.0 }),
+    mask: vec![page.locator("[data-private]")],
+    mask_color: Some("#202020".into()),
+    style: Some(".loading-cursor { visibility: hidden !important }".into()),
+    scale: ScreenshotScale::Css,
+    ..Default::default()
+}).await?;
+let tile = page.locator(".card").screenshot_with(ScreenshotOptions {
+    hide_caret: true,
+    ..Default::default()
+}).await?;
+```
+
+Page clips use viewport capture coordinates in CSS pixels; with full_page they
+use document coordinates. Clips are intersected with the region and enclosed in
+whole CSS pixels; an empty/outside region is Config. Finite coordinates and
+positive dimensions are required. Locator captures scroll to the element and
+translate its box to document coordinates; full_page/clip flags are rejected for
+locators. The existing page/locator/screenshot_clip entry points remain usable.
+Full-page masks now work and match scrolled document coordinates. Masks must
+belong to the same owning page, including its supported same-origin frames.
+
+Device output retains native pixel density. Css output is one output pixel per
+CSS pixel: Chromium renders at that scale; Firefox normalizes the native device
+raster with Lanczos3 and re-encodes PNG/JPEG. This is not identical rendering or
+compression behavior. Capture allocation is limited to 64 million native/output
+pixels. Document dimensions can exclude an engine's scrollbar; viewport captures
+keep the viewport size. Chromium full-page capture no longer changes or clears
+device metrics, preserving viewport, DPR, mobile state and caller overrides.
+
+omit_background is supported on Chromium PNG and fails explicitly on Firefox
+BiDi or JPEG. It changes the default canvas background; explicit CSS backgrounds
+remain visible. Chromium restores the last acknowledged background override
+submitted through Page.call/call_with_timeout. Changes made through a separate
+raw CDP connection are outside that tracking. JPEG still uses quality to select
+format; valid quality is 1..=100. Default format remains PNG.
+
+Temporary styles reach the main document, reachable same-origin frames and open
+shadow roots present at preparation. Closed roots/cross-origin frames are outside
+that traversal. Application-owned nodes/IDs are retained. Existing animation
+controls remain CSS suppression, not Playwright's finite-animation fast-forward
+algorithm. CSS reflow may affect scroll and animation progression as in normal
+browser layout; removing temporary CSS does not rewind application execution.
+
+Captures serialize per page. The optional timeout bounds queueing, preparation,
+native capture and awaiting restoration; zero removes the local limit, while
+caller/context cancellation and enclosing runner budgets still apply. Use the
+existing with_cancellation scope on Page/Locator. Owned restoration continues
+independently after a dropped/canceled/timed-out wait, retains the capture gate
+and has a separate five-second bound. A following capture waits for restoration
+and reports deferred failures before making changes. take_screenshot_cleanup_errors
+also drains those diagnostics; immediate cleanup failures remain visible in the
+returned error, preserving an original capture error's kind. Owner disposal
+releases the native document, and already-lost transport cannot prove remote
+restoration. Synchronous browser/CPU work cannot be preempted by dropping a Rust
+wait; Firefox normalization uses bounded worker work with no native page ownership.
+
+Migration for exhaustive ScreenshotOptions literals: add clip: None,
+scale: ScreenshotScale::Device, omit_background: false, mask_color: None,
+style: None and timeout: None, or use ..Default::default(). Default page captures
+now explicitly select the viewport; full_page selects the document. Previously
+Chromium captureBeyondViewport without a region could include the document.
+See the [native pinned observations](../../scripts/e2e-conformance/README.md)
+for CSS-scale, background restoration and validation differences.

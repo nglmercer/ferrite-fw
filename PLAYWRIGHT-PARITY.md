@@ -1449,3 +1449,70 @@ explicitly requires key-down/mouse-down before release checks. Both native
 fixtures passed after correction, as did the full remaining inventory. Runtime
 navigation and input behavior was unchanged. G04 remains open for the separate
 native protocol/lifecycle/error audit and final cross-feature verification.
+
+
+## Supported screenshot capture options (B09)
+
+Page ScreenshotOptions and Locator.screenshot_with add viewport/document clips,
+Device/Css scale, transparent default background, custom mask color, temporary
+styles and a shared optional timeout. Existing entry points remain; full-page
+masks are now accepted. Source boxes translate CSS viewport positions to native
+document coordinates; caller DPR stays intact. Clips are finite, positive-sized,
+intersected and enclosed in whole CSS pixels; empty/outside clips, invalid color/
+quality, other-page masks and conflicting locator regions are typed Config.
+
+Captures have a shared page gate and owned temporary node references. Styles
+visit reachable same-origin documents/open roots; CSS and masks restore without
+removing application-owned IDs/classes. One outer automatic action step handles
+capture diagnostics. Cancellation, timeout or dropping an active wait starts
+independent bounded restoration with the gate retained until it settles. Native
+restoration errors remain visible; original capture error kinds survive combined
+failures. Deferred errors are drainable and reported by a subsequent capture
+before it mutates the page. Native owner disposal releases the document; already-
+lost transport cannot establish remote restoration. Separate cleanup has a
+five-second bound; blocking native JavaScript/CPU work is not preemptible.
+
+Chromium captures full documents through a region, without setting/clearing
+metrics. This retains actual viewport/DPR/mobile state. Transparent PNG restores
+the last acknowledged Page.call background override; separate raw CDP mutations
+are outside that ownership. Firefox rejects transparent background before DOM
+changes. Device pixels use native capture; Firefox Css output normalizes its
+native raster via Lanczos3 and re-encodes PNG/JPEG, rather than modifying DPR or
+media queries. Native/output images are capped at 64 million pixels. Default
+page captures explicitly select the viewport, fixing the prior Chromium path
+that could capture the document with captureBeyondViewport and no region.
+
+The [52 actual pinned cases](scripts/e2e-conformance/screenshot-reference.json)
+use Chromium 153 and Firefox 157 through Playwright 1.63.0's public moz-firefox
+BiDi channel. Shared viewport dimensions, scrolled clips, full-document masks,
+styles and restoration were measured at DPR 1/2. Pinned Firefox ignores Css scale
+at DPR 2 and rejects transparency. Upstream clears a pre-existing background
+color after transparent capture, whereas Rust restores its last acknowledged
+Page.call value. Upstream accepts JPEG quality zero and infinite clip width;
+Rust validates 1..=100 and finite bounds. CSS animation suppression remains a
+narrower algorithm; temporary CSS removal does not rewind layout/scroll side
+effects or application execution. Closed roots/cross-origin style traversal,
+WebP format and all upstream specialized capture options remain outside this
+supported surface. Public literal migration and examples are in the E2E guide.
+
+
+Verification: the current inventory is **405 E2E and 28 CLI/config checks**:
+180 units, 221 integrations across all 34 targets and four doctests. The broad
+404-check E2E inventory passed with runner81 on full Chrome 153/Firefox 157 and
+core203/browser93/routing23 on matching Headless Shell/Firefox. A late trace
+regression first reproduced a duplicate automatic screenshot action; internal
+trace capture now bypasses the public reporting wrapper. All 16 related native
+scope checks passed afterward, including the additional regression, seven public
+capture groups and the native capability group. Strict all-target E2E/CLI/config
+Clippy and formatting passed on the final source; the pinned generator completed
+52 checked cases after final assertions and an uncontended rerun.
+
+The initial broad routing gate failed once when an acknowledged same-URL
+synthetic redirect response exposed zero Set-Cookie pairs instead of two while
+its x-hop value remained present. The unchanged strict header target then passed
+in isolation and the entire 23-check routing gate passed. This is recorded for
+G04's route-ack/native-extra-event correlation audit; no header assertion was
+relaxed and no root cause is claimed here. A concurrent pinned Firefox launch
+also timed out at 15 seconds; its terminal process was rerun after native gates
+with a 30-second launch budget and all 52 cases passed. These observations do
+not imply complete screenshot or backend equivalence.

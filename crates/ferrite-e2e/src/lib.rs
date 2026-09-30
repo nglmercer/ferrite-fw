@@ -72,6 +72,7 @@ mod resolved_config;
 mod route_options;
 mod routing;
 mod runner;
+mod screenshot;
 mod snapshot;
 mod url_matcher;
 mod url_wait;
@@ -145,6 +146,7 @@ pub use runner::{
     FixtureScope, GlobalHook, HookFn, Project, Runner, Suite, Test, TestContext, TestContextFn,
     TestInfo, TestMode, WorkerContext, WorkerHook, WorkerInfo,
 };
+pub use screenshot::ScreenshotScale;
 pub use snapshot::{
     assert_snapshot_png, assert_snapshot_text, compare_png, match_text_snapshot,
     match_text_snapshot_with, SnapshotDiff, SnapshotOptions, SnapshotUpdate,

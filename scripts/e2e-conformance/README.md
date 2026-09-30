@@ -336,3 +336,34 @@ decisions and resulting JavaScript values. Rust
 closure payloads are native snapshots rather than the upstream Dialog object.
 Firefox's newer native navigation/history/closure subscriptions are probed
 individually; missing main-commit or closure support gives an explicit wait error.
+
+
+### Screenshot capture reference
+
+Run `npm run reference:screenshots` with the documented FERRITE_PLAYWRIGHT_MODULE,
+FERRITE_CHROMIUM_PATH and FERRITE_FIREFOX_PATH variables when using an external
+pinned install. [screenshot-reference.mjs](screenshot-reference.mjs) launches
+actual Chromium and Firefox via the public `moz-firefox` BiDi channel, with DPR
+1 and 2. The 52 cases in [screenshot-reference.json](screenshot-reference.json)
+inspect native PNG dimensions and decoded pixels using Node builtins, and check
+clip/mask/style/scale results, restoration and explicit validation outcomes.
+Only development reference generation requires Node/Playwright.
+
+[screenshot_capabilities.rs](../../crates/ferrite-e2e/tests/screenshot_capabilities.rs)
+checks actual document coordinates, preserved metrics, native density, scale and
+alpha support. Seven [screenshot_options.rs](../../crates/ferrite-e2e/tests/screenshot_options.rs)
+groups exercise public pixels/dimensions, styles in frames/open roots, typed
+validation, JPEG, tracked background restoration, queue isolation, zero timeout,
+cancellation/dropped waits/timeouts and actual native context removal. Explicit/internal trace step counts and genuine
+native restoration failures are retained alongside original errors and exposed
+to a later capture/getter. Application-owned nodes survive cleanup.
+
+Differences remain explicit: pinned Firefox BiDi leaves Css output at native
+DPR, while Rust resizes that raster; Firefox transparency is unsupported in
+both. Upstream clears an existing CDP background override after transparent
+capture, while Rust restores the last Page.call override. Upstream accepts JPEG
+quality zero and an infinite clip width that trims to the viewport; Rust requires
+1..=100 quality and finite clips. Rust has a 64-million-pixel cap and bounded
+independent restoration with visible failures. Animation suppression, style
+traversal and integer enclosure do not imply every upstream screenshot option
+or rendering algorithm is equivalent.

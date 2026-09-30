@@ -1255,15 +1255,32 @@ impl Driver {
         .await
     }
 
-    /// Capture a screenshot.
-    pub async fn screenshot(&self, full_page: bool, quality: Option<u8>) -> E2eResult<Vec<u8>> {
-        self.run(async {
-            match self {
-                Self::Cdp(driver) => driver.screenshot(full_page, quality).await,
-                Self::Bidi(driver) => driver.screenshot(full_page, quality).await,
+    pub(crate) async fn capture_region(
+        &self,
+        rect: &ElementRect,
+        document: bool,
+        scale: f64,
+        quality: Option<u8>,
+    ) -> E2eResult<Vec<u8>> {
+        let result = match self {
+            Self::Cdp(d) => {
+                let mut params = serde_json::json!({"captureBeyondViewport":true,"clip":{"x":rect.x,"y":rect.y,"width":rect.width,"height":rect.height,"scale":scale}});
+                if let Some(q) = quality {
+                    params["format"] = "jpeg".into();
+                    params["quality"] = q.into();
+                }
+                d.call("Page.captureScreenshot", params).await?
             }
-        })
-        .await
+            Self::Bidi(d) => {
+                let mut params = serde_json::json!({"origin":if document {"document"} else {"viewport"},"clip":{"type":"box","x":rect.x,"y":rect.y,"width":rect.width,"height":rect.height}});
+                if let Some(q) = quality {
+                    params["format"] =
+                        serde_json::json!({"type":"image/jpeg","quality":f64::from(q)/100.0});
+                }
+                d.call("browsingContext.captureScreenshot", params).await?
+            }
+        };
+        decode_shot(&result)
     }
 
     /// Print to PDF bytes.
@@ -2026,21 +2043,6 @@ impl Driver {
             Self::Bidi(driver) => driver.cancel_recording(state).await,
         }
     }
-
-    /// Screenshot one element box.
-    pub async fn screenshot_clip(
-        &self,
-        rect: &ElementRect,
-        quality: Option<u8>,
-    ) -> E2eResult<Vec<u8>> {
-        self.run(async {
-            match self {
-                Self::Cdp(driver) => driver.screenshot_clip(rect, quality).await,
-                Self::Bidi(driver) => driver.screenshot_clip(rect, quality).await,
-            }
-        })
-        .await
-    }
 }
 
 /// Live frame stream.
@@ -2414,44 +2416,6 @@ impl CdpDriver {
         )
         .await?;
         Ok(())
-    }
-
-    async fn screenshot(&self, full_page: bool, quality: Option<u8>) -> E2eResult<Vec<u8>> {
-        if full_page {
-            return self.full_page_screenshot(quality).await;
-        }
-        let mut params = serde_json::json!({ "captureBeyondViewport": true });
-        if let Some(quality) = quality {
-            params["format"] = Value::String("jpeg".to_string());
-            params["quality"] = Value::from(quality);
-        }
-        let shot = self.call("Page.captureScreenshot", params).await?;
-        decode_shot(&shot)
-    }
-
-    async fn full_page_screenshot(&self, quality: Option<u8>) -> E2eResult<Vec<u8>> {
-        let metrics = self.call("Page.getLayoutMetrics", Value::Null).await?;
-        let size = &metrics["contentSize"];
-        let width = size.get("width").and_then(Value::as_u64).unwrap_or(1280);
-        let height = size.get("height").and_then(Value::as_u64).unwrap_or(800);
-        self.call(
-            "Emulation.setDeviceMetricsOverride",
-            serde_json::json!({
-                "width": width, "height": height,
-                "deviceScaleFactor": 1, "mobile": false,
-            }),
-        )
-        .await?;
-        let mut params = serde_json::json!({ "captureBeyondViewport": true });
-        if let Some(quality) = quality {
-            params["format"] = Value::String("jpeg".to_string());
-            params["quality"] = Value::from(quality);
-        }
-        let shot = self.call("Page.captureScreenshot", params).await;
-        let _ = self
-            .call("Emulation.clearDeviceMetricsOverride", Value::Null)
-            .await;
-        decode_shot(&shot?)
     }
 
     async fn print_pdf(&self) -> E2eResult<Vec<u8>> {
@@ -3856,23 +3820,6 @@ impl CdpDriver {
         }
     }
 
-    async fn screenshot_clip(&self, rect: &ElementRect, quality: Option<u8>) -> E2eResult<Vec<u8>> {
-        let mut params = serde_json::json!({
-            "clip": {
-                "x": rect.x, "y": rect.y,
-                "width": rect.width, "height": rect.height,
-                "scale": 1,
-            },
-            "captureBeyondViewport": true,
-        });
-        if let Some(quality) = quality {
-            params["format"] = Value::String("jpeg".to_string());
-            params["quality"] = Value::from(quality);
-        }
-        let shot = self.call("Page.captureScreenshot", params).await?;
-        decode_shot(&shot)
-    }
-
     async fn start_screencast(&self, opts: &VideoOptions) -> E2eResult<()> {
         // Always every frame: server-side sampling drops sparse damage to
         // zero frames (observed); throttle client-side instead.
@@ -4282,21 +4229,6 @@ impl BidiDriver {
         ))
         .await?;
         Ok(())
-    }
-
-    async fn screenshot(&self, full_page: bool, quality: Option<u8>) -> E2eResult<Vec<u8>> {
-        let origin = if full_page { "document" } else { "viewport" };
-        let mut params = serde_json::json!({ "origin": origin });
-        if let Some(quality) = quality {
-            params["format"] = serde_json::json!({
-                "type": "image/jpeg",
-                "quality": f64::from(quality).clamp(1.0, 100.0) / 100.0,
-            });
-        }
-        let shot = self
-            .call("browsingContext.captureScreenshot", params)
-            .await?;
-        decode_shot(&shot)
     }
 
     async fn print_pdf(&self) -> E2eResult<Vec<u8>> {
@@ -5373,26 +5305,6 @@ impl BidiDriver {
                 .unwrap_or(path);
             let _ = std::fs::remove_file(src);
         }
-    }
-
-    async fn screenshot_clip(&self, rect: &ElementRect, quality: Option<u8>) -> E2eResult<Vec<u8>> {
-        let mut params = serde_json::json!({
-            "clip": {
-                "type": "box",
-                "x": rect.x, "y": rect.y,
-                "width": rect.width, "height": rect.height,
-            },
-        });
-        if let Some(quality) = quality {
-            params["format"] = serde_json::json!({
-                "type": "image/jpeg",
-                "quality": f64::from(quality).clamp(1.0, 100.0) / 100.0,
-            });
-        }
-        let shot = self
-            .call("browsingContext.captureScreenshot", params)
-            .await?;
-        decode_shot(&shot)
     }
 }
 

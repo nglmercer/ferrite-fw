@@ -2212,15 +2212,15 @@ async fn strict_cookies_device_clock_screenshot() {
             .await
             .unwrap();
         assert_eq!(leftover, 0, "{tag}");
-        let err = page
+        let full_masked = page
             .screenshot(ScreenshotOptions {
                 full_page: true,
                 mask: vec![page.locator("#items")],
                 ..ScreenshotOptions::default()
             })
             .await
-            .unwrap_err();
-        assert!(err.to_string().contains("mask"), "{tag}: {err}");
+            .unwrap();
+        assert!(!full_masked.is_empty(), "{tag}");
 
         page.close().await.unwrap();
         browser.close().await.unwrap();

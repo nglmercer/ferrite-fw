@@ -13,7 +13,7 @@ http-body-util = "0.1"
 hyper = "1"
 mime_guess = "2"
 globset = { workspace = true }
-image = { workspace = true }
+image = { workspace = true, features = ["jpeg"] }
 regex = { workspace = true }
 reqwest = { workspace = true, features = ["cookies", "multipart"] }
 cookie = "0.18"

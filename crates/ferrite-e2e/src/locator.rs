@@ -2065,33 +2065,40 @@ impl Locator {
         Ok(())
     }
 
-    /// Screenshot just this element (PNG bytes).
+    /// Screenshot this element (PNG bytes).
     pub async fn screenshot(&self) -> E2eResult<Vec<u8>> {
+        self.screenshot_with(crate::ScreenshotOptions::default())
+            .await
+    }
+
+    /// Capture this element with masks, scale, background and temporary style controls.
+    /// full_page and clip are rejected because the element defines the region.
+    pub async fn screenshot_with(&self, options: crate::ScreenshotOptions) -> E2eResult<Vec<u8>> {
         self.diagnostic_step(
             format!("locator.screenshot {}", self.selector.raw()),
             crate::StepCategory::Action,
-            async {
-                self.page
-                    .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
-                        format!("locator screenshot `{}`", self.selector.raw()),
-                        async {
-                            self.page.action(&self.selector, "scroll", None).await?;
-                            let state = self
-                                .ready_state(&LocatorOptions { timeout: None }, false, false)
-                                .await?;
-                            match state.rects.first() {
-                                Some(rect) => self.page.screenshot_clip(rect, None).await,
-                                None => Err(E2eError::Locator {
-                                    selector: self.selector.raw().to_string(),
-                                    message: "element has no bounding box".to_string(),
-                                }),
-                            }
-                        },
-                    ))
-                    .await
-            },
+            crate::screenshot::capture(
+                &self.page,
+                options,
+                crate::screenshot::Source::Element(Box::new(self.clone())),
+            ),
         )
         .await
+    }
+
+    pub(crate) async fn screenshot_rect(&self) -> E2eResult<crate::ElementRect> {
+        self.page.action(&self.selector, "scroll", None).await?;
+        let state = self
+            .ready_state(&LocatorOptions { timeout: None }, false, false)
+            .await?;
+        state
+            .rects
+            .first()
+            .cloned()
+            .ok_or_else(|| E2eError::Locator {
+                selector: self.selector.raw().into(),
+                message: "element has no bounding box".into(),
+            })
     }
 
     /// Fill an input/textarea/select with text (replaces the value).

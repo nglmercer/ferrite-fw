@@ -761,12 +761,23 @@ pub struct ScreenshotOptions {
     pub full_page: bool,
     /// JPEG quality (1-100); PNG when unset.
     pub quality: Option<u8>,
-    /// Locators to cover with magenta boxes (viewport captures only).
+    /// Locators to cover, including document/full-page captures.
     pub mask: Vec<Locator>,
     /// Freeze animations/transitions during the capture.
     pub disable_animations: bool,
     /// Hide the text caret during the capture.
     pub hide_caret: bool,
+    /// Clip in viewport capture coordinates, or document coordinates with full_page.
+    pub clip: Option<ElementRect>,
+    pub scale: crate::ScreenshotScale,
+    /// Transparent default canvas on Chromium (PNG only). Firefox rejects this.
+    pub omit_background: bool,
+    /// CSS color for masks; None retains magenta.
+    pub mask_color: Option<String>,
+    /// Temporary CSS in the main document, reachable same-origin frames and open shadow roots.
+    pub style: Option<String>,
+    /// One capture budget, including queueing, preparation and restoration.
+    pub timeout: Option<Duration>,
 }
 
 /// A device to emulate (Chromium only).
@@ -1616,6 +1627,7 @@ impl Download {
 /// An automated page (one browser tab).
 #[derive(Clone)]
 pub struct Page {
+    pub(crate) screenshot_state: Arc<crate::screenshot::ScreenshotState>,
     pub(crate) reporter: Option<crate::report::StepSession>,
     expect_timeout: Arc<Mutex<Duration>>,
     action_timeout: Arc<Mutex<Duration>>,
@@ -1737,6 +1749,7 @@ impl Page {
         driver.share_timeout(action_timeout.clone());
         let download_dir = sink.download_dir.clone();
         Self {
+            screenshot_state: Arc::new(crate::screenshot::ScreenshotState::default()),
             reporter: None,
             driver,
             coverage_state: Arc::new(tokio::sync::Mutex::new(Default::default())),
@@ -2225,9 +2238,7 @@ impl Page {
     /// Raw protocol call with the page timeout (CDP method on Chromium,
     /// BiDi method with context injected on Firefox).
     pub async fn call(&self, method: &str, params: Value) -> E2eResult<Value> {
-        self.driver
-            .run(async { self.driver.raw(method, params, self.timeout()).await })
-            .await
+        self.call_with_timeout(method, params, self.timeout()).await
     }
 
     /// Raw protocol call with an explicit timeout.
@@ -2238,7 +2249,25 @@ impl Page {
         timeout: Duration,
     ) -> E2eResult<Value> {
         self.driver
-            .run(async { self.driver.raw(method, params, timeout).await })
+            .run(crate::operation::Deadline::new(timeout).run(method, async {
+                let background = self.browser_kind() == crate::BrowserKind::Chromium
+                    && method == "Emulation.setDefaultBackgroundColorOverride";
+                let _guard = if background {
+                    Some(self.screenshot_state.gate.clone().lock_owned().await)
+                } else {
+                    None
+                };
+                let color = params.get("color").cloned();
+                let result = self.driver.raw(method, params, timeout).await?;
+                if background {
+                    *self
+                        .screenshot_state
+                        .background
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner()) = color;
+                }
+                Ok(result)
+            }))
             .await
     }
 
@@ -3349,7 +3378,13 @@ impl Page {
         if !armed {
             return;
         }
-        match self.screenshot(ScreenshotOptions::default()).await {
+        match crate::screenshot::capture(
+            self,
+            ScreenshotOptions::default(),
+            crate::screenshot::Source::Page,
+        )
+        .await
+        {
             Ok(png) => {
                 self.tracing
                     .lock()
@@ -3464,79 +3499,20 @@ impl Page {
         Ok(())
     }
 
-    /// Capture a screenshot (PNG by default, JPEG with `quality`).
+    /// Capture PNG or JPEG with supported clipping, masks and temporary styles.
     pub async fn screenshot(&self, options: ScreenshotOptions) -> E2eResult<Vec<u8>> {
-        self.driver
-            .run(async {
-                if options.full_page && !options.mask.is_empty() {
-                    return Err(E2eError::Config(
-                "screenshot mask needs a viewport capture (mask + full_page is not supported)"
-                    .to_string(),
-            ));
-                }
-                let prepared =
-                    !options.mask.is_empty() || options.disable_animations || options.hide_caret;
-                if prepared {
-                    self.prepare_screenshot(&options).await?;
-                }
-                let shot = self
-                    .driver
-                    .screenshot(options.full_page, options.quality)
-                    .await;
-                if prepared {
-                    self.cleanup_screenshot().await.ok();
-                }
-                shot
-            })
-            .await
-    }
-
-    /// Inject mask overlays and capture CSS.
-    async fn prepare_screenshot(&self, options: &ScreenshotOptions) -> E2eResult<()> {
-        let mut css = String::new();
-        if options.disable_animations {
-            css.push_str(
-                "*,*::before,*::after{animation-duration:0s!important;\
-                 animation-delay:0s!important;transition-duration:0s!important;\
-                 scroll-behavior:auto!important}",
-            );
-        }
-        if options.hide_caret {
-            css.push_str("*{caret-color:transparent!important}");
-        }
-        let mut rects = Vec::new();
-        for locator in &options.mask {
-            rects.extend(locator.state().await?.rects);
-        }
-        let css_json = serde_json::to_string(&css).unwrap_or_default();
-        let rects_json = serde_json::to_string(&rects).map_err(E2eError::Json)?;
-        self.evaluate_value(&format!(
-            "(() => {{ \
-             const style = document.createElement('style'); \
-             style.id = 'ferrite-shot-style'; style.textContent = {css_json}; \
-             document.head.appendChild(style); \
-             for (const r of {rects_json}) {{ \
-             const d = document.createElement('div'); \
-             d.className = 'ferrite-shot-mask'; \
-             d.style.cssText = 'position:fixed;left:' + r.x + 'px;top:' + r.y \
-             + 'px;width:' + r.width + 'px;height:' + r.height \
-             + 'px;background:#FF00FF;z-index:2147483647;pointer-events:none;'; \
-             document.body.appendChild(d); }} \
-             return true; }})()"
-        ))
-        .await?;
-        Ok(())
-    }
-
-    /// Remove mask overlays and capture CSS.
-    async fn cleanup_screenshot(&self) -> E2eResult<()> {
-        self.evaluate_value(
-            "(() => { document.getElementById('ferrite-shot-style')?.remove(); \
-             document.querySelectorAll('.ferrite-shot-mask') \
-             .forEach(el => el.remove()); return true; })()",
+        self.auto_step_local(
+            "page.screenshot",
+            crate::StepCategory::Action,
+            crate::screenshot::capture(self, options, crate::screenshot::Source::Page),
         )
-        .await?;
-        Ok(())
+        .await
+    }
+
+    /// Drain restoration errors from captures whose caller dropped its wait.
+    /// A subsequent capture also reports any unconsumed deferred errors.
+    pub fn take_screenshot_cleanup_errors(&self) -> Vec<String> {
+        self.screenshot_state.take_errors()
     }
 
     /// Capture a screenshot and write it to `path`.
@@ -5363,15 +5339,25 @@ impl Page {
         }
     }
 
-    /// Screenshot one element box (PNG by default, JPEG with `quality`).
+    /// Capture a box in viewport-relative CSS coordinates, including offscreen portions.
     pub async fn screenshot_clip(
         &self,
         rect: &ElementRect,
         quality: Option<u8>,
     ) -> E2eResult<Vec<u8>> {
-        self.driver
-            .run(async { self.driver.screenshot_clip(rect, quality).await })
-            .await
+        self.auto_step_local(
+            "page.screenshot_clip",
+            crate::StepCategory::Action,
+            crate::screenshot::capture(
+                self,
+                ScreenshotOptions {
+                    quality,
+                    ..Default::default()
+                },
+                crate::screenshot::Source::Box(rect.clone()),
+            ),
+        )
+        .await
     }
 
     /// Close the page target and its owned convenience context. Cleanup

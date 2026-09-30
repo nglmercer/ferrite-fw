@@ -47,18 +47,30 @@ Partial means the listed limitation must be retained in API/docs/test evidence.
 | Resolved project/run/attempt configuration | Supported | Supported | Library/shared TOML/JSON/CLI selection and precedence; whole context overrides, actual owner versions, project artifact/snapshot paths, read-only TestInfo snapshots and serde-defaulted report metadata. Dedicated versions stay absent before launch; no project dependency scheduling. |
 | Fixture limits and shared cleanup clocks | Supported | Supported | Separate local setup/teardown limits capped by enclosing budgets; ready release after exhaustion, explicit pending errors and disposal surviving dropped waits. Rust accounting differs from upstream separate fixture budgets. |
 | CI flaky policy and focus protection | Supported | Supported | Opt-in aggregate failure preserves actual attempt outcomes; registered focus checked before filters/shards, including skipped descendants. CI forces existing focus protection. JSON/live/HTML aggregate status and explicit JUnit policy markers; upstream filtering/JUnit differences documented. |
+| Screenshot options and reversible preparation | Supported | Supported with limits | Viewport/document clips, full-page masks/colors/styles, locator companions and shared capture clocks. Device/Css output; Firefox Css uses raster normalization. Transparent default canvas is Chromium PNG only. Owned bounded restoration, visible errors and preserved metrics; narrower animation/style traversal documented. |
 | Generic assertion polling options | Supported | Supported | Immediate probes, validated interval sequences with last-value reuse, messages and explicit cancellation/context tokens. Shared local/enclosing budgets, non-Send companions, typed operational errors and final-only soft collection/steps. Rust defaults and upstream nested-soft/step/cutoff differences documented. |
 | Portable reports, runner/fixtures/retries | Supported | Supported | Tokio workers, cooperative cancellation, current artifact formats |
 
 ## Evidence and validation gates
+
+[screenshot_options.rs](crates/ferrite-e2e/tests/screenshot_options.rs) verifies
+seven native groups on full Chrome/Firefox, with pixel dimensions/colors, frames/
+open roots, genuine restoration errors, dropped/canceled/timed-out waits,
+actual removed context IDs and one explicit capture step without internal trace
+steps. [screenshot_capabilities.rs](crates/ferrite-e2e/tests/screenshot_capabilities.rs)
+checks native region/density/alpha behavior. The current inventory is 405 E2E
+plus 28 CLI/config checks: broad 404 passed, followed by 16 related checks after
+the late trace fix, including its added regression. Strict final Clippy and
+formatting passed; 52 actual pinned cases cover both Chromium and moz-firefox
+BiDi. A transient unchanged redirected-header assertion is retained for G04.
 
 [polling_options.rs](crates/ferrite-e2e/tests/polling_options.rs) verifies four
 native groups on full Chrome 153/Firefox 157: shared cadence, local non-Send
 blocks, final-only soft failures and retry reports, scope isolation, typed errors,
 cancellation/disposal and enclosing timeouts with actual context removal. Seven
 virtual-time unit groups cover exact clocks and validation; thirteen actual
-pinned polling cases record intentional upstream differences. Current combined
-inventory is 397 E2E plus 28 CLI/config checks, with strict Clippy and package
+pinned polling cases record intentional upstream differences. The D02 combined
+inventory was 397 E2E plus 28 CLI/config checks, with strict Clippy and package
 formatting. Native polling HTML previews were inspected on both engines.
 
 [ci_policy.rs](crates/ferrite-e2e/tests/ci_policy.rs) verifies flaky policy,

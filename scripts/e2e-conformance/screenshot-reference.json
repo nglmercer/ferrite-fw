@@ -1,0 +1,587 @@
+{
+  "playwright": "1.63.0",
+  "engines": [
+    {
+      "name": "chromium",
+      "version": "153.0.8010.12",
+      "cases": [
+        {
+          "name": "viewport-device",
+          "dpr": 1,
+          "outcome": "captured",
+          "width": 200,
+          "height": 120,
+          "pixels": []
+        },
+        {
+          "name": "viewport-css",
+          "dpr": 1,
+          "outcome": "captured",
+          "width": 200,
+          "height": 120,
+          "pixels": []
+        },
+        {
+          "name": "scrolled-viewport-clip",
+          "dpr": 1,
+          "outcome": "captured",
+          "width": 60,
+          "height": 40,
+          "pixels": [
+            [
+              255,
+              0,
+              0,
+              255
+            ]
+          ]
+        },
+        {
+          "name": "full-document-mask",
+          "dpr": 1,
+          "outcome": "captured",
+          "width": 200,
+          "height": 400,
+          "pixels": [
+            [
+              0,
+              255,
+              0,
+              255
+            ]
+          ]
+        },
+        {
+          "name": "full-document-clip-style",
+          "dpr": 1,
+          "outcome": "captured",
+          "width": 60,
+          "height": 40,
+          "pixels": [
+            [
+              0,
+              0,
+              255,
+              255
+            ]
+          ]
+        },
+        {
+          "name": "css-scale-document-clip",
+          "dpr": 1,
+          "outcome": "captured",
+          "width": 60,
+          "height": 40,
+          "pixels": [
+            [
+              255,
+              0,
+              0,
+              255
+            ]
+          ]
+        },
+        {
+          "name": "locator-css-scale",
+          "dpr": 1,
+          "outcome": "captured",
+          "width": 60,
+          "height": 40,
+          "pixels": [
+            [
+              255,
+              0,
+              0,
+              255
+            ]
+          ]
+        },
+        {
+          "name": "transparent-default-background",
+          "dpr": 1,
+          "outcome": "captured",
+          "width": 20,
+          "height": 20,
+          "pixels": [
+            [
+              0,
+              0,
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "name": "empty-clip",
+          "dpr": 1,
+          "outcome": "rejected",
+          "error": "page.screenshot: Expected options.clip.width to be greater than 0."
+        },
+        {
+          "name": "outside-full-document-clip",
+          "dpr": 1,
+          "outcome": "rejected",
+          "error": "page.screenshot: Clipped area is either empty or outside the resulting image"
+        },
+        {
+          "name": "jpeg-quality-zero",
+          "dpr": 1,
+          "outcome": "captured",
+          "format": "jpeg"
+        },
+        {
+          "name": "nonfinite-clip-width",
+          "dpr": 1,
+          "outcome": "captured",
+          "width": 200,
+          "height": 20,
+          "pixels": []
+        },
+        {
+          "name": "transparent-over-existing-background",
+          "dpr": 1,
+          "outcome": "captured",
+          "width": 20,
+          "height": 20,
+          "pixels": [
+            [
+              0,
+              0,
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "name": "background-after-transparent-capture",
+          "dpr": 1,
+          "outcome": "captured",
+          "width": 20,
+          "height": 20,
+          "pixels": [
+            [
+              255,
+              255,
+              255,
+              255
+            ]
+          ]
+        },
+        {
+          "name": "viewport-device",
+          "dpr": 2,
+          "outcome": "captured",
+          "width": 400,
+          "height": 240,
+          "pixels": []
+        },
+        {
+          "name": "viewport-css",
+          "dpr": 2,
+          "outcome": "captured",
+          "width": 200,
+          "height": 120,
+          "pixels": []
+        },
+        {
+          "name": "scrolled-viewport-clip",
+          "dpr": 2,
+          "outcome": "captured",
+          "width": 120,
+          "height": 80,
+          "pixels": [
+            [
+              255,
+              0,
+              0,
+              255
+            ]
+          ]
+        },
+        {
+          "name": "full-document-mask",
+          "dpr": 2,
+          "outcome": "captured",
+          "width": 400,
+          "height": 800,
+          "pixels": [
+            [
+              0,
+              255,
+              0,
+              255
+            ]
+          ]
+        },
+        {
+          "name": "full-document-clip-style",
+          "dpr": 2,
+          "outcome": "captured",
+          "width": 120,
+          "height": 80,
+          "pixels": [
+            [
+              0,
+              0,
+              255,
+              255
+            ]
+          ]
+        },
+        {
+          "name": "css-scale-document-clip",
+          "dpr": 2,
+          "outcome": "captured",
+          "width": 60,
+          "height": 40,
+          "pixels": [
+            [
+              255,
+              0,
+              0,
+              255
+            ]
+          ]
+        },
+        {
+          "name": "locator-css-scale",
+          "dpr": 2,
+          "outcome": "captured",
+          "width": 60,
+          "height": 40,
+          "pixels": [
+            [
+              255,
+              0,
+              0,
+              255
+            ]
+          ]
+        },
+        {
+          "name": "transparent-default-background",
+          "dpr": 2,
+          "outcome": "captured",
+          "width": 40,
+          "height": 40,
+          "pixels": [
+            [
+              0,
+              0,
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "name": "empty-clip",
+          "dpr": 2,
+          "outcome": "rejected",
+          "error": "page.screenshot: Expected options.clip.width to be greater than 0."
+        },
+        {
+          "name": "outside-full-document-clip",
+          "dpr": 2,
+          "outcome": "rejected",
+          "error": "page.screenshot: Clipped area is either empty or outside the resulting image"
+        },
+        {
+          "name": "jpeg-quality-zero",
+          "dpr": 2,
+          "outcome": "captured",
+          "format": "jpeg"
+        },
+        {
+          "name": "nonfinite-clip-width",
+          "dpr": 2,
+          "outcome": "captured",
+          "width": 400,
+          "height": 40,
+          "pixels": []
+        },
+        {
+          "name": "transparent-over-existing-background",
+          "dpr": 2,
+          "outcome": "captured",
+          "width": 40,
+          "height": 40,
+          "pixels": [
+            [
+              0,
+              0,
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "name": "background-after-transparent-capture",
+          "dpr": 2,
+          "outcome": "captured",
+          "width": 40,
+          "height": 40,
+          "pixels": [
+            [
+              255,
+              255,
+              255,
+              255
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "firefox-bidi",
+      "version": "157.0",
+      "cases": [
+        {
+          "name": "viewport-device",
+          "dpr": 1,
+          "outcome": "captured",
+          "width": 200,
+          "height": 120,
+          "pixels": []
+        },
+        {
+          "name": "viewport-css",
+          "dpr": 1,
+          "outcome": "captured",
+          "width": 200,
+          "height": 120,
+          "pixels": []
+        },
+        {
+          "name": "scrolled-viewport-clip",
+          "dpr": 1,
+          "outcome": "captured",
+          "width": 60,
+          "height": 40,
+          "pixels": [
+            [
+              255,
+              0,
+              0,
+              255
+            ]
+          ]
+        },
+        {
+          "name": "full-document-mask",
+          "dpr": 1,
+          "outcome": "captured",
+          "width": 188,
+          "height": 400,
+          "pixels": [
+            [
+              0,
+              255,
+              0,
+              255
+            ]
+          ]
+        },
+        {
+          "name": "full-document-clip-style",
+          "dpr": 1,
+          "outcome": "captured",
+          "width": 60,
+          "height": 40,
+          "pixels": [
+            [
+              0,
+              0,
+              255,
+              255
+            ]
+          ]
+        },
+        {
+          "name": "css-scale-document-clip",
+          "dpr": 1,
+          "outcome": "captured",
+          "width": 60,
+          "height": 40,
+          "pixels": [
+            [
+              255,
+              0,
+              0,
+              255
+            ]
+          ]
+        },
+        {
+          "name": "locator-css-scale",
+          "dpr": 1,
+          "outcome": "captured",
+          "width": 60,
+          "height": 40,
+          "pixels": [
+            [
+              255,
+              0,
+              0,
+              255
+            ]
+          ]
+        },
+        {
+          "name": "transparent-default-background",
+          "dpr": 1,
+          "outcome": "rejected",
+          "error": "page.screenshot: Not implemented"
+        },
+        {
+          "name": "empty-clip",
+          "dpr": 1,
+          "outcome": "rejected",
+          "error": "page.screenshot: Expected options.clip.width to be greater than 0."
+        },
+        {
+          "name": "outside-full-document-clip",
+          "dpr": 1,
+          "outcome": "rejected",
+          "error": "page.screenshot: Clipped area is either empty or outside the resulting image"
+        },
+        {
+          "name": "jpeg-quality-zero",
+          "dpr": 1,
+          "outcome": "captured",
+          "format": "jpeg"
+        },
+        {
+          "name": "nonfinite-clip-width",
+          "dpr": 1,
+          "outcome": "captured",
+          "width": 200,
+          "height": 20,
+          "pixels": []
+        },
+        {
+          "name": "viewport-device",
+          "dpr": 2,
+          "outcome": "captured",
+          "width": 400,
+          "height": 240,
+          "pixels": []
+        },
+        {
+          "name": "viewport-css",
+          "dpr": 2,
+          "outcome": "captured",
+          "width": 400,
+          "height": 240,
+          "pixels": []
+        },
+        {
+          "name": "scrolled-viewport-clip",
+          "dpr": 2,
+          "outcome": "captured",
+          "width": 120,
+          "height": 80,
+          "pixels": [
+            [
+              255,
+              0,
+              0,
+              255
+            ]
+          ]
+        },
+        {
+          "name": "full-document-mask",
+          "dpr": 2,
+          "outcome": "captured",
+          "width": 376,
+          "height": 800,
+          "pixels": [
+            [
+              0,
+              255,
+              0,
+              255
+            ]
+          ]
+        },
+        {
+          "name": "full-document-clip-style",
+          "dpr": 2,
+          "outcome": "captured",
+          "width": 120,
+          "height": 80,
+          "pixels": [
+            [
+              0,
+              0,
+              255,
+              255
+            ]
+          ]
+        },
+        {
+          "name": "css-scale-document-clip",
+          "dpr": 2,
+          "outcome": "captured",
+          "width": 120,
+          "height": 80,
+          "pixels": [
+            [
+              255,
+              0,
+              0,
+              255
+            ]
+          ]
+        },
+        {
+          "name": "locator-css-scale",
+          "dpr": 2,
+          "outcome": "captured",
+          "width": 120,
+          "height": 80,
+          "pixels": [
+            [
+              255,
+              0,
+              0,
+              255
+            ]
+          ]
+        },
+        {
+          "name": "transparent-default-background",
+          "dpr": 2,
+          "outcome": "rejected",
+          "error": "page.screenshot: Not implemented"
+        },
+        {
+          "name": "empty-clip",
+          "dpr": 2,
+          "outcome": "rejected",
+          "error": "page.screenshot: Expected options.clip.width to be greater than 0."
+        },
+        {
+          "name": "outside-full-document-clip",
+          "dpr": 2,
+          "outcome": "rejected",
+          "error": "page.screenshot: Clipped area is either empty or outside the resulting image"
+        },
+        {
+          "name": "jpeg-quality-zero",
+          "dpr": 2,
+          "outcome": "captured",
+          "format": "jpeg"
+        },
+        {
+          "name": "nonfinite-clip-width",
+          "dpr": 2,
+          "outcome": "captured",
+          "width": 400,
+          "height": 40,
+          "pixels": []
+        }
+      ]
+    }
+  ]
+}
