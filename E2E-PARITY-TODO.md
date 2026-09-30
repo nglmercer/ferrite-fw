@@ -57,7 +57,7 @@ batch; its cause remains an explicit G04 audit item.
 
 The matrix remains 73 classes/1,018 members: Partial635/Missing327/Equivalent15/
 Idiomatic41. Capture mappings now describe these options and engine differences;
-they do not imply full compatibility. Current matrix generation, 737 parity-document
+they do not imply full compatibility. Current matrix generation, 738 parity-document
 local links and 655 source anchors passed for the path increment.
 
 **Current handoff:** B10 is in progress. The verified increment `499c274` in
@@ -71,7 +71,7 @@ never-stable behavior differences. Three required two-engine native groups and
 virtual-time tests cover the draft; these are focused evidence, not final phase
 gates. The font wait test currently uses a held readiness promise.
 
-The next B10 increment implements browser/project/platform and file/title path
+Verified path increment `b34174d` implements browser/project/platform and file/title path
 templates, project/assertion precedence, CLI/config/env plumbing and immutable
 resolved settings. TestInfo.snapshot_path resolves without creating files, and
 snapshot_options supplies standalone helpers with the same identity. Two required
@@ -847,7 +847,7 @@ their dependencies are ready. References include
   implemented in this increment. The 56-case actual pinned reference verifies
   mode/negation/stability differences; three required two-engine groups and
   virtual-time checks cover the draft. Path templates now cover global/project/
-  assertion precedence, frozen metadata, CLI/env and TestInfo access; two native
+  assertion precedence, frozen metadata, CLI/env and TestInfo access (`b34174d`); two native
   groups and 36 pinned path-only cases verify them. Report diff attachments,
   real font/animation cases and final complete phase gates are still required.
   Latest focused increment gates passed: 192 units, 29 native integrations/eight

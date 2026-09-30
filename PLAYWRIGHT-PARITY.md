@@ -1557,7 +1557,7 @@ without relaxing capture behavior. Font wait ordering was corrected and the fina
 native scopes reran after that change. CPU/decode/filesystem budget work remains
 part of B10; synchronous computation is not preempted by an async deadline.
 
-### B10 draft: configurable snapshot paths
+### B10 draft: configurable snapshot paths (`b34174d`)
 
 `Runner::snapshot_path_template`, `Project::snapshot_path_template`, shared
 `E2eConfig`/project fields, `--snapshot-path-template` and
@@ -1612,7 +1612,7 @@ Final focused path-increment gates passed: 192 units, 29 native integration chec
 across eight targets, four doctests and 28 CLI/configuration checks (253 combined).
 This reruns the stable-capture increment scopes and adds snapshot_paths2; all
 native scopes require full Chrome 153 and Firefox 157. Strict all-target Clippy,
-formatting, matrix generation, 737 parity-document links and 655 source anchors
+formatting, matrix generation, 738 parity-document links and 655 source anchors
 passed. The final unit run also verifies visible failure-artifact write errors
 without losing the original mismatch. Full current-inventory verification and
 the remaining B10 acceptance criteria are still pending.
