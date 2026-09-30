@@ -3,9 +3,10 @@
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
 
 Implement **G, then A, then B**, followed by the supported C extensions. This
-backlog contains **45 tasks (20 complete, 25 remaining)**: four foundations, 16 core tasks, 19 follow-ups
-and six optional extensions. All A tasks are now verified; continue with network
-metadata/events and independent B conveniences, then supported C extensions. The ordering and effort assessments
+backlog contains **45 tasks (22 complete, 23 remaining)**: four foundations, 16 core tasks, 19 follow-ups
+and six optional extensions. All A tasks and B02/B03/B15 are now verified;
+continue with HTTP/routing fidelity and native event diagnostics, then the
+remaining runner/capture/report work and supported C extensions. The ordering and effort assessments
 are recommendations based on the current source and parity audit.
 
 The target is a useful, reliable Rust API on the existing Chromium/CDP and
@@ -99,7 +100,14 @@ they do not constitute differential Playwright conformance coverage.
   chunked streaming, source identity after page closure, zero/caller cancellation,
   recorded failures, missing files and non-NotFound deletion errors verified.
   Combined verified inventory: 289 E2E plus 23 CLI/configuration checks.
-- G04 remains open until callback and stream lifecycle coverage is complete.
+- `1a9e875`: B02/B03. All 295 E2E checks and 23 CLI/configuration checks passed
+  with strict E2E/CLI Clippy, formatting and generated evidence links. Four typed
+  metadata groups additionally passed on full Chrome/Firefox. Concurrent requests,
+  child frames, redirects, duplicate cookies, JSON/form text, streaming completion,
+  HTTP/transport errors, page closure, disconnect, zero/caller/enclosing deadlines
+  and runner retries verified. Bounded raw-header correlation, unavailable metadata
+  and weak history are explicit; bodies remain C02 and route header forwarding B07.
+- G04 remains open until lifecycle coverage across all additions is complete.
 
 ## G — Foundations for the larger session
 
@@ -291,17 +299,25 @@ their dependencies are ready. References include
   readiness and dialog closure. Done when events have page/frame identity and
   ordered, deduplicated lifecycle tests. Preserve already implemented dialog,
   popup, download and page-close forwarding; audit it under G01 first.
-- [ ] **B02 — Rich request/response metadata wrappers (L).** Build typed wrappers
+- [x] **B02 — Rich request/response metadata wrappers (L).** Build typed wrappers
   over current observations: headers/arrays, method, post-data JSON, status,
   resource type, frame/page references, failure and redirect links where native
   data exists. Done when concurrent requests and redirect hops retain identity,
   old RecordedRequest callers keep working and unavailable fields remain optional.
   Body retrieval is separate in C02; this item must work without Firefox bodies.
-- [ ] **B03 — Response completion helpers (M; needs B02).** Expose completion of
+  Evidence: `1a9e875`; `network_metadata.rs` and bounded FIFO/history units verify
+  live Request/Response wrappers, typed waits/events, concurrent per-hop identity,
+  frame/page references, JSON/form parsing, redirects and legacy compatibility.
+  Absent/folded Firefox fields, header completeness and history truncation stay explicit.
+- [x] **B03 — Response completion helpers (M; needs B02).** Expose completion of
   a response separately from receiving its headers. Done when delayed streaming
   bodies, HTTP error statuses, redirects, transport failures and disposal settle
   correctly. Extend existing RequestFinished/RequestFailed observations; no
   response-body capture is required to implement completion.
+  Evidence: `1a9e875`; the native streaming/failure/lifecycle and runner/disconnect
+  groups verify independent header/completion phases, HTTP error success, failures
+  before/after headers, disposal and already completed observations after closure.
+  Defaults, zero/caller/enclosing deadlines, retries and transport wake-up covered.
 - [ ] **B04 — Earliest popup diagnostics (M).** Preserve console/error/network
   observations emitted before a popup is fully adopted into the context. Done
   when startup-script logs, immediate requests and immediate closure retain
@@ -464,7 +480,7 @@ waiting for every future feature before starting independent work.
 
 | Phase | Tasks | Outcome and reason for this order |
 |---|---|---|
-| 1. Network observations | B02, B03 | Typed per-hop request/response identity and completion independent of body capture. Establish the data needed by report diagnostics and body helpers. Currently in progress; keep unchecked until verification is complete. |
+| 1. Network observations | B02, B03 — complete | Typed per-hop request/response identity and completion independent of body capture. Verified in `1a9e875`; continue with phase 2. |
 | 2. HTTP and routing correctness | B05, B06, B07, B08 | Define active-handler removal, fetch/fulfill overrides, duplicate header preservation and request/redirect semantics together. Verify forwarding as well as getter APIs. |
 | 3. Native event diagnostics | B01, B04, B19 | Capture frame/load/dialog events, earliest popup traffic and structured error/console data with consistent ownership and ordering. |
 | 4. Runner and developer APIs | B16, B17, B12, B14, B13 | Add ownership and locator descriptions, attempt-owned soft assertions, effective configuration, then fixture/shared cleanup budgets. Changes to budgets need broader runner regressions. |
