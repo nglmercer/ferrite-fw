@@ -1,7 +1,7 @@
 # Ferrite E2E implementation TODO
 
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
-Session plan refreshed: 2026-09-30, from verified B09 implementation `1c37e31`.
+Session plan refreshed: 2026-09-30, with verified B10 stable-capture and path increments.
 Expanded on request for a longer implementation session; B09/B13/B14 and D01/D02 are verified.
 Uncommitted implementations are not counted complete.
 
@@ -55,10 +55,10 @@ reference launch timed out during concurrent native work; a final run with a
 regression failed initially, then passed in isolation and in the full routing
 batch; its cause remains an explicit G04 audit item.
 
-The matrix remains 73 classes/1,018 members: Partial632/Missing330/Equivalent15/
+The matrix remains 73 classes/1,018 members: Partial635/Missing327/Equivalent15/
 Idiomatic41. Capture mappings now describe these options and engine differences;
-they do not imply full compatibility. Matrix generation, 735 local evidence
-links and 652 source anchors passed before the B09 implementation commit.
+they do not imply full compatibility. Current matrix generation, 737 parity-document
+local links and 655 source anchors passed for the path increment.
 
 **Current handoff:** B10 is in progress. The verified increment `499c274` in
 `snapshot.rs`,
@@ -71,9 +71,14 @@ never-stable behavior differences. Three required two-engine native groups and
 virtual-time tests cover the draft; these are focused evidence, not final phase
 gates. The font wait test currently uses a held readiness promise.
 
-Continue B10 with browser/project/platform path templates and explicit precedence
-over B14 immutable run/project settings, including useful TestInfo path access.
-Attach expected/actual/diff artifacts through existing report/bundle plumbing;
+The next B10 increment implements browser/project/platform and file/title path
+templates, project/assertion precedence, CLI/config/env plumbing and immutable
+resolved settings. TestInfo.snapshot_path resolves without creating files, and
+snapshot_options supplies standalone helpers with the same identity. Two required
+two-engine native groups verify page/locator/text paths and retries; 36 actual
+pinned path-only calls document naming differences. This remains partial parity.
+
+Continue B10 by attaching expected/actual/diff artifacts through report/bundle plumbing;
 retain prior/last images for never-stable and dimension diagnostics. Add an actual
 delayed downloadable-font fixture, animation cases, report/soft/retry/cancellation
 coverage, and audit CPU/decode/filesystem bounds under the shared assertion clock.
@@ -841,10 +846,12 @@ their dependencies are ready. References include
   font readiness, `Changed` mode, PNG/ratio validation and last-image failures are
   implemented in this increment. The 56-case actual pinned reference verifies
   mode/negation/stability differences; three required two-engine groups and
-  virtual-time checks cover the draft. Path templates, report diff attachments,
+  virtual-time checks cover the draft. Path templates now cover global/project/
+  assertion precedence, frozen metadata, CLI/env and TestInfo access; two native
+  groups and 36 pinned path-only cases verify them. Report diff attachments,
   real font/animation cases and final complete phase gates are still required.
-  Final focused increment gates passed: 187 units, 27 native integrations/seven
-  targets, four doctests and 28 CLI/configuration checks (246 combined), strict
+  Latest focused increment gates passed: 192 units, 29 native integrations/eight
+  targets, four doctests and 28 CLI/configuration checks (253 combined), strict
   Clippy, formatting, regenerated matrix and local links. Font waits now follow
   owned style preparation across reachable same-origin documents, with held-
   promise cancellation/restoration coverage. These are not full phase gates;

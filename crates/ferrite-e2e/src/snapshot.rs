@@ -9,13 +9,15 @@
 //! use `FERRITE_UPDATE_SNAPSHOTS` (`missing`/`changed`/`all`/`none`), then
 //! [`SnapshotUpdate::Missing`]. Runner inputs are fixed at run startup; they do
 //! not mutate the process environment. Explicit assertion options take precedence.
+//! An explicit path_template replaces the legacy slug path. Runner pages inherit
+//! project/run templates and frozen metadata; standalone helpers can use
+//! TestInfo::snapshot_options or supply SnapshotPathContext explicitly.
 
 use std::path::{Path, PathBuf};
 
 use image::GenericImageView;
 
 use crate::error::{E2eError, E2eResult};
-use crate::runner::slug;
 
 /// What to do about snapshot files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -83,6 +85,10 @@ pub struct SnapshotOptions {
     pub capture: Option<crate::ScreenshotOptions>,
     /// Wait for reachable same-origin documents' fonts after capture style preparation.
     pub wait_for_fonts: bool,
+    /// Baseline path template; None retains the legacy slug path.
+    pub path_template: Option<String>,
+    /// Explicit metadata/base for the template; runner assertions inherit it.
+    pub path_context: Option<crate::SnapshotPathContext>,
 }
 
 impl Default for SnapshotOptions {
@@ -95,12 +101,17 @@ impl Default for SnapshotOptions {
             update: None,
             capture: None,
             wait_for_fonts: true,
+            path_template: None,
+            path_context: None,
         }
     }
 }
 
 impl SnapshotOptions {
     pub(crate) fn validate(&self) -> E2eResult<()> {
+        if let Some(template) = &self.path_template {
+            crate::snapshot_path::validate_template(template)?;
+        }
         if !self.max_diff_ratio.is_finite() || !(0.0..=1.0).contains(&self.max_diff_ratio) {
             return Err(E2eError::Config(
                 "snapshot max_diff_ratio must be finite and between zero and one".into(),
@@ -268,14 +279,13 @@ pub(crate) fn resolve_update(explicit: Option<SnapshotUpdate>) -> SnapshotUpdate
     explicit.unwrap_or_else(SnapshotUpdate::from_env)
 }
 
-/// Snapshot file path for `name` (`<slug>.<ext>`).
-fn snap_path(dir: &Path, name: &str, ext: &str) -> PathBuf {
-    dir.join(format!("{}.{ext}", slug(name)))
-}
-
-/// Snapshot file path for `name` with the resolved directory.
-pub(crate) fn snap_path_for(name: &str, ext: &str, opts: &SnapshotOptions) -> PathBuf {
-    snap_path(&resolve_dir(opts.dir.as_deref()), name, ext)
+/// Snapshot file path for `name`, including an explicit template when present.
+pub(crate) fn snap_path_for(
+    name: &str,
+    kind: crate::SnapshotKind,
+    opts: &SnapshotOptions,
+) -> E2eResult<PathBuf> {
+    opts.path(name, kind)
 }
 
 /// Assert PNG bytes against the named snapshot (`<slug>.png`).
@@ -287,8 +297,7 @@ pub fn assert_snapshot_png(name: &str, actual: &[u8], opts: &SnapshotOptions) ->
     opts.validate()?;
     // Invalid bytes must never become a new baseline, even under update=all.
     compare_png(actual, actual, opts.threshold)?;
-    let dir = resolve_dir(opts.dir.as_deref());
-    let path = snap_path(&dir, name, "png");
+    let path = opts.path(name, crate::SnapshotKind::Screenshot)?;
     let update = resolve_update(opts.update);
     if !path.is_file() {
         return match update {
@@ -315,13 +324,13 @@ pub fn assert_snapshot_png(name: &str, actual: &[u8], opts: &SnapshotOptions) ->
             std::fs::write(&path, actual)?;
             Ok(())
         }
-        Ok(diff) => Err(mismatch(&dir, name, "png", actual, diff.summary())),
+        Ok(diff) => Err(mismatch(&path, name, "png", actual, diff.summary())),
         Err(error) if error.code() == "FERRITE_E2E_EXPECT" => {
             if update == SnapshotUpdate::Changed {
                 std::fs::write(&path, actual)?;
                 Ok(())
             } else {
-                Err(mismatch(&dir, name, "png", actual, error.to_string()))
+                Err(mismatch(&path, name, "png", actual, error.to_string()))
             }
         }
         Err(error) => Err(error),
@@ -331,8 +340,7 @@ pub fn assert_snapshot_png(name: &str, actual: &[u8], opts: &SnapshotOptions) ->
 /// Assert text against the named snapshot (`<slug>.snap`, same update rules).
 pub fn assert_snapshot_text(name: &str, actual: &str, opts: &SnapshotOptions) -> E2eResult<()> {
     opts.validate()?;
-    let dir = resolve_dir(opts.dir.as_deref());
-    let path = snap_path(&dir, name, "snap");
+    let path = opts.path(name, crate::SnapshotKind::Text)?;
     let update = resolve_update(opts.update);
     if !path.is_file() {
         return match update {
@@ -360,7 +368,7 @@ pub fn assert_snapshot_text(name: &str, actual: &str, opts: &SnapshotOptions) ->
         Ok(())
     } else {
         Err(mismatch(
-            &dir,
+            &path,
             name,
             "snap",
             actual.as_bytes(),
@@ -380,13 +388,22 @@ pub fn match_text_snapshot_with(name: &str, actual: &str, opts: &SnapshotOptions
 }
 
 /// Write `<slug>.actual.<ext>` (best-effort) and build the mismatch error.
-fn mismatch(dir: &Path, name: &str, ext: &str, actual: &[u8], detail: String) -> E2eError {
-    let actual_path = dir.join(format!("{}.actual.{ext}", slug(name)));
-    std::fs::write(&actual_path, actual).ok();
-    E2eError::Expect(format!(
+fn mismatch(path: &Path, name: &str, ext: &str, actual: &[u8], detail: String) -> E2eError {
+    let actual_path = path.with_extension(format!("actual.{ext}"));
+    let result = (|| -> std::io::Result<()> {
+        if let Some(parent) = actual_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&actual_path, actual)
+    })();
+    let error = E2eError::Expect(format!(
         "snapshot {name:?} differs: {detail} (actual: {})",
         actual_path.display()
-    ))
+    ));
+    match result {
+        Ok(()) => error,
+        Err(write) => error.with_context(&format!("writing failure artifact also failed: {write}")),
+    }
 }
 
 /// Bounded preview around the first differing line (`±3` context, capped width).

@@ -1007,6 +1007,35 @@ impl TestInfo {
         Ok(path)
     }
 
+    /// Snapshot inputs fixed for this attempt. Use these with standalone text/PNG
+    /// helpers; assertion-specific fields can still override these defaults.
+    pub fn snapshot_options(&self) -> crate::SnapshotOptions {
+        crate::SnapshotOptions {
+            dir: Some(std::path::PathBuf::from(&self.settings.snapshot_dir)),
+            update: Some(self.settings.snapshot_update),
+            path_template: self.settings.snapshot_path_template.clone(),
+            path_context: Some(crate::SnapshotPathContext {
+                root_dir: (!self.settings.snapshot_root_dir.is_empty())
+                    .then(|| std::path::PathBuf::from(&self.settings.snapshot_root_dir)),
+                browser: Some(self.settings.browser),
+                project: self.project.clone(),
+                test_file: Some(std::path::PathBuf::from(&self.file)),
+                test_name: Some(self.title.clone()),
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// Resolve this attempt's baseline without creating it. Retries and repeats
+    /// share baseline identity. Per-attempt report attachments are handled separately.
+    pub fn snapshot_path(
+        &self,
+        name: &str,
+        kind: crate::SnapshotKind,
+    ) -> E2eResult<std::path::PathBuf> {
+        self.snapshot_options().path(name, kind)
+    }
+
     /// Attach bytes as a file under `<output_dir>/attachments/`.
     ///
     /// Returns the written path. The extension is derived from well-known
@@ -1567,6 +1596,7 @@ pub struct Project {
     pub repeat_each: Option<u32>,
     pub output_dir: Option<String>,
     pub snapshot_dir: Option<String>,
+    pub snapshot_path_template: Option<String>,
 }
 
 impl Project {
@@ -1622,6 +1652,11 @@ impl Project {
         self
     }
 
+    pub fn snapshot_path_template(mut self, template: impl Into<String>) -> Self {
+        self.snapshot_path_template = Some(template.into());
+        self
+    }
+
     /// Retry override for this project.
     #[must_use]
     pub fn retries(mut self, retries: u32) -> Self {
@@ -1650,6 +1685,7 @@ fn projects_from_config(config: &crate::E2eConfig) -> E2eResult<Vec<Project>> {
             project.repeat_each = input.repeat_each.map(|count| count.max(1));
             project.output_dir = input.output_dir.clone();
             project.snapshot_dir = input.snapshot_dir.clone();
+            project.snapshot_path_template = input.snapshot_path_template.clone();
             if let Some(viewport) = &input.viewport {
                 project.context_options = Some(ContextOptions {
                     viewport: Some(crate::Viewport {
@@ -2104,6 +2140,7 @@ pub struct Runner {
     fail_on_flaky_tests: bool,
     fixtures: Vec<FixtureDef>,
     snapshot_dir: Option<String>,
+    snapshot_path_template: Option<String>,
     snapshot_update: Option<crate::SnapshotUpdate>,
     selected_projects: Option<Vec<String>>,
     configuration_error: Option<String>,
@@ -2191,6 +2228,7 @@ impl Runner {
             fail_on_flaky_tests: config.fail_on_flaky_tests,
             fixtures: Vec::new(),
             snapshot_dir: config.snapshot_dir.clone(),
+            snapshot_path_template: config.snapshot_path_template.clone(),
             snapshot_update: crate::SnapshotUpdate::parse(&config.update_snapshots).ok(),
             selected_projects: (!config.selected_projects.is_empty())
                 .then(|| config.selected_projects.clone()),
@@ -2208,6 +2246,10 @@ impl Runner {
     }
     pub fn snapshot_dir(mut self, dir: impl Into<String>) -> Self {
         self.snapshot_dir = Some(dir.into());
+        self
+    }
+    pub fn snapshot_path_template(mut self, template: impl Into<String>) -> Self {
+        self.snapshot_path_template = Some(template.into());
         self
     }
     pub fn snapshot_update(mut self, mode: crate::SnapshotUpdate) -> Self {
@@ -2285,6 +2327,14 @@ impl Runner {
         selected_projects.retain(|name| wanted_names.insert(name.clone()));
         let selected =
             resolve_projects(&self.projects, &selected_projects).map_err(E2eError::Config)?;
+        let snapshot_root_dir = std::env::current_dir()?.display().to_string();
+        let snapshot_path_template = self
+            .snapshot_path_template
+            .clone()
+            .or_else(|| std::env::var("FERRITE_SNAPSHOT_PATH_TEMPLATE").ok());
+        if let Some(template) = &snapshot_path_template {
+            crate::snapshot_path::validate_template(template)?;
+        }
         let output_dir = absolute_path(&self.output_dir)?;
         let snapshot_dir = self
             .snapshot_dir
@@ -2315,6 +2365,13 @@ impl Runner {
                 None if snapshot_dir.is_some() => global_snapshot.clone(),
                 None => absolute_path(&format!("{project_output}/snapshots"))?,
             };
+            let project_template = project
+                .as_ref()
+                .and_then(|p| p.snapshot_path_template.clone())
+                .or_else(|| snapshot_path_template.clone());
+            if let Some(template) = &project_template {
+                crate::snapshot_path::validate_template(template)?;
+            }
             let kind = project
                 .as_ref()
                 .and_then(|project| project.browser)
@@ -2361,6 +2418,7 @@ impl Runner {
                     .max(1),
                 output_dir: project_output,
                 snapshot_dir: project_snapshot,
+                snapshot_path_template: project_template,
                 context,
             });
         }
@@ -2383,7 +2441,9 @@ impl Runner {
             video_fps: self.video_fps,
             output_dir,
             snapshot_dir: global_snapshot,
+            snapshot_path_template,
             snapshot_update,
+            snapshot_root_dir,
             repeat_each: self.repeat_each,
             filter,
             grep,
@@ -2822,6 +2882,7 @@ impl Runner {
         runner.output_dir = config.output_dir.clone();
         runner.snapshot_dir = Some(config.snapshot_dir.clone());
         runner.snapshot_update = Some(config.snapshot_update);
+        runner.snapshot_path_template = config.snapshot_path_template.clone();
         runner.forbid_only = config.forbid_only;
         runner.fail_on_flaky_tests = config.fail_on_flaky_tests;
         runner.active_config = Some(Arc::new(config));
@@ -3656,7 +3717,9 @@ async fn run_one(
                     .display()
                     .to_string(),
                 snapshot_dir: project.snapshot_dir.clone(),
+                snapshot_path_template: project.snapshot_path_template.clone(),
                 snapshot_update: config.snapshot_update,
+                snapshot_root_dir: config.snapshot_root_dir.clone(),
                 context: context_options.clone(),
             },
             steps: None,
@@ -3858,6 +3921,9 @@ async fn run_one(
         drop(lifecycle);
         page.snapshot_dir = Some(std::path::PathBuf::from(&project.snapshot_dir));
         page.snapshot_update = Some(config.snapshot_update);
+        let snapshot_options = info.snapshot_options();
+        page.snapshot_path_template = snapshot_options.path_template;
+        page.snapshot_path_context = snapshot_options.path_context.unwrap_or_default();
         page.reporter = info.steps.clone();
         let request = match crate::ApiClient::with_options(context.api_options()) {
             Ok(request) => request,

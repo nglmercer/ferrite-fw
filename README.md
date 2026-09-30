@@ -258,7 +258,8 @@ reporter = "list,json"              # list | json | junit (comma-separated)
 screenshot = "only-on-failure"      # on | off | only-on-failure
 video = "off"                       # on | off | only-on-failure (webm)
 video_fps = 10
-update_snapshots = "missing"        # missing | all | none
+update_snapshots = "missing"        # missing | changed | all | none
+snapshot_path_template = "{snapshotDir}/{browserName}{-projectName}/{platform}/{arg}{ext}"
 
 [e2e.web_server]
 url = "http://127.0.0.1:5190/"
@@ -276,7 +277,7 @@ scripts, storage-state capture/replay, IndexedDB clear, `set_test_id_attribute`,
 request routing
 (handlers with fallback, `times` limits, abort reasons, `route_from_har`,
 `unroute_all`) and observation, response bodies with HAR embed, aria snapshots with
-screenshot/text/aria snapshot assertions (`missing`/`all`/`none` update modes),
+screenshot/text/aria snapshot assertions (`missing`/`changed`/`all`/`none` update modes),
 `Download`
 objects with save/delete, screenshots, video recording, live frame streams,
 traces, `ApiClient` verbs with `fetch`, parallel `Runner` with tags, sharding,

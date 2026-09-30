@@ -406,6 +406,8 @@ pub struct E2eProjectConfig {
     pub repeat_each: Option<u32>,
     pub output_dir: Option<String>,
     pub snapshot_dir: Option<String>,
+    /// Template for snapshot baseline paths; inherited by projects when unset.
+    pub snapshot_path_template: Option<String>,
 }
 
 /// End-to-end test options (`ferrite e2e`, Chromium-first).
@@ -456,6 +458,8 @@ pub struct E2eConfig {
     pub output_dir: String,
     /// Snapshot baseline directory; unset uses output_dir/snapshots.
     pub snapshot_dir: Option<String>,
+    /// Template for snapshot baseline paths; inherited by projects when unset.
+    pub snapshot_path_template: Option<String>,
     /// Repetitions per selected test (zero normalizes to one).
     pub repeat_each: u32,
     /// Name-or-tag substring filters.
@@ -507,6 +511,7 @@ impl Default for E2eConfig {
             reporter: "list".to_string(),
             output_dir: "test-results".to_string(),
             snapshot_dir: None,
+            snapshot_path_template: None,
             repeat_each: 1,
             filter: None,
             grep: None,

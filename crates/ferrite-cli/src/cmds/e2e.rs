@@ -118,6 +118,10 @@ fn child_command(
         ("FERRITE_E2E_GREP", &config.grep),
         ("FERRITE_E2E_GREP_INVERT", &config.grep_invert),
         ("FERRITE_SNAPSHOT_DIR", &config.snapshot_dir),
+        (
+            "FERRITE_SNAPSHOT_PATH_TEMPLATE",
+            &config.snapshot_path_template,
+        ),
     ] {
         if let Some(value) = value {
             child.env(name, value);
@@ -183,6 +187,9 @@ fn apply_flag_overrides(e2e: &mut ferrite::config::E2eConfig, args: &E2eArgs) {
     }
     if let Some(value) = &args.snapshot_dir {
         e2e.snapshot_dir = Some(value.display().to_string());
+    }
+    if let Some(value) = &args.snapshot_path_template {
+        e2e.snapshot_path_template = Some(value.clone());
     }
     if let Some(value) = &args.filter {
         e2e.filter = Some(value.clone());
@@ -451,6 +458,8 @@ mod tests {
             "cli-output",
             "--snapshot-dir",
             "cli-baseline",
+            "--snapshot-path-template",
+            "{snapshotDir}/{browserName}/{arg}{ext}",
             "--filter",
             "",
             "--grep",
@@ -481,6 +490,10 @@ mod tests {
         assert_eq!(config.repeat_each, 1);
         assert_eq!(config.output_dir, "cli-output");
         assert_eq!(config.snapshot_dir.as_deref(), Some("cli-baseline"));
+        assert_eq!(
+            config.snapshot_path_template.as_deref(),
+            Some("{snapshotDir}/{browserName}/{arg}{ext}")
+        );
         assert_eq!(config.filter.as_deref(), Some(""));
         assert_eq!(config.grep.as_deref(), Some("included"));
         assert_eq!(config.grep_invert.as_deref(), Some("excluded"));
@@ -503,6 +516,7 @@ mod tests {
             repeat_each: 3,
             base_url: Some("http://localhost:7777".into()),
             snapshot_dir: Some("snapshots with spaces".into()),
+            snapshot_path_template: Some("{snapshotDir}/{projectName}/{arg}{ext}".into()),
             filter: Some("".into()),
             grep: Some("good".into()),
             grep_invert: Some("bad".into()),
@@ -526,6 +540,10 @@ mod tests {
                 )
             })
             .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(
+            env["FERRITE_SNAPSHOT_PATH_TEMPLATE"],
+            "{snapshotDir}/{projectName}/{arg}{ext}"
+        );
         let forwarded: ferrite::config::E2eConfig =
             serde_json::from_str(&env["FERRITE_E2E_CONFIG"]).unwrap();
         assert_eq!(

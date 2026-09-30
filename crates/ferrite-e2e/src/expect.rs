@@ -1700,7 +1700,16 @@ where
         if options.update.is_none() {
             options.update = page.snapshot_update;
         }
-        let path = snap_path_for(name, "png", &options);
+        if options.path_template.is_none() {
+            options.path_template = page.snapshot_path_template.clone();
+        }
+        if options.path_context.is_none() {
+            options.path_context = Some(page.snapshot_path_context.clone());
+        }
+        if let Some(context) = &mut options.path_context {
+            context.browser.get_or_insert(page.browser_kind());
+        }
+        let path = snap_path_for(name, crate::SnapshotKind::Screenshot, &options)?;
         let expected = match std::fs::read(&path) {
             Ok(bytes) => Some(bytes),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,

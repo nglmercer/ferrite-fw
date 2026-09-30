@@ -19,6 +19,7 @@ pub struct ResolvedProjectConfig {
     pub repeat_each: u32,
     pub output_dir: String,
     pub snapshot_dir: String,
+    pub snapshot_path_template: Option<String>,
     pub context: ContextOptions,
 }
 
@@ -45,7 +46,10 @@ pub struct ResolvedRunConfig {
     pub video_fps: u32,
     pub output_dir: String,
     pub snapshot_dir: String,
+    pub snapshot_path_template: Option<String>,
     pub snapshot_update: SnapshotUpdate,
+    /// Captured working directory used for relative templates and test-file tokens.
+    pub snapshot_root_dir: String,
     pub repeat_each: u32,
     pub filter: Option<String>,
     pub grep: Option<String>,
@@ -86,6 +90,9 @@ pub struct ResolvedTestSettings {
     pub project_output_dir: String,
     pub output_dir: String,
     pub snapshot_dir: String,
+    pub snapshot_path_template: Option<String>,
     pub snapshot_update: SnapshotUpdate,
+    /// Captured working directory used for relative templates and test-file tokens.
+    pub snapshot_root_dir: String,
     pub context: ContextOptions,
 }

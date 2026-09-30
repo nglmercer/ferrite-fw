@@ -126,7 +126,8 @@ separate child process. The parent test environment is not mutated. Native
 versions are available after actual project startup; unlaunched dedicated
 projects retain None. Substring tag filters and whole ContextOptions replacement
 are Rust contracts, not claims of upstream regex/options merging equivalence.
-Snapshot path templates/stabilized capture remain separate TODO work.
+Snapshot path templates and stabilized capture now have focused B10 evidence;
+report diff attachments and final B10 verification remain open.
 
 `soft-assertion-reference.mjs` / `soft-assertion-reference.json` run five actual
 Playwright 1.63.0 test-runner cases: two mismatches followed by a passing retry,
@@ -389,5 +390,23 @@ Both engines show that `all`/`changed` can replace an existing baseline with the
 last image after stability times out, while a never-stable missing baseline fails
 without creation. Rust requires stable generation for both existing and missing
 baselines and preserves its earlier write-and-pass `missing` policy. Its per-
-channel comparator also remains different. B10 is not complete: snapshot path
-and report artifact work, actual delayed fonts and final phase gates remain.
+channel comparator also remains different. B10 is not complete: report artifact
+work, actual delayed fonts and final phase gates remain.
+
+### Snapshot path reference (B10 in progress)
+
+`reference:snapshot-paths` records 36 actual public `TestInfo.snapshotPath` calls
+on pinned Playwright 1.63.0. These path-only runner tests need no browser. Four
+variants cover file/title tokens, relative platform paths, unknown browser tokens
+and legacy defaults, with unnamed/named/project-override cases and three names.
+Every case asserts the exact resolved path, absolute resolution and no file creation.
+The [recorded paths](snapshot-path-reference.json) preserve actual results.
+
+Playwright flattens `/` in a string argument, preserves case in sanitized names,
+leaves `{browserName}` literal, and adds a platform suffix to its legacy paths.
+Ferrite preserves nested name components under an explicit template, uses its
+existing lowercase slug rules, recognizes `{browserName}`, rejects unknown tokens
+and retains its earlier legacy paths when no template is configured. An initial
+reference assumption missed string flattening and the legacy platform suffix;
+the corrected exact expectations passed all 36 cases. These differences remain
+Partial matrix mappings, rather than a claim of identical naming behavior.

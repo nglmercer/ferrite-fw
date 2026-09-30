@@ -1,0 +1,294 @@
+{
+  "playwright": "1.63.0",
+  "platform": "linux",
+  "cases": [
+    {
+      "variant": "all-file-tokens",
+      "project": "",
+      "name": "Nested/Card.png",
+      "path": "baselines/page/path.spec/path.spec.cjs/page/path.spec.cjs/suite-test-should-work/Nested-Card.png",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "all-file-tokens",
+      "project": "",
+      "name": "Body.snap",
+      "path": "baselines/page/path.spec/path.spec.cjs/page/path.spec.cjs/suite-test-should-work/Body.snap",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "all-file-tokens",
+      "project": "",
+      "name": "plain.png",
+      "path": "baselines/page/path.spec/path.spec.cjs/page/path.spec.cjs/suite-test-should-work/plain.png",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "all-file-tokens",
+      "project": "Desktop & tablet",
+      "name": "Nested/Card.png",
+      "path": "baselines/Desktop-tablet/page/path.spec/path.spec.cjs/page/path.spec.cjs/suite-test-should-work/Nested-Card.png",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "all-file-tokens",
+      "project": "Desktop & tablet",
+      "name": "Body.snap",
+      "path": "baselines/Desktop-tablet/page/path.spec/path.spec.cjs/page/path.spec.cjs/suite-test-should-work/Body.snap",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "all-file-tokens",
+      "project": "Desktop & tablet",
+      "name": "plain.png",
+      "path": "baselines/Desktop-tablet/page/path.spec/path.spec.cjs/page/path.spec.cjs/suite-test-should-work/plain.png",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "all-file-tokens",
+      "project": "Custom",
+      "name": "Nested/Card.png",
+      "path": "overrides/Nested-Card.png",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "all-file-tokens",
+      "project": "Custom",
+      "name": "Body.snap",
+      "path": "overrides/Body.snap",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "all-file-tokens",
+      "project": "Custom",
+      "name": "plain.png",
+      "path": "overrides/plain.png",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "relative-platform",
+      "project": "",
+      "name": "Nested/Card.png",
+      "path": "__snapshots__/linux/Nested-Card.png",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "relative-platform",
+      "project": "",
+      "name": "Body.snap",
+      "path": "__snapshots__/linux/Body.snap",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "relative-platform",
+      "project": "",
+      "name": "plain.png",
+      "path": "__snapshots__/linux/plain.png",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "relative-platform",
+      "project": "Desktop & tablet",
+      "name": "Nested/Card.png",
+      "path": "__snapshots__/Desktop-tablet/linux/Nested-Card.png",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "relative-platform",
+      "project": "Desktop & tablet",
+      "name": "Body.snap",
+      "path": "__snapshots__/Desktop-tablet/linux/Body.snap",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "relative-platform",
+      "project": "Desktop & tablet",
+      "name": "plain.png",
+      "path": "__snapshots__/Desktop-tablet/linux/plain.png",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "relative-platform",
+      "project": "Custom",
+      "name": "Nested/Card.png",
+      "path": "overrides/Nested-Card.png",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "relative-platform",
+      "project": "Custom",
+      "name": "Body.snap",
+      "path": "overrides/Body.snap",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "relative-platform",
+      "project": "Custom",
+      "name": "plain.png",
+      "path": "overrides/plain.png",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "unknown-browser-token",
+      "project": "",
+      "name": "Nested/Card.png",
+      "path": "baselines/{browserName}/Nested-Card.png",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "unknown-browser-token",
+      "project": "",
+      "name": "Body.snap",
+      "path": "baselines/{browserName}/Body.snap",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "unknown-browser-token",
+      "project": "",
+      "name": "plain.png",
+      "path": "baselines/{browserName}/plain.png",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "unknown-browser-token",
+      "project": "Desktop & tablet",
+      "name": "Nested/Card.png",
+      "path": "baselines/{browserName}/Nested-Card.png",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "unknown-browser-token",
+      "project": "Desktop & tablet",
+      "name": "Body.snap",
+      "path": "baselines/{browserName}/Body.snap",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "unknown-browser-token",
+      "project": "Desktop & tablet",
+      "name": "plain.png",
+      "path": "baselines/{browserName}/plain.png",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "unknown-browser-token",
+      "project": "Custom",
+      "name": "Nested/Card.png",
+      "path": "overrides/Nested-Card.png",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "unknown-browser-token",
+      "project": "Custom",
+      "name": "Body.snap",
+      "path": "overrides/Body.snap",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "unknown-browser-token",
+      "project": "Custom",
+      "name": "plain.png",
+      "path": "overrides/plain.png",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "legacy-default",
+      "project": "",
+      "name": "Nested/Card.png",
+      "path": "baselines/page/path.spec.cjs-snapshots/Nested-Card-linux.png",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "legacy-default",
+      "project": "",
+      "name": "Body.snap",
+      "path": "baselines/page/path.spec.cjs-snapshots/Body-linux.snap",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "legacy-default",
+      "project": "",
+      "name": "plain.png",
+      "path": "baselines/page/path.spec.cjs-snapshots/plain-linux.png",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "legacy-default",
+      "project": "Desktop & tablet",
+      "name": "Nested/Card.png",
+      "path": "baselines/page/path.spec.cjs-snapshots/Nested-Card-Desktop-tablet-linux.png",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "legacy-default",
+      "project": "Desktop & tablet",
+      "name": "Body.snap",
+      "path": "baselines/page/path.spec.cjs-snapshots/Body-Desktop-tablet-linux.snap",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "legacy-default",
+      "project": "Desktop & tablet",
+      "name": "plain.png",
+      "path": "baselines/page/path.spec.cjs-snapshots/plain-Desktop-tablet-linux.png",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "legacy-default",
+      "project": "Custom",
+      "name": "Nested/Card.png",
+      "path": "overrides/Nested-Card.png",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "legacy-default",
+      "project": "Custom",
+      "name": "Body.snap",
+      "path": "overrides/Body.snap",
+      "absolute": true,
+      "created": false
+    },
+    {
+      "variant": "legacy-default",
+      "project": "Custom",
+      "name": "plain.png",
+      "path": "overrides/plain.png",
+      "absolute": true,
+      "created": false
+    }
+  ]
+}

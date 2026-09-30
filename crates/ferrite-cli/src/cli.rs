@@ -276,6 +276,9 @@ pub(crate) struct E2eArgs {
     /// Snapshot baseline directory.
     #[arg(long)]
     pub(crate) snapshot_dir: Option<PathBuf>,
+    /// Baseline path template (project overrides still apply).
+    #[arg(long)]
+    pub(crate) snapshot_path_template: Option<String>,
     /// Only run tests whose name contains this.
     #[arg(long)]
     pub(crate) filter: Option<String>,

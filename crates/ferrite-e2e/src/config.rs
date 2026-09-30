@@ -129,6 +129,9 @@ fn config_from_variables(read: impl Fn(&str) -> Option<String>) -> E2eResult<E2e
                 .map_err(|_| E2eError::Config("invalid shard total".into()))?,
         ));
     }
+    if let Some(template) = read("FERRITE_SNAPSHOT_PATH_TEMPLATE") {
+        config.snapshot_path_template = Some(template);
+    }
     validate_config(&config)?;
     Ok(config)
 }
@@ -137,6 +140,14 @@ pub(crate) fn validate_config(config: &E2eConfig) -> E2eResult<()> {
     crate::BrowserKind::parse(&config.browser)?;
     crate::VideoMode::parse(&config.video)?;
     crate::SnapshotUpdate::parse(&config.update_snapshots)?;
+    for template in config.snapshot_path_template.iter().chain(
+        config
+            .projects
+            .iter()
+            .filter_map(|p| p.snapshot_path_template.as_ref()),
+    ) {
+        crate::snapshot_path::validate_template(template)?;
+    }
     let paths = std::iter::once(config.output_dir.as_str())
         .chain(config.snapshot_dir.as_deref())
         .chain(config.projects.iter().flat_map(|project| {
@@ -178,6 +189,33 @@ pub(crate) fn validate_config(config: &E2eConfig) -> E2eResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snapshot_templates_survive_json_environment_and_validate_all_projects() {
+        let config=config_from_variables(|name|match name {
+            "FERRITE_E2E_CONFIG"=>Some(r#"{"snapshot_path_template":"{snapshotDir}/{arg}{ext}","projects":[{"name":"desktop","snapshot_path_template":"{testDir}/{projectName}/{arg}{ext}"}]}"#.into()),
+            "FERRITE_SNAPSHOT_PATH_TEMPLATE"=>Some("{snapshotDir}/{browserName}/{platform}/{arg}{ext}".into()),
+            _=>None,
+        }).unwrap();
+        assert_eq!(
+            config.snapshot_path_template.as_deref(),
+            Some("{snapshotDir}/{browserName}/{platform}/{arg}{ext}")
+        );
+        assert_eq!(
+            config.projects[0].snapshot_path_template.as_deref(),
+            Some("{testDir}/{projectName}/{arg}{ext}")
+        );
+        for bad in ["", "{unknown}", "{arg"] {
+            assert!(config_from_variables(
+                |name| (name == "FERRITE_SNAPSHOT_PATH_TEMPLATE").then(|| bad.into())
+            )
+            .is_err());
+            assert!(config_from_variables(|name|(name=="FERRITE_E2E_CONFIG").then(||serde_json::json!({"projects":[{"name":"desktop","snapshot_path_template":bad}]}).to_string())).is_err());
+        }
+        let old = config_from_variables(|name| (name == "FERRITE_E2E_CONFIG").then(|| "{}".into()))
+            .unwrap();
+        assert!(old.snapshot_path_template.is_none());
+    }
 
     #[test]
     fn ci_policy_bridge_validates_booleans_and_explicit_false_overrides_json() {

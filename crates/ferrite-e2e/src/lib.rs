@@ -75,6 +75,7 @@ mod runner;
 mod screenshot;
 mod snapshot;
 mod snapshot_capture;
+mod snapshot_path;
 mod url_matcher;
 mod url_wait;
 mod video;
@@ -152,6 +153,7 @@ pub use snapshot::{
     assert_snapshot_png, assert_snapshot_text, compare_png, match_text_snapshot,
     match_text_snapshot_with, SnapshotDiff, SnapshotOptions, SnapshotUpdate,
 };
+pub use snapshot_path::{SnapshotKind, SnapshotPathContext};
 pub use url_matcher::UrlMatcher;
 pub use url_wait::UrlWaitOptions;
 pub use video::{find_ffmpeg, find_ffprobe, VideoFormat, VideoFrame, VideoMode, VideoOptions};

@@ -19,9 +19,9 @@ reporter, Android and Electron APIs:
 | Classification | Members | Meaning |
 |---|---:|---|
 | Equivalent | 15 | Counterpart for the basic operation/value, without full options or engine compatibility |
-| Partial | 632 | Related exposed operation with material semantic, option or engine differences |
+| Partial | 635 | Related exposed operation with material semantic, option or engine differences |
 | Idiomatic | 41 | Comparable operation through Rust language/library facilities |
-| Missing | 330 | No dedicated public counterpart |
+| Missing | 327 | No dedicated public counterpart |
 
 These counts describe an inventory, **not a behavioral compatibility
 percentage**. The earlier inventory had 458 Partial and 503 Missing members.
@@ -1225,7 +1225,8 @@ an explicit project snapshot directory wins. Otherwise each project uses its
 resolved output directory plus `/snapshots`. Directories resolve against the run
 working directory to absolute paths, without requiring them to exist. Explicit
 assertion SnapshotOptions override page seeds; standalone snapshot helpers keep
-their environment fallback. Capture stabilization/path templates remain B10.
+their environment fallback. B10 now implements stabilization and explicit path
+templates; report diffs and final phase verification remain open.
 
 Reporter `on_configuration` fires once after project startup and before attempts;
 if startup aborts, it emits the available planned snapshot before cleanup.
@@ -1378,7 +1379,7 @@ instead of assuming destruction follows the acknowledgement immediately. G04
 still must audit ignored native page close/detach errors.
 
 The current matrix remains a partial inventory: 73 classes, 1,018 members,
-Partial632/Missing330/Equivalent15/Idiomatic41. Public struct-literal migration
+Partial635/Missing327/Equivalent15/Idiomatic41. Public struct-literal migration
 and backward JSON defaults are documented in the E2E example guide.
 
 
@@ -1537,7 +1538,7 @@ pair, and retains retrying initially stable mismatches within the shared window.
 Per-channel comparison remains different from upstream's perceived-color/YIQ
 algorithm. These are documented differences, not full matcher parity.
 
-B10 remains unchecked. Baseline templates, expected/actual/diff report
+B10 remains unchecked. Expected/actual/diff report
 attachments, real delayed-font/animation evidence and final broad verification
 are still required. Focused draft checks do not replace the completed B09
 checkpoint or prove completion of the expanded current test inventory.
@@ -1555,3 +1556,63 @@ it to a missing capture target verified a real typed native timeout and restorat
 without relaxing capture behavior. Font wait ordering was corrected and the final
 native scopes reran after that change. CPU/decode/filesystem budget work remains
 part of B10; synchronous computation is not preempted by an async deadline.
+
+### B10 draft: configurable snapshot paths
+
+`Runner::snapshot_path_template`, `Project::snapshot_path_template`, shared
+`E2eConfig`/project fields, `--snapshot-path-template` and
+`FERRITE_SNAPSHOT_PATH_TEMPLATE` now supply one resolver for page/locator PNG
+assertions and text/PNG helpers. Project templates override global templates;
+explicit `SnapshotOptions` directory/template/context values override page seeds.
+Runner metadata and the relative base are fixed at startup. `TestInfo::snapshot_path`
+returns a path without writing; `snapshot_options()` supplies the same inputs to
+standalone helpers. Retries/repeats share baseline identity. Failure `.actual`
+files follow the resolved baseline; per-attempt report diff attachments remain open.
+
+Supported tokens are `{arg}`, `{ext}`, `{platform}`, `{projectName}`,
+`{browserName}`, `{snapshotDir}`, `{testDir}`, `{testFileDir}`,
+`{testFileBaseName}`, `{testFileName}`, `{testFilePath}` and `{testName}`.
+A single prefix character such as `{/projectName}` is emitted only for a nonempty
+value. Missing metadata expands to empty. File metadata must be inside the root
+when file tokens are used. Invalid templates and unsafe dynamic name components
+fail before capture or writing; literal template paths are trusted configuration.
+
+```rust,ignore
+let runner = Runner::from_config(&config).snapshot_path_template(
+    "{snapshotDir}/{browserName}{-projectName}/{platform}/{arg}{ext}",
+);
+// Within a test_with_context body:
+let baseline = ctx.info.snapshot_path("nested/Card.png", SnapshotKind::Screenshot)?;
+let options = ctx.info.snapshot_options();
+assert_snapshot_text("nested/Body", "expected text", &options)?;
+```
+
+Without a template, existing `<snapshot-dir>/<whole-name-slug>.png|snap` paths
+remain unchanged. With a template, dynamic argument components/project/title use
+the existing lowercase ASCII slug rules; nested name components remain directories.
+PNG/text extensions are canonical, and matching `.png`/`.snap` input suffixes are
+removed before expansion. Relative templates use `SnapshotPathContext::root_dir`
+or cwd; the runner freezes cwd and uses it for `{testDir}`. This differs from
+Playwright's JS config-directory base and separate test discovery directory.
+
+The [actual pinned path reference](scripts/e2e-conformance/snapshot-path-reference.json)
+contains 36 public path-only runner observations. Upstream string names flatten
+slashes, retain case, preserve unknown tokens and use a platform-suffixed legacy
+layout; Ferrite recognizes the additional browser token and rejects unknown tokens.
+Anonymous names, ARIA kinds, snapshotSuffix and upstream naming overloads remain
+unsupported. See the [official token contract](https://playwright.dev/docs/api/class-testconfig#test-config-snapshot-path-template).
+
+Input struct literals gain `SnapshotOptions::path_template/path_context`, shared
+config/project template fields and `Project::snapshot_path_template`; use
+`..Default::default()` or builders where appropriate. Effective run/project/test
+metadata adds serde-defaulted template fields and a run/test frozen root, so old
+report JSON remains readable. No full screenshot matcher parity is claimed.
+
+Final focused path-increment gates passed: 192 units, 29 native integration checks
+across eight targets, four doctests and 28 CLI/configuration checks (253 combined).
+This reruns the stable-capture increment scopes and adds snapshot_paths2; all
+native scopes require full Chrome 153 and Firefox 157. Strict all-target Clippy,
+formatting, matrix generation, 737 parity-document links and 655 source anchors
+passed. The final unit run also verifies visible failure-artifact write errors
+without losing the original mismatch. Full current-inventory verification and
+the remaining B10 acceptance criteria are still pending.

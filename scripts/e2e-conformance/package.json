@@ -19,7 +19,8 @@
     "reference:ci-policy": "node ci-policy-reference.mjs",
     "reference:polling": "node polling-reference.mjs",
     "reference:screenshots": "node screenshot-reference.mjs",
-    "reference:snapshots": "node snapshot-reference.mjs"
+    "reference:snapshots": "node snapshot-reference.mjs",
+    "reference:snapshot-paths": "node snapshot-path-reference.mjs"
   },
   "devDependencies": {
     "playwright": "1.63.0"

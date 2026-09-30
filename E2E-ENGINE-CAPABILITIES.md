@@ -48,14 +48,15 @@ Partial means the listed limitation must be retained in API/docs/test evidence.
 | Fixture limits and shared cleanup clocks | Supported | Supported | Separate local setup/teardown limits capped by enclosing budgets; ready release after exhaustion, explicit pending errors and disposal surviving dropped waits. Rust accounting differs from upstream separate fixture budgets. |
 | CI flaky policy and focus protection | Supported | Supported | Opt-in aggregate failure preserves actual attempt outcomes; registered focus checked before filters/shards, including skipped descendants. CI forces existing focus protection. JSON/live/HTML aggregate status and explicit JUnit policy markers; upstream filtering/JUnit differences documented. |
 | Screenshot options and reversible preparation | Supported | Supported with limits | Viewport/document clips, full-page masks/colors/styles, locator companions and shared capture clocks. Device/Css output; Firefox Css uses raster normalization. Transparent default canvas is Chromium PNG only. Owned bounded restoration, visible errors and preserved metrics; narrower animation/style traversal documented. |
-| Stable screenshot assertions (B10 in progress) | Partial | Partial | Successive PNG comparison and font readiness after owned style preparation; typed operational errors, changed update mode and retained last-image failures. Per-channel comparator/update policy differs; templates, diff report attachments and CPU-budget work remain open. |
+| Stable screenshot assertions (B10 in progress) | Partial | Partial | Successive PNG comparison and font readiness after owned style preparation; typed operational errors, changed update mode and retained last-image failures. Per-channel comparator/update policy differs; diff report attachments and CPU-budget work remain open. |
+| Snapshot path templates (B10 in progress) | Supported with differences | Supported with differences | Global/project/explicit templates and frozen TestInfo metadata; CLI/config/env plumbing, PNG/text paths and no-write path access. Additional browser token, lowercase slugs, nested names and legacy layout differ from upstream; no anonymous/ARIA kinds. |
 | Generic assertion polling options | Supported | Supported | Immediate probes, validated interval sequences with last-value reuse, messages and explicit cancellation/context tokens. Shared local/enclosing budgets, non-Send companions, typed operational errors and final-only soft collection/steps. Rust defaults and upstream nested-soft/step/cutoff differences documented. |
 | Portable reports, runner/fixtures/retries | Supported | Supported | Tokio workers, cooperative cancellation, current artifact formats |
 
 ## Evidence and validation gates
 
-The B10 increment passed 187 units, 27 native integration checks/seven targets,
-four doctests and 28 CLI/configuration checks (246 focused checks), with final
+The latest B10 increment passed 192 units, 29 native integration checks/eight targets,
+four doctests and 28 CLI/configuration checks (253 focused checks), with final
 strict Clippy, package formatting and regenerated links/matrix. All native checks
 required full Chrome 153 and Firefox 157. The
 [snapshot stability tests](crates/ferrite-e2e/tests/snapshot_stability.rs) cover
@@ -64,7 +65,10 @@ actual typed capture timeout and held font readiness with style ordering,
 caller/owner cancellation and restoration. Actual downloadable-font evidence
 remains pending. The 56 pinned runner snapshot cases document intentional
 stability/update differences. This is focused increment evidence, not a fresh
-complete integration inventory; B10 remains unchecked.
+complete integration inventory; B10 remains unchecked. The
+[snapshot path tests](crates/ferrite-e2e/tests/snapshot_paths.rs) verify project,
+page/locator/text and explicit overrides, retry identity, early validation and
+report serialization. The 36 pinned public path-only cases record naming differences.
 
 
 [screenshot_options.rs](crates/ferrite-e2e/tests/screenshot_options.rs) verifies
