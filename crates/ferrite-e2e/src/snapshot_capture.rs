@@ -1,13 +1,15 @@
 //! Successive screenshot comparison under one clock. Keep the last completed
 //! capture on expiry; never start a new capture to produce a failure artifact.
-use std::{future::Future, time::Duration};
+use std::{future::Future, sync::Arc, time::Duration};
 
 use crate::{operation::Deadline, snapshot::SnapshotOptions, E2eError, E2eResult};
 
 pub(crate) struct Comparison {
     pub result: E2eResult<()>,
-    pub actual: Option<Vec<u8>>,
-    pub previous: Option<Vec<u8>>,
+    pub actual: Option<Arc<Vec<u8>>>,
+    pub previous: Option<Arc<Vec<u8>>>,
+    /// Last completed successive-pair assessment. The newest native capture
+    /// may still be awaiting validation/comparison when the clock expires.
     pub stable: bool,
 }
 
@@ -17,7 +19,7 @@ pub(crate) struct Comparison {
 pub(crate) async fn compare_with_deadline<F, Fut>(
     deadline: Deadline,
     description: &str,
-    expected: Option<&[u8]>,
+    expected: Option<Arc<Vec<u8>>>,
     options: &SnapshotOptions,
     negated: bool,
     mut capture: F,
@@ -26,8 +28,8 @@ where
     F: FnMut() -> Fut,
     Fut: Future<Output = E2eResult<Vec<u8>>>,
 {
-    let mut actual: Option<Vec<u8>> = None;
-    let mut previous: Option<Vec<u8>> = None;
+    let mut actual: Option<Arc<Vec<u8>>> = None;
+    let mut previous: Option<Arc<Vec<u8>>> = None;
     let mut last = "no completed capture".to_string();
     let mut stable = false;
     let result = deadline
@@ -36,8 +38,11 @@ where
             // with expiry of the one assertion clock.
             let work = async {
                 options.validate()?;
-                if let Some(expected) = expected {
-                    crate::compare_png(expected, expected, options.threshold)?;
+                if deadline.expired() {
+                    std::future::pending::<()>().await;
+                }
+                if let Some(expected) = &expected {
+                    compare_bytes(expected.clone(), expected.clone(), options.threshold).await?;
                 } else if negated {
                     return Err(E2eError::Expect(
                         "negated screenshot requires an existing snapshot".into(),
@@ -47,16 +52,31 @@ where
                     if deadline.expired() {
                         std::future::pending::<()>().await;
                     }
-                    let next = capture().await?;
-                    crate::compare_png(&next, &next, options.threshold)?;
-                    previous = actual.replace(next);
-                    stable = false;
-                    if let Some(previous) = previous.as_deref() {
-                        match crate::compare_png(
-                            actual.as_deref().unwrap(),
-                            previous,
+                    let next = Arc::new(capture().await?);
+                    previous = actual.replace(next.clone());
+                    if previous.is_none() {
+                        last = "only one completed capture".into();
+                    }
+                    // A completed native capture remains available even if its
+                    // CPU validation/comparison is interrupted by the shared clock.
+                    if deadline.expired() {
+                        std::future::pending::<()>().await;
+                    }
+                    compare_bytes(next.clone(), next, options.threshold).await?;
+                    if deadline.expired() {
+                        std::future::pending::<()>().await;
+                    }
+                    if let Some(previous) = &previous {
+                        let diff = compare_bytes(
+                            actual.as_ref().unwrap().clone(),
+                            previous.clone(),
                             options.threshold,
-                        ) {
+                        )
+                        .await;
+                        if deadline.expired() {
+                            std::future::pending::<()>().await;
+                        }
+                        match diff {
                             Ok(diff) => {
                                 stable = diff.passed(options);
                                 if !stable {
@@ -65,19 +85,25 @@ where
                                 }
                             }
                             Err(error) if error.code() == "FERRITE_E2E_EXPECT" => {
+                                stable = false;
                                 last = error.to_string()
                             }
                             Err(error) => return Err(error),
                         }
                         if stable {
-                            match expected {
+                            match &expected {
                                 None => return Ok(()),
                                 Some(expected) => {
-                                    let matches = match crate::compare_png(
-                                        actual.as_deref().unwrap(),
-                                        expected,
+                                    let diff = compare_bytes(
+                                        actual.as_ref().unwrap().clone(),
+                                        expected.clone(),
                                         options.threshold,
-                                    ) {
+                                    )
+                                    .await;
+                                    if deadline.expired() {
+                                        std::future::pending::<()>().await;
+                                    }
+                                    let matches = match diff {
                                         Ok(diff) => {
                                             last = diff.summary();
                                             diff.passed(options)
@@ -123,6 +149,22 @@ where
     }
 }
 
+fn compare_bytes(
+    actual: Arc<Vec<u8>>,
+    expected: Arc<Vec<u8>>,
+    threshold: u8,
+) -> impl Future<Output = E2eResult<crate::SnapshotDiff>> {
+    crate::snapshot_work::run(move |stop| {
+        // Validation uses the same immutable buffer on both sides. Decode it
+        // once without allocating a second raster or comparing it to itself.
+        if Arc::ptr_eq(&actual, &expected) {
+            crate::snapshot::validate_png_checked(&actual, || stop.check())
+        } else {
+            crate::snapshot::compare_png_checked(&actual, &expected, threshold, || stop.check())
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,7 +184,7 @@ mod tests {
         compare_with_deadline(
             Deadline::new(timeout),
             description,
-            expected,
+            expected.map(|bytes| Arc::new(bytes.to_vec())),
             options,
             negated,
             capture,
@@ -156,6 +198,63 @@ mod tests {
             .write_to(&mut output, image::ImageFormat::Png)
             .unwrap();
         output.into_inner()
+    }
+
+    #[tokio::test]
+    async fn pending_validation_keeps_last_completed_stability_assessment_and_native_bytes() {
+        use std::{cell::RefCell, pin::Pin, rc::Rc};
+        let _exclusive = crate::snapshot_work::TEST_ADMISSION_LOCK.lock().await;
+        type Held = Pin<Box<dyn Future<Output = E2eResult<()>>>>;
+        let held: Rc<RefCell<Vec<Held>>> = Rc::new(RefCell::new(Vec::new()));
+        let calls = Cell::new(0);
+        let expected = png(2, 0);
+        let capture = || {
+            let call = calls.get();
+            calls.set(call + 1);
+            let held = held.clone();
+            async move {
+                if call == 2 {
+                    // Hold both production admission slots only after the first
+                    // pair was proved stable and different from the baseline.
+                    // The third capture completes; its validation must wait.
+                    for _ in 0..2 {
+                        let (entered, entry) = tokio::sync::oneshot::channel();
+                        let mut job: Held = Box::pin(crate::snapshot_work::run(move |stop| {
+                            entered.send(()).unwrap();
+                            loop {
+                                stop.check()?;
+                                std::thread::sleep(Duration::from_millis(1));
+                            }
+                        }));
+                        tokio::select! {
+                            result=&mut job=>panic!("holding job returned: {result:?}"),
+                            entered=entry=>entered.unwrap(),
+                        }
+                        held.borrow_mut().push(job);
+                    }
+                }
+                Ok(png(2, if call < 2 { 30 } else { 45 }))
+            }
+        };
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            compare(
+                Duration::from_millis(500),
+                "pending validation",
+                Some(&expected),
+                &SnapshotOptions::default(),
+                false,
+                capture,
+            ),
+        )
+        .await
+        .unwrap();
+        held.borrow_mut().clear();
+        assert_eq!(calls.get(), 3);
+        assert_eq!(result.result.unwrap_err().code(), "FERRITE_E2E_EXPECT");
+        assert!(result.stable);
+        assert_eq!(result.actual.as_deref().unwrap().as_slice(), png(2, 45));
+        assert_eq!(result.previous.as_deref().unwrap().as_slice(), png(2, 30));
     }
 
     #[tokio::test(start_paused = true)]
@@ -179,7 +278,7 @@ mod tests {
             .await;
             result.result.unwrap();
             assert_eq!(calls.get(), 3);
-            assert_eq!(result.actual.unwrap(), target);
+            assert_eq!(result.actual.as_deref().unwrap(), &target);
         }
     }
 
@@ -235,7 +334,7 @@ mod tests {
             );
             assert_eq!(result.stable, change_size);
             assert_eq!(
-                result.previous.as_deref().unwrap(),
+                result.previous.as_deref().unwrap().as_slice(),
                 png(
                     if change_size { 3 } else { 2 },
                     if change_size { 0 } else { 1 }
@@ -252,7 +351,7 @@ mod tests {
                 "{error}"
             );
             assert_eq!(
-                result.actual.unwrap(),
+                result.actual.as_deref().unwrap().as_slice(),
                 png(
                     if change_size { 3 } else { 2 },
                     if change_size { 0 } else { 2 }

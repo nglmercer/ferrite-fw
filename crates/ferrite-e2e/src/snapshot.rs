@@ -15,8 +15,6 @@
 
 use std::path::{Path, PathBuf};
 
-use image::GenericImageView;
-
 use crate::error::{E2eError, E2eResult};
 
 /// What to do about snapshot files.
@@ -200,8 +198,37 @@ impl SnapshotDiff {
 /// A pixel differs when any RGBA channel differs by more than `threshold`.
 /// Dimension mismatches fail loudly (exact sizes required).
 pub fn compare_png(actual: &[u8], expected: &[u8], threshold: u8) -> E2eResult<SnapshotDiff> {
-    let actual_img = decode_png(actual, "actual")?;
-    let expected_img = decode_png(expected, "snapshot")?;
+    compare_png_checked(actual, expected, threshold, || Ok(()))
+}
+
+pub(crate) fn validate_png_checked(
+    bytes: &[u8],
+    check: impl Fn() -> E2eResult<()>,
+) -> E2eResult<SnapshotDiff> {
+    check()?;
+    let image = decode_png(bytes, "actual")?;
+    check()?;
+    let (width, height) = (image.width(), image.height());
+    Ok(SnapshotDiff {
+        width,
+        height,
+        diff_pixels: 0,
+        total_pixels: u64::from(width) * u64::from(height),
+        bounds: None,
+    })
+}
+
+pub(crate) fn compare_png_checked(
+    actual: &[u8],
+    expected: &[u8],
+    threshold: u8,
+    mut check: impl FnMut() -> E2eResult<()>,
+) -> E2eResult<SnapshotDiff> {
+    check()?;
+    let actual_img = decode_png(actual, "actual")?.into_rgba8();
+    check()?;
+    let expected_img = decode_png(expected, "snapshot")?.into_rgba8();
+    check()?;
     if actual_img.dimensions() != expected_img.dimensions() {
         let (aw, ah) = actual_img.dimensions();
         let (ew, eh) = expected_img.dimensions();
@@ -210,12 +237,15 @@ pub fn compare_png(actual: &[u8], expected: &[u8], threshold: u8) -> E2eResult<S
         )));
     }
     let (width, height) = actual_img.dimensions();
-    let actual_rgba = actual_img.to_rgba8();
-    let expected_rgba = expected_img.to_rgba8();
+    let actual_rgba = actual_img;
+    let expected_rgba = expected_img;
     let mut diff_pixels = 0u64;
     let (mut min_x, mut min_y) = (width, height);
     let (mut max_x, mut max_y) = (0u32, 0u32);
-    for (x, y, pixel) in actual_rgba.enumerate_pixels() {
+    for (index, (x, y, pixel)) in actual_rgba.enumerate_pixels().enumerate() {
+        if index & 4095 == 0 {
+            check()?;
+        }
         let other = expected_rgba.get_pixel(x, y);
         let differs = pixel
             .0
@@ -246,27 +276,51 @@ pub fn compare_png(actual: &[u8], expected: &[u8], threshold: u8) -> E2eResult<S
 }
 
 fn decode_png(bytes: &[u8], label: &str) -> E2eResult<image::DynamicImage> {
-    let reader =
-        || image::ImageReader::with_format(std::io::Cursor::new(bytes), image::ImageFormat::Png);
+    decode_image(bytes, image::ImageFormat::Png, label)
+}
+
+pub(crate) fn decode_image(
+    bytes: &[u8],
+    format: image::ImageFormat,
+    label: &str,
+) -> E2eResult<image::DynamicImage> {
+    let kind = if format == image::ImageFormat::Png {
+        "PNG"
+    } else {
+        "JPEG"
+    };
+    if bytes.len() > 512 * 1024 * 1024 {
+        return Err(E2eError::Config(format!(
+            "{label} {kind} exceeds the 512 MiB encoded input limit"
+        )));
+    }
+    let reader = || {
+        let mut reader = image::ImageReader::with_format(std::io::Cursor::new(bytes), format);
+        let mut limits = image::Limits::default();
+        limits.max_image_width = Some(64_000_000);
+        limits.max_image_height = Some(64_000_000);
+        reader.limits(limits);
+        reader
+    };
     let (width, height) = reader()
         .into_dimensions()
-        .map_err(|error| E2eError::Config(format!("cannot decode {label} PNG: {error}")))?;
+        .map_err(|error| E2eError::Config(format!("cannot decode {label} {kind}: {error}")))?;
     if u64::from(width) * u64::from(height) > 64_000_000 {
         return Err(E2eError::Config(format!(
-            "{label} PNG exceeds the 64 million pixel comparison limit"
+            "{label} {kind} exceeds the 64 million pixel comparison limit"
         )));
     }
     reader()
         .decode()
-        .map_err(|error| E2eError::Config(format!("cannot decode {label} PNG: {error}")))
+        .map_err(|error| E2eError::Config(format!("cannot decode {label} {kind}: {error}")))
 }
 
 /// Visual diagnostic, using the same per-channel threshold as comparison.
 /// Different pixels are red; nonoverlapping dimension regions are magenta.
 /// Unchanged pixels are muted grayscale. The union raster is bounded separately.
 pub(crate) fn diff_png(actual: &[u8], expected: &[u8], threshold: u8) -> E2eResult<Vec<u8>> {
-    let actual = decode_png(actual, "actual")?.to_rgba8();
-    let expected = decode_png(expected, "snapshot")?.to_rgba8();
+    let actual = decode_png(actual, "actual")?.into_rgba8();
+    let expected = decode_png(expected, "snapshot")?.into_rgba8();
     let width = actual.width().max(expected.width());
     let height = actual.height().max(expected.height());
     if u64::from(width) * u64::from(height) > 64_000_000 {
@@ -490,6 +544,46 @@ fn truncate(line: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn png_and_jpeg_headers_reject_excessive_pixels_before_raster_decode() {
+        let image = image::RgbImage::from_pixel(1, 1, image::Rgb([255, 0, 0]));
+        let mut png = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let mut png = png.into_inner();
+        assert_eq!(&png[12..16], b"IHDR");
+        png[16..20].copy_from_slice(&8001u32.to_be_bytes());
+        png[20..24].copy_from_slice(&8001u32.to_be_bytes());
+        let mut crc = u32::MAX;
+        for byte in &png[12..29] {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 {
+                crc = (crc >> 1) ^ (0xedb88320u32 & (0u32.wrapping_sub(crc & 1)));
+            }
+        }
+        png[29..33].copy_from_slice(&(!crc).to_be_bytes());
+
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new(&mut jpeg)
+            .encode_image(&image)
+            .unwrap();
+        let frame = jpeg
+            .windows(2)
+            .position(|bytes| bytes == [0xff, 0xc0])
+            .unwrap();
+        jpeg[frame + 5..frame + 7].copy_from_slice(&8001u16.to_be_bytes());
+        jpeg[frame + 7..frame + 9].copy_from_slice(&8001u16.to_be_bytes());
+        // These tiny payloads describe huge rasters while retaining only one
+        // compressed pixel. The size guard must win before raster decoding.
+        for (bytes, format) in [
+            (&png, image::ImageFormat::Png),
+            (&jpeg, image::ImageFormat::Jpeg),
+        ] {
+            let error = decode_image(bytes, format, "test").unwrap_err();
+            assert_eq!(error.code(), "FERRITE_E2E_CONFIG");
+            assert!(error.to_string().contains("64 million pixel"), "{error}");
+        }
+    }
 
     #[test]
     fn visual_diff_uses_threshold_and_marks_dimension_regions() {

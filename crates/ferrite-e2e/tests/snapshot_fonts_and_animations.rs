@@ -681,8 +681,8 @@ async fn animation_limit_rejects_overflow_and_restores_every_cancelled_object() 
         .await
         .unwrap();
         for count in [4096, 4097] {
-            page.set_content("<style>body{margin:0}#patch{width:20px;height:20px;background:red}</style><div id=patch></div>").await.unwrap();
-            page.evaluate_value(&format!("globalThis.animations=Array.from({{length:{count}}},()=>{{const animation=document.getElementById('patch').animate([{{opacity:1}},{{opacity:1}}],{{duration:1000000,iterations:Infinity}});animation.finished.catch(()=>{{}});return animation}});true")).await.unwrap();
+            page.set_content("<style>body{margin:0}#patch{width:20px;height:20px;background:red}</style><div id=patch></div><div id=targets hidden></div>").await.unwrap();
+            page.evaluate_value(&format!("globalThis.animations=Array.from({{length:{count}}},()=>{{const target=document.createElement('i');document.getElementById('targets').appendChild(target);const animation=target.animate([{{opacity:1}},{{opacity:1}}],{{duration:1000000,iterations:Infinity}});animation.finished.catch(()=>{{}});return animation}});true")).await.unwrap();
             assert_eq!(
                 page.evaluate::<usize>("document.getAnimations().length")
                     .await

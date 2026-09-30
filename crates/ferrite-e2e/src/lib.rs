@@ -77,6 +77,7 @@ mod snapshot;
 mod snapshot_artifacts;
 mod snapshot_capture;
 mod snapshot_path;
+mod snapshot_work;
 mod url_matcher;
 mod url_wait;
 mod video;

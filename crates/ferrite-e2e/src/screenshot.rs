@@ -438,14 +438,26 @@ async fn normalize_css(
     height: f64,
     quality: Option<u8>,
 ) -> E2eResult<Vec<u8>> {
-    tokio::task::spawn_blocking(move || {
-        let image = image::load_from_memory(&bytes)
-            .map_err(|e| E2eError::Config(format!("screenshot decode: {e}")))?;
-        let image = image.resize_exact(
-            width as u32,
-            height as u32,
-            image::imageops::FilterType::Lanczos3,
-        );
+    crate::snapshot_work::run(move |stop| {
+        stop.check()?;
+        let format = if quality.is_some() {
+            image::ImageFormat::Jpeg
+        } else {
+            image::ImageFormat::Png
+        };
+        let image = crate::snapshot::decode_image(&bytes, format, "screenshot")?;
+        stop.check()?;
+        let width = width as u32;
+        let height = height as u32;
+        if u64::from(image.width()) * u64::from(height) > 64_000_000
+            || u64::from(width) * u64::from(image.height()) > 64_000_000
+        {
+            return Err(E2eError::Config(
+                "screenshot resize exceeds 64 million intermediate pixels".into(),
+            ));
+        }
+        let image = image.resize_exact(width, height, image::imageops::FilterType::Lanczos3);
+        stop.check()?;
         let mut bytes = Vec::new();
         if let Some(quality) = quality {
             image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, quality)
@@ -459,8 +471,8 @@ async fn normalize_css(
                 )
                 .map_err(|e| E2eError::Config(format!("screenshot PNG normalization: {e}")))?;
         }
+        stop.check()?;
         Ok(bytes)
     })
     .await
-    .map_err(|e| E2eError::Config(format!("screenshot normalization task: {e}")))?
 }

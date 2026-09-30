@@ -1718,10 +1718,19 @@ where
             context.browser.get_or_insert(page.browser_kind());
         }
         let path = snap_path_for(name, crate::SnapshotKind::Screenshot, &options)?;
-        let expected = match std::fs::read(&path) {
-            Ok(bytes) => Some(bytes),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => return Err(error.into()),
+        let read = deadline
+            .run("screenshot baseline read", async {
+                Ok(crate::snapshot_work::read_baseline(path.clone()).await)
+            })
+            .await;
+        let expected = match read {
+            Ok(result) => result?,
+            Err(E2eError::Timeout(..)) => {
+                return Err(E2eError::Expect(format!(
+                    "screenshot {name:?} expired while reading its baseline"
+                )))
+            }
+            Err(error) => return Err(error),
         };
         let mode = resolve_update(options.update);
         if expected.is_none() && (negated || mode == SnapshotUpdate::None) {
@@ -1737,7 +1746,7 @@ where
         let target = if !negated && matches!(mode, SnapshotUpdate::All | SnapshotUpdate::Changed) {
             None
         } else {
-            expected.as_deref()
+            expected.clone()
         };
         let capture_options = options.capture_options();
         let description = format!("screenshot {name:?}{}", not_tag(negated));
@@ -1765,16 +1774,16 @@ where
         result.map_err(|error| {
             // Preserve typed control errors. Never take another capture after
             // exhaustion just to write an artifact, or update an unstable baseline.
-            match comparison.actual.as_deref() {
+            match comparison.actual.as_deref().map(Vec::as_slice) {
                 Some(actual) if error.code() == "FERRITE_E2E_EXPECT" => {
                     crate::snapshot_artifacts::record(
                         page,
                         crate::snapshot_artifacts::FailureImages {
                             name,
                             path: &path,
-                            expected: expected.as_deref(),
+                            expected: expected.as_deref().map(Vec::as_slice),
                             actual,
-                            previous: comparison.previous.as_deref(),
+                            previous: comparison.previous.as_deref().map(Vec::as_slice),
                             stable: comparison.stable,
                             threshold: options.threshold,
                         },

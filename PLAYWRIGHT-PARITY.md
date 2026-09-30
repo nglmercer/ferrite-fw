@@ -1787,3 +1787,74 @@ settlement and separately records disposal-time observations: incomplete upstrea
 callbacks cannot mutate the earlier observation or contaminate a later case's
 attachment list. This evidence describes the measured pinned behavior rather than
 claiming universal counts/timing or complete snapshot matcher equivalence.
+
+### B10 active image work and baseline reads
+
+The private [snapshot worker](crates/ferrite-e2e/src/snapshot_work.rs) now runs
+successive/baseline PNG validation and comparison, Css normalization and initial
+baseline reads outside the async runtime. Process-wide admission allows two
+active callbacks. Comparison uses immutable shared encoded buffers, validates a
+single buffer with one decode, and consumes decoded rasters without keeping an
+extra conversion copy. Cancellation checks separate decoding, resizing and
+encoding phases and occur every 4,096 comparison pixels. Dropping a wait aborts
+queued tasks and signals already-started work. Jobs own data and read handles;
+they retain no page, browser, context or report owner and perform no file writes.
+
+The assertion's existing clock covers the initial baseline read as well as
+capture and comparison. Expired comparisons cannot be accepted as matches; the
+last completed native capture is retained even if its CPU validation expires.
+Baseline reads reject non-regular inputs and encoded files larger than 512 MiB
+before allocating their contents, then read in 64-KiB chunks with an actual-byte
+limit to cover growing files. PNG/JPEG header dimensions are checked before raster
+decoding, with a 64-million-pixel product limit. Css normalization additionally
+checks both possible intermediate resize products. Decoders receive the image
+library's default 512-MiB allocation budget; that library describes allocation
+limits as non-strict, so this is not a process-memory guarantee.
+
+Admission bounds active callbacks, not Tokio's blocking-thread count or queued
+input bytes. A started codec/resize/OS call cannot be forcibly interrupted; it
+may finish after its caller stops, while subsequent phases and results are
+discarded. Regular-file metadata checks do not prevent path-replacement races
+or hard-preempt filesystem syscalls. Native JavaScript and transport parsing
+remain separate boundaries. The public synchronous snapshot helpers remain
+synchronous, and successful async assertions still use their synchronous
+baseline comparison/write path. Diagnostic rendering and publication also need
+the remaining clock/filesystem audit. B10 stays open.
+
+Five additional unit regressions cover a paused real PNG raster job returning
+the assertion timeout on the same single-thread runtime, resumed cancellation,
+queued-input release and admission recovery, exact multi-chunk baseline reads,
+missing/empty/directory/socket/sparse-oversized inputs, and tiny PNG/JPEG payloads
+whose headers advertise oversized rasters. All 200 unit tests passed with the
+default parallel test runner.
+
+The current-source diagnostic rerun exposed an interrupted-assessment bug: a
+static page received five images because the next completed native capture
+cleared the preceding proved-stable pair before its CPU work could finish.
+Stability now records the last completed successive-pair assessment and changes
+only when a new pair is assessed. A controlled regression holds both worker
+slots after that stable mismatch, completes a third native image, and verifies
+expiry retains its bytes and the preceding assessment without another capture.
+The latest native bytes can therefore be newer than the completed assessment;
+they are not claimed to have passed an unfinished comparison. Slot-holding tests
+serialize their deliberate full-admission barriers so default parallel unit
+execution cannot make the test fixtures deadlock one another.
+
+The animation-count fixture now uses one connected hidden target per animation.
+Its 4,096/4,097 native-object assertions, restoration checks and subsequent basic
+capture remain intact. The prior stacked-target fixture hit a restoration
+timeout in its later basic capture, which does not use the new normalization or
+comparison worker. This fixture change isolates the count boundary without
+raising a timeout or claiming a confirmed cause for that native timeout.
+
+Final focused current-source gates passed: 200 units, 53 native integrations
+across 12 targets, four doctests and 28 CLI/configuration checks (285 combined).
+Native scope: fonts/animations7, artifacts8, polling4, paths2, stability3,
+browser snapshots3, effective configuration5, runtime/reporters4, screenshot
+options7, capture capabilities1, soft assertions5 and step/bundles4. Every native
+gate required full Chrome 153 and Firefox 157. All scopes reran after the
+interrupted-assessment fix, followed by strict all-target E2E/CLI/config Clippy
+and package formatting. Regenerated matrix counts remain unchanged; 726 local
+Markdown links across the three parity documents and two reference/fixture
+READMEs and 655 source anchors validate. These are focused increment gates;
+success commits, diagnostics and complete phase verification still keep B10 open.

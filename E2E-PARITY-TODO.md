@@ -1,7 +1,7 @@
 # Ferrite E2E implementation TODO
 
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
-Session plan refreshed: 2026-09-30, with verified B10 capture, path, diagnostic and native font/animation and final-poll diagnostic increments.
+Session plan refreshed: 2026-09-30, with B10 capture, path, diagnostic, native font/animation, final-poll diagnostic and active image/read work increments.
 Expanded on request for a longer implementation session; B09/B13/B14 and D01/D02 are verified.
 Uncommitted implementations are not counted complete.
 
@@ -58,8 +58,9 @@ batch; its cause remains an explicit G04 audit item.
 
 The matrix remains 73 classes/1,018 members: Partial635/Missing327/Equivalent15/
 Idiomatic41. Capture mappings now describe these options and engine differences;
-they do not imply full compatibility. Current matrix generation, 757 parity-document/fixture local links and 655
-source anchors passed for the final-poll diagnostic increment.
+they do not imply full compatibility. Current matrix generation, 726 local
+Markdown links across the three parity documents and two reference/fixture
+READMEs, and 655 source anchors passed for the active image/read increment.
 
 **Current handoff:** B10 is in progress. The verified increment `499c274` in
 `snapshot.rs`,
@@ -100,8 +101,23 @@ The 32 checked actual pinned font/animation observations document matching
 finite/infinite/zero-rate pixels, stronger same-origin page font waits in Rust
 and observed upstream Chromium locator-stability timeouts.
 
-Continue B10 with CPU/decode/encode/filesystem bounds under the shared assertion
-clock. Final-only deferred diagnostics for failing outer generic polls are now
+The active image/read increment moves comparison, Css normalization and baseline
+reads off the async runtime with two active callbacks, cooperative cancellation,
+shared immutable buffers and encoded/raster/intermediate-size guards. Five added
+unit regressions bring the unit inventory to 200, including retaining the last
+completed stability assessment while a newer native image awaits CPU work.
+Opaque codec/resize/OS phases
+are not hard-preempted, and admission does not bound queued bytes or blocking
+threads. Continue B10 with the synchronous success baseline comparison/write
+path and diagnostic rendering/publication under the shared assertion clock;
+stage data work without allowing detached late baseline commits or sealed-attempt images.
+For success, compare `Changed` against the frozen expected bytes using scalar
+tolerances, stage a temporary regular file, and keep the deadline-checked atomic
+commit in the owning foreground operation. Do not capture whole SnapshotOptions
+in workers: its capture masks can own locators/pages. For diagnostics, separate
+data rendering/staging from current-step and weak-attempt publication; the
+existing attachment lifecycle guard must not block attempt sealing on worker I/O.
+Final-only deferred diagnostics for failing outer generic polls are now
 implemented, including retry/soft/nested/parallel ownership and visible I/O failures.
 The 12 actual pinned screenshot/toPass cases document upstream intermediate image
 history, including eventual/nested success and expected-only missing-target images,
@@ -880,10 +896,14 @@ their dependencies are ready. References include
   finish/resume errors and the 4,096/4,097-object limit boundary. Final-only
   outer-poll diagnostics (`0509518`) now publish the last completed failing probe only,
   with four additional native diagnostic groups verifying nested/control/pending/
-  unfinished/soft/parallel/retry/export and publication I/O behavior. Resource/
-  clock audits and final complete phase gates are still required.
-  Latest focused increment gates passed: 195 units, 30 native integrations/six
-  targets, four doctests and 28 CLI/configuration checks (257 combined), strict
+  unfinished/soft/parallel/retry/export and publication I/O behavior. Active
+  image/read work now has two callback slots, cooperative cancellation, immutable
+  buffers, bounded regular baseline reads and PNG/JPEG/resize input guards, with
+  five additional unit regressions. Success baseline commits and diagnostic work
+  still need the clock/filesystem audit; opaque phases and queued input memory
+  are not hard bounded. Final complete phase gates are still required.
+  Latest focused increment gates passed: 200 units, 53 native integrations/12
+  targets, four doctests and 28 CLI/configuration checks (285 combined), strict
   Clippy, formatting, regenerated matrix and local links. Font waits now follow
   owned style preparation across reachable same-origin documents, with real-
   font HTTP delivery, cancellation/restoration and animation-boundary coverage.
