@@ -19,9 +19,9 @@ reporter, Android and Electron APIs:
 | Classification | Members | Meaning |
 |---|---:|---|
 | Equivalent | 15 | Counterpart for the basic operation/value, without full options or engine compatibility |
-| Partial | 587 | Related exposed operation with material semantic, option or engine differences |
+| Partial | 589 | Related exposed operation with material semantic, option or engine differences |
 | Idiomatic | 42 | Comparable operation through Rust language/library facilities |
-| Missing | 374 | No dedicated public counterpart |
+| Missing | 372 | No dedicated public counterpart |
 
 These counts describe an inventory, **not a behavioral compatibility
 percentage**. The earlier inventory had 458 Partial and 503 Missing members.
@@ -564,7 +564,7 @@ Validation for URL/network matching, generated uploads and browser diagnostics:
   3 core conformance/capability groups, 4 callback lifecycle groups,
   1 daily API group, 2 action option groups, 3 URL readiness groups,
   2 shared URL matching groups, 3 function wait groups, 1 frame lookup group
-  and 2 doctests** (287 checks total).
+  2 completed download groups and 2 doctests** (289 checks total).
   Headless Shell and Firefox were installed and exercised; unsupported-engine branches remain explicit.
 - The five new groups additionally passed with full Chrome and Firefox, covering
   exact/glob/regex and predicate URL matching, frame history, request-start and
@@ -590,7 +590,7 @@ Validation for URL/network matching, generated uploads and browser diagnostics:
 - Existing trace and first-attachment names remain compatible; retry trace files
   and repeated attachment names preserve their individual contents.
 - CLI/configuration checks passed again: 5 CLI tests, 17 configuration tests and
-  1 doctest (310 checks across E2E/CLI/configuration). This change adds no CLI
+  1 doctest (312 checks across E2E/CLI/configuration). This change adds no CLI
   options. A real portable HTML report with expanded automatic/user/hook trees,
   skipped steps, annotations and run lifecycle was rendered in Chromium and
   visually inspected. The console section was also rendered and visually
@@ -687,3 +687,23 @@ and returns true after explicit owning-page closure; native disconnection errors
 propagate. Firefox names remain empty because its native tree supplies no names.
 Same-origin nested/replacement cases have native regressions on both engines.
 Selector-free OOPIF traversal remains deferred.
+
+### Completed download I/O
+
+`Download::read()` asynchronously reads the completed file;
+`create_read_stream()` opens a Tokio AsyncRead/AsyncSeek file for incremental
+reads. Both reject recorded failures and expose missing-file I/O errors.
+Options companions accept a local timeout and cancellation; None/zero disables
+the local budget. Stream options cover opening only: subsequent reads use Tokio
+I/O and can be wrapped in `CancellationToken::run` as one larger operation.
+Dropping the stream releases its file handle; it does not delete the download.
+Whole-file reads allocate for the file contents, so use incremental streaming
+for large files.
+
+`page_id()` retains only source identity, returning None for `from_path()` files.
+Completed file access does not retain or require a live browser page. Deletion
+is idempotent for NotFound and reports all other I/O failures. The earlier API
+silently discarded those failures. Firefox URL/failure/active cancellation
+metadata stays unsupported; it is not inferred from the downloaded filename.
+These are completed-file companions to the [official download API](https://playwright.dev/docs/api/class-download#download-create-read-stream),
+with a narrower active-download lifecycle.

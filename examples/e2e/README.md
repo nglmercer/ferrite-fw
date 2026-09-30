@@ -410,3 +410,24 @@ let frame = page.frame_by_url_where(|url| url.contains("/checkout?")).await?;
 Lookups return the first match, or None. Frame identity survives navigation but
 never retargets a replacement iframe. `url()` is its lookup snapshot, while
 `current_url()` is live. Firefox frame name metadata is empty.
+
+Read a completed download without loading the whole file into memory:
+
+```rust,no_run
+use tokio::io::AsyncReadExt;
+let download = page.wait_for_download_file(&download_dir, std::time::Duration::from_secs(15)).await?;
+let owner = download.page_id();
+let mut stream = download.create_read_stream().await?;
+let mut buffer = [0u8;8192];
+loop {
+    let count = stream.read(&mut buffer).await?;
+    if count == 0 { break; }
+    // Consume buffer[..count].
+}
+drop(stream);
+download.delete().await?;
+```
+
+Stream option timeouts/cancellation cover opening. Wrap the complete reading
+future in `CancellationToken::run` for caller cancellation across reads.
+Missing-file deletion succeeds; other filesystem errors propagate.

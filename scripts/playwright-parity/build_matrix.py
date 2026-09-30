@@ -273,6 +273,9 @@ put('Page','frame','Page.frame_by_url_matching','Exact/contains/glob/regex or UR
 put('Frame','url','Frame.current_url','current_url() reads live URL; url() retains lookup snapshot. Native realm/tree errors propagate after detach.')
 put('Frame','isDetached','Frame.is_detached','Asynchronous native tree identity check; explicit page closure is detached, disconnection errors propagate. No replacement retargeting.')
 put('Frame','name','Frame.name','Native lookup name snapshot; Chromium reports names, Firefox metadata is empty. No inferred name.')
+put('Download','createReadStream','Download.create_read_stream','Tokio AsyncRead/AsyncSeek file for a completed successful download; options bound open only, caller can wrap reads in CancellationToken.run. Active native streams remain unsupported.')
+put('Download','page','Download.page_id','Owning native page identity without retaining a live Page; None for hand-built completed paths. No upstream live page object.')
+put('Download','delete','Download.delete','Completed file deletion is idempotent only for NotFound; other filesystem errors propagate. Active downloads are not represented.')
 # Reliability, API authentication state, frame helpers, limits and context events.
 for m,t in {'page':'page','setContent':'set_content','waitForFunction':'wait_for_function','waitForURL':'wait_for_url','waitForLoadState':'wait_for_load_state','waitForSelector':'wait_for_selector'}.items():
  put('Frame',m,'Frame.'+t,'Frame-scoped counterpart; unit-returning waits, fewer predicate/options modes; frame NetworkIdle remains unsupported. current_url() reads navigation updates.')

@@ -1480,6 +1480,8 @@ pub struct Download {
     pub failure: Option<String>,
     /// CDP download GUID (Chromium only).
     pub(crate) guid: Option<String>,
+    /// Identity only, so keeping a completed download never retains its page.
+    page_id: Option<String>,
 }
 
 impl Download {
@@ -1496,6 +1498,69 @@ impl Download {
             url: None,
             failure: None,
             guid: None,
+            page_id: None,
+        }
+    }
+
+    /// Owning page identity, or None for a hand-built path.
+    #[must_use]
+    pub fn page_id(&self) -> Option<&str> {
+        self.page_id.as_deref()
+    }
+
+    /// Read the completed file. For large files prefer `create_read_stream`.
+    pub async fn read(&self) -> E2eResult<Vec<u8>> {
+        self.read_with_options(crate::OperationOptions::default())
+            .await
+    }
+
+    /// Read with a local budget and caller cancellation. None/zero disables the
+    /// local timeout; this completed file has no live browser dependency.
+    pub async fn read_with_options(&self, options: crate::OperationOptions) -> E2eResult<Vec<u8>> {
+        Self::file_operation(options, async {
+            self.check_completed()?;
+            Ok(tokio::fs::read(&self.path).await?)
+        })
+        .await
+    }
+
+    /// Open a completed file as a Tokio AsyncRead/AsyncSeek stream.
+    pub async fn create_read_stream(&self) -> E2eResult<tokio::fs::File> {
+        self.create_read_stream_with_options(crate::OperationOptions::default())
+            .await
+    }
+
+    /// Options bound opening the file. Subsequent stream reads use normal Tokio
+    /// I/O; wrap them in CancellationToken::run to cancel a larger read operation.
+    pub async fn create_read_stream_with_options(
+        &self,
+        options: crate::OperationOptions,
+    ) -> E2eResult<tokio::fs::File> {
+        Self::file_operation(options, async {
+            self.check_completed()?;
+            Ok(tokio::fs::File::open(&self.path).await?)
+        })
+        .await
+    }
+
+    fn check_completed(&self) -> E2eResult<()> {
+        if let Some(failure) = &self.failure {
+            return Err(E2eError::Config(format!(
+                "download did not complete successfully: {failure}"
+            )));
+        }
+        Ok(())
+    }
+
+    async fn file_operation<T>(
+        options: crate::OperationOptions,
+        future: impl Future<Output = E2eResult<T>>,
+    ) -> E2eResult<T> {
+        let future = crate::operation::Deadline::new(options.timeout.unwrap_or(Duration::ZERO))
+            .run("completed download I/O", future);
+        match options.cancellation {
+            Some(token) => token.run(future).await,
+            None => future.await,
         }
     }
 
@@ -1514,10 +1579,13 @@ impl Download {
         Ok(path)
     }
 
-    /// Delete the downloaded file (idempotent).
+    /// Delete the downloaded file. Missing files are idempotent; other I/O
+    /// failures are reported rather than hidden.
     pub async fn delete(&self) -> E2eResult<()> {
         match tokio::fs::remove_file(&self.path).await {
-            Ok(()) | Err(_) => Ok(()),
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(E2eError::Io(error)),
         }
     }
 }
@@ -4550,6 +4618,7 @@ impl Page {
                 let path = self.wait_for_download_in(dir.as_ref(), timeout).await?;
                 self.emit(PageEvent::Download(path.clone()));
                 let mut download = Download::from_path(path);
+                download.page_id = Some(self.target_id().to_owned());
                 // Chromium fills URL/failure from download events (newest match wins).
                 let name = download.suggested_filename.clone();
                 if let Some(record) = self
