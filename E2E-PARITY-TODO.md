@@ -1,16 +1,16 @@
 # Ferrite E2E implementation TODO
 
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
-Session plan refreshed: 2026-09-30, from verified B14 implementation `a7f1e45`.
-Expanded on request for a longer implementation session; B14 is now verified.
+Session plan refreshed: 2026-09-30, from verified B13 implementation `e2e3ecc`.
+Expanded on request for a longer implementation session; B13/B14 are verified.
 Uncommitted implementations are not counted complete.
 
 The initial G/A foundations are complete except for the final G04 audit. Follow
 the remaining-work index below through B/D improvements and supported C extensions.
-This backlog contains **51 tasks (33 complete, 18 remaining)**: four foundations,
+This backlog contains **51 tasks (34 complete, 17 remaining)**: four foundations,
 16 core tasks, 19 follow-ups, six optional extensions and six practical additions.
-All A tasks and B01–B08/B12/B14/B15/B16/B17/B19 are now verified; continue with
-runner budgets and CI/assertion reliability, then captures, reports and supported
+All A tasks and B01–B08/B12–B17/B19 are now verified; continue with
+CI/assertion reliability, then captures, reports and supported
 C extensions. The ordering and effort assessments are recommendations based on
 the current source and parity audit.
 D01–D06 add bounded improvements found in the missing/partial member inventory;
@@ -24,48 +24,46 @@ limits remain in [PLAYWRIGHT-PARITY.md](PLAYWRIGHT-PARITY.md).
 
 ## Recommended next implementation
 
-Start **B13 — fixture budgets and shared teardown accounting**, followed by
-**D01 — CI flaky-test policy** and **D02 — assertion polling options**. B14 is
-verified in `a7f1e45`: named shared/library project configuration, CLI forwarding,
-resolved run/project/attempt settings, actual native owner identity, precedence,
-project output/snapshot paths and captured environment fallbacks.
+Start **D01 — CI flaky-test policy**, then **D02 — assertion polling options**
+and **B09 — screenshot capture options**. B13 is verified in `e2e3ecc`:
+separate fixture setup/teardown limits capped by enclosing clocks, one shared
+cleanup deadline per scope, individual pending-operation errors and disposal
+surviving dropped/repeated waits. B14 effective configuration remains verified
+in `a7f1e45`; keep its frozen settings and output/snapshot paths intact.
 
-The configuration phase passed **365 E2E and 27 CLI/configuration checks**:
-164 units, 197 integrations across all 29 targets and four doctests. The 58-check
-runner batch ran on full Chrome 153/Firefox 157; core187/browser93/routing23
-used Headless Shell/Firefox. Strict all-target E2E/CLI/config Clippy, package
-formatting and regenerated matrix links passed. Five native groups compare four
-actual pinned runner observations and exercise suite/test/project precedence,
-zero values, tag exclusion, repetition/sharding, runtime timeouts/retries,
-dedicated owner identity/release, artifact/snapshot seeds, early setup and old
-JSON. An isolated child verifies environment resolution before hooks without
-parent-environment races. Final units were rerun after preserving empty legacy
-filter behavior. Expanded run/attempt reports from both engines were inspected;
-all 12 artifact links per preview resolved and relocated bundles kept valid links.
-Initial missing literal fields/two test borrows and the invalid-shard test setup
-were corrected before final verification. The first shard test used a builder
-that intentionally panics; the corrected test supplies invalid shared config.
+The fixture phase passed **377 E2E and 27 CLI/configuration checks**: 170 units,
+203 integrations across all 30 targets and four doctests. Runner64 used full
+Chrome 153/Firefox 157; core191/browser93/routing23 used Headless Shell/Firefox.
+Final units and six B13 native groups reran after adding actual target-ID release,
+finite setup caps and shared run-final hook accounting. Strict all-target
+E2E/CLI/config Clippy, package formatting and generated evidence links passed.
+Eight actual pinned runner cases establish the documented upstream accounting
+differences. Initial stack growth, lost-transport idempotence and worker-fixture
+report labels were corrected before final verification. The late rerun contains
+170 units; its two added units extend the original 168-unit core batch.
 
-**Current handoff:** start B13 in `FixtureDef`/`Fixture<T>`, `setup_fixtures`,
-`teardown_fixtures_with_info`, `SuiteState` setup/cleanup, worker retirement,
-`bounded`/`bounded_in`, `run_one` and `finish_run`, with shared Deadline/runtime
-helpers in `operation.rs`. Fixture definitions currently have no explicit
-setup/teardown timeouts. Cleanup currently creates a fresh cleanup_timeout
-for each hook, fixture and resource operation, including worker/suite teardown.
-Add fixture overrides and one enclosing deadline per cleanup scope; per-operation
-limits cannot extend it. Preserve zero-as-unlimited subject to finite enclosing
-limits, reverse dependency teardown, completed dependency release after failed
-setup, worker retry isolation and all phase-specific diagnostics. Exhaustion
-must be reported explicitly for remaining cleanup work, not silently omitted.
+**Current handoff:** start D01 in shared `E2eConfig`, Runner, `resolved_config.rs`,
+`report.rs` and CLI flag/config/child forwarding. Existing `TestResult.flaky`,
+`TestReport::flaky` and retry classification already work. `TestReport::ok` and
+`exit_code` currently consider only failed results. Add opt-in CI failure for
+flaky runs without turning a successful final attempt into a failed attempt.
+Define aggregate policy reporting consistently in live/JSON/JUnit/HTML output,
+including expected failures, skips, repetition, max-failures and interruption.
 
-Test slow hooks/fixtures together, failed setup, runtime timeout changes,
-cancellation, repeated teardown and native context/browser release. Retain B12
-soft-error visibility/classification while cleanup errors accumulate. Compare
-pinned fixture accounting before claiming upstream semantics; document Rust's
-setup/body/cleanup defaults and any explicit differences. Extend the existing
-fixtures rather than creating a disconnected fixture API. Keep B14 configuration
-snapshots/callbacks, output paths, serialized settings and CLI forwarding aligned
-if the budget model adds effective settings.
+Reuse existing focus protection and audit registered test/suite focus before
+filters or sharding can hide it. Preserve skipped/fixme tests while rejecting
+forbidden focus before bodies. Keep defaults compatible, reflect new effective
+settings in read-only snapshots, preserve historical JSON with serde defaults,
+and verify actual CLI child forwarding/exit status. Compare pinned runner policy
+and focus cases before claiming matching behavior. D02 follows once policy work
+is verified; extend existing polling helpers without duplicate soft failures.
+
+Preserve B13's ready cleanup after exhaustion, individual pending errors,
+reverse dependency release, worker retirement draining, once-only native disposal
+and Firefox lifecycle ownership until disposal settles. An already-lost transport
+permits idempotent local close without confirming remote native release. Native
+protocol budgets still apply; blocking synchronous Rust/filesystem work cannot
+be preempted. Capture, trace and early-close errors must remain visible.
 
 Preserve B12's only-Expect soft collection, body-only expected-failure handling,
 setup/cleanup visibility, atomic sealing before artifact/context cleanup, weak
@@ -75,7 +73,7 @@ outer label/error/step/trace and Diagnostic typed causes, and B16's shared owner
 weak context graph and owned base_url getter. G04 remains open for channel lag,
 partial setup, detached in-flight requests and the final cross-feature audit.
 
-The scope of the longer session is **all 18 open tasks below**. Completed tasks
+The scope of the longer session is **all 17 open tasks below**. Completed tasks
 remain regression requirements. The deferred projects are future work; completing
 this checklist means practical parity within the stated engine capabilities,
 not complete Playwright compatibility.
@@ -88,54 +86,40 @@ there. G04 applies during every phase and closes after the final audit.
 
 | Order | Task | Implementation result | Dependency or capability gate |
 |---|---|---|---|
-| 1 | B13 | Fixture timeouts and one shared teardown budget | Runner cancellation, failed setup and reverse teardown |
-| 2 | D01 | Optional CI failure on flaky tests and consistent focus protection | B14; existing retry/flaky classification |
-| 3 | D02 | Configurable assertion polling and retry intervals | Existing polling helpers, B12 and B13 budgets |
-| 4 | B09 | Supported screenshot options with reversible temporary changes | Native capture capabilities on each engine |
-| 5 | B10 | Stable screenshot comparisons, paths and update modes | B09; project/path settings from B14 |
-| 6 | B18 | Bounded ARIA snapshots with optional boxes and state | Existing DOM approximation; no full ARIA/YAML implementation |
-| 7 | B11 | Searchable portable reports with per-attempt network diagnostics | B02/B03/B19 complete; browser visual inspection |
-| 8 | D03 | Explicit artifact retention policies with valid report links | B14/B11; final attempt classification and bundle export |
-| 9 | D04 | Run/project metadata and configurable slow-test summaries | B14/B11; existing live/JSON/JUnit/HTML reporters |
-| 10 | D05 | Local/session storage enumeration and typed bulk helpers | Existing page storage APIs on both engines |
-| 11 | D06 | Socket identity, errors, closed state and bounded typed waits | Existing Chromium socket events; Firefox unsupported |
-| 12 | C01 | Validated PDF options | Chromium; explicit Firefox unsupported result |
-| 13 | C02 | Bounded captured-body bytes, text and JSON helpers | B02/B03 complete; Chromium body capture |
-| 14 | C03 | Coverage navigation/source options and restart lifecycle | Chromium JS/CSS coverage |
-| 15 | C04 | HAR matching, not-found and supported content options | A14/B06 complete; engine body/rewrite capabilities |
-| 16 | C05 | Supported media/device emulation options and resets | Chromium native capabilities |
-| 17 | C06 | Independently detachable CDP target sessions | Chromium transport and session ownership |
-| 18 | G04 | Final lifecycle, compatibility and resource-release audit | Evidence from every completed phase |
+| 1 | D01 | Optional CI failure on flaky tests and consistent focus protection | B14; existing retry/flaky classification |
+| 2 | D02 | Configurable assertion polling and retry intervals | Existing polling helpers, B12 and B13 budgets |
+| 3 | B09 | Supported screenshot options with reversible temporary changes | Native capture capabilities on each engine |
+| 4 | B10 | Stable screenshot comparisons, paths and update modes | B09; project/path settings from B14 |
+| 5 | B18 | Bounded ARIA snapshots with optional boxes and state | Existing DOM approximation; no full ARIA/YAML implementation |
+| 6 | B11 | Searchable portable reports with per-attempt network diagnostics | B02/B03/B19 complete; browser visual inspection |
+| 7 | D03 | Explicit artifact retention policies with valid report links | B14/B11; final attempt classification and bundle export |
+| 8 | D04 | Run/project metadata and configurable slow-test summaries | B14/B11; existing live/JSON/JUnit/HTML reporters |
+| 9 | D05 | Local/session storage enumeration and typed bulk helpers | Existing page storage APIs on both engines |
+| 10 | D06 | Socket identity, errors, closed state and bounded typed waits | Existing Chromium socket events; Firefox unsupported |
+| 11 | C01 | Validated PDF options | Chromium; explicit Firefox unsupported result |
+| 12 | C02 | Bounded captured-body bytes, text and JSON helpers | B02/B03 complete; Chromium body capture |
+| 13 | C03 | Coverage navigation/source options and restart lifecycle | Chromium JS/CSS coverage |
+| 14 | C04 | HAR matching, not-found and supported content options | A14/B06 complete; engine body/rewrite capabilities |
+| 15 | C05 | Supported media/device emulation options and resets | Chromium native capabilities |
+| 16 | C06 | Independently detachable CDP target sessions | Chromium transport and session ownership |
+| 17 | G04 | Final lifecycle, compatibility and resource-release audit | Evidence from every completed phase |
 
-Immediate delivery: **B13**; B14 is complete. D01/D02 strengthen CI and
-assertions without adding a browser backend. Capture/report work comes next;
-D03/D04 consume its final artifact/report behavior. D05/D06 and the supported C
-extensions can then proceed independently. G04 is applied throughout and closed last.
+Immediate delivery: **D01**, followed by **D02**. B13/B14 are complete.
+Capture/report work follows; D03/D04 consume its final artifact/report behavior.
+D05/D06 and the supported C extensions can then proceed independently. G04 is
+applied throughout and closed last.
 
-### First delivery: B13 implementation sequence
+### Verified B13 delivery sequence
 
-These are steps within B13, not additional completion checkboxes. Finish the
-whole delivery before marking B13 complete or starting dependent D02 work.
-
-| Step | Concrete work | Evidence required |
-|---|---|---|
-| 1. Establish accounting | Record pinned Playwright cases for ordinary/explicit fixture limits, worker fixtures and setup/teardown failure. Define Ferrite's attempt, worker retirement and run-final cleanup scopes before changing clocks. | Observable setup/body/teardown ordering and final errors; document any different accounting. |
-| 2. Extend existing fixtures | Add optional setup and teardown limits to `Fixture<T>` and its existing registration paths. Preserve defaults, dependency ordering and zero semantics. | Default/explicit/zero limits, inherited finite limits, lazy and automatic test/worker fixtures, and failed setup after completed dependencies. |
-| 3. Share cleanup deadlines | Thread one deadline through each cleanup scope instead of renewing it for every hook, fixture, capture or close. Define what can still execute after exhaustion and report every unfinished operation. | Several slow cleanups stay within one finite budget; reverse dependency release still runs when possible, with distinct errors for unfinished work. |
-| 4. Make disposal survive a dropped wait | Review context/page close futures alongside the existing browser close owner. A timed-out caller must not leave native disposal permanently skipped because the handle was marked closed before an await. | Repeated/concurrent close and an intentionally dropped close wait; verify native targets/user contexts and listener/task ownership are actually released on both engines. |
-| 5. Integrate and verify | Preserve attempt soft-error sealing, expected-failure classification, retries and effective settings; update examples, parity notes and matrix evidence. | Focused native cases followed by the complete runner/integration inventory, serialization checks, strict Clippy, formatting and link validation. |
-
-Current inspection found that `BrowserContext::close` marks the context closed
-before awaited callback/page/native disposal. Step 4 must establish safe completion
-when that wait is dropped; a repeated call returning success alone is insufficient
-evidence of native release. Keep this lifecycle work inside B13 rather than
-deferring it until after introducing shorter shared cleanup deadlines.
-
-The upstream reference describes separate fixture limits and shared test/cleanup
-accounting in [fixture timeouts](https://playwright.dev/docs/test-fixtures#fixture-timeout)
-and [test timeouts](https://playwright.dev/docs/test-timeouts). Use the pinned
-runner observations to establish precise behavior; current documentation is a
-design reference, not proof that Ferrite matches it.
+The implementation followed five steps in `e2e3ecc`: pinned accounting cases,
+local fixture limits, shared cleanup clocks, once-only native disposal and
+integration/documentation verification. Preserve these outcomes as regressions.
+Actual native target/user-context removal, dependency release after failures,
+retry worker rebuilds, dynamic zero, cancellation and final run hook accounting
+are covered. The upstream comparison remains explicit in
+[fixture timeouts](https://playwright.dev/docs/test-fixtures#fixture-timeout),
+[test timeouts](https://playwright.dev/docs/test-timeouts) and the pinned corpus;
+Rust's separate local limits do not claim upstream's fixture clock semantics.
 
 ## Concrete implementation deliverables
 
@@ -172,7 +156,7 @@ contracts and pinned behavior; prefer extending existing options and helpers.
 | G04 | `operation.rs`, affected tests and parity documents | Audit every new API's deadlines/cancellation/disposal/retries, resource release and serialization; reconcile the complete test inventory and matrix. |
 
 The diagnostics group **B01/B04/B19**, ownership **B16** and locator labels
-**B17** and soft assertions **B12** are complete. B14 is complete; the next delivery is **B13**, then D01/D02 and the capture/report
+**B17** and soft assertions **B12** are complete. B13/B14 are complete; the next delivery is **D01**, then D02 and the capture/report
 group **B09/B10/B18/B11**, with D01–D06 placed as in the remaining-work index.
 Implement the six C extensions after checking native
 capabilities, and finish with G04. Each delivery should have usable public APIs,
@@ -385,6 +369,20 @@ they do not constitute differential Playwright conformance coverage.
   Expanded reports and relocated bundles inspected; final units reran after the
   empty legacy filter compatibility correction. Inventory: 164 units, 197
   integrations/all 29 targets and four doctests; combined total 392 checks.
+- `e2e3ecc`: B13. All 377 E2E and 27 CLI/configuration checks passed, with
+  strict all-target Clippy, package formatting and regenerated matrix links.
+  Inventory: 170 units, 203 integrations/all 30 targets and four doctests;
+  combined total 404 checks. Eight actual pinned observations document different
+  fixture accounting. Six native groups on full Chrome/Firefox verify actual
+  target/user-context release after dropped waits, setup caps and failure,
+  cancellation, shared/zero cleanup, retry worker rebuilds, dynamic zero and
+  soft-error retention. Six budget/lifecycle units cover one-poll release,
+  intersections, disposal ownership/error replay, worker/suite retirement,
+  run-final hooks and enclosing setup caps. Core/browser/routing batches used
+  Headless Shell/Firefox. Initial stack growth, lost-transport idempotence and
+  worker-fixture labels were corrected; final units/native groups and strict
+  Clippy reran after late target-ID/run-final/setup-cap cases. Continue with D01;
+  G04 stays open for the final cross-feature audit.
 
 ## G — Foundations for the larger session
 
@@ -768,11 +766,24 @@ their dependencies are ready. References include
   All 355 E2E/23 CLI checks, strict Clippy, package formatting and generated links
   passed. A test-only await-held guard was fixed, with its native group and Clippy
   reverified. Expanded/relocated reports inspected; all three links per engine resolved.
-- [ ] **B13 — Fixture budgets and shared teardown accounting (L).** Add explicit
+- [x] **B13 — Fixture budgets and shared teardown accounting (L).** Add explicit
   fixture setup/teardown timeouts and define one enclosing cleanup budget with
   operation overrides bounded by it. Done when slow hooks/fixtures, failed setup,
   reverse teardown and cancellation produce all relevant errors without silently
   skipping cleanup. Preserve zero-timeout semantics and test existing defaults.
+  Evidence: `e2e3ecc`; eight actual pinned runner observations and six
+  `fixture_budgets` groups on full Chrome/Firefox. Local/zero/enclosing limits,
+  setup failure and cancellation, reverse/ready cleanup after exhaustion,
+  individual phase errors, actual removed native target/user-context IDs after
+  dropped/repeated waits, worker rebuilds/retries, dynamic zero and soft errors
+  verified. Six lifecycle units cover intersections, one-poll release, error
+  replay/ownership, suite/worker retirement and final run scopes. Default values
+  remain compatible; cleanup now shares one scope clock. Upstream independent
+  fixture accounting and local close after lost transport remain explicit.
+  All 377 E2E/27 CLI/config checks, strict Clippy, package formatting and generated
+  links passed. Stack growth, lost-transport close and worker report labels were
+  corrected before final gates; final 170 units/six native groups reran after
+  target-ID/run-final/setup-cap additions.
 - [x] **B14 — Effective project/configuration metadata (M).** Extend Project and
   report metadata with missing per-project grep-invert, output/snapshot paths and
   repetition settings; expose resolved configuration read-only. Done when global/
@@ -1019,7 +1030,7 @@ waiting for every future feature before starting independent work.
 | 1. Network observations | B02, B03 — complete | Typed per-hop request/response identity and completion independent of body capture. Verified in `1a9e875`; continue with phase 2. |
 | 2. HTTP and routing correctness | B05/B06/B07/B08 — complete | Context-linked fetch/fulfill options verified in `c88c14b`. Preserve shared HTTP, route lifecycle, duplicate-header forwarding and pinned precedence regressions. |
 | 3. Native event diagnostics | B01/B04/B19 — complete | Preserve frame/load/dialog observations (`f8c12de`), earliest popup traffic (`1ec7e3e`) and structured console/error data (`34890cc`) through ownership and runner changes. |
-| 4. Runner and developer APIs | B16/B17/B12/B14 complete; B13 remaining | Preserve shared ownership (`1e4d3bb`), labeled diagnostics (`8ae438c`), soft collection (`0ee8245`) and effective configuration (`a7f1e45`); add fixture/shared cleanup budgets and safe disposal after dropped close waits next. Budget changes need broader runner regressions. |
+| 4. Runner and developer APIs | B16/B17/B12/B13/B14 — complete | Preserve shared ownership (`1e4d3bb`), labeled diagnostics (`8ae438c`), soft collection (`0ee8245`) and effective configuration (`a7f1e45`) and shared fixture/cleanup budgets with safe disposal (`e2e3ecc`). Continue with D01/D02 while preserving their broader runner regressions. |
 | 4a. CI and assertion reliability | D01, D02 | Extend flaky-run policy/focus wiring and generic polling options using the resolved configuration and fixture/operation budgets. |
 | 5. Captures and reports | B09, B10, B18, B11 | Implement capture options before stabilized comparisons; add bounded ARIA output and searchable per-attempt reports using the earlier network/error data. |
 | 5a. Practical storage and diagnostics | D03, D04, D05, D06 | Complete output retention, run metadata/slow summaries, typed Web Storage helpers and bounded Chromium socket diagnostics after their prerequisites. |
@@ -1095,7 +1106,7 @@ also need formatting checks for the modified packages.
 
 Copyable request for the implementation session:
 
-> Implement all 18 open tasks (B13, D01/D02, B09/B10/B18/B11, D03–D06,
+> Implement all 17 open tasks (D01/D02, B09/B10/B18/B11, D03–D06,
 > C01–C06 and G04) in E2E-PARITY-TODO.md using the recommended remaining
 > phases, dependencies and completion criteria. Preserve the already verified
 > features. Implement all practical
