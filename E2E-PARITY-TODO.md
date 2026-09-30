@@ -3,7 +3,7 @@
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
 
 Implement **G, then A, then B**, followed by the supported C extensions. This
-backlog contains **45 tasks (16 complete, 29 remaining)**: four foundations, 16 core tasks, 19 follow-ups
+backlog contains **45 tasks (17 complete, 28 remaining)**: four foundations, 16 core tasks, 19 follow-ups
 and six optional extensions. Start the feature work with typed DOM events,
 richer assertions and exposed callbacks. The ordering and effort assessments
 are recommendations based on the current source and parity audit.
@@ -76,9 +76,13 @@ they do not constitute differential Playwright conformance coverage.
   passed. Shared deadlines/defaults, deferred scripts, redirects/replacement,
   frame readiness, short HTTP bursts, cancellation, disposal and runner retries
   verified; combined regression inventory is 303 checks.
+- `a900523`: A14. Pinned Playwright 1.63.0 reference records 22 URL cases;
+  shared assertion, route/removal, future-page context handlers and HAR filters
+  passed native Chromium/Firefox groups. Existing seven network regressions,
+  140 unit checks and related conformance/readiness/wait groups passed; strict
+  E2E/CLI Clippy and formatting passed. Combined verified inventory: 283 E2E
+  plus 23 CLI/configuration checks. Legacy string glob contracts remain intact.
 - G04 remains open until callback and stream lifecycle coverage is complete.
-  A14 has a verified zero-segment double-star correction; shared API integration
-  and its remaining conformance cases are still open.
 
 ## G — Foundations for the larger session
 
@@ -225,11 +229,16 @@ The existing synchronous Page callback survives navigation; extend it.
   readiness. DOMContentLoaded uses native navigation timing; NetworkIdle requires
   Load and 500ms observed page HTTP quiet, detects short bursts and rejects frames.
   Replaced Chromium documents leave idle accounting without fabricated terminal events.
-- [ ] **A14 — Shared URL matching across APIs (M).** Reuse UrlMatcher in page URL
+- [x] **A14 — Shared URL matching across APIs (M).** Reuse UrlMatcher in page URL
   assertions, route selection and HAR filters while preserving legacy string
   contracts. Done when base-URL resolution, escaped globs, braces, zero-segment
   double-stars and regex anchoring have pinned conformance cases; invalid patterns
   fail before registration. Needs G03; coordinate with A13 and B05.
+  Evidence: `a900523`; `shared_url_matching.rs` verifies shared matcher routing,
+  hit limits, removal, assertions and HAR filters on both engines; the pinned
+  corpus checks base paths, escaping, braces, double-stars and regex anchors.
+  Relative matchers require a base URL; Rust regex and strict malformed-glob
+  differences are documented. In-flight removal policy remains B05.
 - [ ] **A15 — Function-wait arguments, polling and results (M).** Extend existing
   function waits with JSON arguments and interval/animation-frame polling; add a
   result helper where existing handle support permits it. Done when promises,
