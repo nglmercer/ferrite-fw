@@ -5,6 +5,8 @@
 //! `package.json` compatibility (read/write, never requires npm itself).
 
 mod client;
+#[cfg(test)]
+mod graph_tests;
 mod installer;
 mod lockfile;
 mod manifest;
@@ -14,11 +16,13 @@ mod package_json;
 mod spec;
 
 pub use client::RegistryClient;
-pub use installer::Installer;
-pub use lockfile::{LockedPackage, Lockfile};
+pub use installer::{manifest_requests, Installer};
+pub use lockfile::{
+    validate_package_name, LockedImporter, LockedPackage, Lockfile, LOCKFILE_VERSION,
+};
 pub use manifest::{classify_package, PackageManifest, PackageRuntime, DEFAULT_REGISTRY};
-pub use metadata::{RegistryDist, RegistryMetadata, RegistryVersion};
-pub use package::{extract_tarball, resolve_version, verify_integrity};
+pub use metadata::{PeerDependencyMeta, RegistryDist, RegistryMetadata, RegistryVersion};
+pub use package::{extract_tarball, range_satisfied, resolve_version, verify_integrity};
 pub use package_json::JsPackageJson;
 pub use spec::parse_spec;
 
@@ -41,6 +45,7 @@ mod tests {
                             version: version.to_string(),
                             dependencies: HashMap::new(),
                             peer_dependencies: HashMap::new(),
+                            peer_dependencies_meta: HashMap::new(),
                             optional_dependencies: HashMap::new(),
                             dist: RegistryDist {
                                 tarball: String::new(),
@@ -95,6 +100,7 @@ mod tests {
             source: "npm".to_string(),
             integrity: Some("sha512-abc".to_string()),
             dependencies: BTreeMap::new(),
+            ..Default::default()
         });
         lock.write(&dir.join("ferrite.lock")).unwrap();
         let loaded = Lockfile::read(&dir.join("ferrite.lock")).unwrap();

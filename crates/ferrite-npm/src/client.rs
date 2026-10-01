@@ -32,6 +32,7 @@ impl RegistryClient {
 
     /// Fetch (and cache) package metadata.
     pub async fn metadata(&self, name: &str) -> Result<RegistryMetadata> {
+        crate::validate_package_name(name)?;
         let cache_path = self
             .cache_dir
             .join(format!("{}.json", name.replace('/', "__")));
@@ -68,6 +69,19 @@ impl RegistryClient {
         Ok(metadata)
     }
 
+    /// Explicit update requests refresh metadata instead of indefinitely reusing cache.
+    pub fn invalidate_metadata(&self, name: &str) -> Result<()> {
+        crate::validate_package_name(name)?;
+        let path = self
+            .cache_dir
+            .join(format!("{}.json", name.replace('/', "__")));
+        match std::fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
     /// Download a tarball.
     pub async fn tarball(&self, url: &str) -> Result<Vec<u8>> {
         let bytes = self
@@ -76,6 +90,8 @@ impl RegistryClient {
             .send()
             .await
             .map_err(|error| FerriteError::Npm(format!("tarball download failed: {error}")))?
+            .error_for_status()
+            .map_err(|error| FerriteError::Npm(format!("tarball HTTP failure: {error}")))?
             .bytes()
             .await
             .map_err(|error| FerriteError::Npm(format!("tarball read failed: {error}")))?;

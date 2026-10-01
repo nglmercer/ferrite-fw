@@ -24,7 +24,7 @@ pub(crate) async fn inspect(
         .iter()
         .map(|p| p.name().to_string())
         .collect();
-    let lock = ferrite::npm::Lockfile::read(&resolved.lockfile()).unwrap_or_default();
+    let lock = ferrite::npm::Lockfile::read(&resolved.lockfile())?;
     if args.json {
         println!(
             "{}",
@@ -37,7 +37,9 @@ pub(crate) async fn inspect(
                 "build": { "outDir": resolved.build.out_dir, "minify": resolved.build.minify, "target": resolved.build.target },
                 "compiler": resolved.compiler.engine,
                 "plugins": plugins,
-                "lockedPackages": lock.package.iter().map(|p| format!("{}@{}", p.name, p.version)).collect::<Vec<_>>(),
+                "lockfileVersion": lock.version,
+                "importers": lock.importers,
+                "lockedPackages": lock.package.iter().map(|p| p.id()).collect::<Vec<_>>(),
             })
         );
     } else {

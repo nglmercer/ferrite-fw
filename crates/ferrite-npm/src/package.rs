@@ -15,18 +15,14 @@ pub fn resolve_version(metadata: &RegistryMetadata, range: &str) -> Result<Strin
     if metadata.versions.contains_key(range) {
         return Ok(range.to_string());
     }
-    let requirement = semver::VersionReq::parse(range)
+    let requirement = node_semver::Range::parse(range)
         .map_err(|error| FerriteError::Npm(format!("invalid version range `{range}`: {error}")))?;
-    let mut best: Option<semver::Version> = None;
+    let mut best: Option<node_semver::Version> = None;
     for version in metadata.versions.keys() {
-        let Ok(parsed) = semver::Version::parse(version) else {
+        let Ok(parsed) = node_semver::Version::parse(version) else {
             continue;
         };
-        // Stable ranges skip prereleases unless explicitly requested.
-        if !parsed.pre.is_empty() && !range.contains('-') {
-            continue;
-        }
-        if requirement.matches(&parsed) && best.as_ref().is_none_or(|current| parsed > *current) {
+        if requirement.satisfies(&parsed) && best.as_ref().is_none_or(|current| parsed > *current) {
             best = Some(parsed);
         }
     }
@@ -95,7 +91,16 @@ pub fn extract_tarball(bytes: &[u8], dest: &Path) -> Result<()> {
             .path()
             .map_err(|error| FerriteError::Npm(error.to_string()))?
             .into_owned();
-        let relative = path.strip_prefix("package").unwrap_or(&path);
+        // npm tarballs have a single top-level directory, whose name is
+        // not necessarily `package` (DefinitelyTyped packages use their name).
+        let mut components = path.components();
+        let Some(std::path::Component::Normal(_)) = components.next() else {
+            return Err(FerriteError::Npm(format!(
+                "invalid tarball root: {}",
+                path.display()
+            )));
+        };
+        let relative = components.as_path();
         if relative.as_os_str().is_empty() {
             continue;
         }
@@ -103,11 +108,20 @@ pub fn extract_tarball(bytes: &[u8], dest: &Path) -> Result<()> {
         if relative.components().any(|component| {
             matches!(
                 component,
-                std::path::Component::ParentDir | std::path::Component::RootDir
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
             )
         }) {
             return Err(FerriteError::Npm(format!(
                 "tarball entry escapes package dir: {}",
+                relative.display()
+            )));
+        }
+        let entry_type = entry.header().entry_type();
+        if !entry_type.is_file() && !entry_type.is_dir() {
+            return Err(FerriteError::Npm(format!(
+                "unsupported tarball link/device entry {}; publish regular files instead",
                 relative.display()
             )));
         }
@@ -124,4 +138,16 @@ pub fn extract_tarball(bytes: &[u8], dest: &Path) -> Result<()> {
             .map_err(|error| FerriteError::Npm(format!("unpack {}: {error}", target.display())))?;
     }
     Ok(())
+}
+
+/// npm-compatible range matching. Tags must be matched to a recorded specifier,
+/// never treated as a wildcard for arbitrary installed packages.
+pub fn range_satisfied(version: &str, range: &str) -> bool {
+    match (
+        node_semver::Range::parse(range),
+        node_semver::Version::parse(version),
+    ) {
+        (Ok(range), Ok(version)) => range.satisfies(&version),
+        _ => false,
+    }
 }

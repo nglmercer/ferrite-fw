@@ -137,6 +137,7 @@ impl DevServer {
         module.map = merge_maps(module.map, pre_map, module.code == pre.code)?;
         module.side_effects = loaded.side_effects.or(resolved.side_effects);
         module.dependencies = loaded.dependencies;
+        module.dependencies.push(self.inner.config.lockfile().to_string_lossy().into_owned());
         module.dependencies.extend(pre.dependencies);
         // Normal/post transforms see lowered output; retain maps and watches.
         if module.module_type.is_js_like() {

@@ -151,6 +151,9 @@ pub(crate) struct UpdateArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct InstallArgs {
+    /// Replay exact locked dependencies and reject manifest/lock changes.
+    #[arg(long)]
+    pub(crate) frozen_lockfile: bool,
     /// Project root.
     #[arg(long, default_value = ".")]
     pub(crate) root: PathBuf,

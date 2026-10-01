@@ -40,17 +40,3 @@ pub(crate) fn is_bare_node_builtin(specifier: &str) -> bool {
             | "zlib"
     )
 }
-
-pub(crate) type SemverLikeKey = (u64, u64, u64, String);
-
-pub(crate) fn semver_like_key(version: &str) -> SemverLikeKey {
-    let mut numbers = version
-        .split(['.', '-', '+'])
-        .filter_map(|part| part.parse::<u64>().ok());
-    (
-        numbers.next().unwrap_or(0),
-        numbers.next().unwrap_or(0),
-        numbers.next().unwrap_or(0),
-        version.to_string(),
-    )
-}

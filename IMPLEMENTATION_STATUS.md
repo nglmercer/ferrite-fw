@@ -34,7 +34,8 @@ establish actual framework support.
 
 Migration: Vue/Svelte stubs and the legacy ssr scaffold now fail closed. Public
 `template_stub`/`markup_stub` functions were removed because their output was not
-valid framework compilation. No lockfile migration is implemented.
+valid framework compilation. At this initial slice, no lockfile migration was implemented; the later package
+graph slice below implements migration.
 
 ## Validation
 
@@ -113,3 +114,67 @@ Svelte compiler has executed yet. No new framework support claim is made.
 
 The concurrent documentation reorganization was committed separately as 4ae1d13
 and preserved. Framework safety changes were committed as ccbc64d.
+
+
+## Concrete package graph slice (continued implementation)
+
+Implemented ferrite.lock schema v2 with concrete package identities and dependency
+edges, root importer requests/edges, exact tarball URLs/integrities, deterministic
+serialization and atomic lock writes. Multiple versions coexist; scoped package
+paths and cycle edges resolve through the graph. Direct peer contexts use distinct
+store identities; peer ranges are validated. npm range matching uses pinned
+node-semver 2.2.0 (OR, comparator sets, hyphens, exact/zero-major/prerelease cases).
+Root/transitive tags retain locked selections during ordinary installs; explicit
+updates refresh metadata and select the requested newer version.
+
+CLI add/remove/update/install and the single-package library API share manifest
+installation. Failed resolution leaves the supplied graph unchanged. Removing a
+root preserves reachable transitive packages. `ferrite install --frozen-lockfile`
+checks manifest requests and concrete edges, replays locked tarballs without
+metadata, and does not rewrite the lock. Cached archives are integrity checked;
+extraction stages package contents before publishing and checks manifest identity.
+Lifecycle scripts are not executed. Tar extraction supports the non-`package/`
+root used by DefinitelyTyped; unsafe paths and link/device entries fail explicitly.
+
+The resolver follows the importing package's exact dependency edge, including
+self imports, or the project importer edge. A lock prevents undeclared imports;
+without a lock, multiple matching store versions fail instead of selecting the
+highest. Custom configured lock paths propagate into CLI/server/library resolution.
+Lock content participates in transform cache identity and watch dependencies.
+Inspect reports graph identities/importers and propagates malformed-lock errors.
+
+Migration: read v1 edges into concrete name@version identities in memory. A
+successful ordinary manifest install adds importer requests/edges and tarball URLs
+and writes v2. Frozen installs require the complete v2 graph. Irrecoverable v1
+collisions/dangling edges fail with instructions to back up/rename the old lock and
+regenerate. Public LockedPackage adds fields (use `..Default::default()` where
+appropriate); dependency values now mean concrete IDs. `Lockfile.find` selects a
+root or a unique identity, never an arbitrary version. ResolverConfig adds the
+lockfile path. Existing stores are retained, not deleted during migration.
+
+Validation executed in this slice:
+
+- `cargo test -p ferrite-npm -p ferrite-resolver -p ferrite-server -p ferrite -p ferrite-cli --locked`:
+  77 unit tests and 3 facade doc tests passed; a subsequent npm rerun passed
+  14 tests including the single-package API and unsupported-manifest guards.
+- `cargo test -p ferrite-test --test config_resolver --test dev_pipeline --test build --test standalone --locked`:
+  13 integration tests passed. Two pre-existing real standalone/cross-build tests
+  remained ignored; no release/platform support follows from these skipped tests.
+- `cargo clippy -p ferrite-npm -p ferrite-resolver -p ferrite-cli -p ferrite-server -p ferrite --all-targets --locked -- -D warnings`:
+  passed.
+- Actual CLI registry install in a temporary clean project with `vue=3.5.22` and
+  `svelte=5.39.6`: 39 concrete packages installed with PATH=/nonexistent. After
+  deleting the temporary store and metadata, frozen reinstall succeeded from
+  tarball cache with the identical lock bytes and no metadata directory. This is
+  installation evidence only: neither framework compiler was executed.
+
+Remaining package requirements: full transitive peer context propagation and
+contextual ancestors, workspace links, top-level optional dependencies, npm aliases,
+all-platform frozen graphs, exports/imports condition parity, runtime deduplication,
+CommonJS named/default interop and unsupported dynamic-require/native-addon errors,
+SHA1-only/multiple-SRI compatibility and stricter absence-of-integrity handling.
+Unsupported contextual ancestor collisions fail instead of overwriting another
+instance; root workspaces/optionalDependencies fail instead of silently omitting
+requests. Peer contexts and frozen replay are tested on the current host only.
+Editor/compiler-host package projections are not implemented. No new framework
+compilation, browser, SSR, or release compatibility profile is advertised.

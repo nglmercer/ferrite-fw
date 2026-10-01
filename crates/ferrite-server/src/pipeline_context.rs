@@ -94,8 +94,9 @@ impl DevServer {
         env: &str,
         defines: &HashMap<String, String>,
     ) -> Hash {
+        let lock_state = std::fs::read(self.inner.config.lockfile()).ok().map(|bytes| Hash::of_bytes(&bytes).0);
         let pipeline = format!(
-            "pipeline-v3:{}:{:?}:{}:{}:{:?}",
+            "pipeline-v4:{}:{:?}:{}:{}:{:?}:{lock_state:?}",
             self.inner.plugins.cache_key(),
             self.inner.config.react,
             self.inner.config.is_production,

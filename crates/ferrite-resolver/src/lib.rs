@@ -5,6 +5,8 @@
 //! imports, and virtual modules.
 
 mod exports;
+#[cfg(test)]
+mod lock_tests;
 mod node;
 mod resolver;
 mod side_effects;

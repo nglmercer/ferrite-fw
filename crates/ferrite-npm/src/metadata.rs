@@ -16,6 +16,9 @@ pub struct RegistryVersion {
     /// Peer dependencies.
     #[serde(default, rename = "peerDependencies")]
     pub peer_dependencies: HashMap<String, String>,
+    /// Optional peer declarations.
+    #[serde(default, rename = "peerDependenciesMeta")]
+    pub peer_dependencies_meta: HashMap<String, PeerDependencyMeta>,
     /// Optional dependencies.
     #[serde(default, rename = "optionalDependencies")]
     pub optional_dependencies: HashMap<String, String>,
@@ -55,4 +58,10 @@ pub struct RegistryMetadata {
     /// Versions.
     #[serde(default)]
     pub versions: BTreeMap<String, RegistryVersion>,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct PeerDependencyMeta {
+    #[serde(default)]
+    pub optional: bool,
 }

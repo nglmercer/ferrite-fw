@@ -53,11 +53,12 @@ impl Ferrite {
         } else {
             Apply::Serve
         };
-        let resolver = ferrite_resolver::Resolver::for_environment(
+        let mut resolver = ferrite_resolver::Resolver::for_environment(
             config.root.clone(),
             &config.resolve,
             &EnvironmentKind::Client,
         );
+        resolver.lockfile = config.lockfile();
         let compiler: Arc<dyn ferrite_transform::JsCompiler> =
             ferrite_transform::compiler_for_engine(&config.compiler.engine).unwrap_or_else(|_| {
                 Arc::new(ferrite_transform::OxcCompiler::new(Default::default()))
@@ -191,6 +192,7 @@ impl Ferrite {
             module_type: hooked.module_type.unwrap_or(ModuleType::Js),
         })?;
         let mut dependencies = loaded.dependencies;
+        dependencies.push(self.config.lockfile().to_string_lossy().into_owned());
         dependencies.extend(pre.dependencies);
         dependencies.extend(compiled.dependencies);
         dependencies.extend(hooked.dependencies);

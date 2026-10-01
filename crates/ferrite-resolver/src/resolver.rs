@@ -31,6 +31,8 @@ pub struct Resolver {
     pub preserve_symlinks: bool,
     /// npm store root (`.ferrite/npm/packages`).
     pub npm_store: PathBuf,
+    /// Concrete package graph used for importer-specific npm resolution.
+    pub lockfile: PathBuf,
 }
 
 impl Resolver {
@@ -39,6 +41,7 @@ impl Resolver {
     pub fn new(root: PathBuf, config: &ResolveConfig) -> Self {
         Self {
             npm_store: root.join(".ferrite/npm/packages"),
+            lockfile: root.join("ferrite.lock"),
             root,
             conditions: config.conditions.clone(),
             extensions: config.extensions.clone(),
@@ -163,6 +166,10 @@ impl Resolver {
                 .join(rest)
                 .parent()
                 .map_or_else(|| self.npm_store.clone(), std::path::Path::to_path_buf)
+        } else if let Some(file) = path.strip_prefix("/@fs/") {
+            PathBuf::from(format!("/{file}"))
+                .parent()
+                .map_or_else(|| self.root.clone(), Path::to_path_buf)
         } else if path.starts_with('/') {
             self.root
                 .join(path.trim_start_matches('/'))
@@ -214,8 +221,45 @@ impl Resolver {
         query: Option<&str>,
     ) -> Result<ResolvedId> {
         let (name, subpath) = split_package(specifier);
-        // Installed Ferrite store first (no node_modules required).
-        if let Some(dir) = self.find_store_package(&name) {
+        ferrite_npm::validate_package_name(&name)?;
+        if self.lockfile.exists() {
+            let lock = ferrite_npm::Lockfile::read(&self.lockfile)?;
+            let base = request
+                .importer
+                .map(|importer| self.importer_dir(importer))
+                .unwrap_or_else(|| self.root.clone());
+            let owner = lock
+                .package
+                .iter()
+                .find(|package| base.starts_with(self.npm_store.join(package.id())));
+            let target = if let Some(owner) = owner {
+                if owner.name == name {
+                    Some(owner.id())
+                } else {
+                    owner.dependencies.get(&name).cloned()
+                }
+            } else {
+                let importer = lock
+                    .importers
+                    .iter()
+                    .filter(|(path, _)| base.starts_with(self.root.join(path)))
+                    .max_by_key(|(path, _)| path.len());
+                importer.and_then(|(_, root)| root.dependencies.get(&name).cloned())
+            };
+            let id = target.ok_or_else(|| FerriteError::Resolve(format!(
+                "no locked dependency edge for `{name}` from {}; run ferrite install to record importer dependencies",
+                base.display()
+            )))?;
+            let dir = self.npm_store.join(&id);
+            if !dir.join("package.json").exists() {
+                return Err(FerriteError::Resolve(format!(
+                    "locked package {id} is missing; run ferrite install --frozen-lockfile"
+                )));
+            }
+            return self.resolve_in_package(&dir, &name, &subpath, query, true);
+        }
+        // Legacy manually populated stores remain usable only when unambiguous.
+        if let Some(dir) = self.find_store_package(&name)? {
             return self.resolve_in_package(&dir, &name, &subpath, query, true);
         }
         // node_modules fallback (compatibility).
@@ -309,20 +353,32 @@ impl Resolver {
     }
 
     /// Find an installed package in the Ferrite store.
-    pub(crate) fn find_store_package(&self, name: &str) -> Option<PathBuf> {
-        // Layout: `.ferrite/npm/packages/<name>@<version>/`.
-        let entries = std::fs::read_dir(&self.npm_store).ok()?;
-        let mut best: Option<(SemverLikeKey, PathBuf)> = None;
-        for entry in entries.flatten() {
-            let file_name = entry.file_name().to_string_lossy().into_owned();
-            if let Some(rest) = file_name.strip_prefix(&format!("{name}@")) {
-                let key = semver_like_key(rest);
-                if best.as_ref().is_none_or(|(prev, _)| key > *prev) {
-                    best = Some((key, entry.path()));
-                }
-            }
+    pub(crate) fn find_store_package(&self, name: &str) -> Result<Option<PathBuf>> {
+        let (namespace, leaf) = name
+            .rsplit_once('/')
+            .map_or((self.npm_store.clone(), name), |(scope, leaf)| {
+                (self.npm_store.join(scope), leaf)
+            });
+        let Ok(entries) = std::fs::read_dir(namespace) else {
+            return Ok(None);
+        };
+        let mut matches: Vec<_> = entries
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(&format!("{leaf}@"))
+                    && entry.path().join("package.json").is_file()
+            })
+            .map(|entry| entry.path())
+            .collect();
+        matches.sort();
+        match matches.len() {
+            0 => Ok(None),
+            1 => Ok(matches.pop()),
+            _ => Err(FerriteError::Resolve(format!("multiple versions of {name} exist without an importer lock edge; run ferrite install instead of selecting an arbitrary version"))),
         }
-        best.map(|(_, path)| path)
     }
 
     /// Finalize a project file resolution.

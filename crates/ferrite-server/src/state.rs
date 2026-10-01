@@ -164,15 +164,17 @@ impl DevServer {
         let container = PluginContainer::new(plugins, mode);
         container.hook_config_resolved(&config).await?;
         let compiler = compiler_for_engine(&config.compiler.engine)?;
-        let client_resolver = Resolver::for_environment(
+        let mut client_resolver = Resolver::for_environment(
             config.root.clone(),
             &config.resolve,
             &EnvironmentKind::Client,
         );
-        let ssr_resolver =
+        let mut ssr_resolver =
             Resolver::for_environment(config.root.clone(), &config.resolve, &EnvironmentKind::Ssr);
         let env_vars = load_env_files(&config.root, &config.mode, &config.env.prefix);
         let mode_name = config.mode.clone();
+        client_resolver.lockfile = config.lockfile();
+        ssr_resolver.lockfile = config.lockfile();
         let inner = Arc::new(DevServerInner {
             config,
             graph: ModuleGraph::new(),
