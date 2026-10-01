@@ -117,10 +117,24 @@ Six added unit groups bring the unit inventory to 206. The 54 focused native
 groups passed, including page/locator alias and parallel Missing generation;
 22 font/path/artifact/polling groups replayed on final source. Workers never
 capture whole SnapshotOptions, whose masks
-can own locators/pages. Continue B10 with diagnostic rendering/publication and
-final complete phase verification. For diagnostics, separate
-data rendering/staging from current-step and weak-attempt publication; the
-existing attachment lifecycle guard must not block attempt sealing on worker I/O.
+can own locators/pages. Verified diagnostic increment `2c042e1` now shares immutable
+buffers, moves diff rendering and chunked attachment writes into data-only workers,
+and installs/publishes in the foreground under a short weak-attempt lifecycle guard.
+Matching/update retain their assertion clock; final failure diagnostics share one
+additional five-second clock, bounded by enclosing step/test waits and cancellation.
+External filename winners survive; expired/sealed publication and the 1,024-name
+collision boundary refuse installation and remove temporary handles. Two added
+unit groups and the expanded real sink regression bring the unit inventory to 208.
+All 54 focused native groups, four doctests and 28 CLI/config checks passed
+(294 combined), along with strict Clippy, formatting and matrix/link validation.
+The initial broader audit passed 24 remainder targets, then reproduced a native
+large-console hang from undrained browser output pipes. Verified lifecycle fix
+`ade139b` continuously drains both streams with a 4-KiB stderr tail, retains
+readers through shutdown and aborts them without native-owner retention. All
+211 units, seven native console/ownership groups and strict Clippy/format checks
+passed. Complete phase gates are now rerunning on this source: the 54 focused
+native groups plus all 27 remainder targets. B10 remains unchecked until that
+audit finishes; G04 still covers the wider final lifecycle review.
 Final-only deferred diagnostics for failing outer generic polls are now
 implemented, including retry/soft/nested/parallel ownership and visible I/O failures.
 The 12 actual pinned screenshot/toPass cases document upstream intermediate image
@@ -942,10 +956,14 @@ their dependencies are ready. References include
   Changed comparisons, non-overwriting Missing generation/matching race winners,
   writable permissions and existing/dangling aliases are verified by six more
   unit groups and one added page/locator/parallel native path group. Diagnostic
-  work still needs the clock/filesystem audit; opaque phases and queued input memory
-  are not hard bounded. Final complete phase gates are still required.
-  Latest focused increment gates passed: 206 units, 54 native integrations/12
-  targets, four doctests and 28 CLI/configuration checks (292 combined), strict
+  finalization (`2c042e1`) now uses immutable buffers, data-only diff/chunked-write
+  jobs and foreground non-overwriting attachment publication under a separate
+  shared five-second clock. Sealing is excluded only during installation/metadata;
+  cancellation, expired publication, external collisions and the 1,024-name cap
+  are covered. Opaque phases and queued input memory are not hard bounded.
+  Final complete phase gates are still required.
+  Latest focused increment gates passed: 208 units, 54 native integrations/12
+  targets, four doctests and 28 CLI/configuration checks (294 combined), strict
   Clippy, formatting, regenerated matrix and local links. Font waits now follow
   owned style preparation across reachable same-origin documents, with real-
   font HTTP delivery, cancellation/restoration and animation-boundary coverage.

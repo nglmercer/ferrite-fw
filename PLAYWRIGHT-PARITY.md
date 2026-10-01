@@ -1924,3 +1924,96 @@ also passed. Matrix counts remain unchanged; 727 local Markdown links across
 the three parity documents and two reference/fixture READMEs and 655 source
 anchors validate. This is focused increment evidence, not complete phase
 verification or completed B10 parity.
+
+
+### B10 bounded failure diagnostic finalization
+
+Increment `2c042e1` makes page/locator assertion diagnostics retain shared immutable image buffers,
+rather than copying whole PNG payloads in generic probes. The private
+[diagnostic finalizer](crates/ferrite-e2e/src/snapshot_artifacts.rs) submits diff
+rendering and chunked file staging to the same two-active-callback worker gate
+as comparison/normalization/read work. Worker inputs contain bytes, paths and
+scalar tolerances; browser, context, attempt and current-step owners never cross
+that boundary. Diff rendering checks abandonment around decoding/encoding and
+every 4,096 raster pixels. Attachment staging checks around directory/file/flush
+phases and each 64-KiB write. New Unix attachments retain ordinary 0666-with-umask
+creation permissions.
+
+Matching/capture/update use the original assertion clock. Once a mismatch is
+established, diagnostics receive **one additional five-second finalization
+budget** for all image rendering, attachment staging/publication and the legacy
+baseline-adjacent `.actual.png` write. Reusing the exhausted matching clock would
+prevent timeout failures from producing their evidence. Enclosing step/test
+waits still bound the entire assertion and can drop finalization earlier; page/
+context disposal, transport disconnection and caller cancellation retain their
+operational codes. Explicit generic polling cancellation also covers final
+publication. A diagnostic budget or I/O failure adds context to the original
+Expect mismatch. No new native capture or baseline reread is performed.
+
+Only the foreground task installs staged attachments with non-overwriting
+persistence and publishes attempt/current-step metadata. A short lifecycle read
+guard excludes sealing during installation/metadata publication, without holding
+sealing off during worker rendering or chunked writes. External filename winners
+remain intact; names use the existing base/suffix pattern, with at most 1,024
+candidates before a visible diagnostic error. Ended attempts and expired
+publication refuse installation and release the temporary handle. Reporter
+callbacks run after the guard is released. The legacy actual path uses the
+baseline staging writer under the same finalization clock.
+
+Cancellation drops queued/completed results and stops subsequent worker phases;
+an in-flight codec or OS call can finish temporary work. Directories can remain,
+and OS persistence/cleanup is not a forcibly preemptible or crash-durable
+transaction. The callback limit does not bound queued input memory or blocking
+threads. Partial diagnostic bundles are possible when the clock expires or cancellation
+arrives after some images have been published. Accepted images remain owned by
+the attempt; operational errors received before the mismatch do not start
+diagnostic work. Final-only completed-probe, nested/soft/retry/
+parallel ownership and portable-copy policy remain unchanged. Standalone
+synchronous PNG/text helpers and generic TestInfo attachments retain their
+existing synchronous contracts.
+
+Added unit groups pause real diff raster work and a real attachment write after
+64 KiB, prove the single-thread async timer returns while the worker is paused,
+and verify resumed work stops with no remaining temporary file. Large non-Send
+values remain boxed through generic finalization, dropped inputs release their
+owners, and all phases share one diagnostic clock. The real sink test additionally
+covers an external collision, expired publication, the 1,024-candidate boundary,
+sealing after staging and weak-owner release. All 208 units passed with default
+parallel execution; 54 focused native groups on required Chrome/Firefox, four
+doctests and 28 CLI/configuration checks passed (294 combined). Strict all-target
+Clippy, package formatting, regenerated matrix and 728 local links/655 source
+anchors passed. Complete phase verification is in progress; B10 remains unchecked
+until that audit is recorded.
+
+
+### G04 partial: continuously drain owned browser process output
+
+The first B10 broad audit passed 24 remainder integration targets before
+`native_preview_caps_and_remote_references_are_explicit_after_disposal` timed
+out in CDP Runtime.evaluate. The unchanged isolated case reproduced the same
+30-second timeout. Launched Chromium and Firefox both used piped stdout/stderr,
+but only startup-exit stderr was read; normal operation left the pipes unread.
+Headless Shell's large console output therefore blocked the launched process.
+The unchanged 90-argument, 5,000-emoji payload now completes after `ade139b`.
+No assertion, payload, preview cap or timeout was relaxed.
+
+The private [process output guard](crates/ferrite-e2e/src/process_output.rs) starts
+two readers immediately after spawn, discards stdout and retains only the last
+4 KiB of stderr in a bounded byte deque. Startup-exit diagnostics wait at most
+500 ms for final bytes/EOF and keep a lossy UTF-8, at-most-five-line summary.
+Readers own streams and data only. The launched browser owns their guard and
+retains it through graceful shutdown/final-owner release, then aborts pending
+readers even if descendants keep inherited pipe descriptors open. Attached
+remote browsers have no child-output guard. Public launch options remain the
+same; no stdout/stderr event API was added.
+
+Two reader unit groups verify simultaneous writes far above a 64-byte pipe's
+capacity, bounded retention and pending-reader release without EOF. A real Unix
+child-process launch group writes 256 KiB to each stream before exiting, on both
+launch paths, and verifies the retained startup marker and bounded failure.
+All 211 units passed with default parallel execution. All three native structured
+console and four ownership groups passed with required Headless Shell 153.0.8010.12
+and Firefox 157.0, including last-owner process/profile release, dropped/shared
+close, persistent profiles, remote ownership and disconnection. Strict all-target
+Clippy and formatting passed. The complete B10 phase is rerunning after this
+cross-cutting lifecycle fix; B10 and the wider G04 audit remain open.

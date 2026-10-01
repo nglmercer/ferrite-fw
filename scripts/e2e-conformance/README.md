@@ -480,3 +480,14 @@ completed mismatch. Nested failures transfer to their parent's collector, and
 report copies belong to the final outer step/attempt. Native timeout/no-capture
 errors attach no failure images. This bounded final-only policy differs from the
 pinned upstream attachment history; its mappings remain Partial.
+
+
+Ferrite diagnostic finalization (`2c042e1`) uses shared immutable buffers and
+bounded worker rendering/chunked staging. Matching and baseline updates retain
+the assertion clock; final failure publication receives one additional five-second
+budget, shared across all images and the legacy actual-file write and subject to
+enclosing step/test deadlines and caller cancellation. Foreground publication
+checks expiry and the weak attempt's sealing state; workers cannot install report
+images. Images accepted before interruption remain owned by the attempt, so a
+partially published bundle is possible. This does not add captures or baseline
+rereads, change final-only probe selection, or imply hard-preemptible codec/OS work.
