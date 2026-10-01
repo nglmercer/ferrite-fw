@@ -651,6 +651,24 @@ impl PageExpect {
 
     /// Assert the accessibility snapshot equals `expected` exactly.
     pub async fn aria_snapshot(&self, expected: &str) -> E2eResult<()> {
+        self.aria_snapshot_options(expected, None).await
+    }
+
+    /// Assert exact bounded Ferrite ARIA text with the same options as capture.
+    pub async fn aria_snapshot_with(
+        &self,
+        expected: &str,
+        options: crate::AriaSnapshotOptions,
+    ) -> E2eResult<()> {
+        options.json()?;
+        self.aria_snapshot_options(expected, Some(options)).await
+    }
+
+    async fn aria_snapshot_options(
+        &self,
+        expected: &str,
+        options: Option<crate::AriaSnapshotOptions>,
+    ) -> E2eResult<()> {
         self.page
             .auto_step(
                 "expect.aria_snapshot",
@@ -666,7 +684,10 @@ impl PageExpect {
                             let page = page.clone();
                             let expected = expected.clone();
                             async move {
-                                let actual = match page.aria_snapshot().await {
+                                let actual = match match options {
+                                    Some(options) => page.aria_snapshot_with(options).await,
+                                    None => page.aria_snapshot().await,
+                                } {
                                     Ok(actual) => actual,
                                     Err(error) => return Ok(Some(error.to_string())),
                                 };
@@ -862,13 +883,34 @@ impl LocatorExpect {
 
     /// Assert the element's indented accessibility tree.
     pub async fn aria_snapshot(&self, expected: &str) -> E2eResult<()> {
+        self.aria_snapshot_options(expected, None).await
+    }
+
+    /// Assert exact bounded Ferrite ARIA text with the same options as capture.
+    pub async fn aria_snapshot_with(
+        &self,
+        expected: &str,
+        options: crate::AriaSnapshotOptions,
+    ) -> E2eResult<()> {
+        options.json()?;
+        self.aria_snapshot_options(expected, Some(options)).await
+    }
+
+    async fn aria_snapshot_options(
+        &self,
+        expected: &str,
+        options: Option<crate::AriaSnapshotOptions>,
+    ) -> E2eResult<()> {
         self.locator
             .diagnostic_step(
                 format!("expect.aria_snapshot {}", self.locator.selector()),
                 crate::StepCategory::Assertion,
                 async {
                     self.satisfies("ARIA snapshot", |locator| async move {
-                        Ok(locator.aria_snapshot().await? == expected)
+                        Ok(match options {
+                            Some(options) => locator.aria_snapshot_with(options).await?,
+                            None => locator.aria_snapshot().await?,
+                        } == expected)
                     })
                     .await
                 },

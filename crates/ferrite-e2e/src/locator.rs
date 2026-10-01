@@ -1076,6 +1076,52 @@ impl Locator {
         .await
     }
 
+    /// Bounded DOM tree rooted at this element; boxes use its own frame viewport.
+    pub async fn aria_snapshot_json_with(
+        &self,
+        options: crate::AriaSnapshotOptions,
+    ) -> E2eResult<Value> {
+        let options = options.json()?;
+        self.diagnostic_step(
+            format!("locator.aria_snapshot_json {}", self.selector.raw()),
+            crate::StepCategory::Action,
+            async {
+                self.page
+                    .run_operation(crate::operation::Deadline::new(self.page.timeout()).run(
+                        "bounded ARIA snapshot",
+                        async {
+                            let text: String = self
+                                .evaluate(&format!(
+                                    "el => JSON.stringify(({}).ariaBounded(el, {options}))",
+                                    include_str!("dom.js")
+                                ))
+                                .await?;
+                            serde_json::from_str(&text).map_err(|error| {
+                                crate::E2eError::Config(format!(
+                                    "invalid ARIA snapshot JSON: {error}"
+                                ))
+                            })
+                        },
+                    ))
+                    .await
+            },
+        )
+        .await
+    }
+
+    /// Bounded exact indented text, including selected boxes/state and truncation markers.
+    pub async fn aria_snapshot_with(
+        &self,
+        options: crate::AriaSnapshotOptions,
+    ) -> E2eResult<String> {
+        let options = options.json()?;
+        self.diagnostic_step(format!("locator.aria_snapshot {}", self.selector.raw()), crate::StepCategory::Action, async {
+            self.page.run_operation(crate::operation::Deadline::new(self.page.timeout()).run("bounded ARIA snapshot", async {
+                self.evaluate(&format!("el => {{ const f = {}; return f.render(f.ariaBounded(el, {options})).join('\\n'); }}", include_str!("dom.js"))).await
+            })).await
+        }).await
+    }
+
     /// Wait for an element-scoped function to become truthy.
     pub async fn wait_for_function(&self, function: &str, timeout: Duration) -> E2eResult<()> {
         self.diagnostic_step(
@@ -3165,7 +3211,9 @@ mod tests {
         let mut last = base.clone();
         last.pick = Pick::Last;
         assert!(last.resolve_js().contains(".slice(-1)"));
-        assert!(!base.resolve_js().contains(".slice("));
+        // Name truncation inside the shared DOM helper also uses String.slice.
+        // A pick slices the parenthesized selector result.
+        assert!(!base.resolve_js().contains(").slice("));
     }
 
     #[test]

@@ -4918,6 +4918,38 @@ impl Page {
             .await
     }
 
+    /// Bounded DOM snapshot with optional state and frame-local rounded boxes.
+    pub async fn aria_snapshot_json_with(
+        &self,
+        options: crate::AriaSnapshotOptions,
+    ) -> E2eResult<Value> {
+        let options = options.json()?;
+        self.driver
+            .run(async {
+                let text = self
+                    .evaluate_string(&format!(
+                        "JSON.stringify(({}).ariaBounded(document.body, {options}))",
+                        include_str!("dom.js")
+                    ))
+                    .await?;
+                serde_json::from_str(&text).map_err(|error| {
+                    crate::E2eError::Config(format!("invalid ARIA snapshot JSON: {error}"))
+                })
+            })
+            .await
+    }
+
+    /// Bounded indented snapshot. This is exact Ferrite text, not YAML pattern syntax.
+    pub async fn aria_snapshot_with(
+        &self,
+        options: crate::AriaSnapshotOptions,
+    ) -> E2eResult<String> {
+        let options = options.json()?;
+        self.driver.run(async {
+            self.evaluate_string(&format!("(() => {{ const f = {}; return f.render(f.ariaBounded(document.body, {options})).join('\\n'); }})()", include_str!("dom.js"))).await
+        }).await
+    }
+
     /// Download watcher without the event emission (shared implementation).
     async fn wait_for_download_in(&self, dir: &Path, timeout: Duration) -> E2eResult<PathBuf> {
         self.driver

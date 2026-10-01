@@ -12,11 +12,14 @@ The initial inventory and existing changes were committed in `d93365a`; this
 report describes the subsequent practical parity implementation. The original
 findings remain available in that commit's history.
 
-Latest completed phase: **B10**, verified by 457 E2E and 28 CLI/configuration
-checks (485 combined): 211 units, 242 integrations/all 38 targets and four
-doctests. All complete gates replayed after `ade139b`; B18 is next. Earlier B10
-increment sections below retain their historical checkpoint evidence; the final
-phase closure at the end supersedes their then-open status.
+Latest completed phase: **B18**, with 219 scoped checks (212 units, three
+bounded-ARIA native groups and four legacy browser groups), requiring both
+Chromium and Firefox. Strict all-target Clippy, package formatting, generated
+matrix and local documentation links passed. B11 is next. B10's preceding
+complete gates remain 457 E2E and 28 CLI/configuration checks (485 combined),
+including all 38 then-existing integration targets. B18 adds a 39th target;
+this increment does not claim a new complete all-target integration replay.
+Earlier increment sections retain historical checkpoint evidence.
 
 The [complete API matrix](PLAYWRIGHT-API-MATRIX.md) covers **73 classes and
 1,018 documented JavaScript-applicable members**, including browser, test,
@@ -2065,3 +2068,63 @@ Current public entry points and input-struct migration notes are documented.
 B18's 26 actual pinned JSON/text option observations are committed as `ef95764`;
 its Rust implementation remains next. The wider G04 audit and 12 other tasks are
 still open; the full TODO objective is not complete.
+
+
+## B18 bounded DOM ARIA snapshots
+
+`AriaSnapshotOptions` and Page/Locator `aria_snapshot_with` and
+`aria_snapshot_json_with` add opt-in bounded snapshots. PageExpect/LocatorExpect
+`aria_snapshot_with(expected, options)` retry against the same exact text output.
+Existing no-options methods retain their historical behavior. See
+[options](crates/ferrite-e2e/src/aria_options.rs),
+[walker](crates/ferrite-e2e/src/dom.js) and
+[native checks](crates/ferrite-e2e/tests/aria_options.rs).
+
+Positive depth counts role nodes with the selected root at zero; transparent
+wrappers consume no depth. Zero/negative depth applies no requested depth limit.
+Requested depth omits descendants. The bounded methods always enforce a safety
+role depth of 60, with defaults of 1,000 role nodes, 10,000 visited DOM nodes and
+4,096 UTF-16 code units per name. Budgets must be positive JavaScript-safe
+integers. Safety exhaustion appends an explicit `truncated` node identifying the
+limit (synthetic markers are additional to the role-node budget); name truncation appends an ellipsis without splitting a surrogate pair.
+Traversal is iterative and indexes light/shadow children lazily. These are
+traversal/output limits, not preemption of native layout, hidden-ancestor checks
+or accessible-name computation. Existing operation deadlines and cancellation
+still bound the Rust wait.
+
+`boxes: true` includes rounded `{x,y,width,height}` CSS pixels in the element's
+own frame viewport, including scroll offsets. Text renders these as
+`[box={...}]`. `states: false` omits supported checked/expanded/pressed/selected/
+disabled and heading-level fields; default true retains them, with native
+indeterminate inputs reported as `mixed`. Same-origin frame roots use their own
+realm for visibility and label references. Automatic iframe expansion, cross-
+origin accessibility trees, upstream AI modes, static text fragments, full
+accessible-name conformance and YAML pattern matching remain deferred. This is
+still a DOM approximation, with exact Ferrite text syntax.
+
+The 26 actual pinned Playwright cases in
+[the reference corpus](scripts/e2e-conformance/aria-options-reference.json)
+provided role-depth, state and box observations. A 100-role native tree exposed
+Firefox BiDi's nested remote-value timeout; bounded JSON now travels as a string
+and is decoded in Rust, avoiding that remote serialization path. Both capture
+formats retain the same safety marker and public JSON value shape.
+
+Example (the same options apply to capture and assertion):
+
+```rust,ignore
+let options = ferrite_e2e::AriaSnapshotOptions {
+    depth: 2,
+    boxes: true,
+    ..Default::default()
+};
+let snapshot = page.locator("main").aria_snapshot_with(options).await?;
+page.locator("main").expect().aria_snapshot_with(&snapshot, options).await?;
+```
+
+B18 validation: all 212 units, three bounded-ARIA native groups and four legacy
+browser groups passed (219 scoped checks). Both engines were required. Native
+checks include cancellation, a missing-target operation deadline and Unicode
+truncation. Strict all-target Clippy and package formatting passed. The generated
+inventory retains 635 Partial/327 Missing/15 Equivalent/41 Idiomatic entries;
+733 local links were checked across the parity/TODO documents and conformance
+README. B11 and the wider G04 audit remain open.

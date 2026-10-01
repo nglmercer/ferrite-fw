@@ -273,6 +273,12 @@ put('TestOptions','launchOptions','Project.launch_options','Dedicated project la
 put('TestOptions','contextOptions','Project.context_options','Isolated context per attempt, runner defaults and per-project overrides; no full named-fixture test.use model.')
 put('Page','ariaSnapshot','Page.aria_snapshot','Structured role/name/state DOM approximation, including open shadow roots; no full ARIA/YAML matching, mode/depth/boxes options.')
 put('Page','ariaSnapshotJSON','Page.aria_snapshot_json','Nested role/name/state DOM tree without name/node truncation; not the complete accessibility algorithm.')
+for cls, target in [('Page', 'Page'), ('Locator', 'Locator')]:
+ for member, method in [('ariaSnapshot', 'aria_snapshot_with'), ('ariaSnapshotJSON', 'aria_snapshot_json_with')]:
+  put(cls, member, target+'.'+method, 'Opt-in bounded DOM approximation: role depth, rounded frame-local boxes, optional supported state, explicit traversal/name budgets and deterministic safety markers. Legacy methods retain unbounded output. Native name/layout work is not preemptible; text fragments, full accessible names, AI modes and YAML syntax differ.')
+for cls, target in [('PageAssertions', 'PageExpect'), ('LocatorAssertions', 'LocatorExpect')]:
+ put(cls, 'toMatchAriaSnapshot', target+'.aria_snapshot_with', 'Retrying exact Ferrite text with bounded capture options; DOM approximation and truncation markers, no upstream YAML patterns or AI modes.')
+
 put('Page','addLocatorHandler','Page.add_locator_handler_with','Visibility-based overlay handlers run before actions and state/custom assertions; no full dismissal/noWaitAfter semantics.')
 put('Page','waitForFunction','Page.wait_for_function_handle','JSON argument, native animation-frame/interval polling and retained truthy result; JSON helper supports frames. Frame remote handles and arbitrary argument serialization remain unsupported. Legacy expression helper returns unit.')
 put('Page','mainFrame','Page.main_frame','Dedicated asynchronous native root lookup; closed/disconnected pages fail, no fabricated root. Selector-free OOPIF traversal remains deferred.')

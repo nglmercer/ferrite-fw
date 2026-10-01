@@ -9,7 +9,7 @@
   }
   function ariaHidden(element) {
     for (let node = element; node; node = node.parentElement || node.getRootNode()?.host) {
-      const style = getComputedStyle(node);
+      const style = node.ownerDocument.defaultView.getComputedStyle(node);
       if (node.hidden || node.getAttribute('aria-hidden') === 'true' || style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return true;
     }
     return false;
@@ -24,7 +24,7 @@
     visited.add(element);
     const ids = element.getAttribute('aria-labelledby');
     if (ids) {
-      const values = ids.split(/\s+/).map(id => element.getRootNode().getElementById?.(id) || document.getElementById(id)).filter(Boolean);
+      const values = ids.split(/\s+/).map(id => element.getRootNode().getElementById?.(id) || element.ownerDocument.getElementById(id)).filter(Boolean);
       if (values.length) return normalize(values.map(node => name(node, visited)).join(' '));
     }
     if (element.hasAttribute('aria-label')) return normalize(element.getAttribute('aria-label'));
@@ -36,7 +36,7 @@
   }
   function description(element) {
     const ids = element.getAttribute('aria-describedby');
-    if (ids) return normalize(ids.split(/\s+/).map(id => (element.getRootNode().getElementById?.(id) || document.getElementById(id))?.textContent || '').join(' '));
+    if (ids) return normalize(ids.split(/\s+/).map(id => (element.getRootNode().getElementById?.(id) || element.ownerDocument.getElementById(id))?.textContent || '').join(' '));
     return normalize(element.getAttribute('aria-description') || element.getAttribute('title'));
   }
   function role(element) {
@@ -102,12 +102,73 @@
     if (/^h[1-6]$/.test(root.tagName.toLowerCase())) node.level = +root.tagName[1];
     return [node];
   }
+  function ariaBounded(root, options) {
+    const result = [], stack = [{ element: root, output: result, depth: 0 }];
+    let visits = 0, nodes = 0;
+    const truncate = (output, reason) => output.push({role: 'truncated', name: reason});
+    while (stack.length) {
+      if (stack[stack.length - 1].continuation) {
+        const next = stack[stack.length - 1];
+        const length = (next.children?.length || 0) + (next.shadow?.length || 0);
+        if (next.index >= length) { stack.pop(); continue; }
+        const index = next.index++;
+        const child = index < (next.children?.length || 0) ? next.children[index] : next.shadow[index - (next.children?.length || 0)];
+        stack.push({element: child, output: next.output, depth: next.depth});
+        continue;
+      }
+      const { element, output, depth } = stack.pop();
+      if (++visits > options.maxDomNodes) { truncate(output, 'DOM visit limit'); break; }
+      const isElement = element.nodeType === 1;
+      if (isElement && ariaHidden(element)) continue;
+      const elementRole = isElement ? role(element) : '';
+      const hasRole = elementRole && elementRole !== 'none' && elementRole !== 'presentation';
+      let childrenOutput = output, childDepth = depth;
+      if (hasRole) {
+        if (options.depth > 0 && depth > options.depth) continue;
+        if (depth > 60) { truncate(output, 'Safety depth limit'); continue; }
+        if (++nodes > options.maxNodes) { truncate(output, 'Role node limit'); break; }
+        const fullName = name(element);
+        let end = options.maxNameChars;
+        if (end < fullName.length && /[\uD800-\uDBFF]/.test(fullName[end - 1])) end--;
+        const node = {role: elementRole, name: fullName.length > options.maxNameChars ? fullName.slice(0, end) + '…' : fullName};
+        output.push(node);
+        if (options.states) {
+          if (disabled(element)) node.disabled = true;
+          for (const key of ['checked', 'expanded', 'pressed', 'selected']) {
+            const value = element.getAttribute('aria-' + key);
+            if (value != null) node[key] = value === 'true' ? true : value === 'false' ? false : value;
+          }
+          if (element.matches('input[type=checkbox],input[type=radio]')) node.checked = element.indeterminate ? 'mixed' : element.checked;
+          if (/^h[1-6]$/.test(element.tagName.toLowerCase())) node.level = +element.tagName[1];
+        }
+        if (options.boxes) {
+          const rect = element.getBoundingClientRect();
+          node.box = Object.fromEntries(['x', 'y', 'width', 'height'].map(key => [key, Math.round(rect[key])]));
+        }
+        childrenOutput = node.children = [];
+        childDepth = depth + 1;
+        if (options.depth > 0 && depth >= options.depth) continue;
+      }
+      // Index children lazily: wide DOMs cannot allocate an unbounded traversal stack.
+      const children = element.children, shadow = element.shadowRoot?.children;
+      stack.push({ continuation: true, children, shadow, index: 0, output: childrenOutput, depth: childDepth });
+    }
+    // Remove empty child arrays, keeping the existing structured shape.
+    const pending = [...result];
+    while (pending.length) {
+      const node = pending.pop();
+      if (node.children?.length) pending.push(...node.children);
+      else delete node.children;
+    }
+    return result;
+  }
   function render(nodes, depth = 0) {
     return nodes.flatMap(node => {
       let line = '  '.repeat(depth) + '- ' + node.role + (node.name ? ' ' + JSON.stringify(node.name) : '');
       for (const key of ['level', 'checked', 'expanded', 'pressed', 'selected', 'disabled']) if (key in node) line += ' [' + key + (node[key] === true ? '' : '=' + node[key]) + ']';
+      if (node.box) line += ' [box=' + JSON.stringify(node.box) + ']';
       return [line, ...(node.children ? render(node.children, depth + 1) : [])];
     });
   }
-  return { normalize, query, hidden, ariaHidden, disabled, name, description, role, matches, box, receives, aria, render };
+  return { normalize, query, hidden, ariaHidden, disabled, name, description, role, matches, box, receives, aria, ariaBounded, render };
 })()

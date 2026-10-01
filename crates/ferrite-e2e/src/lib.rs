@@ -40,6 +40,7 @@
 mod action_options;
 mod api;
 mod api_cookies;
+mod aria_options;
 mod assertion_options;
 mod bidi;
 mod browser;
@@ -89,6 +90,7 @@ pub use action_options::{ActionOptions, ActionPosition, DragOptions, KeyboardMod
 pub use api::{
     ApiClient, ApiClientOptions, ApiCredentialsSend, ApiRequestOptions, ApiResponse, MultipartField,
 };
+pub use aria_options::AriaSnapshotOptions;
 pub use assertion_options::{
     CheckedOptions, MatchOptions, StateAssertion, TextAssertionOptions, TextMatcher,
 };

@@ -520,6 +520,10 @@ retain both raw getBoundingClientRect values and snapshot boxes, with explicit
 rounding checks. Engine-specific font/layout differences remain in the artifact;
 this does not claim identical pixels or complete accessible-name semantics.
 
-This is reference evidence for B18, whose Rust options and bounded assertions
-are still pending. Existing Rust DOM approximation and exact-text assertions are
-not equivalent to this complete upstream tree or its YAML representation.
+This corpus informed the opt-in Rust `AriaSnapshotOptions` capture/assertion
+methods. Native `tests/aria_options.rs` checks role-depth trimming, shadow and
+same-origin frame roots, state omission/mixed inputs, rounded fractional/scroll
+boxes, deterministic visit/node/depth/name limits and exact-text assertion
+consumption. Rust remains a DOM approximation with explicit safety markers;
+it does not reproduce the complete upstream tree, text fragments or YAML syntax.
+The `states` and safety-budget fields are Rust conveniences, not upstream options.
