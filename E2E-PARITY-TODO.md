@@ -605,6 +605,15 @@ Work in [the audit generator](scripts/playwright-parity/build_matrix.py),
   scoped checks), strict Clippy/formatting. Cleanup ACK faults, newly created
   descendant observation races, declarative rollback and the full replay remain
   under audit.
+  Further progress: declarative rule generations roll back only their own
+  replacement, preserve newer commits, and prevent removal/disposal from being
+  undone by late completion. Weak runtime bindings also refresh initializing
+  pages; matcher and engine validation precede publication, including empty
+  contexts.
+  [Evidence](PLAYWRIGHT-PARITY.md#g04-audit-progress--declarative-rule-replacement-rollback):
+  284 units, nine mandatory two-engine native groups and four doctests (297
+  scoped checks), strict Clippy/formatting. The other audit cases and complete
+  integration/backlog replay remain open.
 
 
 

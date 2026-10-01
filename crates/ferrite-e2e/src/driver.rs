@@ -2096,17 +2096,7 @@ impl Driver {
         &self,
         configuration: &crate::routing::RouteConfiguration,
     ) -> E2eResult<()> {
-        if matches!(self, Self::Bidi(_)) {
-            for rule in configuration.rules() {
-                if matches!(rule.action, RouteAction::ContinueWith { url: Some(_), .. }) {
-                    return Err(E2eError::Config("continue_with url overrides are not supported on Firefox (BiDi aborts the redirected request)".into()));
-                }
-                if matches!(rule.action, RouteAction::ModifyResponse { .. }) {
-                    return Err(E2eError::Config("modify_response is not supported on Firefox (BiDi provideResponse overrides are request-phase-only)".into()));
-                }
-            }
-        }
-        Ok(())
+        configuration.validate_for(matches!(self, Self::Bidi(_)))
     }
     pub(crate) async fn start_routing(
         &self,

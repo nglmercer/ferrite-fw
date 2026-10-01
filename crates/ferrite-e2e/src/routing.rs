@@ -5,7 +5,7 @@ use crate::{
 };
 use futures::FutureExt;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     panic::AssertUnwindSafe,
     sync::{
         atomic::{AtomicBool, AtomicU32, Ordering},
@@ -52,6 +52,196 @@ impl UnrouteOptions {
         self.cancellation = Some(token);
         self
     }
+}
+
+// Replacements are ordered by invocation, rather than completion. A cancelled
+// older operation cannot restore its snapshot over a newer accepted replacement.
+#[derive(Default)]
+pub(crate) struct RuleStore {
+    base: Vec<RouteRule>,
+    committed: u64,
+    next: u64,
+    pending: BTreeMap<u64, Vec<RouteRule>>,
+    observers: Vec<RuleObserver>,
+}
+#[derive(Clone)]
+struct RuleObserver {
+    runtime: std::sync::Weak<RouteRuntime>,
+    local: std::sync::Weak<Mutex<RuleStore>>,
+    context: std::sync::Weak<Mutex<RuleStore>>,
+}
+pub(crate) fn bind_rule_runtime(
+    runtime: &Arc<RouteRuntime>,
+    local: &Arc<Mutex<RuleStore>>,
+    context: &Arc<Mutex<RuleStore>>,
+) {
+    let observer = RuleObserver {
+        runtime: Arc::downgrade(runtime),
+        local: Arc::downgrade(local),
+        context: Arc::downgrade(context),
+    };
+    for store in [local, context] {
+        let mut store = store.lock().unwrap_or_else(|e| e.into_inner());
+        store
+            .observers
+            .retain(|observer| observer.runtime.strong_count() > 0);
+        if !store
+            .observers
+            .iter()
+            .any(|existing| existing.runtime.ptr_eq(&observer.runtime))
+        {
+            store.observers.push(observer.clone());
+        }
+    }
+}
+impl RuleStore {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.pending
+            .last_key_value()
+            .map(|(_, rules)| rules)
+            .unwrap_or(&self.base)
+            .is_empty()
+    }
+    pub(crate) fn clear(&mut self) {
+        self.base.clear();
+        self.pending.clear();
+        self.observers.clear();
+        self.committed = self.next;
+    }
+    pub(crate) fn snapshot(&self) -> Vec<RouteRule> {
+        self.pending
+            .last_key_value()
+            .map(|(_, rules)| rules)
+            .unwrap_or(&self.base)
+            .clone()
+    }
+    fn begin(&mut self, rules: Vec<RouteRule>) -> E2eResult<u64> {
+        if self.pending.len() >= 256 {
+            return Err(E2eError::Config(
+                "256 pending route rule replacements; finish or cancel earlier calls".into(),
+            ));
+        }
+        // Compile before publishing: rollback always has valid matcher snapshots.
+        routing_matchers(
+            rules
+                .iter()
+                .map(|rule| (rule.pattern.as_str(), rule.matcher.as_ref())),
+        )?;
+        self.next = self
+            .next
+            .checked_add(1)
+            .ok_or_else(|| E2eError::Config("route rule generation exhausted".into()))?;
+        self.pending.insert(self.next, rules);
+        Ok(self.next)
+    }
+    fn commit(&mut self, generation: u64) {
+        if let Some(rules) = self.pending.remove(&generation) {
+            if generation > self.committed {
+                self.base = rules;
+                self.committed = generation;
+                self.pending.retain(|id, _| *id > generation);
+            }
+        }
+    }
+    pub(crate) fn remove(&mut self, predicate: impl Fn(&RouteRule) -> bool) -> E2eResult<usize> {
+        let mut rules = self.snapshot();
+        let before = rules.len();
+        rules.retain(|rule| !predicate(rule));
+        // Removal is itself a newer committed mutation, including a zero-match
+        // removal: dropping an older installation must not resurrect removed rules.
+        self.next = self
+            .next
+            .checked_add(1)
+            .ok_or_else(|| E2eError::Config("route rule generation exhausted".into()))?;
+        self.committed = self.next;
+        self.base = rules;
+        self.pending.clear();
+        Ok(before - self.base.len())
+    }
+}
+
+pub(crate) struct RuleReplacement {
+    storage: Arc<Mutex<RuleStore>>,
+    generation: u64,
+    committed: bool,
+}
+impl RuleReplacement {
+    pub(crate) fn new(storage: Arc<Mutex<RuleStore>>, rules: Vec<RouteRule>) -> E2eResult<Self> {
+        let generation = storage
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .begin(rules)?;
+        Ok(Self {
+            storage,
+            generation,
+            committed: false,
+        })
+    }
+    pub(crate) fn commit(mut self) {
+        self.storage
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .commit(self.generation);
+        self.committed = true;
+    }
+}
+impl Drop for RuleReplacement {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        self.storage
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pending
+            .remove(&self.generation);
+        refresh_rule_observers(&self.storage);
+    }
+}
+pub(crate) fn refresh_rule_observers(storage: &Mutex<RuleStore>) {
+    let observers = {
+        let mut storage = storage.lock().unwrap_or_else(|e| e.into_inner());
+        storage
+            .observers
+            .retain(|observer| observer.runtime.strong_count() > 0);
+        storage.observers.clone()
+    };
+    for observer in observers {
+        if let (Some(runtime), Some(local), Some(context)) = (
+            observer.runtime.upgrade(),
+            observer.local.upgrade(),
+            observer.context.upgrade(),
+        ) {
+            restore_rule_profile(&runtime, &local, &context);
+        }
+    }
+}
+pub(crate) fn restore_rule_profile(
+    runtime: &RouteRuntime,
+    local: &Mutex<RuleStore>,
+    context: &Mutex<RuleStore>,
+) {
+    let local = local.lock().unwrap_or_else(|e| e.into_inner());
+    let context = context.lock().unwrap_or_else(|e| e.into_inner());
+    let mut rules = local.snapshot();
+    rules.extend(context.snapshot());
+    // All published store entries were compiled at admission; retaining both
+    // source locks keeps rollback coherent with restart_routing publication.
+    let matchers = routing_matchers(
+        rules
+            .iter()
+            .map(|r| (r.pattern.as_str(), r.matcher.as_ref())),
+    )
+    .expect("validated stored route matchers");
+    let mut state = runtime.state.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(configuration) = &state.configuration {
+        let mut configuration = (**configuration).clone();
+        configuration.rules = rules;
+        configuration.rule_matchers = matchers;
+        state.configuration = Some(Arc::new(configuration));
+    }
+    drop(state);
+    runtime.changed.notify_one();
 }
 
 pub(crate) type PumpSlot = tokio::sync::Mutex<Option<RoutePump>>;
@@ -101,8 +291,18 @@ impl RouteConfiguration {
             handlers,
         })
     }
-    pub(crate) fn rules(&self) -> &[RouteRule] {
-        &self.rules
+    pub(crate) fn validate_for(&self, firefox: bool) -> E2eResult<()> {
+        if firefox {
+            for rule in &self.rules {
+                if matches!(rule.action, RouteAction::ContinueWith { url: Some(_), .. }) {
+                    return Err(E2eError::Config("continue_with url overrides are not supported on Firefox (BiDi aborts the redirected request)".into()));
+                }
+                if matches!(rule.action, RouteAction::ModifyResponse { .. }) {
+                    return Err(E2eError::Config("modify_response is not supported on Firefox (BiDi provideResponse overrides are request-phase-only)".into()));
+                }
+            }
+        }
+        Ok(())
     }
     fn empty(&self) -> bool {
         self.rules.is_empty() && self.handlers.is_empty()
@@ -492,6 +692,204 @@ impl Drop for HandlerInstallation {
         for page in pages {
             page.route_runtime.rollback_handler(&self.entry);
         }
+    }
+}
+
+#[cfg(test)]
+mod rule_replacement_tests {
+    use super::*;
+    fn rules(name: &str) -> Vec<RouteRule> {
+        vec![RouteRule::abort(name)]
+    }
+    fn names(store: &RuleStore) -> Vec<String> {
+        store.snapshot().iter().map(|r| r.pattern.clone()).collect()
+    }
+    fn guard(store: &Arc<Mutex<RuleStore>>, name: &str) -> RuleReplacement {
+        RuleReplacement::new(store.clone(), rules(name)).unwrap()
+    }
+    #[test]
+    fn failed_replacements_never_restore_cancelled_or_superseded_snapshots() {
+        let store = Arc::new(Mutex::new(RuleStore::default()));
+        guard(&store, "base").commit();
+        let old = guard(&store, "old");
+        let new = guard(&store, "new");
+        drop(old);
+        assert_eq!(names(&store.lock().unwrap()), ["new"]);
+        drop(new);
+        assert_eq!(names(&store.lock().unwrap()), ["base"]);
+        let old = guard(&store, "old");
+        let new = guard(&store, "new");
+        drop(new);
+        assert_eq!(names(&store.lock().unwrap()), ["old"]);
+        drop(old);
+        assert_eq!(names(&store.lock().unwrap()), ["base"]);
+    }
+    #[test]
+    fn invocation_order_wins_over_completion_order_and_later_failure_restores_accepted_rules() {
+        let store = Arc::new(Mutex::new(RuleStore::default()));
+        let old = guard(&store, "old");
+        let new = guard(&store, "new");
+        new.commit();
+        old.commit();
+        assert_eq!(names(&store.lock().unwrap()), ["new"]);
+        let old = guard(&store, "accepted");
+        let new = guard(&store, "failed");
+        old.commit();
+        assert_eq!(names(&store.lock().unwrap()), ["failed"]);
+        drop(new);
+        assert_eq!(names(&store.lock().unwrap()), ["accepted"]);
+        assert!(store.lock().unwrap().pending.is_empty());
+    }
+    #[test]
+    fn removal_and_disposal_cannot_be_undone_by_dropped_or_late_successful_replacement() {
+        let store = Arc::new(Mutex::new(RuleStore::default()));
+        guard(&store, "base").commit();
+        let pending = guard(&store, "pending");
+        assert_eq!(
+            store
+                .lock()
+                .unwrap()
+                .remove(|r| r.pattern == "pending")
+                .unwrap(),
+            1
+        );
+        drop(pending);
+        assert!(store.lock().unwrap().is_empty());
+        let pending = guard(&store, "pending");
+        assert_eq!(store.lock().unwrap().remove(|_| false).unwrap(), 0);
+        pending.commit();
+        assert_eq!(names(&store.lock().unwrap()), ["pending"]);
+        let pending = guard(&store, "disposed");
+        store.lock().unwrap().clear();
+        pending.commit();
+        assert!(store.lock().unwrap().is_empty());
+    }
+    #[tokio::test]
+    async fn dropped_future_restores_rule_matchers_without_retiring_unrelated_handlers() {
+        let local = Arc::new(Mutex::new(RuleStore::default()));
+        let context = Arc::new(Mutex::new(RuleStore::default()));
+        guard(&local, "page-base").commit();
+        guard(&context, "context-base").commit();
+        let runtime = Arc::new(RouteRuntime::default());
+        let hits = Arc::new(AtomicU32::new(3));
+        let handler = RouteHandlerEntry {
+            pattern: "**".into(),
+            matcher: None,
+            handler: Arc::new(|_| Box::pin(async { Ok(RouteAction::Fallback) })),
+            times: None,
+            hits: hits.clone(),
+        };
+        runtime.configure(RouteConfiguration::new(Vec::new(), vec![handler]).unwrap());
+        bind_rule_runtime(&runtime, &local, &context);
+        let token = CancellationToken::new();
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let work = async {
+            let _replacement = RuleReplacement::new(local.clone(), rules("abandoned")).unwrap();
+            restore_rule_profile(&runtime, &local, &context);
+            started.send(()).unwrap();
+            std::future::pending::<E2eResult<()>>().await
+        };
+        let (result, ()) = tokio::join!(token.run(work), async {
+            ready.await.unwrap();
+            token.cancel();
+        });
+        assert!(matches!(result, Err(E2eError::Cancelled(_))));
+        assert_eq!(names(&local.lock().unwrap()), ["page-base"]);
+        let state = runtime.state.lock().unwrap();
+        let configuration = state.configuration.as_ref().unwrap();
+        assert_eq!(
+            configuration
+                .rules
+                .iter()
+                .map(|r| r.pattern.as_str())
+                .collect::<Vec<_>>(),
+            ["page-base", "context-base"]
+        );
+        assert_eq!(configuration.rule_matchers.len(), 2);
+        assert_eq!(configuration.handler_matchers.len(), 1);
+        assert!(Arc::ptr_eq(&configuration.handlers[0].hits, &hits));
+        assert_eq!(hits.load(Ordering::Relaxed), 3);
+    }
+    #[test]
+    fn unregistered_runtime_receives_context_rollback_and_removal_with_aligned_matchers() {
+        let local = Arc::new(Mutex::new(RuleStore::default()));
+        let context = Arc::new(Mutex::new(RuleStore::default()));
+        let runtime = Arc::new(RouteRuntime::default());
+        bind_rule_runtime(&runtime, &local, &context);
+        guard(&local, "page-rule").commit();
+        guard(&context, "context-base").commit();
+        let pending = guard(&context, "abandoned-context");
+        runtime.configure(
+            RouteConfiguration::new(
+                vec![
+                    RouteRule::abort("page-rule"),
+                    RouteRule::abort("abandoned-context"),
+                ],
+                Vec::new(),
+            )
+            .unwrap(),
+        );
+        // No Page/context registry is involved in this runtime's initialization.
+        drop(pending);
+        let snapshot = || {
+            let state = runtime.state.lock().unwrap();
+            let configuration = state.configuration.as_ref().unwrap();
+            assert_eq!(configuration.rules.len(), configuration.rule_matchers.len());
+            configuration
+                .rules
+                .iter()
+                .map(|r| r.pattern.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(snapshot(), ["page-rule", "context-base"]);
+        assert_eq!(context.lock().unwrap().remove(|_| true).unwrap(), 1);
+        refresh_rule_observers(&context);
+        assert_eq!(snapshot(), ["page-rule"]);
+    }
+    #[test]
+    fn runtime_bindings_are_weak_and_prune_finished_initialization_metadata() {
+        let context = Arc::new(Mutex::new(RuleStore::default()));
+        let local = Arc::new(Mutex::new(RuleStore::default()));
+        let runtime = Arc::new(RouteRuntime::default());
+        let weak_local = Arc::downgrade(&local);
+        let weak_runtime = Arc::downgrade(&runtime);
+        bind_rule_runtime(&runtime, &local, &context);
+        bind_rule_runtime(&runtime, &local, &context);
+        assert_eq!(context.lock().unwrap().observers.len(), 1);
+        drop(local);
+        drop(runtime);
+        assert!(weak_local.upgrade().is_none());
+        assert!(weak_runtime.upgrade().is_none());
+        let local = Arc::new(Mutex::new(RuleStore::default()));
+        let runtime = Arc::new(RouteRuntime::default());
+        bind_rule_runtime(&runtime, &local, &context);
+        assert_eq!(context.lock().unwrap().observers.len(), 1);
+        drop(local);
+        drop(runtime);
+        refresh_rule_observers(&context);
+        assert!(context.lock().unwrap().observers.is_empty());
+    }
+
+    #[test]
+    fn pending_admission_and_generation_exhaustion_are_explicit_and_preserve_state() {
+        let mut store = RuleStore::default();
+        for _ in 0..256 {
+            store.begin(rules("pending")).unwrap();
+        }
+        assert!(matches!(
+            store.begin(rules("overflow")),
+            Err(E2eError::Config(_))
+        ));
+        assert_eq!(store.pending.len(), 256);
+        assert_eq!(names(&store), ["pending"]);
+        store.clear();
+        store.next = u64::MAX;
+        assert!(matches!(
+            store.begin(rules("overflow")),
+            Err(E2eError::Config(_))
+        ));
+        assert!(matches!(store.remove(|_| true), Err(E2eError::Config(_))));
+        assert!(store.is_empty());
     }
 }
 

@@ -2927,3 +2927,41 @@ G04 remains open. Cleanup acknowledgement failures and newly created descendant
 observation races still need the wider resource/source-loss audit; declarative
 rule replacement rollback and the complete integration replay are also pending.
 Queued Chromium cleanup is not a claim of confirmed native disposal.
+
+
+## G04 audit progress — Declarative rule replacement rollback
+
+Page and context declarative replacements now use ordered rule generations.
+Failure or dropped work removes its own pending generation, without restoring
+an obsolete whole-vector snapshot over a newer replacement. Newer committed
+replacements win even when an older call completes last; cancellation of several
+pending replacements restores the last accepted baseline. Removal and disposal
+invalidate older pending generations, preventing later completion from
+resurrecting removed rules. Admission bounds pending replacements at 256;
+generation exhaustion is an explicit configuration error.
+
+Rule sources bind weakly to each routing runtime when a Page is constructed,
+before context registration. Rollback and removal therefore update pages still
+initializing as well as registered pages, preserve page/context precedence, and
+keep compiled matcher arrays aligned. Bindings retain neither runtime nor rule
+source owners and prune expired metadata. Source locks protect snapshot and
+publication coherence; rollback refresh preserves unrelated handler state.
+No synchronous source lock crosses a native await.
+
+Capability and matcher validation precede publication. Empty Firefox contexts
+reject unsupported actions, and context routing now checks cancellation and
+transport loss even with no pages. Native regressions drop page/context rule
+installation at its first pending response, require network requests to finish,
+exercise retry, preserve accepted rules after rejection on current/future pages,
+and verify closed/empty-context control errors. Seven new unit cases cover
+replacement completion/cancellation orders, removal/disposal, runtime matcher
+restoration, initializing runtime recovery, weak ownership and bounded admission.
+
+Scoped verification passed 297 checks: 284 units, nine mandatory two-engine
+native groups (`route_lifecycle` and `har_options`), and four doctests. Strict
+Clippy, formatting and regenerated matrix/link checks passed. Matrix scope
+remains 73 classes/1,018 members: Partial650/Missing312/Equivalent15/Idiomatic41.
+This settles stored/profile rollback, not reversal of native effects already
+performed by a request. G04 remains open for cleanup acknowledgement faults,
+other source/control-error cases, redirect correlation and the full integration
+/backlog replay.

@@ -714,3 +714,102 @@ async fn native_dropped_route_startup_releases_callbacks_requests_and_allows_ret
     }
     stop.abort();
 }
+
+#[tokio::test]
+async fn native_rule_replacement_drop_validation_and_empty_context_lifecycle() {
+    let (base, stop) = fixture().await;
+    for kind in [BrowserKind::Chromium, BrowserKind::Firefox] {
+        let Some(browser) = launch(kind, &base).await else {
+            continue;
+        };
+        for context_registration in [false, true] {
+            let context = browser
+                .new_context(ContextOptions::default())
+                .await
+                .unwrap();
+            let mut page = context.new_page().await.unwrap();
+            page.goto("/").await.unwrap();
+            page.set_timeout(Duration::from_secs(3));
+            let rules = vec![RouteRule::fulfill(
+                "**/abandoned-rule",
+                200,
+                b"abandoned".to_vec(),
+                "text/plain",
+            )];
+            let mut setup: std::pin::Pin<
+                Box<dyn std::future::Future<Output = E2eResult<()>> + '_>,
+            > = if context_registration {
+                Box::pin(context.route(rules))
+            } else {
+                Box::pin(page.route(rules))
+            };
+            assert!(futures::poll!(&mut setup).is_pending());
+            drop(setup);
+            start(&page, "/abandoned-rule").await;
+            assert_eq!(result(&page).await, "network");
+            let rules = vec![RouteRule::fulfill(
+                "**/kept-rule",
+                200,
+                b"kept".to_vec(),
+                "text/plain",
+            )];
+            if context_registration {
+                context.route(rules).await.unwrap();
+            } else {
+                page.route(rules).await.unwrap();
+            }
+            // Rejected replacement must preserve the accepted profile on live
+            // pages, and must not affect later pages created in a context.
+            let invalid = vec![RouteRule::abort("[")];
+            let outcome = if context_registration {
+                context.route(invalid).await
+            } else {
+                page.route(invalid).await
+            };
+            assert!(matches!(outcome, Err(E2eError::Config(_))));
+            start(&page, "/kept-rule").await;
+            assert_eq!(result(&page).await, "kept");
+            if context_registration {
+                let future = context.new_page().await.unwrap();
+                future.goto("/").await.unwrap();
+                start(&future, "/kept-rule").await;
+                assert_eq!(result(&future).await, "kept");
+            }
+            let retained = context.clone();
+            context.close().await.unwrap();
+            assert!(matches!(
+                retained.route(Vec::new()).await,
+                Err(E2eError::Cancelled(_))
+            ));
+        }
+        let empty = browser
+            .new_context(ContextOptions::default())
+            .await
+            .unwrap();
+        if kind == BrowserKind::Firefox {
+            // Engine capability validation also applies before a context has pages.
+            let rule =
+                RouteRule::continue_with("**", Some(format!("{base}override")), None, None, None);
+            assert!(matches!(
+                empty.route(vec![rule]).await,
+                Err(E2eError::Config(_))
+            ));
+        }
+        if let Some(connection) = browser.cdp() {
+            connection.close();
+        } else {
+            browser.bidi().unwrap().close();
+        }
+        // Wait for actual transport loss, rather than treating close enqueue as EOF.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            match empty.route(Vec::new()).await {
+                Err(E2eError::Disconnected(_)) => break,
+                Ok(()) if tokio::time::Instant::now() < deadline => tokio::task::yield_now().await,
+                outcome => panic!("empty context must observe disconnect: {outcome:?}"),
+            }
+        }
+        browser.close().await.unwrap();
+    }
+    stop.abort();
+}

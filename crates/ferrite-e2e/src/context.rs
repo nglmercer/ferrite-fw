@@ -417,7 +417,7 @@ pub struct BrowserContext {
     registry: Weak<Mutex<Vec<BrowserContext>>>,
     owner: Option<Weak<BrowserInner>>,
     /// Routing rules shared with every page (page rules win on overlap).
-    routes: Arc<Mutex<Vec<RouteRule>>>,
+    routes: Arc<Mutex<crate::routing::RuleStore>>,
     /// Route handlers shared with every page.
     handlers: Arc<Mutex<Vec<RouteHandlerEntry>>>,
     /// Granted permissions, applied to current and future pages.
@@ -468,7 +468,7 @@ impl BrowserContext {
             network_summary: Arc::new(Mutex::new(Default::default())),
             registry,
             owner: None,
-            routes: Arc::new(Mutex::new(Vec::new())),
+            routes: Arc::new(Mutex::new(crate::routing::RuleStore::default())),
             handlers: Arc::new(Mutex::new(Vec::new())),
             permissions: Arc::new(Mutex::new(permissions)),
             geolocation: Arc::new(Mutex::new(geolocation)),
@@ -1004,31 +1004,30 @@ impl BrowserContext {
 
     /// Route matching requests on every current and future page.
     ///
-    /// Page-level [`Page::route`] rules win on overlap. When a current page
-    /// rejects the rules (e.g. a Firefox-unsupported override), the stored
-    /// set is left unchanged and the error surfaces.
+    /// Page-level [`Page::route`] rules win on overlap. Rejected or dropped
+    /// replacements are removed without overwriting newer changes. Unsupported
+    /// actions are rejected even before this context has pages.
     pub async fn route(&self, rules: Vec<RouteRule>) -> E2eResult<()> {
-        let rules = crate::url_matcher::prepare_rules(rules, |url| self.resolve_url(url))?;
-        let old = self
-            .routes
-            .lock()
-            .map(|mut stored| std::mem::replace(&mut *stored, rules))
-            .unwrap_or_default();
-        let mut failed = None;
-        for page in self.pages() {
-            if let Err(error) = page.restart_routing().await {
-                failed = Some(error);
-                break;
-            }
-        }
-        if let Some(error) = failed {
-            *self.routes.lock().unwrap_or_else(|e| e.into_inner()) = old;
-            for page in self.pages() {
-                let _ = page.restart_routing().await;
-            }
-            return Err(error);
-        }
-        Ok(())
+        self.cancellation
+            .run(async {
+                let transport = match &self.backend {
+                    Backend::Cdp(connection) => connection.disconnection(),
+                    Backend::Bidi { conn, .. } => conn.disconnection(),
+                };
+                if let Some(reason) = transport.reason() {
+                    return Err(E2eError::Disconnected(reason));
+                }
+                let rules = crate::url_matcher::prepare_rules(rules, |url| self.resolve_url(url))?;
+                crate::routing::RouteConfiguration::new(rules.clone(), Vec::new())?
+                    .validate_for(matches!(self.backend, Backend::Bidi { .. }))?;
+                let replacement = crate::routing::RuleReplacement::new(self.routes.clone(), rules)?;
+                for page in self.pages() {
+                    page.restart_routing().await?;
+                }
+                replacement.commit();
+                Ok(())
+            })
+            .await
     }
 
     /// Register a context-level route handler. Handlers run before
@@ -1269,10 +1268,9 @@ impl BrowserContext {
                 crate::operation::Deadline::new(timeout).run("context route removal", async {
                     let removed_rules = {
                         let mut rules = self.routes.lock().unwrap_or_else(|e| e.into_inner());
-                        let before = rules.len();
-                        rules.retain(|r| !rule(r));
-                        before - rules.len()
+                        rules.remove(&rule)?
                     };
+                    crate::routing::refresh_rule_observers(&self.routes);
                     let removed_handlers = {
                         let mut entries = self.handlers.lock().unwrap_or_else(|e| e.into_inner());
                         let removed: Vec<_> =

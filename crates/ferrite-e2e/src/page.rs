@@ -1672,9 +1672,9 @@ pub struct Page {
     pub(crate) route_runtime: Arc<crate::routing::RouteRuntime>,
     dialogs: Arc<Mutex<Option<tokio::task::AbortHandle>>>,
     capture: Arc<Mutex<Option<CaptureState>>>,
-    routes: Arc<Mutex<Vec<RouteRule>>>,
+    routes: Arc<Mutex<crate::routing::RuleStore>>,
     /// Rules inherited from the owning context (shared; page rules win).
-    context_routes: Arc<Mutex<Vec<RouteRule>>>,
+    context_routes: Arc<Mutex<crate::routing::RuleStore>>,
     /// Page-level route handlers (checked before rules; first match wins
     /// unless it returns [`RouteAction::Fallback`]).
     handlers: Arc<Mutex<Vec<RouteHandlerEntry>>>,
@@ -1770,14 +1770,14 @@ impl Page {
         slow_mo: Duration,
         base_url: Option<String>,
         registry: Weak<Mutex<Vec<Page>>>,
-        context_routes: Arc<Mutex<Vec<RouteRule>>>,
+        context_routes: Arc<Mutex<crate::routing::RuleStore>>,
         context_handlers: Arc<Mutex<Vec<RouteHandlerEntry>>>,
         tracing: Arc<Mutex<Option<TracingState>>>,
     ) -> Self {
         let action_timeout = Arc::new(Mutex::new(driver.timeout()));
         driver.share_timeout(action_timeout.clone());
         let download_dir = sink.download_dir.clone();
-        Self {
+        let page = Self {
             screenshot_state: Arc::new(crate::screenshot::ScreenshotState::default()),
             reporter: None,
             snapshot_attachments: None,
@@ -1791,7 +1791,7 @@ impl Page {
             route_runtime: Arc::new(crate::routing::RouteRuntime::default()),
             dialogs: Arc::new(Mutex::new(None)),
             capture: Arc::new(Mutex::new(None)),
-            routes: Arc::new(Mutex::new(Vec::new())),
+            routes: Arc::new(Mutex::new(crate::routing::RuleStore::default())),
             context_routes,
             handlers: Arc::new(Mutex::new(Vec::new())),
             context_handlers,
@@ -1825,7 +1825,9 @@ impl Page {
             opener_target: Arc::new(Mutex::new(None)),
             locator_handlers: Arc::new(Mutex::new(Vec::new())),
             handlers_running: Arc::new(Mutex::new(false)),
-        }
+        };
+        crate::routing::bind_rule_runtime(&page.route_runtime, &page.routes, &page.context_routes);
+        page
     }
 
     /// Clone scoped to a frame (evaluation runs inside it).
@@ -4223,12 +4225,20 @@ impl Page {
     /// Start intercepting requests with glob rules (replaces page rules;
     /// context rules still apply as fallback, page rules win on overlap).
     /// Route handlers (see [`Page::route_with_handler`]) run before rules.
+    /// Failed or dropped replacements are removed without overwriting newer changes.
     pub async fn route(&self, rules: Vec<RouteRule>) -> E2eResult<()> {
         self.driver
             .run(async {
                 let rules = crate::url_matcher::prepare_rules(rules, |url| self.resolve_url(url))?;
-                *self.routes.lock().unwrap_or_else(|e| e.into_inner()) = rules;
-                self.restart_routing().await
+                self.driver
+                    .validate_routing(&crate::routing::RouteConfiguration::new(
+                        rules.clone(),
+                        Vec::new(),
+                    )?)?;
+                let replacement = crate::routing::RuleReplacement::new(self.routes.clone(), rules)?;
+                self.restart_routing().await?;
+                replacement.commit();
+                Ok(())
             })
             .await
     }
@@ -4419,10 +4429,9 @@ impl Page {
                 crate::operation::Deadline::new(timeout).run("route removal", async {
                     let removed_rules = {
                         let mut rules = self.routes.lock().unwrap_or_else(|e| e.into_inner());
-                        let before = rules.len();
-                        rules.retain(|r| !rule(r));
-                        before - rules.len()
+                        rules.remove(&rule)?
                     };
+                    crate::routing::refresh_rule_observers(&self.routes);
                     let removed_handlers = {
                         let mut entries = self.handlers.lock().unwrap_or_else(|e| e.into_inner());
                         let removed: Vec<_> =
@@ -4507,8 +4516,8 @@ impl Page {
                         .context_routes
                         .lock()
                         .unwrap_or_else(|e| e.into_inner());
-                    let mut rules = local_rules.clone();
-                    rules.extend(context_rules.iter().cloned());
+                    let mut rules = local_rules.snapshot();
+                    rules.extend(context_rules.snapshot());
                     let mut handlers = local_handlers.clone();
                     handlers.extend(context_handlers.iter().cloned());
                     let configuration = crate::routing::RouteConfiguration::new(rules, handlers)?;
