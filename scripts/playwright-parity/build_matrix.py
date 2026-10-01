@@ -322,6 +322,8 @@ for m,t in {'page':'page','context':'context','request':'request'}.items():
  put('Fixtures',m,'TestContext.'+t,'Fresh per-attempt resource, usable as a typed fixture dependency. request is isolated from browser cookies; context.request() shares cookies.')
 for m,t in {'onBegin':'on_begin','onEnd':'on_end','onError':'on_error','onTestBegin':'on_test_begin','onTestEnd':'on_test_end','onStepBegin':'on_step_begin','onStepEnd':'on_step_end'}.items():
  put('Reporter',m,'Reporter.'+t,'Live synchronous thread-safe callbacks; attempt identity includes retry/project/repetition/worker, errors and interrupted user steps reported. No Suite/TestCase graph, asynchronous end/status override or worker stdout capture.')
+for member, method in [('onEnd', 'on_end'), ('onTestEnd', 'on_test_end')]:
+ put('Reporter', member, 'Reporter.'+method, 'Live synchronous callbacks retain attempt-specific steps, console and optional bounded data-only network summaries. Aggregate reports add inline search/status/project filters and pagination with portable artifact links. No Suite/TestCase graph, asynchronous end/status override, worker stdout or Trace Viewer archive.')
 for m,t in {'title':'title','duration':'duration_ms'}.items():put('TestStep',m,'StepInfo.'+t,'Named Page.step live event metadata; no automatic action tree, parent hierarchy or structured error/source data.')
 put('WorkerInfo','workerIndex','WorkerInfo.worker_index','Logical Tokio worker index, not a process identity.')
 put('WorkerInfo','project','WorkerInfo.project','Optional project name only, not a resolved FullProject object.')

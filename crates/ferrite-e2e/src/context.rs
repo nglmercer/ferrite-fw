@@ -411,6 +411,7 @@ pub struct BrowserContext {
     timeout: Duration,
     base_url: Option<String>,
     pages: Arc<Mutex<Vec<Page>>>,
+    network_summary: Arc<Mutex<crate::report_network::NetworkSummaryLog>>,
     registry: Weak<Mutex<Vec<BrowserContext>>>,
     owner: Option<Weak<BrowserInner>>,
     /// Routing rules shared with every page (page rules win on overlap).
@@ -460,6 +461,7 @@ impl BrowserContext {
             timeout,
             base_url,
             pages: Arc::new(Mutex::new(Vec::new())),
+            network_summary: Arc::new(Mutex::new(Default::default())),
             registry,
             owner: None,
             routes: Arc::new(Mutex::new(Vec::new())),
@@ -495,6 +497,15 @@ impl BrowserContext {
             .unwrap_or_else(|e| e.into_inner())
             .clone()
     }
+    /// Bounded data-only network diagnostics, including closed pages and popup startup.
+    /// Retains at most 1,000 requests and 1 MiB of text; fields cap at 4 KiB.
+    /// Omissions and text truncation are explicit; no headers or bodies are captured.
+    pub fn network_summary(&self) -> crate::NetworkSummary {
+        self.network_summary
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .snapshot()
+    }
     /// Clear context history; per-page console buffers remain independent.
     pub fn clear_console_messages(&self) {
         self.console
@@ -522,6 +533,10 @@ impl BrowserContext {
     }
     pub(crate) fn bind_popup_sink(&self, sink: &ConsoleSink, page_id: &str) {
         sink.forward_context(&self.events, page_id, &self.console);
+        sink.network_log
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .bind_report(&self.network_summary, page_id);
     }
 
     /// Subscribe before triggering an action to observe context and page events.
@@ -713,7 +728,7 @@ impl BrowserContext {
     ) -> E2eResult<Page> {
         driver.bind_context_cancellation(self.cancellation.clone());
         let target_id = driver.target_id().to_owned();
-        sink.forward_context(&self.events, &target_id, &self.console);
+        self.bind_popup_sink(&sink, &target_id);
         let mut page = Page::new(
             driver,
             sink,

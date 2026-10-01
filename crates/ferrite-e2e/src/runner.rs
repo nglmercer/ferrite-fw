@@ -3674,6 +3674,10 @@ impl Drop for AttemptGuard {
             .skip(self.attachments_start)
             .collect();
         let attempt = AttemptResult {
+            network: self
+                .context
+                .as_ref()
+                .map(|context| context.network_summary()),
             settings: Some(self.info.settings()),
             soft_assertions: self.info.soft_failures(),
             popup_diagnostics: self

@@ -251,6 +251,9 @@ impl StepInfo {
 /// Complete diagnostics and artifacts for a single attempt.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttemptResult {
+    /// Bounded network diagnostics; None for historical reports or absent contexts.
+    #[serde(default)]
+    pub network: Option<crate::NetworkSummary>,
     /// Console output and JavaScript errors across all pages of this attempt.
     #[serde(default)]
     pub console: Vec<crate::ConsoleMessage>,
@@ -1097,7 +1100,11 @@ impl TestReport {
              th{background:#f0f0f0}pre{background:#f6f6f6;padding:.4em;white-space:pre-wrap}\
              .pill{display:inline-block;padding:.1em .6em;border-radius:1em;color:#fff;font-size:.85em}\
              .pass{background:#2a7}.fail{background:#c33}.skip{background:#888}\
-             .exp{background:#b96}\
+             .exp{background:#b96}[hidden]{display:none!important}\
+             .controls{display:flex;flex-wrap:wrap;gap:.8em;align-items:end;margin:1em 0}\
+             .controls label{display:flex;flex-direction:column;gap:.3em}\
+             input,select,button{font:inherit;padding:.35em}\
+             .network{overflow:auto;max-height:28em}.network td{overflow-wrap:anywhere}\
              </style></head><body>",
         );
         out.push_str(&format!(
@@ -1106,6 +1113,15 @@ impl TestReport {
             if self.ok() { "passed" } else { "failed" },
             xml_escape(&self.summary())
         ));
+        out.push_str(r#"<div class="controls" aria-label="Report filters">
+<label>Test name<input id="test-search" type="search" placeholder="Search tests"></label>
+<label>Status<select id="status-filter"><option value="">All statuses</option><option value="passed">Passed (including flaky)</option><option value="failed">Failed</option><option value="flaky">Flaky</option><option value="skipped">Skipped</option><option value="expected-failed">Expected failure</option></select></label>
+<label>Project<select id="project-filter"><option value="">All projects</option></select></label>
+<label>Tests per page<select id="page-size"><option>25</option><option selected>50</option><option>100</option></select></label>
+<button id="clear-filters" type="button">Clear filters</button>
+<button id="previous-page" type="button">Previous</button><button id="next-page" type="button">Next</button>
+</div><p id="result-count" role="status" aria-live="polite"></p><p id="no-results" hidden>No matching tests.</p>
+<noscript>All tests are shown. Enable JavaScript to search, filter and paginate.</noscript>"#);
         out.push_str(
             "<table><thead><tr><th>status</th><th>test</th><th>time</th>\
              <th>attempts</th><th>details</th></tr></thead><tbody>",
@@ -1118,12 +1134,21 @@ impl TestReport {
                 TestStatus::Skipped => ("skipped", "skip"),
                 TestStatus::FailedExpected => ("expected-failed", "exp"),
             };
+            let status_key = match result.status {
+                TestStatus::Passed => "passed",
+                TestStatus::Failed => "failed",
+                TestStatus::Skipped => "skipped",
+                TestStatus::FailedExpected => "expected-failed",
+            };
+            let project_key = result
+                .project
+                .as_ref()
+                .map_or_else(|| "n".into(), |name| format!("s{name}"));
             out.push_str(&format!(
-                "<tr><td><span class=\"pill {class}\">{label}</span></td><td>{}</td>\
-                 <td>{}ms</td><td>{}</td><td>",
-                xml_escape(&result.name),
-                result.duration_ms,
-                result.attempts
+                "<tr class=\"test-result\" data-name=\"{}\" data-status=\"{status_key}\" data-flaky=\"{}\" data-project=\"{}\" data-project-name=\"{}\"><td><span class=\"pill {class}\">{label}</span></td><td>{}</td><td>{}ms</td><td>{}</td><td>",
+                xml_escape(&result.name), result.flaky, xml_escape(&project_key),
+                xml_escape(result.project.as_deref().unwrap_or("(no project)")),
+                xml_escape(&result.name), result.duration_ms, result.attempts
             ));
             if let Some(project) = &result.project {
                 out.push_str(&format!("<div>project: {}</div>", xml_escape(project)));
@@ -1203,6 +1228,7 @@ impl TestReport {
                 }
                 render_steps(&mut out, &attempt.steps);
                 render_console(&mut out, &attempt.console);
+                render_network(&mut out, attempt.network.as_ref());
                 render_popup_diagnostics(&mut out, &attempt.popup_diagnostics);
                 for path in &attempt.screenshots {
                     render_link(&mut out, path, "screenshot");
@@ -1233,9 +1259,77 @@ impl TestReport {
             out.push_str("<h2>Run lifecycle</h2>");
             render_steps(&mut out, &self.run_steps);
         }
-        out.push_str("</body></html>");
+        out.push_str("<script>");
+        out.push_str(include_str!("report_controls.js"));
+        out.push_str("</script></body></html>");
         out
     }
+}
+
+fn render_network(out: &mut String, summary: Option<&crate::NetworkSummary>) {
+    let Some(summary) = summary else {
+        return;
+    };
+    let requests = &summary.requests;
+    let failed = requests
+        .iter()
+        .filter(|request| matches!(request.completion, crate::RequestCompletion::Failed(_)))
+        .count();
+    let http_errors = requests
+        .iter()
+        .filter(|request| request.status.is_some_and(|status| status >= 400))
+        .count();
+    out.push_str(&format!("<details><summary>Network: {} retained requests · {failed} failures · {http_errors} HTTP errors · {} omitted</summary>", requests.len(), summary.omitted_requests));
+    if requests.is_empty() {
+        out.push_str("<p>No retained network requests.</p>");
+    } else {
+        out.push_str("<div class=\"network\"><table><thead><tr><th>Page / request</th><th>Method / URL</th><th>Status</th><th>Response time</th><th>Completion / redirects</th></tr></thead><tbody>");
+        for request in requests {
+            let completion = match &request.completion {
+                crate::RequestCompletion::Pending => "pending".into(),
+                crate::RequestCompletion::Finished => "finished".into(),
+                crate::RequestCompletion::Failed(failure) => format!(
+                    "failed: {} ({})",
+                    failure.error_text,
+                    match failure.cancelled {
+                        Some(true) => "cancelled",
+                        Some(false) => "not cancelled",
+                        None => "cancellation unknown",
+                    }
+                ),
+                crate::RequestCompletion::Unavailable(reason) => format!("unavailable: {reason}"),
+            };
+            out.push_str(&format!(
+                "<tr><td>{}<br>{}</td><td>{} {}<br>{}</td><td>{}</td><td>{}</td><td>{}",
+                xml_escape(&request.page_id),
+                xml_escape(&request.id),
+                xml_escape(&request.method),
+                xml_escape(&request.url),
+                xml_escape(request.resource_type.as_deref().unwrap_or("unknown type")),
+                request
+                    .status
+                    .map_or_else(|| "not observed".into(), |status| status.to_string()),
+                request
+                    .duration_ms
+                    .map_or_else(|| "not observed".into(), |time| format!("{time}ms")),
+                xml_escape(&completion)
+            ));
+            for (label, id) in [
+                ("from", &request.redirected_from),
+                ("to", &request.redirected_to),
+            ] {
+                if let Some(id) = id {
+                    out.push_str(&format!("<div>redirect {label}: {}</div>", xml_escape(id)));
+                }
+            }
+            if request.text_truncated {
+                out.push_str("<div>Summary text truncated</div>");
+            }
+            out.push_str("</td></tr>");
+        }
+        out.push_str("</tbody></table></div>");
+    }
+    out.push_str("<p>Bounded diagnostic history; response time excludes transfer completion. Missing native fields remain unknown. Headers and bodies are not included.</p></details>");
 }
 
 fn render_link(out: &mut String, path: &str, name: &str) {
@@ -1620,6 +1714,7 @@ mod tests {
             })
             .await;
         let attempt = AttemptResult {
+            network: None,
             console: Vec::new(),
             popup_diagnostics: Default::default(),
             soft_assertions: Vec::new(),
@@ -1647,6 +1742,14 @@ mod tests {
             trace: Some("first.json".into()),
             video: Some("first.webm".into()),
         };
+        let mut attempt = attempt;
+        attempt.network = Some(serde_json::from_value(serde_json::json!({
+            "requests": [{"id":"<id>","page_id":"<page>","method":"<method>",
+            "url":"<script>network</script>","status":null,"duration_ms":null,
+            "started_ms":null,"resource_type":null,"redirected_from":"<from>",
+            "redirected_to":null,"completion":{"state":"failed","detail":{"error_text":"<script>failure</script>","cancelled":null}},"text_truncated":true}],
+            "omitted_requests":7
+        })).unwrap());
         let mut second = attempt.clone();
         second.info.retry = 1;
         second.status = AttemptStatus::Passed;
@@ -1672,13 +1775,23 @@ mod tests {
             "flaky",
             "&lt;script&gt;",
             "a&quot;.txt",
+            "&lt;script&gt;network&lt;/script&gt;",
+            "&lt;script&gt;failure&lt;/script&gt;",
+            "7 omitted",
         ] {
             assert!(html.contains(expected), "missing {expected}");
         }
-        assert!(!html.contains("<script>"));
+        assert_eq!(html.matches("<script>").count(), 1); // Static report controls only.
+        assert!(!html.contains("<script>step</script>"));
         let round_trip: TestReport = serde_json::from_str(&report.to_json()).unwrap();
         assert_eq!(round_trip.results[0].attempt_results.len(), 2);
         assert_eq!(round_trip.results[0].attempt_results[0].steps.len(), 1);
+        let mut legacy = serde_json::to_value(&round_trip.results[0].attempt_results[0]).unwrap();
+        legacy.as_object_mut().unwrap().remove("network");
+        assert!(serde_json::from_value::<AttemptResult>(legacy)
+            .unwrap()
+            .network
+            .is_none());
     }
 
     #[tokio::test]

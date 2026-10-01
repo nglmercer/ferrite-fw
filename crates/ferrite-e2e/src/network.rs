@@ -296,6 +296,10 @@ impl ExtraHeaders {
 /// Weak redirect links avoid retaining evicted chains; snapshot IDs stay intact.
 pub(crate) struct NetworkLog {
     sequence: u64,
+    report: Option<(
+        Weak<Mutex<crate::report_network::NetworkSummaryLog>>,
+        String,
+    )>,
     current: HashMap<String, Arc<RequestState>>,
     latest: HashMap<String, Weak<RequestState>>,
     recent: VecDeque<Arc<RequestState>>,
@@ -309,6 +313,7 @@ impl Default for NetworkLog {
     fn default() -> Self {
         Self {
             sequence: 0,
+            report: None,
             current: HashMap::new(),
             latest: HashMap::new(),
             recent: VecDeque::new(),
@@ -330,6 +335,65 @@ pub(crate) enum NetworkNotice {
 const MAX_OBSERVATIONS: usize = 4096;
 const MAX_METADATA_HISTORY: usize = 16 * 1024 * 1024;
 impl NetworkLog {
+    pub(crate) fn bind_report(
+        &mut self,
+        report: &Arc<Mutex<crate::report_network::NetworkSummaryLog>>,
+        page_id: &str,
+    ) {
+        if self
+            .report
+            .as_ref()
+            .is_some_and(|(weak, id)| weak.ptr_eq(&Arc::downgrade(report)) && id == page_id)
+        {
+            return;
+        }
+        self.report = Some((Arc::downgrade(report), page_id.into()));
+        report
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .omit(self.sequence.saturating_sub(self.recent.len() as u64));
+        for state in &self.recent {
+            self.report_state(state, true);
+        }
+    }
+    fn report_state(&self, state: &RequestState, new: bool) {
+        let Some((weak, page_id)) = &self.report else {
+            return;
+        };
+        let Some(report) = weak.upgrade() else {
+            return;
+        };
+        let data = state.data.lock().unwrap_or_else(|e| e.into_inner());
+        let next = state.next.lock().unwrap_or_else(|e| e.into_inner());
+        let mut truncated = false;
+        let mut clip = |value: &str| crate::report_network::text(value, &mut truncated);
+        let completion = match state.completion.borrow().clone() {
+            RequestCompletion::Failed(mut failure) => {
+                failure.error_text = clip(&failure.error_text);
+                RequestCompletion::Failed(failure)
+            }
+            RequestCompletion::Unavailable(reason) => RequestCompletion::Unavailable(clip(&reason)),
+            value => value,
+        };
+        let summary = crate::NetworkRequestSummary {
+            id: clip(&state.id),
+            page_id: clip(page_id),
+            method: clip(&state.method),
+            url: clip(&state.url),
+            status: data.received.then_some(data.record.status),
+            duration_ms: data.record.duration_ms,
+            started_ms: data.record.started_ms,
+            resource_type: state.details.resource_type.as_deref().map(&mut clip),
+            redirected_from: state.previous.as_ref().map(|(id, _)| clip(id)),
+            redirected_to: next.as_ref().map(|(id, _)| clip(id)),
+            completion,
+            text_truncated: truncated,
+        };
+        report
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .observe(summary, new);
+    }
     fn prune(&mut self) {
         let mut bytes: usize = self
             .recent
@@ -349,6 +413,7 @@ impl NetworkLog {
                     "native observation history capacity exceeded".into(),
                 ));
             }
+            self.report_state(&old, false);
             if self
                 .latest
                 .get(&old.native_id)
@@ -411,6 +476,7 @@ impl NetworkLog {
         if let Some(previous) = previous {
             *previous.next.lock().unwrap_or_else(|e| e.into_inner()) =
                 Some((state.id.clone(), Arc::downgrade(&state)));
+            self.report_state(&previous, false);
         }
         if state.details.raw_headers {
             state
@@ -422,6 +488,7 @@ impl NetworkLog {
         self.current.insert(native_id.clone(), state.clone());
         self.latest.insert(native_id, Arc::downgrade(&state));
         self.recent.push_back(state.clone());
+        self.report_state(&state, true);
         self.prune();
         let _ = self.events.send(NetworkNotice::Request(state.clone()));
         state
@@ -483,6 +550,7 @@ impl NetworkLog {
                 }
             }
         }
+        self.report_state(&state, false);
         self.prune();
         if initial {
             let _ = self.events.send(NetworkNotice::Response(state.clone()));
@@ -531,6 +599,7 @@ impl NetworkLog {
                 Some(failure) => RequestCompletion::Failed(failure),
                 None => RequestCompletion::Finished,
             });
+            self.report_state(&state, false);
             let _ = self.events.send(if failed {
                 NetworkNotice::Failed(state)
             } else {
@@ -627,10 +696,11 @@ impl NetworkLog {
         Some(RouteHeadersGuard(headers))
     }
     pub(crate) fn close(&mut self, reason: &str) {
-        for (_, state) in self.current.drain() {
+        for (_, state) in self.current.drain().collect::<Vec<_>>() {
             state
                 .completion
                 .send_replace(RequestCompletion::Unavailable(reason.into()));
+            self.report_state(&state, false);
         }
         self.extra.clear();
         self.pending_route_headers.clear();
@@ -1057,6 +1127,51 @@ pub(crate) fn header_value(headers: &[(String, String)], name: &str) -> Option<S
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn report_sink_is_weak_replays_startup_and_preserves_terminal_redirects() {
+        let report = Arc::new(Mutex::new(
+            crate::report_network::NetworkSummaryLog::default(),
+        ));
+        let weak = Arc::downgrade(&report);
+        let mut log = NetworkLog::default();
+        log.start(
+            record("one", "http://host/start"),
+            RequestDetails::default(),
+            None,
+        );
+        log.bind_report(&report, "page");
+        log.bind_report(&report, "page");
+        let mut response = record("one", "http://host/start");
+        response.status = 302;
+        log.response("one", response, None);
+        log.finish_redirect("one");
+        log.start(
+            record("one", "http://host/end"),
+            RequestDetails {
+                redirect: true,
+                ..Default::default()
+            },
+            None,
+        );
+        log.close("page closed");
+        let summary = report.lock().unwrap().snapshot();
+        assert_eq!(summary.requests.len(), 2);
+        assert_eq!(summary.requests[0].completion, RequestCompletion::Finished);
+        assert_eq!(
+            summary.requests[0].redirected_to.as_deref(),
+            Some(summary.requests[1].id.as_str())
+        );
+        assert!(
+            matches!(&summary.requests[1].completion, RequestCompletion::Unavailable(reason) if reason == "page closed")
+        );
+        drop(report);
+        assert!(weak.upgrade().is_none());
+        log.start(
+            record("after", "http://host/no-owner"),
+            RequestDetails::default(),
+            None,
+        );
+    }
     fn record(id: &str, url: &str) -> RecordedRequest {
         RecordedRequest {
             method: "GET".into(),

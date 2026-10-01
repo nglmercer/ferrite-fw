@@ -70,6 +70,7 @@ mod page;
 mod popup_capture;
 mod process_output;
 mod report;
+mod report_network;
 mod resolved_config;
 mod route_options;
 mod routing;
@@ -146,6 +147,7 @@ pub use report::{
     SourceLocation, StepAnnotation, StepCategory, StepContext, StepInfo, StepOptions, StepOutcome,
     StepStatus, TestError, TestReport, TestResult, TestStatus,
 };
+pub use report_network::{NetworkRequestSummary, NetworkSummary};
 pub use resolved_config::{ResolvedProjectConfig, ResolvedRunConfig, ResolvedTestSettings};
 pub use route_options::{RouteBodyState, RouteFetchOptions, RouteFulfillOptions};
 pub use routing::{UnrouteBehavior, UnrouteOptions};

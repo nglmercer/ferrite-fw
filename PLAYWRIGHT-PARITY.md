@@ -12,13 +12,15 @@ The initial inventory and existing changes were committed in `d93365a`; this
 report describes the subsequent practical parity implementation. The original
 findings remain available in that commit's history.
 
-Latest completed phase: **B18**, with 219 scoped checks (212 units, three
-bounded-ARIA native groups and four legacy browser groups), requiring both
-Chromium and Firefox. Strict all-target Clippy, package formatting, generated
-matrix and local documentation links passed. B11 is next. B10's preceding
-complete gates remain 457 E2E and 28 CLI/configuration checks (485 combined),
-including all 38 then-existing integration targets. B18 adds a 39th target;
-this increment does not claim a new complete all-target integration replay.
+Latest completed phase: **B11**, with 279 scoped checks: 215 E2E units,
+32 integrations across eight targets, four E2E doctests and 28 CLI/configuration
+checks. Shared native cases required Chromium and Firefox. Strict all-target
+Clippy, package formatting, generated matrix and 740 local links passed;
+expanded network/retry, large/filtered and empty reports were visually inspected
+on both engines. D03 is next. The preceding B18 phase passed 219 scoped checks;
+B10's complete inventory remains 485 combined checks across its then-existing
+38 integration targets. B11 adds the 40th target; this scoped increment does not
+claim a complete replay of the current 40-target integration inventory.
 Earlier increment sections retain historical checkpoint evidence.
 
 The [complete API matrix](PLAYWRIGHT-API-MATRIX.md) covers **73 classes and
@@ -2128,3 +2130,66 @@ truncation. Strict all-target Clippy and package formatting passed. The generate
 inventory retains 635 Partial/327 Missing/15 Equivalent/41 Idiomatic entries;
 733 local links were checked across the parity/TODO documents and conformance
 README. B11 and the wider G04 audit remain open.
+
+## B11 searchable portable reports and attempt network diagnostics
+
+The HTML report now has case-insensitive test-name search, combined status and
+project filters, a distinct flaky filter, and 25/50/100-test pagination. Passed
+includes recovered flaky tests; the flaky filter selects them separately. The
+count announces matching/total tests and page position; clear resets filters,
+empty matches have a visible message and navigation buttons disable at their
+bounds. The controls use inline static JavaScript and escaped data attributes;
+project options use DOM `textContent`. Without JavaScript all tests remain
+visible. Report generation still renders all rows up front, so pagination bounds
+visible rows rather than total HTML or DOM memory. See
+[report rendering](crates/ferrite-e2e/src/report.rs) and
+[portable controls](crates/ferrite-e2e/src/report_controls.js).
+
+Each attempt now owns an optional `network: NetworkSummary`. Historical JSON
+without the field loads as `None`, distinguishing unavailable historical data
+from an observed empty history. Code constructing `AttemptResult` literals must
+add `network: None` or a populated summary. The runner captures the context's
+summary after cleanup; live reporter callbacks and aggregate JSON receive the
+same attempt data. Retry histories remain distinct.
+
+`BrowserContext::network_summary()` collects per-hop request/page identities,
+method/URL, response status and request-to-response duration, start time, resource
+type, redirect identities and finished/failed/unavailable completion. Missing
+native response fields stay unknown. Closed pages and bound popup startup sinks
+update the same context history. Native request logs hold a weak diagnostic
+sink; the collector stores plain summaries with no browser/native handles,
+headers or bodies. It retains at most 1,000 requests and 1 MiB of text payload,
+with 4-KiB UTF-8-safe field limits. Count/byte eviction, pre-registration losses
+and text truncation are explicit; late completion updates cannot resurrect
+removed entries. These are diagnostic payload limits, not a bound on all report
+allocations or the existing native request history. See
+[summary types and bounds](crates/ferrite-e2e/src/report_network.rs) and
+[native history integration](crates/ferrite-e2e/src/network.rs).
+
+Expanded attempts show network counts, HTTP errors separately from transport
+failures, completion, redirects and unknown fields beside console diagnostics.
+All dynamic values are escaped. The bounded request table scrolls inside its
+attempt. Portable export keeps all controls inline and rewrites artifact paths
+as before; moving the folder requires no external assets or server API. No Trace
+Viewer archive format is introduced.
+
+[native report tests](crates/ferrite-e2e/tests/report_diagnostics.rs) exercise
+combined filters and pagination on 1,500 results, empty/no-match views, retries,
+HTTP errors, transport failures, redirects, closed-page retention, escaping and
+relocated artifact downloads on Chromium and Firefox. Unit checks cover weak
+sink ownership, startup replay, redirect/completion updates, count/byte limits,
+Unicode truncation, late-update eviction and historical attempt JSON.
+
+B11 validation: 215 units, 32 integration checks across report diagnostics,
+step controls/bundles, runtime/reporters, structured console, browser ownership,
+network metadata, scopes/network and waits/uploads/console, plus four E2E
+doctests and 28 CLI/config checks passed (279 combined scoped checks). Shared
+native cases required full Chrome 153.0.8010.12 and Firefox 157.0. Strict
+all-target Clippy and E2E/CLI/config formatting passed. Generated counts stay
+635 Partial/327 Missing/15 Equivalent/41 Idiomatic; 740 local links validated.
+Eight captured views (expanded retry report, network details, filtered large
+report and empty report on both engines) were visually reviewed. The network
+table scrolls within its attempt and controls wrap at the smaller Chromium
+viewport. The final capture removes Rust debug formatting from cancellation
+status. No full all-target replay is claimed by this focused phase; G04 remains
+open for that audit. B11 is complete and D03 output retention is next.

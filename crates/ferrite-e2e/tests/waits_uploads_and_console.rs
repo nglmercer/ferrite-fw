@@ -470,7 +470,7 @@ async fn console_metadata_survives_closed_pages_retries_cleanup_and_portable_rep
         assert!(html.contains("Console and page errors"));
         assert!(html.contains("console.js"));
         assert!(html.contains("&lt;script&gt;"));
-        assert!(!html.contains("<script>"));
+        assert_eq!(html.matches("<script>").count(), 1); // Static report controls only.
         browser.close().await.unwrap();
         stop.abort();
     }
