@@ -1,13 +1,13 @@
 # Ferrite E2E implementation TODO
 
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
-Session plan refreshed: 2026-09-30, after verified C01 PDF-options implementation.
+Session plan refreshed: 2026-09-30, after verified C02 captured-body implementation.
 Expanded on request for a longer implementation session; B09/B10/B13/B14 and D01/D02 are verified.
 Uncommitted implementations are not counted complete.
 
 The initial G/A foundations are complete except for the final G04 audit. Follow
 the remaining-work index below through B/D improvements and supported C extensions.
-This backlog contains **51 tasks (45 complete, 6 remaining)**: four foundations,
+This backlog contains **51 tasks (46 complete, 5 remaining)**: four foundations,
 16 core tasks, 19 follow-ups, six optional extensions and six practical additions.
 All A and B tasks and D01–D06 are verified; continue with
 practical additions and supported C extensions. The ordering
@@ -24,7 +24,7 @@ limits remain in [PLAYWRIGHT-PARITY.md](PLAYWRIGHT-PARITY.md).
 
 ## Recommended next implementation
 
-Start **C02 — Captured response-body convenience methods**, then C03–C06 and the final G04 audit.
+Start **C03 — Coverage lifecycle/options**, then C04–C06 and the final G04 audit.
 B10 is verified through `2c042e1`, with owned process-output drainage in
 `ade139b`. The complete phase passed **457 E2E and 28 CLI/configuration checks**,
 485 combined: 211 units, 242 integrations across all 38 targets and four doctests.
@@ -95,7 +95,7 @@ snapshot run missed the required capture pair in its existing 650 ms window;
 the unchanged eight-case snapshot target passed serially. Final native gates
 use `--test-threads=1`. No assertion clock or expected evidence was relaxed.
 The current integration inventory has 43 targets; this phase does not claim
-its complete replay. **Next: C02**, then C03–C06 and the G04 audit.
+its complete replay. **Next: C03**, then C04–C06 and the G04 audit.
 G04 remains open for the wider lifecycle, lag/eviction and cross-feature audit.
 The initial broad audit's reproducible large-console timeout was fixed by draining
 owned child stdout/stderr, retaining a bounded 4-KiB stderr tail and keeping
@@ -137,13 +137,12 @@ there. G04 applies during every phase and closes after the final audit.
 
 | Order | Task | Implementation result | Dependency or capability gate |
 |---|---|---|---|
-| 1 | C02 | Bounded captured-body bytes, text and JSON helpers | B02/B03 complete; Chromium body capture |
 | 2 | C03 | Coverage navigation/source options and restart lifecycle | Chromium JS/CSS coverage |
 | 3 | C04 | HAR matching, not-found and supported content options | A14/B06 complete; engine body/rewrite capabilities |
 | 4 | C05 | Supported media/device emulation options and resets | Chromium native capabilities |
 | 5 | C06 | Independently detachable CDP target sessions | Chromium transport and session ownership |
 | 6 | G04 | Final lifecycle, compatibility and resource-release audit | Evidence from every completed phase |
-Immediate delivery: **C02**. All A/B/D tasks and C01 are complete.
+Immediate delivery: **C03**. All A/B/D tasks and C01–C02 are complete.
 Supported C extensions remain available independently. G04 applies
 throughout and closes after the complete integration/lifecycle audit.
 
@@ -1088,12 +1087,24 @@ complete this section.
   matrix and 795 local links passed. Shared/capability cases required both Linux
   browsers. The legacy PDF/browser group passed with 92 unrelated cases filtered.
   The full current 46-target integration replay remains G04 work.
-- [ ] **C02 — Captured response-body convenience methods (M, Chromium; needs B02/B03).**
+- [x] **C02 — Captured response-body convenience methods (M, Chromium; needs B02/B03).**
   Add bytes/text/JSON helpers over native captured bodies with bounded storage.
   Done when uncaptured, unavailable, empty, truncated and failed bodies are
   distinguishable and malformed JSON reports a useful error. Preserve the
   existing cap unless a reviewed bounded option replaces it. Firefox body
   capture remains deferred until a supported native mechanism is verified.
+  Verified helpers read original Chromium bytes without refetching; typed capture
+  states distinguish uncaptured/pending/empty/truncated/unavailable/failed bodies.
+  Text replaces invalid UTF-8; typed JSON preserves URL/parser diagnostics.
+  The 1 MiB body cap and 16 MiB typed/legacy retained-history budgets remain;
+  caller-held handles survive pruning/close. Stop/restart generation isolation,
+  pending timeout/zero/caller cancellation, native failed transport and explicit
+  Firefox unsupported errors are covered. See [native tests](crates/ferrite-e2e/tests/captured_bodies.rs)
+  and [pinned observations](scripts/e2e-conformance/body-reference.json).
+  Verified 257 scoped checks: 245 units, eight native groups across four targets
+  and four doctests, plus strict Clippy/formatting, matrix and local-link checks.
+  Legacy browser filters retained 91/92 excluded tests; this is not a full replay.
+  The current inventory has 47 integration targets; the complete replay is G04.
 - [ ] **C03 — Coverage lifecycle/options (M, Chromium).** Extend current JS/CSS
   coverage with supported navigation reset and source inclusion controls.
   Done when navigation, anonymous scripts, stop/restart and disposal behave
@@ -1345,7 +1356,7 @@ waiting for every future feature before starting independent work.
 | 4a. CI and assertion reliability | D01/D02 — complete | Preserve policy/focus wiring in `a2fd29b` and polling controls/scoped final-only soft retries in `312090d`. |
 | 5. Captures and reports | B09/B10/B18/B11/D03/D04 — complete | Preserve verified capture/stability/path/update and owned diagnostics; preserve bounded ARIA output and searchable reports; preserve frozen metadata and bounded slow summaries. |
 | 5a. Practical storage and diagnostics | D03/D04/D05/D06 — complete | Preserve retention/storage helpers; preserve run metadata/slow summaries; preserve bounded Chromium socket diagnostics. |
-| 6. Supported backend extensions | C01 — complete; C02, C03, C04, C05, C06 | Preserve validated PDF options; extend captured bodies, coverage, HAR, emulation and scoped CDP sessions. Check capability before accepting each option; verify explicit errors on the other engine. |
+| 6. Supported backend extensions | C01–C02 — complete; C03, C04, C05, C06 | Preserve validated PDF options; extend captured bodies, coverage, HAR, emulation and scoped CDP sessions. Check capability before accepting each option; verify explicit errors on the other engine. |
 | 7. Final lifecycle and compatibility audit | G04 | Verify cancellation, zero/enclosing deadlines, retries, disposal and released resources across the additions, then run the complete regression and documentation gates. |
 
 Within a phase, prefer correctness and lifecycle work over convenience methods.

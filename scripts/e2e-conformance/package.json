@@ -28,7 +28,8 @@
     "reference:web-storage": "node web-storage-reference.mjs",
     "reference:metadata-slow": "node metadata-slow-reference.mjs",
     "reference:websockets": "node websocket-reference.mjs",
-    "reference:pdf": "node pdf-reference.mjs"
+    "reference:pdf": "node pdf-reference.mjs",
+    "reference:bodies": "node body-reference.mjs"
   },
   "devDependencies": {
     "playwright": "1.63.0"

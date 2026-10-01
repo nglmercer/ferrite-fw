@@ -46,6 +46,7 @@ mod bidi;
 mod browser;
 mod bundle;
 mod callbacks;
+mod captured_body;
 mod cdp;
 mod config;
 mod console;
@@ -180,3 +181,5 @@ pub use ferrite_config::{E2eConfig, E2eProjectConfig, ViewportConfig, WebServerC
 pub use websocket::{WebSocketDiagnostics, WebSocketSnapshot, WebSocketState};
 
 pub use pdf::{PdfFormat, PdfLength, PdfMargins, PdfOptions, PdfPageSize};
+
+pub use captured_body::BodyCaptureState;

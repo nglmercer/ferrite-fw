@@ -1192,3 +1192,29 @@ The new API is Chromium-only. Existing `page.pdf()` preserves native basic
 printing on both engines and native default margins. No existing public struct
 literal needs migration. Ferrite uses exact metric conversion; pinned JavaScript
 uses rounded pixel factors, so native paper rounding may differ slightly.
+
+### Read an original captured response body
+
+Start capture before the request starts, and poll the response wait before
+triggering traffic. Chromium supports the typed helpers; Firefox returns an
+explicit unsupported error.
+
+```rust,ignore
+page.start_request_capture();
+let matcher = UrlMatcher::exact("/api/data");
+let (response, trigger) = tokio::join!(
+    page.wait_for_response_handle(&matcher, OperationOptions::default()),
+    page.evaluate_value("fetch('/api/data').then(r => r.text())")
+);
+trigger?;
+let response = response?;
+let value: serde_json::Value = response.json().await?;
+let bytes = response.body().await?;
+page.stop_request_capture();
+```
+
+Helpers read the original exchange without refetching. Pending operations support
+timeouts/cancellation; cached bytes survive close. `body_capture_state()` explains
+uncaptured, pending, empty available, truncated, unavailable and failed bodies.
+Bodies are capped at 1 MiB and participate in bounded retained history. Invalid
+JSON returns a parser diagnostic; text replaces invalid UTF-8 sequences.

@@ -55,6 +55,8 @@ pub struct RequestSnapshot {
     pub headers_truncated: bool,
     pub redirect_history_truncated: bool,
     pub completion: RequestCompletion,
+    #[serde(default)]
+    pub body_capture: crate::BodyCaptureState,
     pub recorded: RecordedRequest,
 }
 
@@ -74,6 +76,7 @@ pub(crate) struct RequestState {
     page_id: Option<String>,
     details: RequestDetails,
     data: Mutex<ObservationData>,
+    pub(crate) body: crate::captured_body::BodySlot,
     completion: tokio::sync::watch::Sender<RequestCompletion>,
     previous: Option<(String, Weak<RequestState>)>,
     next: Mutex<Option<(String, Weak<RequestState>)>>,
@@ -236,6 +239,7 @@ impl RequestState {
                     .as_ref()
                     .is_some_and(|headers| headers.truncated),
             completion: self.completion.borrow().clone(),
+            body_capture: self.body.state.borrow().clone(),
             recorded,
         }
     }
@@ -308,11 +312,13 @@ pub(crate) struct NetworkLog {
     paused: HashMap<String, Weak<RequestState>>,
     raw_headers_enabled: bool,
     events: tokio::sync::broadcast::Sender<NetworkNotice>,
+    body_generation: Option<u64>,
 }
 impl Default for NetworkLog {
     fn default() -> Self {
         Self {
             sequence: 0,
+            body_generation: None,
             report: None,
             current: HashMap::new(),
             latest: HashMap::new(),
@@ -398,11 +404,17 @@ impl NetworkLog {
         let mut bytes: usize = self
             .recent
             .iter()
-            .map(|state| state.data.lock().unwrap_or_else(|e| e.into_inner()).size())
+            .map(|state| {
+                state.data.lock().unwrap_or_else(|e| e.into_inner()).size() + state.body.size()
+            })
             .sum();
         while self.recent.len() > MAX_OBSERVATIONS || bytes > MAX_METADATA_HISTORY {
             let old = self.recent.pop_front().unwrap();
-            bytes = bytes.saturating_sub(old.data.lock().unwrap_or_else(|e| e.into_inner()).size());
+            bytes = bytes.saturating_sub(
+                old.data.lock().unwrap_or_else(|e| e.into_inner()).size() + old.body.size(),
+            );
+            old.body
+                .unavailable("native observation history capacity exceeded");
             if self
                 .current
                 .get(&old.native_id)
@@ -469,6 +481,7 @@ impl NetworkLog {
             page_id,
             details,
             data: Mutex::new(ObservationData::new(record)),
+            body: crate::captured_body::BodySlot::new(self.body_generation),
             completion: tokio::sync::watch::channel(RequestCompletion::Pending).0,
             previous: previous.as_ref().map(|s| (s.id.clone(), Arc::downgrade(s))),
             next: Mutex::new(None),
@@ -595,6 +608,9 @@ impl NetworkLog {
             .retain(|_, state| state.upgrade().is_some_and(|state| state.native_id != id));
         if let Some(state) = self.current.remove(id) {
             let failed = failure.is_some();
+            if let Some(failure) = &failure {
+                state.body.failed(failure);
+            }
             state.completion.send_replace(match failure {
                 Some(failure) => RequestCompletion::Failed(failure),
                 None => RequestCompletion::Finished,
@@ -608,6 +624,11 @@ impl NetworkLog {
         }
     }
     pub(crate) fn finish_redirect(&mut self, id: &str) {
+        if let Some(state) = self.current.get(id) {
+            state
+                .body
+                .unavailable("native redirect response body unavailable");
+        }
         let received = self.current.get(id).is_some_and(|state| {
             state
                 .data
@@ -695,7 +716,30 @@ impl NetworkLog {
         }
         Some(RouteHeadersGuard(headers))
     }
+    pub(crate) fn begin_body_capture(&mut self, generation: u64) {
+        self.end_body_capture("body capture restarted");
+        self.body_generation = Some(generation);
+    }
+    pub(crate) fn end_body_capture(&mut self, reason: &str) {
+        self.body_generation = None;
+        for state in &self.recent {
+            state.body.unavailable(reason);
+        }
+        self.prune();
+    }
+    pub(crate) fn captured_body(
+        &mut self,
+        id: &str,
+        generation: u64,
+        result: Result<Vec<u8>, crate::BodyCaptureState>,
+    ) {
+        if let Some(state) = self.latest.get(id).and_then(Weak::upgrade) {
+            state.body.complete(generation, result);
+        }
+        self.prune();
+    }
     pub(crate) fn close(&mut self, reason: &str) {
+        self.end_body_capture(reason);
         for (_, state) in self.current.drain().collect::<Vec<_>>() {
             state
                 .completion
@@ -951,7 +995,7 @@ impl Request {
 /// Response headers are independent of completion; no body capture is needed.
 #[derive(Debug, Clone)]
 pub struct Response {
-    request: Request,
+    pub(crate) request: Request,
 }
 impl Response {
     pub(crate) fn with_page(mut self, page: Page) -> Self {
@@ -1172,6 +1216,81 @@ mod tests {
             None,
         );
     }
+    #[test]
+    fn captured_bodies_follow_redirect_hops_and_survive_close() {
+        let mut log = NetworkLog::default();
+        log.begin_body_capture(7);
+        let first = log.start(
+            record("native", "http://host/start"),
+            RequestDetails::default(),
+            None,
+        );
+        log.finish_redirect("native");
+        assert!(matches!(
+            *first.body.state.borrow(),
+            crate::BodyCaptureState::Unavailable(_)
+        ));
+        let final_hop = log.start(
+            record("native", "http://host/end"),
+            RequestDetails {
+                redirect: true,
+                ..Default::default()
+            },
+            None,
+        );
+        log.captured_body("native", 6, Ok(vec![1]));
+        assert_eq!(
+            *final_hop.body.state.borrow(),
+            crate::BodyCaptureState::Pending
+        );
+        log.captured_body("native", 7, Ok(vec![2, 3]));
+        log.close("closed");
+        assert_eq!(
+            *final_hop.body.state.borrow(),
+            crate::BodyCaptureState::Available { bytes: 2 }
+        );
+        assert!(matches!(
+            *first.body.state.borrow(),
+            crate::BodyCaptureState::Unavailable(_)
+        ));
+    }
+
+    #[test]
+    fn body_storage_counts_toward_history_budget_and_legacy_snapshots_default() {
+        let mut log = NetworkLog::default();
+        log.begin_body_capture(1);
+        let mut held = None;
+        for i in 0..20 {
+            let id = i.to_string();
+            let state = log.start(
+                record(&id, "http://host/body"),
+                RequestDetails::default(),
+                None,
+            );
+            log.finish(&id, None);
+            log.captured_body(&id, 1, Ok(vec![0; crate::driver::MAX_RESPONSE_BODY]));
+            if i == 0 {
+                held = Some(state);
+            }
+        }
+        assert!(
+            log.recent.len() < 20,
+            "captured bytes must participate in pruning"
+        );
+        let held = held.unwrap();
+        assert_eq!(
+            *held.body.state.borrow(),
+            crate::BodyCaptureState::Available {
+                bytes: crate::driver::MAX_RESPONSE_BODY
+            }
+        );
+        let mut serialized = serde_json::to_value(held.snapshot()).unwrap();
+        serialized.as_object_mut().unwrap().remove("body_capture");
+        let restored: RequestSnapshot = serde_json::from_value(serialized).unwrap();
+        assert_eq!(restored.body_capture, crate::BodyCaptureState::NotCaptured);
+        assert!(restored.recorded.body.is_none());
+    }
+
     fn record(id: &str, url: &str) -> RecordedRequest {
         RecordedRequest {
             method: "GET".into(),

@@ -4524,6 +4524,8 @@ impl Page {
 
     /// Stop recording requests (keeps recorded ones).
     pub fn stop_request_capture(&self) {
+        self.sink
+            .end_body_capture(None, "body capture explicitly stopped");
         let handle = self
             .net_capture
             .lock()

@@ -12,15 +12,15 @@ The initial inventory and existing changes were committed in `d93365a`; this
 report describes the subsequent practical parity implementation. The original
 findings remain available in that commit's history.
 
-Latest completed phase: **C01**, with 265 scoped E2E checks: 239 units,
-22 native integrations across six targets and four doctests. Shared/capability
-cases required Chromium and Firefox on Linux. Strict Clippy, package formatting,
-generated matrix and local links passed. Eight native PDF profiles were rendered
-and inspected; the pinned reference verified eight profiles and five invalid
-options. Basic Firefox PDF behavior remains intact; new validated options target
-Chromium. C02 is next. The current inventory has 46 integration targets; this
-phase does not claim its complete replay. Earlier sections retain historical
-checkpoint evidence, including B10's complete audit of its then-existing 38 targets.
+Latest completed phase: **C02**, with 257 scoped E2E checks: 245 units,
+eight native groups across four targets and four doctests. The body and metadata
+gates required Chromium and Firefox on Linux; legacy capture/HAR gates used
+matching Chromium Headless Shell and Firefox. Strict Clippy, package formatting,
+generated matrix and 802 local links passed. The pinned reference verified six
+original-response profiles. Captured helpers support Chromium; Firefox returns
+explicit unsupported errors. C03 is next. The current inventory has 47 integration
+targets; this phase does not claim its complete replay. Earlier sections retain
+historical evidence, including B10's complete audit of its then-existing 38 targets.
 
 The [complete API matrix](PLAYWRIGHT-API-MATRIX.md) covers **73 classes and
 1,018 documented JavaScript-applicable members**, including browser, test,
@@ -2481,3 +2481,45 @@ all-target Clippy, formatting, generated matrix and local file links passed.
 Eight native rendered PDFs were inspected. The full 46-target replay and
 other-platform verification remain G04 work. Matrix remains 73 classes and
 1,018 members: Partial648/Missing314/Equivalent15/Idiomatic41.
+
+## C02 — Bounded captured response bodies
+
+`Response::body`, `text` and typed `json::<T>` read the original native Chromium
+exchange after `Page::start_request_capture`. They never issue another HTTP
+request. Their `*_with_options` forms share operation deadlines and cancellation
+while capture is pending. Cached bytes remain readable after capture stops or
+the page closes; explicit caller cancellation still applies. Firefox returns a
+configuration error because its current native capture channel provides headers
+without response bytes.
+
+`BodyCaptureState`, also present in `RequestSnapshot::body_capture`, distinguishes
+not captured, pending, available (including zero bytes), truncated, unavailable,
+and failed transport. Redirect-hop bodies are explicitly unavailable; final
+bodies belong to the final native hop. Invalid JSON preserves a typed JSON error
+with the response URL and parser location. Invalid UTF-8 text uses replacement
+characters. HTTP error status alone does not prevent reading a completed body.
+
+The existing 1 MiB body limit remains. Encoded/plain lengths are checked before
+allocating decoded storage; parsed native protocol ingress is outside that cap.
+Typed bodies participate in the 16 MiB observation-history budget. Legacy body
+storage separately retains at most 16 MiB; history eviction does not erase
+caller-held typed handles. Caller clones are outside the page retention budget.
+Stopping/restarting capture cannot resurrect old pending bytes or publish a late
+reply into a new generation. Body bytes remain excluded from serialized records.
+
+[Playwright's response reference](https://playwright.dev/docs/api/class-response)
+and [CDP getResponseBody](https://chromedevtools.github.io/devtools-protocol/tot/Network/#method-getResponseBody)
+are the upstream contracts. The [pinned executable reference](scripts/e2e-conformance/body-reference.mjs)
+and [observations](scripts/e2e-conformance/body-reference.json) cover JSON, empty,
+binary, malformed JSON, oversized and HTTP 500 responses. These methods remain
+Partial: Ferrite requires opt-in capture, caps storage and supports native bytes
+only on Chromium. Existing `Page::response_body(url)` is still a separate refetch
+helper, and legacy `RecordedRequest::body_json` retains its optional parse behavior.
+
+C02 verification passed 257 scoped checks: 245 units, captured bodies (one native
+scenario covering both engines), network metadata (four), legacy capture (one),
+legacy HAR (two) and four doctests. The two legacy browser filters retained 92
+and 91 filtered cases respectively; these counts do not describe a full browser
+target replay. Strict Clippy and package formatting passed; the member matrix
+remains 73 classes/1,018 members (648 Partial, 314 Missing, 15 Equivalent and
+41 Idiomatic). The 47-target complete integration replay remains G04.

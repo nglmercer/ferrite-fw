@@ -30,6 +30,24 @@ type ContextEventForwarding = (
 );
 type IdleRequestScope = (Option<String>, Option<String>);
 struct NetworkListenerGuard(ConsoleSink);
+#[derive(Default)]
+struct BodyCaptureControl {
+    generation: u64,
+    active: bool,
+}
+struct BodyCaptureGuard {
+    sink: ConsoleSink,
+    generation: u64,
+}
+impl Drop for BodyCaptureGuard {
+    fn drop(&mut self) {
+        self.sink.end_body_capture(
+            Some(self.generation),
+            "body capture ended (stop, lag, disposal or disconnect)",
+        );
+    }
+}
+
 /// Native listeners must also stop when setup is canceled before a Page exists.
 struct PageInitialization {
     lifecycle: crate::CancellationToken,
@@ -84,6 +102,7 @@ pub struct ConsoleSink {
     idle_requests: Arc<Mutex<HashMap<String, IdleRequestScope>>>,
     observed_network: Arc<Mutex<HashMap<String, RecordedRequest>>>,
     pub(crate) network_log: Arc<Mutex<crate::network::NetworkLog>>,
+    body_capture_control: Arc<Mutex<BodyCaptureControl>>,
     network_events: tokio::sync::broadcast::Sender<NetworkObservation>,
     /// WebSocket request id to URL (resolves frame events to sockets).
     pub(crate) socket_log: Arc<Mutex<crate::websocket::SocketLog>>,
@@ -125,6 +144,7 @@ impl ConsoleSink {
             idle_requests: Arc::new(Mutex::new(HashMap::new())),
             observed_network: Arc::new(Mutex::new(HashMap::new())),
             network_log: Arc::new(Mutex::new(crate::network::NetworkLog::default())),
+            body_capture_control: Arc::new(Mutex::new(BodyCaptureControl::default())),
             network_events: tokio::sync::broadcast::channel(MAX_EVENT_BUFFER).0,
             events: tokio::sync::broadcast::channel(MAX_EVENT_BUFFER).0,
             context_events: Arc::new(Mutex::new(None)),
@@ -290,6 +310,7 @@ impl ConsoleSink {
     }
 
     pub(crate) fn close_network(&self, reason: &str) {
+        self.end_body_capture(None, reason);
         self.socket_log
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -586,7 +607,72 @@ impl ConsoleSink {
                 found.body = body;
                 found.body_truncated = truncated;
             }
+            let mut bytes: usize = requests
+                .iter()
+                .map(|record| record.body.as_ref().map_or(0, Vec::len))
+                .sum();
+            for record in requests.iter_mut() {
+                if bytes <= 16 * 1024 * 1024 {
+                    break;
+                }
+                if let Some(body) = record.body.take() {
+                    bytes -= body.len();
+                }
+            }
         }
+    }
+
+    fn begin_body_capture(&self) -> u64 {
+        let mut control = self
+            .body_capture_control
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        control.generation += 1;
+        control.active = true;
+        self.network_log
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .begin_body_capture(control.generation);
+        control.generation
+    }
+    pub(crate) fn end_body_capture(&self, generation: Option<u64>, reason: &str) {
+        let mut control = self
+            .body_capture_control
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if generation.is_some_and(|generation| generation != control.generation) {
+            return;
+        }
+        control.active = false;
+        self.network_log
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .end_body_capture(reason);
+    }
+    fn publish_captured_body(
+        &self,
+        id: &str,
+        generation: u64,
+        result: Result<Vec<u8>, crate::BodyCaptureState>,
+    ) {
+        let control = self
+            .body_capture_control
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if !control.active || control.generation != generation {
+            return;
+        }
+        match &result {
+            Ok(body) => self.set_response_body(id, Some(body.clone()), false),
+            Err(crate::BodyCaptureState::Truncated { .. }) => {
+                self.set_response_body(id, None, true)
+            }
+            Err(_) => {}
+        }
+        self.network_log
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .captured_body(id, generation, result);
     }
 
     /// Recorded requests (oldest first).
@@ -3401,11 +3487,27 @@ impl CdpDriver {
         let sink = self.sink.clone();
         let cdp = self.cdp.clone();
         let timeout = self.timeout();
+        let lifecycle = self.lifecycle.clone();
+        let context = self.context_cancellation.clone();
+        let transport = self.cdp.disconnection();
+        let generation = sink.begin_body_capture();
+        // Construct before spawning so an abort before the first poll still finalizes pending state.
+        let guard = BodyCaptureGuard {
+            sink: sink.clone(),
+            generation,
+        };
         tokio::spawn(async move {
+            let _guard=guard;
             let mut pending: HashMap<String, PendingRequest> = HashMap::new();
             let mut responded: std::collections::HashSet<String> = std::collections::HashSet::new();
             loop {
-                let event = match events.recv().await {
+                let received=tokio::select!{biased;
+                    _=lifecycle.cancelled()=>Err(tokio::sync::broadcast::error::RecvError::Closed),
+                    _=context.cancelled()=>Err(tokio::sync::broadcast::error::RecvError::Closed),
+                    _=transport.cancelled()=>Err(tokio::sync::broadcast::error::RecvError::Closed),
+                    result=events.recv()=>result,
+                };
+                let event = match received {
                     Ok(event) => event,
                     Err(_) => break,
                 };
@@ -3453,7 +3555,7 @@ impl CdpDriver {
                             let response = &event.params["response"];
                             sink.push_request(RecordedRequest {
                                 method: request.method,
-                                url: request.url,
+                                url: response["url"].as_str().unwrap_or(&request.url).to_owned(),
                                 status,
                                 headers: request.headers,
                                 post_data: request.post_data,
@@ -3488,26 +3590,18 @@ impl CdpDriver {
                     "Network.loadingFinished" => {
                         let id = event.params["requestId"].as_str().unwrap_or_default();
                         if !id.is_empty() && responded.remove(id) {
-                            // Bodies are best-effort: evicted/cached responses
-                            // simply keep `body: None`.
-                            if let Ok(got) = cdp
-                                .call(
-                                    Some(&session),
-                                    "Network.getResponseBody",
-                                    serde_json::json!({ "requestId": id }),
-                                    timeout,
-                                )
-                                .await
-                            {
-                                let bytes = network_response_bytes(&got);
-                                let (body, truncated) = match bytes {
-                                    Some(bytes) if bytes.len() > MAX_RESPONSE_BODY => (None, true),
-                                    bytes => (bytes, false),
-                                };
-                                if body.is_some() || truncated {
-                                    sink.set_response_body(id, body, truncated);
+                            let result=tokio::select!{biased;
+                                reason=lifecycle.cancelled()=>Err(crate::BodyCaptureState::Unavailable(reason)),
+                                reason=context.cancelled()=>Err(crate::BodyCaptureState::Unavailable(reason)),
+                                reason=transport.cancelled()=>Err(crate::BodyCaptureState::Unavailable(reason)),
+                                reply=cdp.call(Some(&session),"Network.getResponseBody",serde_json::json!({"requestId":id}),timeout)=>{
+                                    match reply {
+                                        Ok(reply)=>crate::captured_body::decode_body(&reply),
+                                        Err(error)=>Err(crate::BodyCaptureState::Unavailable(error.to_string())),
+                                    }
                                 }
-                            }
+                            };
+                            sink.publish_captured_body(id,generation,result);
                         }
                     }
                     "Network.loadingFailed" => {
@@ -5681,18 +5775,6 @@ fn decode_base64(data: &str) -> Result<Vec<u8>, String> {
 }
 
 /// Decode a `Network.getResponseBody` result (`None` when undecodable).
-fn network_response_bytes(got: &Value) -> Option<Vec<u8>> {
-    if got.get("base64Encoded").and_then(Value::as_bool) == Some(true) {
-        got.get("body")
-            .and_then(Value::as_str)
-            .and_then(|encoded| decode_base64(encoded).ok())
-    } else {
-        got.get("body")
-            .and_then(Value::as_str)
-            .map(|text| text.as_bytes().to_vec())
-    }
-}
-
 /// Collect frames from a CDP frame tree (main frame first, depth-first).
 /// Surface a CDP `exceptionDetails` payload as an [`E2eError`].
 fn check_cdp_exception(method: &str, result: &Value, expression: &str) -> E2eResult<()> {

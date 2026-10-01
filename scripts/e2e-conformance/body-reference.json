@@ -1,0 +1,49 @@
+{
+  "playwright": "1.63.0",
+  "engine": "chromium",
+  "cases": [
+    {
+      "path": "/json",
+      "status": 200,
+      "bytes": 29,
+      "text": "{\"answer\":42,\"text\":\"ñ🦀\"}",
+      "jsonRejected": false
+    },
+    {
+      "path": "/empty",
+      "status": 200,
+      "bytes": 0,
+      "text": "",
+      "jsonRejected": false
+    },
+    {
+      "path": "/binary",
+      "status": 200,
+      "bytes": 4,
+      "text": "\u0000��A",
+      "jsonRejected": false
+    },
+    {
+      "path": "/bad",
+      "status": 200,
+      "bytes": 8,
+      "text": "{invalid",
+      "jsonRejected": true
+    },
+    {
+      "path": "/large",
+      "status": 200,
+      "bytes": 1048577,
+      "text": null,
+      "jsonRejected": false
+    },
+    {
+      "path": "/error",
+      "status": 500,
+      "bytes": 14,
+      "text": "error response",
+      "jsonRejected": false
+    }
+  ],
+  "note": "Ferrite intentionally differs: opt-in Chromium capture, 1 MiB per body and bounded retained history. Firefox native body capture remains unsupported."
+}

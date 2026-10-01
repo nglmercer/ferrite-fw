@@ -631,3 +631,15 @@ legacy `pdf()` continues to print basic PDFs on Firefox/BiDi. The
 [native suite](../../crates/ferrite-e2e/tests/pdf_options.rs) adds validation before
 disposal checks, held-font deadlines, caller/enclosing cancellation, tagged output
 and visual inspection of eight rendered PDF profiles.
+
+### Captured response bodies
+
+`npm run reference:bodies` runs [body-reference.mjs](body-reference.mjs) against
+pinned Playwright 1.63 Chromium and writes [body-reference.json](body-reference.json).
+Six original-response profiles check JSON, empty bytes, binary/invalid UTF-8,
+malformed JSON, a body over 1 MiB and HTTP 500 content. Helpers must not refetch.
+Ferrite's [native gate](../../crates/ferrite-e2e/tests/captured_bodies.rs) also
+checks uncaptured bodies, bounded truncation, failed transport after headers,
+pending deadlines/cancellation, stop/restart generation isolation, cached bytes
+after close and explicit Firefox unsupported errors. Playwright can return the
+oversized reference body; Ferrite intentionally preserves its 1 MiB cap.
