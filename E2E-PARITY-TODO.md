@@ -1179,6 +1179,16 @@ behavior claims must still use the repository's pinned Playwright v1.63.0 corpus
   unexpected passes; expected failures, successful attempts and runtime skips
   are removed. Upstream JSON can retain deleted attachment paths. Rust ownership,
   safe deletion and valid/pruned report links remain pending; D03 stays open.
+  Policy foundation: [OutputRetention](crates/ferrite-e2e/src/output_retention.rs)
+  provides the three validated serialized values and `retains_attempt`, using
+  final `AttemptResult.is_expected` rather than raw/final-test status. Default is
+  Always; unexpected retry/cleanup/interruption outcomes stay distinguishable.
+  Two targeted policy tests and strict library Clippy/fmt passed. Runner/config
+  wiring and deletion are not activated yet. Existing screenshots/videos/traces
+  and latest-trace aliases live outside the attempt attachment directory; move
+  them into explicitly reserved owned roots before any retention deletion.
+  Verify roots, overlap/symlinks, baselines, caller sources and report/export
+  publication before activating cleanup. D03 remains open.
 
 - [ ] **D04 — Run metadata and slow-test reporting (M; needs B14/B11).** Add
   optional JSON-safe user metadata/run name and project metadata, propagated

@@ -66,6 +66,7 @@ mod lifecycle_events;
 mod locator;
 mod network;
 mod operation;
+mod output_retention;
 mod page;
 mod popup_capture;
 mod process_output;
@@ -132,6 +133,7 @@ pub use network::{
     RequestSnapshot, Response,
 };
 pub use operation::{CancellationToken, OperationOptions};
+pub use output_retention::OutputRetention;
 pub use page::{
     AbortReason, ClickOptions, ColorScheme, ConsoleLocation, ConsoleMessage, Cookie,
     DeviceDescriptor, DialogDecision, DialogInfo, Download, ElementRect, ElementState, Frame,
