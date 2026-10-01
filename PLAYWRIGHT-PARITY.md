@@ -3288,3 +3288,32 @@ The coherent final-source `cargo test -p ferrite-e2e --no-fail-fast --
 are mandatory, using Chrome Headless Shell 153.0.8010.12 and Firefox 157.0.
 The [completion index](E2E-PARITY-AUDIT.md) records inventory and gate scope.
 G04 remains unchecked until that command and the requirement audit are complete.
+
+## G04 audit progress — Abandoned Fetch cleanup receipts
+
+Abandoned Chromium route startup now owns the replies for its ordered Fetch
+disable/auth-restoration commands instead of discarding their acknowledgements.
+The current cleanup batch holds at most two receipts. Each receipt uses the
+existing pending-call guard, so cancellation and page-state drop reclaim its
+response entry without spawning a retained background task.
+
+Fetch updates are serialized. Before reinstalling interception, the driver
+settles the cleanup receipts; rejection, malformed acknowledgement or a lost
+wait requires an acknowledged Fetch disable repair. A held receipt and repair
+share one 750-millisecond clock, including with protocol timeouts disabled.
+Failed repair retains the dirty marker for an explicit retry. Generation checks
+prevent an older update from clearing a newer abandoned-startup marker, and the
+merged routing/auth configuration is applied only after cleanup is confirmed.
+Already-issued native commands remain outside force-cancellation guarantees.
+
+The new protocol regression covers rejection, malformed success, held reply,
+failed repair and retry, with and without auth restoration. It checks wire
+ordering, dirty-marker retention, receipt bounds and weak page-state release.
+Scoped verification passed 303 units, 30 required Chromium/Firefox groups across
+six HTTP/routing/callback/ownership/header targets, and four doctests (337 checks).
+Three-package strict Clippy and formatting passed.
+
+The preceding complete replay also exited successfully: 302 units, 282
+integration tests across 51 targets and four doctests, 588 checks without failures,
+ignored or filtered cases. It predates this repair and cannot close G04. The new
+303-unit final-source complete build/replay and final audit remain required.

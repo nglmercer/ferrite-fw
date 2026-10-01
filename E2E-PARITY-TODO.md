@@ -582,6 +582,13 @@ Work in [the audit generator](scripts/playwright-parity/build_matrix.py),
   [Evidence](PLAYWRIGHT-PARITY.md#g04-audit-progress--terminal-interception-stop-failures):
   302 units, eight mandatory two-engine groups, four doctests and three-package
   strict Clippy. The complete final-source replay and requirement audit remain.
+  Abandoned Chromium startup now tracks bounded Fetch cleanup receipts and
+  requires acknowledged repair before fresh installation. Cancellation retains
+  a dirty marker; auth restoration and generation changes preserve ownership.
+  [Evidence](PLAYWRIGHT-PARITY.md#g04-audit-progress--abandoned-fetch-cleanup-receipts):
+  303 units, 30 mandatory two-engine groups, four doctests and three-package
+  strict Clippy/formatting. The preceding 588-check complete replay passed;
+  the complete replay after this repair and final audit remain required.
   Further progress: native listener guards expose terminal source loss to Page
   event, typed request/response and legacy network predicate waits, including
   zero-timeout probes on both transports. [Evidence](PLAYWRIGHT-PARITY.md#g04-audit-progress--native-listener-source-loss):

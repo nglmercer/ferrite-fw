@@ -67,6 +67,34 @@ struct PendingCall {
     inner: Arc<Inner>,
     id: u64,
 }
+/// A bounded cleanup receipt owned by its page state, without a background task.
+pub(crate) struct QueuedCleanup {
+    pending: PendingCall,
+    reply: oneshot::Receiver<E2eResult<Value>>,
+    method: String,
+}
+impl std::fmt::Debug for QueuedCleanup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QueuedCleanup")
+            .field("method", &self.method)
+            .finish()
+    }
+}
+impl QueuedCleanup {
+    pub(crate) async fn wait(self, budget: crate::operation::Deadline) -> E2eResult<()> {
+        budget.run(format!("queued {} cleanup", self.method), async {
+            let value = tokio::select! { biased;
+                reason = self.pending.inner.closed.cancelled() => return Err(E2eError::Disconnected(reason)),
+                result = self.reply => result.map_err(|_| E2eError::Disconnected("queued cleanup reply dropped".into()))??,
+            };
+            if !value.is_object() {
+                return Err(E2eError::Config("queued Fetch cleanup returned malformed acknowledgement".into()));
+            }
+            Ok(())
+        }).await
+    }
+}
+
 impl Drop for PendingCall {
     fn drop(&mut self) {
         self.inner
@@ -270,16 +298,41 @@ impl CdpConnection {
             .await
     }
 
-    // Cleanup commands use the existing ordered writer without creating pending
-    // response owners or a task that can outlive its page.
-    pub(crate) fn enqueue_cleanup(&self, session: &str, method: &str, params: Value) {
+    // The caller owns the receipt and pending guard; cancellation or page drop
+    // removes the response entry without retaining a background task.
+    pub(crate) fn enqueue_cleanup(
+        &self,
+        session: &str,
+        method: &str,
+        params: Value,
+    ) -> E2eResult<QueuedCleanup> {
         if self.inner.closed.is_cancelled() {
-            return;
+            return Err(E2eError::Disconnected(
+                "cdp cleanup transport closed".into(),
+            ));
         }
         let id = self.inner.next_id.fetch_add(1, Ordering::SeqCst);
+        let (tx, reply) = oneshot::channel();
+        self.inner
+            .pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id, tx);
+        let pending = PendingCall {
+            inner: self.inner.clone(),
+            id,
+        };
         let frame =
             serde_json::json!({"id":id,"sessionId":session,"method":method,"params":params});
-        let _ = self.inner.tx.send(Outbound::Text(frame.to_string()));
+        self.inner
+            .tx
+            .send(Outbound::Text(frame.to_string()))
+            .map_err(|_| E2eError::Disconnected("cdp cleanup writer gone".into()))?;
+        Ok(QueuedCleanup {
+            pending,
+            reply,
+            method: method.to_owned(),
+        })
     }
 
     pub(crate) fn forget_session(&self, session: &str) {

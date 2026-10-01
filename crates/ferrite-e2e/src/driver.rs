@@ -820,6 +820,7 @@ pub struct CdpDriver {
     browser_context: Option<String>,
     /// Fetch-domain sharing between routing and auth challenges.
     fetch_auth: Arc<Mutex<FetchAuthState>>,
+    fetch_update: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// Shared Fetch-domain state: routing owns `patterns`, credentials own
@@ -832,6 +833,9 @@ struct FetchAuthState {
     creds: Option<(String, String)>,
     /// Auth-challenge pump (alive while `creds` is set).
     auth_task: Option<tokio::task::AbortHandle>,
+    cleanup: Vec<crate::cdp::QueuedCleanup>,
+    cleanup_dirty: bool,
+    cleanup_generation: u64,
 }
 
 // Construct before the first native await; failed or dropped startup must not
@@ -852,13 +856,32 @@ impl Drop for FetchRoutingStartup {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         state.routing_patterns = None;
-        self.driver
+        state.cleanup.clear();
+        state.cleanup_dirty = true;
+        state.cleanup_generation = state.cleanup_generation.wrapping_add(1);
+        match self
+            .driver
             .cdp
-            .enqueue_cleanup(&self.driver.session, "Fetch.disable", Value::Null);
+            .enqueue_cleanup(&self.driver.session, "Fetch.disable", Value::Null)
+        {
+            Ok(receipt) => state.cleanup.push(receipt),
+            Err(error) => self.driver.sink.record(
+                "route",
+                format!("abandoned Fetch cleanup could not be queued: {error}"),
+            ),
+        }
         if let Some(params) = fetch_enable_params(None, state.creds.is_some()) {
-            self.driver
+            match self
+                .driver
                 .cdp
-                .enqueue_cleanup(&self.driver.session, "Fetch.enable", params);
+                .enqueue_cleanup(&self.driver.session, "Fetch.enable", params)
+            {
+                Ok(receipt) => state.cleanup.push(receipt),
+                Err(error) => self.driver.sink.record(
+                    "route",
+                    format!("abandoned Fetch auth restoration could not be queued: {error}"),
+                ),
+            }
         }
     }
 }
@@ -1100,6 +1123,7 @@ impl CdpDriver {
             pressed: Arc::new(Mutex::new(false)),
             browser_context,
             fetch_auth: Arc::new(Mutex::new(FetchAuthState::default())),
+            fetch_update: Arc::new(tokio::sync::Mutex::new(())),
         };
         let mut initialization = PageInitialization {
             lifecycle: driver.lifecycle.clone(),
@@ -3496,16 +3520,69 @@ impl CdpDriver {
 
     /// Re-enable the Fetch domain from merged routing/auth state.
     async fn apply_fetch_config(&self) -> E2eResult<()> {
-        let params = self
-            .fetch_auth
-            .lock()
-            .map(|shared| {
-                fetch_enable_params(shared.routing_patterns.as_deref(), shared.creds.is_some())
-            })
-            .unwrap_or(None);
-        match params {
-            Some(params) => self.call("Fetch.enable", params).await.map(|_| ()),
-            None => self.call("Fetch.disable", Value::Null).await.map(|_| ()),
+        let _update = self.fetch_update.lock().await;
+        let budget = crate::operation::Deadline::cleanup(Duration::from_millis(750));
+        loop {
+            let (generation, dirty, receipts) = {
+                let mut state = self.fetch_auth.lock().unwrap_or_else(|e| e.into_inner());
+                (
+                    state.cleanup_generation,
+                    state.cleanup_dirty,
+                    std::mem::take(&mut state.cleanup),
+                )
+            };
+            if dirty {
+                let mut repair = receipts.is_empty();
+                for receipt in receipts {
+                    if let Err(error) = receipt.wait(budget).await {
+                        repair = true;
+                        self.sink.record(
+                            "route",
+                            format!("abandoned Fetch cleanup requires repair: {error}"),
+                        );
+                    }
+                }
+                if repair {
+                    let value = budget
+                        .run(
+                            "abandoned Fetch cleanup repair",
+                            self.call("Fetch.disable", Value::Null),
+                        )
+                        .await?;
+                    if !value.is_object() {
+                        return Err(E2eError::Config(
+                            "Fetch cleanup repair returned malformed acknowledgement".into(),
+                        ));
+                    }
+                }
+                let mut state = self.fetch_auth.lock().unwrap_or_else(|e| e.into_inner());
+                if state.cleanup_generation != generation {
+                    continue;
+                }
+                state.cleanup_dirty = false;
+            }
+            let params = {
+                let state = self.fetch_auth.lock().unwrap_or_else(|e| e.into_inner());
+                fetch_enable_params(state.routing_patterns.as_deref(), state.creds.is_some())
+            };
+            let value = match params {
+                Some(params) => self.call("Fetch.enable", params).await?,
+                None => self.call("Fetch.disable", Value::Null).await?,
+            };
+            if !value.is_object() {
+                return Err(E2eError::Config(
+                    "Fetch configuration returned malformed acknowledgement".into(),
+                ));
+            }
+            if self
+                .fetch_auth
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .cleanup_generation
+                == generation
+            {
+                return Ok(());
+            }
         }
     }
 
@@ -7190,6 +7267,151 @@ mod initialization_tests {
         let mut unblocked = event("new-child", "owned");
         unblocked.params["isBlocked"] = json!(false);
         assert!(!bidi_owned_pause(&unblocked, "root", "owned"));
+    }
+
+    #[tokio::test]
+    async fn abandoned_fetch_cleanup_receipts_require_confirmed_repair_before_reinstallation() {
+        for auth in [false, true] {
+            for mode in 0..4 {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let address = listener.local_addr().unwrap();
+                let (observed, mut commands) = tokio::sync::mpsc::unbounded_channel();
+                let server = tokio::spawn(async move {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                    let mut disables = 0;
+                    let mut repaired = false;
+                    while let Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) =
+                        socket.next().await
+                    {
+                        let request: Value = serde_json::from_str(&text).unwrap();
+                        let method = request["method"].as_str().unwrap();
+                        if method.starts_with("Fetch.") {
+                            observed.send(request.clone()).unwrap();
+                        }
+                        if method == "Fetch.disable" {
+                            disables += 1;
+                            if disables == 1 && mode == 2 {
+                                continue;
+                            }
+                        }
+                        let rejected = method == "Fetch.disable"
+                            && ((disables == 1 && mode != 1) || (disables == 2 && mode == 3));
+                        let malformed = method == "Fetch.disable" && disables == 1 && mode == 1;
+                        if method == "Fetch.disable" && !rejected && !malformed {
+                            repaired = true;
+                        }
+                        let fresh = method == "Fetch.enable"
+                            && request["params"]["patterns"]
+                                .as_array()
+                                .is_some_and(|p| p.len() == 2);
+                        assert!(
+                            !fresh || repaired,
+                            "fresh routing must not precede acknowledged cleanup repair"
+                        );
+                        let reply = if rejected {
+                            json!({"id":request["id"],"error":{"code":-1,"message":"cleanup refused"}})
+                        } else {
+                            let result = if malformed {
+                                Value::Null
+                            } else if method == "Page.getFrameTree" {
+                                json!({"frameTree":{"frame":{"id":"root","url":"about:blank"}}})
+                            } else {
+                                json!({})
+                            };
+                            json!({"id":request["id"],"result":result})
+                        };
+                        socket
+                            .send(tokio_tungstenite::tungstenite::Message::Text(
+                                reply.to_string().into(),
+                            ))
+                            .await
+                            .unwrap();
+                    }
+                });
+                let connection = CdpConnection::connect(&format!("ws://{address}"))
+                    .await
+                    .unwrap();
+                let driver = CdpDriver::spawn(
+                    connection.clone(),
+                    "session".into(),
+                    "page".into(),
+                    Duration::ZERO,
+                    ConsoleSink::new(),
+                    None,
+                )
+                .await
+                .unwrap();
+                if auth {
+                    driver.fetch_auth.lock().unwrap().creds =
+                        Some(("user".into(), "password".into()));
+                }
+                drop(FetchRoutingStartup {
+                    driver: driver.clone(),
+                    committed: false,
+                });
+                {
+                    let mut state = driver.fetch_auth.lock().unwrap();
+                    assert!(state.cleanup_dirty);
+                    assert_eq!(state.cleanup.len(), if auth { 2 } else { 1 });
+                    state.routing_patterns = Some(vec![
+                        json!({"urlPattern":"*"}),
+                        json!({"urlPattern":"*","requestStage":"Response"}),
+                    ]);
+                }
+                let result =
+                    tokio::time::timeout(Duration::from_secs(2), driver.apply_fetch_config())
+                        .await
+                        .unwrap();
+                if mode >= 2 {
+                    assert!(result.is_err());
+                    assert!(driver.fetch_auth.lock().unwrap().cleanup_dirty);
+                    tokio::time::timeout(Duration::from_secs(2), driver.apply_fetch_config())
+                        .await
+                        .unwrap()
+                        .unwrap();
+                } else {
+                    result.unwrap();
+                }
+                let mut trace = Vec::new();
+                loop {
+                    let request = tokio::time::timeout(Duration::from_secs(1), commands.recv())
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    let fresh = request["method"] == "Fetch.enable"
+                        && request["params"]["patterns"]
+                            .as_array()
+                            .is_some_and(|p| p.len() == 2);
+                    trace.push(request);
+                    if fresh {
+                        break;
+                    }
+                }
+                assert_eq!(trace[0]["method"], "Fetch.disable");
+                assert!(
+                    trace
+                        .iter()
+                        .filter(|r| r["method"] == "Fetch.disable")
+                        .count()
+                        >= 2
+                );
+                if auth {
+                    assert_eq!(trace[1]["params"], fetch_enable_params(None, true).unwrap());
+                    assert_eq!(trace.last().unwrap()["params"]["handleAuthRequests"], true);
+                }
+                assert!(!driver.fetch_auth.lock().unwrap().cleanup_dirty);
+                assert!(driver.fetch_auth.lock().unwrap().cleanup.is_empty());
+                let weak = Arc::downgrade(&driver.fetch_auth);
+                drop(driver);
+                assert!(
+                    weak.upgrade().is_none(),
+                    "cleanup receipts cannot retain their page state"
+                );
+                connection.close();
+                server.abort();
+            }
+        }
     }
 
     async fn interrupted_fetch_startup(auth: bool, reject: bool) {

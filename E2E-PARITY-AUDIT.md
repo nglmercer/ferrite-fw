@@ -1,29 +1,22 @@
 # E2E parity completion evidence index
 
-Implementation checkpoint: `c6ac63d`. This indexes every requirement in
+Implementation checkpoint: abandoned Fetch cleanup receipt repair following `6502ff7`. This indexes every requirement in
 [E2E-PARITY-TODO.md](E2E-PARITY-TODO.md); its acceptance criteria remain authoritative.
 All 51 task IDs are represented. Evidence locations are not completion claims.
 
-Cargo metadata and the final-source `--list` inventory agree: **302 unit tests
-and 282 integration tests across all 51 targets**, 584 executable tests in total.
-The earlier checkpoint replay completed this exact inventory with zero failures,
-ignored tests or filtered cases. Its process exited successfully. Because the
-terminal-stop increment was verified separately while that replay was running,
-this checkpoint is not used as a complete final-source claim.
+Cargo metadata identifies all 51 integration targets. The preceding complete
+replay passed 302 units, all 282 integration tests and four doctests: **588 checks**,
+with no failures, ignored or filtered cases. Its process exited successfully.
+It predates the Fetch cleanup receipt repair and is retained as checkpoint evidence.
 
-The final-source complete command is now running with `--no-fail-fast` and
-`--test-threads=1`, including doctests. It uses Chrome Headless Shell
-153.0.8010.12, Firefox 157.0 and the mandatory both-browser setting. The four
-current E2E doctests bring the expected E2E inventory to 588; the separately
-verified 31 CLI/configuration checks bring the combined inventory to 619.
-These expected totals are not a report of the pending command's result.
-
-The complete final-source replay result is **pending**. Every final-source
-integration target built successfully before this command began.
-Current final-source scoped evidence is 302 unit tests, eight mandatory
-Chromium/Firefox route-lifecycle groups and four doctests. E2E/CLI/configuration
-strict Clippy and formatting passed; CLI/configuration passed 30 tests and one
-doctest. All 32 recorded reference JSON files identify Playwright 1.63.0.
+The new final-source complete build and replay are **pending**. Current scoped
+evidence is 303 unit tests, 30 mandatory Chromium/Firefox native groups across
+six targets and four doctests. E2E/CLI/configuration strict Clippy and formatting
+passed. The separately recorded CLI/configuration gate passed 30 tests and one
+doctest; all 32 recorded reference JSON files identify Playwright 1.63.0.
+The expected new E2E inventory is 589 checks (303 units, 282 integrations, four
+doctests), pending reconciliation and terminal verification. This expected total
+is not a report of the pending replay's result.
 
 ## Requirement evidence locations
 
