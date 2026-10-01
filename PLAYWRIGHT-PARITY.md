@@ -2813,3 +2813,32 @@ and [network metadata](crates/ferrite-e2e/tests/network_metadata.rs), plus four
 doctests. Strict Clippy and formatting passed. Context-wide listener loss,
 native disposal error handling and the other G04 cases remain under audit;
 this does not claim the full integration replay.
+
+
+## G04 audit progress — Confirmed native page disposal
+
+Page driver cleanup now preserves native close failures and confirms target
+absence. Chromium calls `Target.closeTarget` directly; closing a target disposes
+its sessions, so the previous independent pre-close detach is unnecessary.
+Firefox calls `browsingContext.close`. Both query the native target/context
+inventory until the identity disappears, under one shared five-second cleanup
+budget. Inventory shape and identity fields are validated; malformed replies
+cannot prove disappearance. A concurrent external close counts as success only
+when absence is observed. If the native close fails and the target remains, the
+original error surfaces; query/disconnection failures also surface.
+
+This distinguishes local Page invalidation, native close acknowledgment and
+confirmed native destruction. Page invalidation still starts before cleanup;
+a failed close leaves that Page unusable and its shared disposal outcome is
+replayed. Existing owned close work survives dropped waits. The [disposal kernel](crates/ferrite-e2e/src/native_disposal.rs)
+checks acknowledgment versus delayed disappearance, native rejection, concurrent
+external removal, observation failure and the shared timeout. The protocol
+fixture now returns valid close acknowledgment and post-close inventory data.
+
+Scoped validation passed 279 checks: 264 units, 11 mandatory Chromium/Firefox
+native groups across [ownership](crates/ferrite-e2e/tests/browser_ownership.rs),
+[lifecycle](crates/ferrite-e2e/tests/lifecycle_events.rs) and
+[popup diagnostics](crates/ferrite-e2e/tests/popup_diagnostics.rs), plus four
+doctests, strict Clippy and formatting. G04 remains open for context-wide source
+loss, route installation cancellation/rollback, assertion/step control errors,
+detached-frame requests, redirect/header correlation and complete final replay.

@@ -254,8 +254,14 @@ mod tests {
                             json!({"context":if command["params"]["userContext"] == "owner2" {"root2"} else {"root"}})
                         }
                         "browsingContext.getTree" => {
-                            json!({"contexts":[{"context":"root","url":"about:blank","children":[]}]})
+                            if command["params"]["maxDepth"] == 0 {
+                                json!({"contexts":[]})
+                            } else {
+                                json!({"contexts":[{"context":"root","url":"about:blank","children":[]}]})
+                            }
                         }
+                        "Target.closeTarget" => json!({"success":true}),
+                        "Target.getTargets" => json!({"targetInfos":[]}),
                         "Target.createTarget" => {
                             json!({"targetId":if command["params"]["browserContextId"] == "owner2" {"root2"} else {"root"}})
                         }

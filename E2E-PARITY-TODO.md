@@ -575,6 +575,14 @@ Work in [the audit generator](scripts/playwright-parity/build_matrix.py),
   262 units, seven mandatory two-engine native groups and four doctests (273
   scoped checks), with strict Clippy/formatting. Context-wide source propagation
   and native close-error handling still require verification.
+  Further progress: native Page disposal preserves errors and confirms target
+  disappearance using validated inventories under one five-second cleanup clock.
+  The pre-close Chromium session detach was removed. Concurrent external closure
+  resolves only after observed absence; owned close/drop behavior is retained.
+  [Evidence](PLAYWRIGHT-PARITY.md#g04-audit-progress--confirmed-native-page-disposal):
+  264 units, 11 mandatory two-engine native groups and four doctests (279 scoped
+  checks), strict Clippy/formatting. This does not complete the remaining audit.
+
 
 
 

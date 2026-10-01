@@ -67,6 +67,7 @@ mod har;
 mod jshandle;
 mod lifecycle_events;
 mod locator;
+mod native_disposal;
 mod network;
 mod operation;
 mod output_retention;

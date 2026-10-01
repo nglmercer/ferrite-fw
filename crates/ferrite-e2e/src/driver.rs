@@ -3743,25 +3743,46 @@ impl CdpDriver {
     }
 
     async fn close(&self) -> E2eResult<()> {
-        let _ = self
-            .cdp
-            .call(
-                None,
-                "Target.detachFromTarget",
-                serde_json::json!({ "sessionId": self.session }),
-                Duration::from_secs(5),
-            )
-            .await;
-        let _ = self
-            .cdp
-            .call(
-                None,
-                "Target.closeTarget",
-                serde_json::json!({ "targetId": self.target }),
-                Duration::from_secs(5),
-            )
-            .await;
-        Ok(())
+        let timeout = Duration::from_secs(5);
+        crate::native_disposal::confirmed_close(
+            async {
+                let result = self
+                    .cdp
+                    .call(
+                        None,
+                        "Target.closeTarget",
+                        serde_json::json!({"targetId":self.target}),
+                        timeout,
+                    )
+                    .await?;
+                if result["success"] != Value::Bool(true) {
+                    return Err(E2eError::Cdp {
+                        method: "Target.closeTarget".into(),
+                        message: "native close was not acknowledged".into(),
+                    });
+                }
+                Ok(())
+            },
+            || async {
+                let result = self
+                    .cdp
+                    .call(None, "Target.getTargets", serde_json::json!({}), timeout)
+                    .await?;
+                let targets = result["targetInfos"].as_array().ok_or_else(|| {
+                    E2eError::Config(
+                        "Target.getTargets omitted targetInfos while confirming disposal".into(),
+                    )
+                })?;
+                if targets.iter().any(|target| target["targetId"].as_str().is_none_or(str::is_empty)) {
+                    return Err(E2eError::Config("Target.getTargets returned invalid target identity while confirming disposal".into()));
+                }
+                Ok(!targets
+                    .iter()
+                    .any(|target| target["targetId"].as_str() == Some(self.target.as_str())))
+            },
+            timeout,
+        )
+        .await
     }
 
     async fn raw(&self, method: &str, params: Value, timeout: Duration) -> E2eResult<Value> {
@@ -5268,15 +5289,42 @@ impl BidiDriver {
     }
 
     async fn close(&self) -> E2eResult<()> {
-        let _ = self
-            .bidi
-            .call(
-                "browsingContext.close",
-                serde_json::json!({ "context": self.context }),
-                Duration::from_secs(5),
-            )
-            .await;
-        Ok(())
+        let timeout = Duration::from_secs(5);
+        crate::native_disposal::confirmed_close(
+            async {
+                self.bidi
+                    .call(
+                        "browsingContext.close",
+                        serde_json::json!({"context":self.context}),
+                        timeout,
+                    )
+                    .await?;
+                Ok(())
+            },
+            || async {
+                let result = self
+                    .bidi
+                    .call(
+                        "browsingContext.getTree",
+                        serde_json::json!({"maxDepth":0}),
+                        timeout,
+                    )
+                    .await?;
+                let contexts = result["contexts"].as_array().ok_or_else(|| {
+                    E2eError::Config(
+                        "browsingContext.getTree omitted contexts while confirming disposal".into(),
+                    )
+                })?;
+                if contexts.iter().any(|context| context["context"].as_str().is_none_or(str::is_empty)) {
+                    return Err(E2eError::Config("browsingContext.getTree returned invalid context identity while confirming disposal".into()));
+                }
+                Ok(!contexts
+                    .iter()
+                    .any(|context| context["context"].as_str() == Some(self.context.as_str())))
+            },
+            timeout,
+        )
+        .await
     }
 
     async fn raw(&self, method: &str, mut params: Value, timeout: Duration) -> E2eResult<Value> {
