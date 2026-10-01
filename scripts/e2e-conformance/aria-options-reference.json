@@ -1,0 +1,1794 @@
+{
+  "playwright": "1.63.0",
+  "mode": "default",
+  "engines": [
+    {
+      "name": "chromium",
+      "version": "153.0.8010.12",
+      "cases": [
+        {
+          "name": "default",
+          "options": {},
+          "json": {
+            "outcome": "passed",
+            "value": [
+              {
+                "role": "region",
+                "name": "Root",
+                "children": [
+                  {
+                    "role": "group",
+                    "name": "Nested",
+                    "children": [
+                      {
+                        "role": "heading",
+                        "name": "Heading",
+                        "level": 2
+                      },
+                      {
+                        "role": "button",
+                        "name": "Push",
+                        "pressed": true
+                      },
+                      {
+                        "role": "checkbox",
+                        "name": "Check",
+                        "checked": true
+                      },
+                      {
+                        "role": "checkbox",
+                        "name": "Mixed",
+                        "checked": "mixed"
+                      },
+                      {
+                        "role": "button",
+                        "name": "Disabled",
+                        "disabled": true
+                      },
+                      {
+                        "role": "button",
+                        "name": "Flags"
+                      }
+                    ]
+                  },
+                  {
+                    "role": "group",
+                    "name": "Shadow",
+                    "children": [
+                      "Edit",
+                      {
+                        "role": "textbox",
+                        "name": "Edit",
+                        "disabled": true
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "text": {
+            "outcome": "passed",
+            "value": "- region \"Root\":\n  - group \"Nested\":\n    - heading \"Heading\" [level=2]\n    - button \"Push\" [pressed]\n    - checkbox \"Check\" [checked]\n    - checkbox \"Mixed\" [checked=mixed]\n    - button \"Disabled\" [disabled]\n    - button \"Flags\"\n  - group \"Shadow\":\n    - text: Edit\n    - textbox \"Edit\" [disabled]"
+          }
+        },
+        {
+          "name": "depth-zero",
+          "options": {
+            "depth": 0
+          },
+          "json": {
+            "outcome": "passed",
+            "value": [
+              {
+                "role": "region",
+                "name": "Root",
+                "children": [
+                  {
+                    "role": "group",
+                    "name": "Nested",
+                    "children": [
+                      {
+                        "role": "heading",
+                        "name": "Heading",
+                        "level": 2
+                      },
+                      {
+                        "role": "button",
+                        "name": "Push",
+                        "pressed": true
+                      },
+                      {
+                        "role": "checkbox",
+                        "name": "Check",
+                        "checked": true
+                      },
+                      {
+                        "role": "checkbox",
+                        "name": "Mixed",
+                        "checked": "mixed"
+                      },
+                      {
+                        "role": "button",
+                        "name": "Disabled",
+                        "disabled": true
+                      },
+                      {
+                        "role": "button",
+                        "name": "Flags"
+                      }
+                    ]
+                  },
+                  {
+                    "role": "group",
+                    "name": "Shadow",
+                    "children": [
+                      "Edit",
+                      {
+                        "role": "textbox",
+                        "name": "Edit",
+                        "disabled": true
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "text": {
+            "outcome": "passed",
+            "value": "- region \"Root\":\n  - group \"Nested\":\n    - heading \"Heading\" [level=2]\n    - button \"Push\" [pressed]\n    - checkbox \"Check\" [checked]\n    - checkbox \"Mixed\" [checked=mixed]\n    - button \"Disabled\" [disabled]\n    - button \"Flags\"\n  - group \"Shadow\":\n    - text: Edit\n    - textbox \"Edit\" [disabled]"
+          }
+        },
+        {
+          "name": "depth-one",
+          "options": {
+            "depth": 1
+          },
+          "json": {
+            "outcome": "passed",
+            "value": [
+              {
+                "role": "region",
+                "name": "Root",
+                "children": [
+                  {
+                    "role": "group",
+                    "name": "Nested"
+                  },
+                  {
+                    "role": "group",
+                    "name": "Shadow"
+                  }
+                ]
+              }
+            ]
+          },
+          "text": {
+            "outcome": "passed",
+            "value": "- region \"Root\":\n  - group \"Nested\"\n  - group \"Shadow\""
+          }
+        },
+        {
+          "name": "depth-two",
+          "options": {
+            "depth": 2
+          },
+          "json": {
+            "outcome": "passed",
+            "value": [
+              {
+                "role": "region",
+                "name": "Root",
+                "children": [
+                  {
+                    "role": "group",
+                    "name": "Nested",
+                    "children": [
+                      {
+                        "role": "heading",
+                        "name": "Heading",
+                        "level": 2
+                      },
+                      {
+                        "role": "button",
+                        "name": "Push",
+                        "pressed": true
+                      },
+                      {
+                        "role": "checkbox",
+                        "name": "Check",
+                        "checked": true
+                      },
+                      {
+                        "role": "checkbox",
+                        "name": "Mixed",
+                        "checked": "mixed"
+                      },
+                      {
+                        "role": "button",
+                        "name": "Disabled",
+                        "disabled": true
+                      },
+                      {
+                        "role": "button",
+                        "name": "Flags"
+                      }
+                    ]
+                  },
+                  {
+                    "role": "group",
+                    "name": "Shadow",
+                    "children": [
+                      "Edit",
+                      {
+                        "role": "textbox",
+                        "name": "Edit",
+                        "disabled": true
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "text": {
+            "outcome": "passed",
+            "value": "- region \"Root\":\n  - group \"Nested\":\n    - heading \"Heading\" [level=2]\n    - button \"Push\" [pressed]\n    - checkbox \"Check\" [checked]\n    - checkbox \"Mixed\" [checked=mixed]\n    - button \"Disabled\" [disabled]\n    - button \"Flags\"\n  - group \"Shadow\":\n    - text: Edit\n    - textbox \"Edit\" [disabled]"
+          }
+        },
+        {
+          "name": "depth-four",
+          "options": {
+            "depth": 4
+          },
+          "json": {
+            "outcome": "passed",
+            "value": [
+              {
+                "role": "region",
+                "name": "Root",
+                "children": [
+                  {
+                    "role": "group",
+                    "name": "Nested",
+                    "children": [
+                      {
+                        "role": "heading",
+                        "name": "Heading",
+                        "level": 2
+                      },
+                      {
+                        "role": "button",
+                        "name": "Push",
+                        "pressed": true
+                      },
+                      {
+                        "role": "checkbox",
+                        "name": "Check",
+                        "checked": true
+                      },
+                      {
+                        "role": "checkbox",
+                        "name": "Mixed",
+                        "checked": "mixed"
+                      },
+                      {
+                        "role": "button",
+                        "name": "Disabled",
+                        "disabled": true
+                      },
+                      {
+                        "role": "button",
+                        "name": "Flags"
+                      }
+                    ]
+                  },
+                  {
+                    "role": "group",
+                    "name": "Shadow",
+                    "children": [
+                      "Edit",
+                      {
+                        "role": "textbox",
+                        "name": "Edit",
+                        "disabled": true
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "text": {
+            "outcome": "passed",
+            "value": "- region \"Root\":\n  - group \"Nested\":\n    - heading \"Heading\" [level=2]\n    - button \"Push\" [pressed]\n    - checkbox \"Check\" [checked]\n    - checkbox \"Mixed\" [checked=mixed]\n    - button \"Disabled\" [disabled]\n    - button \"Flags\"\n  - group \"Shadow\":\n    - text: Edit\n    - textbox \"Edit\" [disabled]"
+          }
+        },
+        {
+          "name": "boxes",
+          "options": {
+            "boxes": true
+          },
+          "json": {
+            "outcome": "passed",
+            "value": [
+              {
+                "role": "region",
+                "name": "Root",
+                "box": {
+                  "x": 20,
+                  "y": 30,
+                  "width": 140,
+                  "height": 174
+                },
+                "children": [
+                  {
+                    "role": "group",
+                    "name": "Nested",
+                    "box": {
+                      "x": 20,
+                      "y": 50,
+                      "width": 140,
+                      "height": 90
+                    },
+                    "children": [
+                      {
+                        "role": "heading",
+                        "name": "Heading",
+                        "level": 2,
+                        "box": {
+                          "x": 20,
+                          "y": 50,
+                          "width": 140,
+                          "height": 27
+                        }
+                      },
+                      {
+                        "role": "button",
+                        "name": "Push",
+                        "pressed": true,
+                        "box": {
+                          "x": 20,
+                          "y": 98,
+                          "width": 46,
+                          "height": 21
+                        }
+                      },
+                      {
+                        "role": "checkbox",
+                        "name": "Check",
+                        "checked": true,
+                        "box": {
+                          "x": 70,
+                          "y": 100,
+                          "width": 13,
+                          "height": 13
+                        }
+                      },
+                      {
+                        "role": "checkbox",
+                        "name": "Mixed",
+                        "checked": "mixed",
+                        "box": {
+                          "x": 94,
+                          "y": 100,
+                          "width": 13,
+                          "height": 13
+                        }
+                      },
+                      {
+                        "role": "button",
+                        "name": "Disabled",
+                        "disabled": true,
+                        "box": {
+                          "x": 20,
+                          "y": 119,
+                          "width": 68,
+                          "height": 21
+                        }
+                      },
+                      {
+                        "role": "button",
+                        "name": "Flags",
+                        "box": {
+                          "x": 20,
+                          "y": 140,
+                          "width": 140,
+                          "height": 0
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "role": "group",
+                    "name": "Shadow",
+                    "box": {
+                      "x": 20,
+                      "y": 140,
+                      "width": 140,
+                      "height": 64
+                    },
+                    "children": [
+                      "Edit",
+                      {
+                        "role": "textbox",
+                        "name": "Edit",
+                        "disabled": true,
+                        "box": {
+                          "x": 20,
+                          "y": 158,
+                          "width": 201,
+                          "height": 42
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "text": {
+            "outcome": "passed",
+            "value": "- region \"Root\" [box=20,30,140,174]:\n  - group \"Nested\" [box=20,50,140,90]:\n    - heading \"Heading\" [level=2] [box=20,50,140,27]\n    - button \"Push\" [pressed] [box=20,98,46,21]\n    - checkbox \"Check\" [checked] [box=70,100,13,13]\n    - checkbox \"Mixed\" [checked=mixed] [box=94,100,13,13]\n    - button \"Disabled\" [disabled] [box=20,119,68,21]\n    - button \"Flags\" [box=20,140,140,0]\n  - group \"Shadow\" [box=20,140,140,64]:\n    - text: Edit\n    - textbox \"Edit\" [disabled] [box=20,158,201,42]"
+          }
+        },
+        {
+          "name": "depth-boxes",
+          "options": {
+            "depth": 1,
+            "boxes": true
+          },
+          "json": {
+            "outcome": "passed",
+            "value": [
+              {
+                "role": "region",
+                "name": "Root",
+                "box": {
+                  "x": 20,
+                  "y": 30,
+                  "width": 140,
+                  "height": 174
+                },
+                "children": [
+                  {
+                    "role": "group",
+                    "name": "Nested",
+                    "box": {
+                      "x": 20,
+                      "y": 50,
+                      "width": 140,
+                      "height": 90
+                    }
+                  },
+                  {
+                    "role": "group",
+                    "name": "Shadow",
+                    "box": {
+                      "x": 20,
+                      "y": 140,
+                      "width": 140,
+                      "height": 64
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "text": {
+            "outcome": "passed",
+            "value": "- region \"Root\" [box=20,30,140,174]:\n  - group \"Nested\" [box=20,50,140,90]\n  - group \"Shadow\" [box=20,140,140,64]"
+          }
+        },
+        {
+          "name": "negative-depth",
+          "options": {
+            "depth": -1
+          },
+          "json": {
+            "outcome": "passed",
+            "value": [
+              {
+                "role": "region",
+                "name": "Root",
+                "children": [
+                  {
+                    "role": "group",
+                    "name": "Nested",
+                    "children": [
+                      {
+                        "role": "heading",
+                        "name": "Heading",
+                        "level": 2
+                      },
+                      {
+                        "role": "button",
+                        "name": "Push",
+                        "pressed": true
+                      },
+                      {
+                        "role": "checkbox",
+                        "name": "Check",
+                        "checked": true
+                      },
+                      {
+                        "role": "checkbox",
+                        "name": "Mixed",
+                        "checked": "mixed"
+                      },
+                      {
+                        "role": "button",
+                        "name": "Disabled",
+                        "disabled": true
+                      },
+                      {
+                        "role": "button",
+                        "name": "Flags"
+                      }
+                    ]
+                  },
+                  {
+                    "role": "group",
+                    "name": "Shadow",
+                    "children": [
+                      "Edit",
+                      {
+                        "role": "textbox",
+                        "name": "Edit",
+                        "disabled": true
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "text": {
+            "outcome": "passed",
+            "value": "- region \"Root\":\n  - group \"Nested\":\n    - heading \"Heading\" [level=2]\n    - button \"Push\" [pressed]\n    - checkbox \"Check\" [checked]\n    - checkbox \"Mixed\" [checked=mixed]\n    - button \"Disabled\" [disabled]\n    - button \"Flags\"\n  - group \"Shadow\":\n    - text: Edit\n    - textbox \"Edit\" [disabled]"
+          }
+        },
+        {
+          "name": "fractional-depth",
+          "options": {
+            "depth": 1.5
+          },
+          "json": {
+            "outcome": "caught",
+            "error": "locator.ariaSnapshotJSON: depth: expected integer, got float 1.5"
+          },
+          "text": {
+            "outcome": "caught",
+            "error": "locator.ariaSnapshot: depth: expected integer, got float 1.5"
+          }
+        },
+        {
+          "name": "invalid-boxes",
+          "options": {
+            "boxes": "yes"
+          },
+          "json": {
+            "outcome": "caught",
+            "error": "locator.ariaSnapshotJSON: boxes: expected boolean, got string"
+          },
+          "text": {
+            "outcome": "caught",
+            "error": "locator.ariaSnapshot: boxes: expected boolean, got string"
+          }
+        },
+        {
+          "name": "same-origin-frame",
+          "options": {
+            "boxes": true
+          },
+          "json": {
+            "outcome": "passed",
+            "value": [
+              {
+                "role": "group",
+                "name": "Frame",
+                "box": {
+                  "x": 20,
+                  "y": 40,
+                  "width": 100,
+                  "height": 60
+                },
+                "children": [
+                  {
+                    "role": "button",
+                    "name": "Frame button",
+                    "box": {
+                      "x": 20,
+                      "y": 40,
+                      "width": 95,
+                      "height": 21
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "text": {
+            "outcome": "passed",
+            "value": "- group \"Frame\" [box=20,40,100,60]:\n  - button \"Frame button\" [box=20,40,95,21]"
+          },
+          "domBox": {
+            "x": 20,
+            "y": 40,
+            "width": 100,
+            "height": 60
+          },
+          "locatorBox": {
+            "x": 232,
+            "y": 82,
+            "width": 100,
+            "height": 60
+          }
+        },
+        {
+          "name": "scrolled-viewport",
+          "options": {
+            "boxes": true
+          },
+          "json": {
+            "outcome": "passed",
+            "value": [
+              {
+                "role": "region",
+                "name": "Root",
+                "box": {
+                  "x": 20,
+                  "y": 50,
+                  "width": 140,
+                  "height": 174
+                },
+                "children": [
+                  {
+                    "role": "group",
+                    "name": "Nested",
+                    "box": {
+                      "x": 20,
+                      "y": 70,
+                      "width": 140,
+                      "height": 90
+                    },
+                    "children": [
+                      {
+                        "role": "heading",
+                        "name": "Heading",
+                        "level": 2,
+                        "box": {
+                          "x": 20,
+                          "y": 70,
+                          "width": 140,
+                          "height": 27
+                        }
+                      },
+                      {
+                        "role": "button",
+                        "name": "Push",
+                        "pressed": true,
+                        "box": {
+                          "x": 20,
+                          "y": 118,
+                          "width": 46,
+                          "height": 21
+                        }
+                      },
+                      {
+                        "role": "checkbox",
+                        "name": "Check",
+                        "checked": true,
+                        "box": {
+                          "x": 70,
+                          "y": 120,
+                          "width": 13,
+                          "height": 13
+                        }
+                      },
+                      {
+                        "role": "checkbox",
+                        "name": "Mixed",
+                        "checked": "mixed",
+                        "box": {
+                          "x": 94,
+                          "y": 120,
+                          "width": 13,
+                          "height": 13
+                        }
+                      },
+                      {
+                        "role": "button",
+                        "name": "Disabled",
+                        "disabled": true,
+                        "box": {
+                          "x": 20,
+                          "y": 139,
+                          "width": 68,
+                          "height": 21
+                        }
+                      },
+                      {
+                        "role": "button",
+                        "name": "Flags",
+                        "box": {
+                          "x": 20,
+                          "y": 160,
+                          "width": 140,
+                          "height": 0
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "role": "group",
+                    "name": "Shadow",
+                    "box": {
+                      "x": 20,
+                      "y": 160,
+                      "width": 140,
+                      "height": 64
+                    },
+                    "children": [
+                      "Edit",
+                      {
+                        "role": "textbox",
+                        "name": "Edit",
+                        "disabled": true,
+                        "box": {
+                          "x": 20,
+                          "y": 178,
+                          "width": 201,
+                          "height": 42
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "text": {
+            "outcome": "passed",
+            "value": "- region \"Root\" [box=20,50,140,174]:\n  - group \"Nested\" [box=20,70,140,90]:\n    - heading \"Heading\" [level=2] [box=20,70,140,27]\n    - button \"Push\" [pressed] [box=20,118,46,21]\n    - checkbox \"Check\" [checked] [box=70,120,13,13]\n    - checkbox \"Mixed\" [checked=mixed] [box=94,120,13,13]\n    - button \"Disabled\" [disabled] [box=20,139,68,21]\n    - button \"Flags\" [box=20,160,140,0]\n  - group \"Shadow\" [box=20,160,140,64]:\n    - text: Edit\n    - textbox \"Edit\" [disabled] [box=20,178,201,42]"
+          },
+          "domBox": {
+            "x": 20,
+            "y": 50,
+            "width": 140,
+            "height": 173.8125
+          }
+        },
+        {
+          "name": "fractional-boxes",
+          "options": {
+            "boxes": true
+          },
+          "json": {
+            "outcome": "passed",
+            "value": [
+              {
+                "role": "region",
+                "name": "Root",
+                "box": {
+                  "x": 20,
+                  "y": 50,
+                  "width": 141,
+                  "height": 174
+                },
+                "children": [
+                  {
+                    "role": "group",
+                    "name": "Nested",
+                    "box": {
+                      "x": 20,
+                      "y": 70,
+                      "width": 141,
+                      "height": 90
+                    },
+                    "children": [
+                      {
+                        "role": "heading",
+                        "name": "Heading",
+                        "level": 2,
+                        "box": {
+                          "x": 20,
+                          "y": 70,
+                          "width": 141,
+                          "height": 27
+                        }
+                      },
+                      {
+                        "role": "button",
+                        "name": "Push",
+                        "pressed": true,
+                        "box": {
+                          "x": 20,
+                          "y": 118,
+                          "width": 46,
+                          "height": 21
+                        }
+                      },
+                      {
+                        "role": "checkbox",
+                        "name": "Check",
+                        "checked": true,
+                        "box": {
+                          "x": 71,
+                          "y": 120,
+                          "width": 13,
+                          "height": 13
+                        }
+                      },
+                      {
+                        "role": "checkbox",
+                        "name": "Mixed",
+                        "checked": "mixed",
+                        "box": {
+                          "x": 95,
+                          "y": 120,
+                          "width": 13,
+                          "height": 13
+                        }
+                      },
+                      {
+                        "role": "button",
+                        "name": "Disabled",
+                        "disabled": true,
+                        "box": {
+                          "x": 20,
+                          "y": 139,
+                          "width": 68,
+                          "height": 21
+                        }
+                      },
+                      {
+                        "role": "button",
+                        "name": "Flags",
+                        "box": {
+                          "x": 20,
+                          "y": 160,
+                          "width": 141,
+                          "height": 0
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "role": "group",
+                    "name": "Shadow",
+                    "box": {
+                      "x": 20,
+                      "y": 160,
+                      "width": 141,
+                      "height": 64
+                    },
+                    "children": [
+                      "Edit",
+                      {
+                        "role": "textbox",
+                        "name": "Edit",
+                        "disabled": true,
+                        "box": {
+                          "x": 20,
+                          "y": 178,
+                          "width": 201,
+                          "height": 42
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "text": {
+            "outcome": "passed",
+            "value": "- region \"Root\" [box=20,50,141,174]:\n  - group \"Nested\" [box=20,70,141,90]:\n    - heading \"Heading\" [level=2] [box=20,70,141,27]\n    - button \"Push\" [pressed] [box=20,118,46,21]\n    - checkbox \"Check\" [checked] [box=71,120,13,13]\n    - checkbox \"Mixed\" [checked=mixed] [box=95,120,13,13]\n    - button \"Disabled\" [disabled] [box=20,139,68,21]\n    - button \"Flags\" [box=20,160,141,0]\n  - group \"Shadow\" [box=20,160,141,64]:\n    - text: Edit\n    - textbox \"Edit\" [disabled] [box=20,178,201,42]"
+          },
+          "domBox": {
+            "x": 20.25,
+            "y": 50.375,
+            "width": 140.625,
+            "height": 173.8125
+          }
+        }
+      ]
+    },
+    {
+      "name": "firefox",
+      "version": "157.0",
+      "cases": [
+        {
+          "name": "default",
+          "options": {},
+          "json": {
+            "outcome": "passed",
+            "value": [
+              {
+                "role": "region",
+                "name": "Root",
+                "children": [
+                  {
+                    "role": "group",
+                    "name": "Nested",
+                    "children": [
+                      {
+                        "role": "heading",
+                        "name": "Heading",
+                        "level": 2
+                      },
+                      {
+                        "role": "button",
+                        "name": "Push",
+                        "pressed": true
+                      },
+                      {
+                        "role": "checkbox",
+                        "name": "Check",
+                        "checked": true
+                      },
+                      {
+                        "role": "checkbox",
+                        "name": "Mixed",
+                        "checked": "mixed"
+                      },
+                      {
+                        "role": "button",
+                        "name": "Disabled",
+                        "disabled": true
+                      },
+                      {
+                        "role": "button",
+                        "name": "Flags"
+                      }
+                    ]
+                  },
+                  {
+                    "role": "group",
+                    "name": "Shadow",
+                    "children": [
+                      "Edit",
+                      {
+                        "role": "textbox",
+                        "name": "Edit",
+                        "disabled": true
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "text": {
+            "outcome": "passed",
+            "value": "- region \"Root\":\n  - group \"Nested\":\n    - heading \"Heading\" [level=2]\n    - button \"Push\" [pressed]\n    - checkbox \"Check\" [checked]\n    - checkbox \"Mixed\" [checked=mixed]\n    - button \"Disabled\" [disabled]\n    - button \"Flags\"\n  - group \"Shadow\":\n    - text: Edit\n    - textbox \"Edit\" [disabled]"
+          }
+        },
+        {
+          "name": "depth-zero",
+          "options": {
+            "depth": 0
+          },
+          "json": {
+            "outcome": "passed",
+            "value": [
+              {
+                "role": "region",
+                "name": "Root",
+                "children": [
+                  {
+                    "role": "group",
+                    "name": "Nested",
+                    "children": [
+                      {
+                        "role": "heading",
+                        "name": "Heading",
+                        "level": 2
+                      },
+                      {
+                        "role": "button",
+                        "name": "Push",
+                        "pressed": true
+                      },
+                      {
+                        "role": "checkbox",
+                        "name": "Check",
+                        "checked": true
+                      },
+                      {
+                        "role": "checkbox",
+                        "name": "Mixed",
+                        "checked": "mixed"
+                      },
+                      {
+                        "role": "button",
+                        "name": "Disabled",
+                        "disabled": true
+                      },
+                      {
+                        "role": "button",
+                        "name": "Flags"
+                      }
+                    ]
+                  },
+                  {
+                    "role": "group",
+                    "name": "Shadow",
+                    "children": [
+                      "Edit",
+                      {
+                        "role": "textbox",
+                        "name": "Edit",
+                        "disabled": true
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "text": {
+            "outcome": "passed",
+            "value": "- region \"Root\":\n  - group \"Nested\":\n    - heading \"Heading\" [level=2]\n    - button \"Push\" [pressed]\n    - checkbox \"Check\" [checked]\n    - checkbox \"Mixed\" [checked=mixed]\n    - button \"Disabled\" [disabled]\n    - button \"Flags\"\n  - group \"Shadow\":\n    - text: Edit\n    - textbox \"Edit\" [disabled]"
+          }
+        },
+        {
+          "name": "depth-one",
+          "options": {
+            "depth": 1
+          },
+          "json": {
+            "outcome": "passed",
+            "value": [
+              {
+                "role": "region",
+                "name": "Root",
+                "children": [
+                  {
+                    "role": "group",
+                    "name": "Nested"
+                  },
+                  {
+                    "role": "group",
+                    "name": "Shadow"
+                  }
+                ]
+              }
+            ]
+          },
+          "text": {
+            "outcome": "passed",
+            "value": "- region \"Root\":\n  - group \"Nested\"\n  - group \"Shadow\""
+          }
+        },
+        {
+          "name": "depth-two",
+          "options": {
+            "depth": 2
+          },
+          "json": {
+            "outcome": "passed",
+            "value": [
+              {
+                "role": "region",
+                "name": "Root",
+                "children": [
+                  {
+                    "role": "group",
+                    "name": "Nested",
+                    "children": [
+                      {
+                        "role": "heading",
+                        "name": "Heading",
+                        "level": 2
+                      },
+                      {
+                        "role": "button",
+                        "name": "Push",
+                        "pressed": true
+                      },
+                      {
+                        "role": "checkbox",
+                        "name": "Check",
+                        "checked": true
+                      },
+                      {
+                        "role": "checkbox",
+                        "name": "Mixed",
+                        "checked": "mixed"
+                      },
+                      {
+                        "role": "button",
+                        "name": "Disabled",
+                        "disabled": true
+                      },
+                      {
+                        "role": "button",
+                        "name": "Flags"
+                      }
+                    ]
+                  },
+                  {
+                    "role": "group",
+                    "name": "Shadow",
+                    "children": [
+                      "Edit",
+                      {
+                        "role": "textbox",
+                        "name": "Edit",
+                        "disabled": true
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "text": {
+            "outcome": "passed",
+            "value": "- region \"Root\":\n  - group \"Nested\":\n    - heading \"Heading\" [level=2]\n    - button \"Push\" [pressed]\n    - checkbox \"Check\" [checked]\n    - checkbox \"Mixed\" [checked=mixed]\n    - button \"Disabled\" [disabled]\n    - button \"Flags\"\n  - group \"Shadow\":\n    - text: Edit\n    - textbox \"Edit\" [disabled]"
+          }
+        },
+        {
+          "name": "depth-four",
+          "options": {
+            "depth": 4
+          },
+          "json": {
+            "outcome": "passed",
+            "value": [
+              {
+                "role": "region",
+                "name": "Root",
+                "children": [
+                  {
+                    "role": "group",
+                    "name": "Nested",
+                    "children": [
+                      {
+                        "role": "heading",
+                        "name": "Heading",
+                        "level": 2
+                      },
+                      {
+                        "role": "button",
+                        "name": "Push",
+                        "pressed": true
+                      },
+                      {
+                        "role": "checkbox",
+                        "name": "Check",
+                        "checked": true
+                      },
+                      {
+                        "role": "checkbox",
+                        "name": "Mixed",
+                        "checked": "mixed"
+                      },
+                      {
+                        "role": "button",
+                        "name": "Disabled",
+                        "disabled": true
+                      },
+                      {
+                        "role": "button",
+                        "name": "Flags"
+                      }
+                    ]
+                  },
+                  {
+                    "role": "group",
+                    "name": "Shadow",
+                    "children": [
+                      "Edit",
+                      {
+                        "role": "textbox",
+                        "name": "Edit",
+                        "disabled": true
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "text": {
+            "outcome": "passed",
+            "value": "- region \"Root\":\n  - group \"Nested\":\n    - heading \"Heading\" [level=2]\n    - button \"Push\" [pressed]\n    - checkbox \"Check\" [checked]\n    - checkbox \"Mixed\" [checked=mixed]\n    - button \"Disabled\" [disabled]\n    - button \"Flags\"\n  - group \"Shadow\":\n    - text: Edit\n    - textbox \"Edit\" [disabled]"
+          }
+        },
+        {
+          "name": "boxes",
+          "options": {
+            "boxes": true
+          },
+          "json": {
+            "outcome": "passed",
+            "value": [
+              {
+                "role": "region",
+                "name": "Root",
+                "box": {
+                  "x": 20,
+                  "y": 30,
+                  "width": 140,
+                  "height": 185
+                },
+                "children": [
+                  {
+                    "role": "group",
+                    "name": "Nested",
+                    "box": {
+                      "x": 20,
+                      "y": 50,
+                      "width": 140,
+                      "height": 101
+                    },
+                    "children": [
+                      {
+                        "role": "heading",
+                        "name": "Heading",
+                        "level": 2,
+                        "box": {
+                          "x": 20,
+                          "y": 50,
+                          "width": 140,
+                          "height": 33
+                        }
+                      },
+                      {
+                        "role": "button",
+                        "name": "Push",
+                        "pressed": true,
+                        "box": {
+                          "x": 20,
+                          "y": 103,
+                          "width": 43,
+                          "height": 24
+                        }
+                      },
+                      {
+                        "role": "checkbox",
+                        "name": "Check",
+                        "checked": true,
+                        "box": {
+                          "x": 67,
+                          "y": 107,
+                          "width": 14,
+                          "height": 14
+                        }
+                      },
+                      {
+                        "role": "checkbox",
+                        "name": "Mixed",
+                        "checked": "mixed",
+                        "box": {
+                          "x": 92,
+                          "y": 107,
+                          "width": 14,
+                          "height": 14
+                        }
+                      },
+                      {
+                        "role": "button",
+                        "name": "Disabled",
+                        "disabled": true,
+                        "box": {
+                          "x": 20,
+                          "y": 127,
+                          "width": 66,
+                          "height": 24
+                        }
+                      },
+                      {
+                        "role": "button",
+                        "name": "Flags",
+                        "box": {
+                          "x": 20,
+                          "y": 151,
+                          "width": 140,
+                          "height": 0
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "role": "group",
+                    "name": "Shadow",
+                    "box": {
+                      "x": 20,
+                      "y": 151,
+                      "width": 140,
+                      "height": 64
+                    },
+                    "children": [
+                      "Edit",
+                      {
+                        "role": "textbox",
+                        "name": "Edit",
+                        "disabled": true,
+                        "box": {
+                          "x": 20,
+                          "y": 173,
+                          "width": 192,
+                          "height": 42
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "text": {
+            "outcome": "passed",
+            "value": "- region \"Root\" [box=20,30,140,185]:\n  - group \"Nested\" [box=20,50,140,101]:\n    - heading \"Heading\" [level=2] [box=20,50,140,33]\n    - button \"Push\" [pressed] [box=20,103,43,24]\n    - checkbox \"Check\" [checked] [box=67,107,14,14]\n    - checkbox \"Mixed\" [checked=mixed] [box=92,107,14,14]\n    - button \"Disabled\" [disabled] [box=20,127,66,24]\n    - button \"Flags\" [box=20,151,140,0]\n  - group \"Shadow\" [box=20,151,140,64]:\n    - text: Edit\n    - textbox \"Edit\" [disabled] [box=20,173,192,42]"
+          }
+        },
+        {
+          "name": "depth-boxes",
+          "options": {
+            "depth": 1,
+            "boxes": true
+          },
+          "json": {
+            "outcome": "passed",
+            "value": [
+              {
+                "role": "region",
+                "name": "Root",
+                "box": {
+                  "x": 20,
+                  "y": 30,
+                  "width": 140,
+                  "height": 185
+                },
+                "children": [
+                  {
+                    "role": "group",
+                    "name": "Nested",
+                    "box": {
+                      "x": 20,
+                      "y": 50,
+                      "width": 140,
+                      "height": 101
+                    }
+                  },
+                  {
+                    "role": "group",
+                    "name": "Shadow",
+                    "box": {
+                      "x": 20,
+                      "y": 151,
+                      "width": 140,
+                      "height": 64
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "text": {
+            "outcome": "passed",
+            "value": "- region \"Root\" [box=20,30,140,185]:\n  - group \"Nested\" [box=20,50,140,101]\n  - group \"Shadow\" [box=20,151,140,64]"
+          }
+        },
+        {
+          "name": "negative-depth",
+          "options": {
+            "depth": -1
+          },
+          "json": {
+            "outcome": "passed",
+            "value": [
+              {
+                "role": "region",
+                "name": "Root",
+                "children": [
+                  {
+                    "role": "group",
+                    "name": "Nested",
+                    "children": [
+                      {
+                        "role": "heading",
+                        "name": "Heading",
+                        "level": 2
+                      },
+                      {
+                        "role": "button",
+                        "name": "Push",
+                        "pressed": true
+                      },
+                      {
+                        "role": "checkbox",
+                        "name": "Check",
+                        "checked": true
+                      },
+                      {
+                        "role": "checkbox",
+                        "name": "Mixed",
+                        "checked": "mixed"
+                      },
+                      {
+                        "role": "button",
+                        "name": "Disabled",
+                        "disabled": true
+                      },
+                      {
+                        "role": "button",
+                        "name": "Flags"
+                      }
+                    ]
+                  },
+                  {
+                    "role": "group",
+                    "name": "Shadow",
+                    "children": [
+                      "Edit",
+                      {
+                        "role": "textbox",
+                        "name": "Edit",
+                        "disabled": true
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "text": {
+            "outcome": "passed",
+            "value": "- region \"Root\":\n  - group \"Nested\":\n    - heading \"Heading\" [level=2]\n    - button \"Push\" [pressed]\n    - checkbox \"Check\" [checked]\n    - checkbox \"Mixed\" [checked=mixed]\n    - button \"Disabled\" [disabled]\n    - button \"Flags\"\n  - group \"Shadow\":\n    - text: Edit\n    - textbox \"Edit\" [disabled]"
+          }
+        },
+        {
+          "name": "fractional-depth",
+          "options": {
+            "depth": 1.5
+          },
+          "json": {
+            "outcome": "caught",
+            "error": "locator.ariaSnapshotJSON: depth: expected integer, got float 1.5"
+          },
+          "text": {
+            "outcome": "caught",
+            "error": "locator.ariaSnapshot: depth: expected integer, got float 1.5"
+          }
+        },
+        {
+          "name": "invalid-boxes",
+          "options": {
+            "boxes": "yes"
+          },
+          "json": {
+            "outcome": "caught",
+            "error": "locator.ariaSnapshotJSON: boxes: expected boolean, got string"
+          },
+          "text": {
+            "outcome": "caught",
+            "error": "locator.ariaSnapshot: boxes: expected boolean, got string"
+          }
+        },
+        {
+          "name": "same-origin-frame",
+          "options": {
+            "boxes": true
+          },
+          "json": {
+            "outcome": "passed",
+            "value": [
+              {
+                "role": "group",
+                "name": "Frame",
+                "box": {
+                  "x": 20,
+                  "y": 40,
+                  "width": 100,
+                  "height": 60
+                },
+                "children": [
+                  {
+                    "role": "button",
+                    "name": "Frame button",
+                    "box": {
+                      "x": 20,
+                      "y": 40,
+                      "width": 97,
+                      "height": 24
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "text": {
+            "outcome": "passed",
+            "value": "- group \"Frame\" [box=20,40,100,60]:\n  - button \"Frame button\" [box=20,40,97,24]"
+          },
+          "domBox": {
+            "x": 20,
+            "y": 40,
+            "width": 100,
+            "height": 60
+          },
+          "locatorBox": {
+            "x": 232,
+            "y": 82,
+            "width": 100,
+            "height": 60
+          }
+        },
+        {
+          "name": "scrolled-viewport",
+          "options": {
+            "boxes": true
+          },
+          "json": {
+            "outcome": "passed",
+            "value": [
+              {
+                "role": "region",
+                "name": "Root",
+                "box": {
+                  "x": 20,
+                  "y": 50,
+                  "width": 140,
+                  "height": 185
+                },
+                "children": [
+                  {
+                    "role": "group",
+                    "name": "Nested",
+                    "box": {
+                      "x": 20,
+                      "y": 70,
+                      "width": 140,
+                      "height": 101
+                    },
+                    "children": [
+                      {
+                        "role": "heading",
+                        "name": "Heading",
+                        "level": 2,
+                        "box": {
+                          "x": 20,
+                          "y": 70,
+                          "width": 140,
+                          "height": 33
+                        }
+                      },
+                      {
+                        "role": "button",
+                        "name": "Push",
+                        "pressed": true,
+                        "box": {
+                          "x": 20,
+                          "y": 123,
+                          "width": 43,
+                          "height": 24
+                        }
+                      },
+                      {
+                        "role": "checkbox",
+                        "name": "Check",
+                        "checked": true,
+                        "box": {
+                          "x": 67,
+                          "y": 127,
+                          "width": 14,
+                          "height": 14
+                        }
+                      },
+                      {
+                        "role": "checkbox",
+                        "name": "Mixed",
+                        "checked": "mixed",
+                        "box": {
+                          "x": 92,
+                          "y": 127,
+                          "width": 14,
+                          "height": 14
+                        }
+                      },
+                      {
+                        "role": "button",
+                        "name": "Disabled",
+                        "disabled": true,
+                        "box": {
+                          "x": 20,
+                          "y": 147,
+                          "width": 66,
+                          "height": 24
+                        }
+                      },
+                      {
+                        "role": "button",
+                        "name": "Flags",
+                        "box": {
+                          "x": 20,
+                          "y": 171,
+                          "width": 140,
+                          "height": 0
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "role": "group",
+                    "name": "Shadow",
+                    "box": {
+                      "x": 20,
+                      "y": 171,
+                      "width": 140,
+                      "height": 64
+                    },
+                    "children": [
+                      "Edit",
+                      {
+                        "role": "textbox",
+                        "name": "Edit",
+                        "disabled": true,
+                        "box": {
+                          "x": 20,
+                          "y": 193,
+                          "width": 192,
+                          "height": 42
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "text": {
+            "outcome": "passed",
+            "value": "- region \"Root\" [box=20,50,140,185]:\n  - group \"Nested\" [box=20,70,140,101]:\n    - heading \"Heading\" [level=2] [box=20,70,140,33]\n    - button \"Push\" [pressed] [box=20,123,43,24]\n    - checkbox \"Check\" [checked] [box=67,127,14,14]\n    - checkbox \"Mixed\" [checked=mixed] [box=92,127,14,14]\n    - button \"Disabled\" [disabled] [box=20,147,66,24]\n    - button \"Flags\" [box=20,171,140,0]\n  - group \"Shadow\" [box=20,171,140,64]:\n    - text: Edit\n    - textbox \"Edit\" [disabled] [box=20,193,192,42]"
+          },
+          "domBox": {
+            "x": 20,
+            "y": 50,
+            "width": 140,
+            "height": 184.8333282470703
+          }
+        },
+        {
+          "name": "fractional-boxes",
+          "options": {
+            "boxes": true
+          },
+          "json": {
+            "outcome": "passed",
+            "value": [
+              {
+                "role": "region",
+                "name": "Root",
+                "box": {
+                  "x": 20,
+                  "y": 50,
+                  "width": 141,
+                  "height": 185
+                },
+                "children": [
+                  {
+                    "role": "group",
+                    "name": "Nested",
+                    "box": {
+                      "x": 20,
+                      "y": 70,
+                      "width": 141,
+                      "height": 101
+                    },
+                    "children": [
+                      {
+                        "role": "heading",
+                        "name": "Heading",
+                        "level": 2,
+                        "box": {
+                          "x": 20,
+                          "y": 70,
+                          "width": 141,
+                          "height": 33
+                        }
+                      },
+                      {
+                        "role": "button",
+                        "name": "Push",
+                        "pressed": true,
+                        "box": {
+                          "x": 20,
+                          "y": 123,
+                          "width": 43,
+                          "height": 24
+                        }
+                      },
+                      {
+                        "role": "checkbox",
+                        "name": "Check",
+                        "checked": true,
+                        "box": {
+                          "x": 67,
+                          "y": 127,
+                          "width": 14,
+                          "height": 14
+                        }
+                      },
+                      {
+                        "role": "checkbox",
+                        "name": "Mixed",
+                        "checked": "mixed",
+                        "box": {
+                          "x": 92,
+                          "y": 127,
+                          "width": 14,
+                          "height": 14
+                        }
+                      },
+                      {
+                        "role": "button",
+                        "name": "Disabled",
+                        "disabled": true,
+                        "box": {
+                          "x": 20,
+                          "y": 147,
+                          "width": 66,
+                          "height": 24
+                        }
+                      },
+                      {
+                        "role": "button",
+                        "name": "Flags",
+                        "box": {
+                          "x": 20,
+                          "y": 171,
+                          "width": 141,
+                          "height": 0
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "role": "group",
+                    "name": "Shadow",
+                    "box": {
+                      "x": 20,
+                      "y": 171,
+                      "width": 141,
+                      "height": 64
+                    },
+                    "children": [
+                      "Edit",
+                      {
+                        "role": "textbox",
+                        "name": "Edit",
+                        "disabled": true,
+                        "box": {
+                          "x": 20,
+                          "y": 193,
+                          "width": 192,
+                          "height": 42
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "text": {
+            "outcome": "passed",
+            "value": "- region \"Root\" [box=20,50,141,185]:\n  - group \"Nested\" [box=20,70,141,101]:\n    - heading \"Heading\" [level=2] [box=20,70,141,33]\n    - button \"Push\" [pressed] [box=20,123,43,24]\n    - checkbox \"Check\" [checked] [box=67,127,14,14]\n    - checkbox \"Mixed\" [checked=mixed] [box=92,127,14,14]\n    - button \"Disabled\" [disabled] [box=20,147,66,24]\n    - button \"Flags\" [box=20,171,141,0]\n  - group \"Shadow\" [box=20,171,141,64]:\n    - text: Edit\n    - textbox \"Edit\" [disabled] [box=20,193,192,42]"
+          },
+          "domBox": {
+            "x": 20.25,
+            "y": 50.383331298828125,
+            "width": 140.63333129882812,
+            "height": 184.8333282470703
+          }
+        }
+      ]
+    }
+  ]
+}

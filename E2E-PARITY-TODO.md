@@ -1076,6 +1076,11 @@ their dependencies are ready. References include
   nested/open-shadow/same-origin-frame cases are consistent, limits are explicit
   and snapshot assertions can consume the output. Full accessible-name conformance,
   upstream AI modes and YAML pattern matching remain deferred.
+  Reference preparation: `aria-options-reference.mjs`/JSON record 26 actual pinned
+  public cases on Chromium/Firefox, including role-depth trimming, native state,
+  open-shadow/frame roots, text fragments and rounded viewport boxes. Zero/negative
+  upstream depth is unbounded; fractional depth/type errors and frame-local versus
+  main-viewport box coordinates are recorded. Rust implementation is still pending.
 - [x] **B19 — Structured page errors and console value previews (M).** Add optional
   error name/message/stack frames and JSON-safe console argument previews where
   native events provide them. Done when page/context events, traces and attempt

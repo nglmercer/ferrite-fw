@@ -491,3 +491,35 @@ checks expiry and the weak attempt's sealing state; workers cannot install repor
 images. Images accepted before interruption remain owned by the attempt, so a
 partially published bundle is possible. This does not add captures or baseline
 rereads, change final-only probe selection, or imply hard-preemptible codec/OS work.
+
+
+### B18 default-mode ARIA option observations
+
+`reference:aria-options` records 26 actual Playwright 1.63.0 cases on Chromium
+153.0.8010.12 and Firefox 157.0 through `moz-firefox`. Regenerate with the external
+module installation and `node scripts/e2e-conformance/aria-options-reference.mjs`,
+or the package script. The [recorded observations](aria-options-reference.json)
+include both public JSON and text results, option errors and raw DOM geometry.
+They cover default/zero/positive/negative/fractional depth, boxes, combined depth
+and boxes, native state flags, hidden content, open shadow roots, explicit
+same-origin frame roots, scrolling and fractional geometry. AI modes and YAML
+pattern matching are outside this corpus and the B18 task.
+
+In both engines, zero and negative depth produce the complete default tree;
+depth one retains the root plus direct role children, while transparent DOM
+wrappers do not consume the role-tree depth. Fractional depth and non-boolean
+boxes are rejected. Default JSON can contain plain string text fragments between
+object nodes. Mixed checkboxes and disabled/pressed flags retain native state;
+unsupported/redundant flags are not implied by this reference.
+
+Box fields round the element's viewport CSS coordinates and dimensions to whole
+pixels, including fractional layout. A frame-root ARIA box uses that frame's
+viewport: the recorded root is `(20,40,100,60)`, while public locator.boundingBox
+reports `(232,82,100,60)` in the main viewport. Scrolled and fractional cases
+retain both raw getBoundingClientRect values and snapshot boxes, with explicit
+rounding checks. Engine-specific font/layout differences remain in the artifact;
+this does not claim identical pixels or complete accessible-name semantics.
+
+This is reference evidence for B18, whose Rust options and bounded assertions
+are still pending. Existing Rust DOM approximation and exact-text assertions are
+not equivalent to this complete upstream tree or its YAML representation.

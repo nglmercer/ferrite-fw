@@ -22,7 +22,8 @@
     "reference:snapshots": "node snapshot-reference.mjs",
     "reference:snapshot-paths": "node snapshot-path-reference.mjs",
     "reference:fonts-animations": "node font-animation-reference.mjs",
-    "reference:snapshot-polls": "node snapshot-poll-reference.mjs"
+    "reference:snapshot-polls": "node snapshot-poll-reference.mjs",
+    "reference:aria-options": "node aria-options-reference.mjs"
   },
   "devDependencies": {
     "playwright": "1.63.0"
