@@ -103,7 +103,7 @@ put('Page','waitForFunction','Page.wait_for_function','Polling expression to com
 put('Page','waitForSelector','Page.wait_for_selector_with','Waits for requested state and returns Locator, not ElementHandle.')
 put('Page','emulateMedia','Page.emulate_media','Chromium only; color scheme/reduced motion only, no full media/forcedColors/contrast surface.')
 put('Page','requestGC','Page.request_gc','Chromium only; Firefox returns an unsupported error.')
-put('Page','pdf','Page.pdf','PDF export exists; no PDF options builder. Engine behavior differs.')
+put('Page','pdf','Page.pdf_with','Validated Chromium PdfOptions: typed format/custom px/in/cm/mm dimensions, margins, scale/background/landscape, header/footer HTML, CSS size, one-based ranges, tagged/outline flags and a shared font/print clock. Basic pdf() remains native on both engines; new options explicitly reject Firefox. Defaults use zero margins, unlike legacy native defaults. Exact metric conversion differs slightly from pinned rounded JS factors; PDF size quantization/native print CSS remain visible.')
 put('Page','request','ApiClient','Standalone client only; no page.request with shared browser cookies.')
 for m,keys in {'addScriptTag':['add_script_tag_url','add_script_tag_content'],'addStyleTag':['add_style_tag_url','add_style_tag_content']}.items():
  put('Page',m,'Page.'+keys[0],'URL/content helpers return unit; no ElementHandle return, file/type options; other helper: Page.'+keys[1])

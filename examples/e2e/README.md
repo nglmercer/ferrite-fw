@@ -1154,3 +1154,41 @@ for native closure. Historical JSON gains serde-defaulted event fields;
 exhaustive `WebSocketEvent` literals must supply the new fields, and matches on
 `WebSocketDirection` must handle `Error`. Firefox returns an explicit unsupported
 error. Socket routing, injection and service-worker sockets remain deferred.
+
+### Validated Chromium PDF options
+
+```rust
+use ferrite_e2e::{PdfFormat, PdfLength, PdfMargins, PdfOptions};
+
+let bytes = page.pdf_with(PdfOptions::default()
+    .format(PdfFormat::A4)
+    .margins(PdfMargins::all(PdfLength::Millimeters(12.7)))
+    .background(true)
+    .header_footer(
+        "<div style='font-size:10px;width:100%;text-align:center'>Checkout report</div>",
+        "<div style='font-size:10px;width:100%;text-align:center'><span class='pageNumber'></span>/<span class='totalPages'></span></div>",
+    )).await?;
+std::fs::write("checkout.pdf", bytes)?;
+```
+
+Use `.size(PdfLength::Pixels(384.0), PdfLength::Inches(6.0))` for custom pages;
+format/custom size replace one another. Units are inches, millimeters,
+centimeters or CSS pixels (96 per inch). Options validate finite positive sizes,
+nonnegative margins with positive printable area, scales from 0.1 to 2, and
+positive one-based page ranges before browser work. Set `.landscape(true)`,
+`.scale(0.5)`, `.page_ranges("2-3")`, `.prefer_css_page_size(true)`, `.tagged(true)`
+or `.outline(true)` as needed. Templates need their own styles; native scripts
+and page styles are not inherited. Native print CSS controls colors and may
+interact with `print-color-adjust`.
+
+Defaults are Letter with zero margins, background off, scale 1, templates off,
+and root font readiness enabled. `timeout` and `cancellation` cover font readiness
+and printing together; zero removes only the local timeout. Disabling
+`wait_for_fonts` skips the explicit root wait and leaves native printer behavior
+in place. Native printing/allocation remains opaque and output bytes are owned
+by the caller. Write or attach them explicitly.
+
+The new API is Chromium-only. Existing `page.pdf()` preserves native basic
+printing on both engines and native default margins. No existing public struct
+literal needs migration. Ferrite uses exact metric conversion; pinned JavaScript
+uses rounded pixel factors, so native paper rounding may differ slightly.

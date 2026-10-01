@@ -27,7 +27,8 @@
     "reference:output-retention": "node output-retention-reference.mjs",
     "reference:web-storage": "node web-storage-reference.mjs",
     "reference:metadata-slow": "node metadata-slow-reference.mjs",
-    "reference:websockets": "node websocket-reference.mjs"
+    "reference:websockets": "node websocket-reference.mjs",
+    "reference:pdf": "node pdf-reference.mjs"
   },
   "devDependencies": {
     "playwright": "1.63.0"

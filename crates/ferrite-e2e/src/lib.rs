@@ -72,6 +72,7 @@ pub use ferrite_config::E2eMetadata;
 pub use report_slow::{SlowTestOptions, SlowTestSummary};
 mod owned_output;
 mod page;
+mod pdf;
 mod popup_capture;
 mod process_output;
 mod report;
@@ -177,3 +178,5 @@ pub use webserver::{wait_for_url, RunningWebServer, WebServer};
 pub use ferrite_config::{E2eConfig, E2eProjectConfig, ViewportConfig, WebServerConfig};
 
 pub use websocket::{WebSocketDiagnostics, WebSocketSnapshot, WebSocketState};
+
+pub use pdf::{PdfFormat, PdfLength, PdfMargins, PdfOptions, PdfPageSize};

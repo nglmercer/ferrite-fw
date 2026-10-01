@@ -1315,6 +1315,19 @@ impl Driver {
         .await
     }
 
+    pub(crate) async fn print_pdf_with(&self, parameters: Value) -> E2eResult<Vec<u8>> {
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => {
+                    let result = driver.call("Page.printToPDF", parameters).await?;
+                    decode_shot(&result)
+                }
+                Self::Bidi(_) => Err(E2eError::Config("PDF options require Chromium".into())),
+            }
+        })
+        .await
+    }
+
     /// Set the viewport size.
     pub async fn set_viewport(&self, width: u32, height: u32) -> E2eResult<()> {
         self.run(async {

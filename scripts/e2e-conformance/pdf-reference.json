@@ -1,0 +1,79 @@
+{
+  "playwright": "1.63.0",
+  "engine": "chromium",
+  "cases": [
+    {
+      "name": "default",
+      "width": 612,
+      "height": 792,
+      "pages": 1,
+      "text": "Ferrite PDF\nNative content\nPrintMarker\n\n\f"
+    },
+    {
+      "name": "a4-header",
+      "width": 842.88,
+      "height": 595.92,
+      "pages": 1,
+      "text": "HeaderMarker\n\nFerrite PDF\nNative content\nPrintMarker\n\nFooterMarker 1/1\n\n\f"
+    },
+    {
+      "name": "background-off",
+      "width": 288,
+      "height": 432.96,
+      "pages": 1,
+      "text": "Ferrite PDF\nNative content\nPrintMarker\n\n\f",
+      "pixel": [
+        255,
+        255,
+        255
+      ]
+    },
+    {
+      "name": "background-on",
+      "width": 288,
+      "height": 432.96,
+      "pages": 1,
+      "text": "Ferrite PDF\nNative content\nPrintMarker\n\n\f",
+      "pixel": [
+        20,
+        80,
+        210
+      ]
+    },
+    {
+      "name": "scaled-half",
+      "width": 288,
+      "height": 432.96,
+      "pages": 1,
+      "text": "Ferrite PDF\nNative content\nPrintMarker\n\n\f",
+      "pixel": [
+        255,
+        255,
+        255
+      ]
+    },
+    {
+      "name": "css-size",
+      "width": 216,
+      "height": 360,
+      "pages": 1,
+      "text": "Ferrite PDF\nNative content\nPrintMarker\n\n\f"
+    },
+    {
+      "name": "css-fit",
+      "width": 288,
+      "height": 432.96,
+      "pages": 1,
+      "text": "Ferrite PDF\nNative content\nPrintMarker\n\n\f"
+    },
+    {
+      "name": "range-second",
+      "width": 288,
+      "height": 432.96,
+      "pages": 1,
+      "text": "SecondMarker\n\n\f"
+    }
+  ],
+  "invalidOptionsRejected": 5,
+  "unitNote": "Pinned JS converts cm/mm through rounded 37.8/3.78 px per unit; Ferrite uses exact 2.54 cm/25.4 mm per inch. Native paper dimensions agree within one PDF point."
+}

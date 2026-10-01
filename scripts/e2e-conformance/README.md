@@ -613,3 +613,21 @@ are decoded by `payload_bytes`. Its new APIs return data snapshots rather than
 live Playwright socket objects. The [native suite](../../crates/ferrite-e2e/tests/websocket_diagnostics.rs)
 also checks cancellation, page/context/transport teardown, popup isolation and
 retry scopes; unit tests cover retained-byte/count limits, eviction and lag.
+
+### PDF options reference
+
+`npm run reference:pdf` runs [pdf-reference.mjs](pdf-reference.mjs) against
+pinned Playwright 1.63 Chromium and writes [pdf-reference.json](pdf-reference.json).
+Eight real PDFs verify Letter/A4/custom/CSS page sizes, print-media content,
+header/footer/page-number templates, selected pages, document outline and raster
+background/scale behavior. Five invalid format/size/scale/margin/range cases are
+rejected. Poppler inspects native size, text and pixel colors; PDF binaries are
+not compared because metadata/fonts/object IDs vary.
+
+Pinned JavaScript converts metric sizes through rounded 37.8/3.78 CSS pixels
+per cm/mm. Ferrite uses exact 2.54 cm/25.4 mm per inch, so metric conversions and
+native page rounding can differ. Its new `pdf_with` is Chromium-only while
+legacy `pdf()` continues to print basic PDFs on Firefox/BiDi. The
+[native suite](../../crates/ferrite-e2e/tests/pdf_options.rs) adds validation before
+disposal checks, held-font deadlines, caller/enclosing cancellation, tagged output
+and visual inspection of eight rendered PDF profiles.

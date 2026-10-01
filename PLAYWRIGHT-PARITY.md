@@ -12,14 +12,14 @@ The initial inventory and existing changes were committed in `d93365a`; this
 report describes the subsequent practical parity implementation. The original
 findings remain available in that commit's history.
 
-Latest completed phase: **D06**, with 261 scoped E2E checks: 237 units,
-20 native integrations across six targets and four doctests. Shared/capability
+Latest completed phase: **C01**, with 265 scoped E2E checks: 239 units,
+22 native integrations across six targets and four doctests. Shared/capability
 cases required Chromium and Firefox on Linux. Strict Clippy, package formatting,
-generated matrix and 788 local links passed. Native socket identity, binary/text,
-errors, closure, cancellation, loss, popup scopes and retries were verified;
-the pinned reference records Chromium behavior and stock Firefox BiDi limits.
-C01 is next. The current integration inventory has 45 targets; this phase does
-not claim its complete replay. Earlier increment sections retain historical
+generated matrix and local links passed. Eight native PDF profiles were rendered
+and inspected; the pinned reference verified eight profiles and five invalid
+options. Basic Firefox PDF behavior remains intact; new validated options target
+Chromium. C02 is next. The current inventory has 46 integration targets; this
+phase does not claim its complete replay. Earlier sections retain historical
 checkpoint evidence, including B10's complete audit of its then-existing 38 targets.
 
 The [complete API matrix](PLAYWRIGHT-API-MATRIX.md) covers **73 classes and
@@ -2425,3 +2425,59 @@ Strict all-target Clippy, package formatting, generated matrix and 788 local
 file links passed. The current 45-target complete replay and other-platform
 verification remain G04 work. Matrix: Partial648/Missing314/Equivalent15/
 Idiomatic41 across 73 classes and 1,018 members.
+
+## C01 — Validated Chromium PDF options
+
+`Page::pdf_with(PdfOptions)` returns owned bytes with typed Letter/Legal/
+Tabloid/Ledger/A0–A6 formats or custom `PdfLength` dimensions in px/in/cm/mm.
+`PdfPageSize` makes format/custom-size conflicts impossible; builders replace
+one another. Margins use the same units. Validation rejects nonfinite/nonpositive
+sizes, point-conversion overflow, negative/nonfinite margins, empty printable
+area after orientation, scales outside 0.1–2 and invalid one-based page ranges.
+It runs before any browser/lifecycle work, including on disposed Pages. Blank
+ranges normalize to all pages. Valid but out-of-document ranges and native/CSS
+printer constraints remain native typed protocol errors.
+
+The options expose landscape/background, scale, isolated header/footer HTML,
+CSS page-size preference, ranges and tagged/outline flags. Defaults are Letter,
+zero margins, background off, scale 1, headers off, all pages and tagged/outline
+off. Root `document.fonts.ready` is awaited by default under the same operation
+clock as native printing. Caller/page/context/transport cancellation and enclosing
+step budgets remain active; zero disables only the local limit. `wait_for_fonts:
+false` skips the explicit root wait and does not control native printer internals.
+No file is written or attached automatically. Native PDF buffers/printing and
+font/layout/allocation phases are not hard memory or interruption bounded.
+
+The new validated options are Chromium-only; Firefox gets an explicit error.
+Existing `pdf()` continues basic native printing on both engines with its prior
+native defaults, including margins. All public types are additive, with no
+existing literal migration. Native print media/styles determine color behavior;
+`print-color-adjust: exact` can force backgrounds even when suppression is
+requested. Header/footer scripts do not run and their styles are isolated from
+page styles. This follows the native template model rather than a JS templating
+engine.
+
+Paper format values match the pinned upstream table. Physical metric conversion
+uses exactly 2.54 cm/25.4 mm per inch and 96 CSS pixels per inch. Pinned JS uses
+rounded 37.8/3.78 px per metric unit, so conversion and native rounding can differ;
+PDF page dimensions are checked within one point, not byte-for-byte equivalence.
+The [pinned reference](scripts/e2e-conformance/pdf-reference.json) verifies eight
+real page-size/content/raster profiles and five invalid-option rejections.
+[Native tests](crates/ferrite-e2e/tests/pdf_options.rs) verify extracted text,
+background/scale pixels, templates/page numbering, CSS size, selected pages,
+tagged output and native outline presence, orientation-aware margins, held-font
+expiry, caller/enclosing cancellation and disposal. Eight rasterized profiles
+were visually inspected. Implementation and validation are in
+[pdf.rs](crates/ferrite-e2e/src/pdf.rs); see [the example](examples/e2e/README.md)
+and [upstream PDF API](https://playwright.dev/docs/api/class-page#page-pdf).
+
+C01 verification passed 265 scoped E2E checks: 239 units, 22 native groups
+across `pdf_options`, `screenshot_options`, `screenshot_capabilities`,
+`snapshot_fonts_and_animations`, `step_controls_and_bundles` and the legacy
+PDF/browser group, plus four doctests. Shared/capability cases required both
+engines on Linux. Legacy gates used matching Headless Shell/Firefox with 92
+unrelated cases filtered; other native gates used full Chrome/Firefox. Strict
+all-target Clippy, formatting, generated matrix and local file links passed.
+Eight native rendered PDFs were inspected. The full 46-target replay and
+other-platform verification remain G04 work. Matrix remains 73 classes and
+1,018 members: Partial648/Missing314/Equivalent15/Idiomatic41.
