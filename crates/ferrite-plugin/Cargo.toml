@@ -16,8 +16,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 regex = { workspace = true }
 
-[dev-dependencies]
 tokio = { workspace = true }
+tempfile = { workspace = true }
 
 [features]
 napi-vm = ["ferrite-runtime/napi-vm"]

@@ -1,7 +1,8 @@
 //! Framework adapters and evidence-based capability registry.
-//! Vue/Svelte fail explicitly until official compiler hosts are validated.
+//! Vue/Svelte plugins require explicit integration; official Node compiler calls are experimental.
 //! React Refresh remains experimental.
 
+pub mod compiler_host;
 pub mod react;
 pub mod registry;
 pub mod svelte;

@@ -999,11 +999,16 @@ dependencies = [
  "async-trait",
  "ferrite-config",
  "ferrite-core",
+ "ferrite-npm",
  "ferrite-plugin",
  "ferrite-resolver",
  "ferrite-transform",
+ "oxc_sourcemap",
+ "serde",
  "serde_json",
+ "tempfile",
  "tokio",
+ "url",
 ]
 
 [[package]]
@@ -1080,6 +1085,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 

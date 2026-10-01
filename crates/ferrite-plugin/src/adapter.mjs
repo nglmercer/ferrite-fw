@@ -7,12 +7,15 @@
 // A hook returning `null`/`undefined` means "skip" (Rust keeps its default).
 import { createInterface } from "node:readline";
 
+// Protocol owns the original stdout writer. Ordinary guest output is logs.
+const protocolWrite = process.stdout.write.bind(process.stdout);
+process.stdout.write = process.stderr.write.bind(process.stderr);
 const plugins = new Map();
 
 function respond(id, ok, result, error) {
   const message = { id, ok, result: result === undefined ? null : result };
   if (error !== undefined) message.error = error;
-  process.stdout.write(JSON.stringify(message) + "\n");
+  protocolWrite(JSON.stringify(message) + "\n");
 }
 
 async function register(id, name, entry) {
@@ -44,7 +47,7 @@ async function hook(id, name, hook, input) {
   respond(id, true, result === undefined ? null : result);
 }
 
-process.stdout.write(JSON.stringify({ ferrite: 3 }) + "\n");
+protocolWrite(JSON.stringify({ ferrite: 3 }) + "\n");
 
 // Serialize handling: `register` must settle before later lines run.
 let tail = Promise.resolve();
@@ -61,6 +64,10 @@ rl.on("line", (line) => {
     .then(async () => {
       if (message.cmd === "register") {
         await register(message.id, message.name, message.entry);
+      } else if (message.cmd === "call") {
+        const module = plugins.get(message.name);
+        if (!module || typeof module[message.export] !== "function") throw new Error(`missing callable export ${message.name}.${message.export}`);
+        respond(message.id, true, await module[message.export](message.input));
       } else if (message.cmd === "hook") {
         await hook(message.id, message.name, message.hook, message.input);
       } else {

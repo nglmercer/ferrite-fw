@@ -1,7 +1,7 @@
 //! Versioned, evidence-based framework capabilities shared by adapters.
 
 /// Registry schema version; independent of framework package versions.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// A capability is tested only after the entire acceptance profile executes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12,11 +12,40 @@ pub enum Support {
     Unavailable,
 }
 
+/// Compiler-only evidence. This does not advertise rendering, HMR or SSR runtime support.
+#[derive(Debug)]
+pub struct CompilerProfile {
+    pub host: &'static str,
+    pub framework_version: &'static str,
+    pub client: Support,
+    pub server: Support,
+    pub requires_explicit_enable: bool,
+    pub conformance_fixture: &'static str,
+}
+
+pub const VUE_NODE: CompilerProfile = CompilerProfile {
+    host: "node",
+    framework_version: "3.5.22",
+    client: Support::Experimental,
+    server: Support::Experimental,
+    requires_explicit_enable: true,
+    conformance_fixture: "compiler_host::actual_project_matched_compilers_client_server_and_runes",
+};
+pub const SVELTE_NODE: CompilerProfile = CompilerProfile {
+    host: "node",
+    framework_version: "5.39.6",
+    client: Support::Experimental,
+    server: Support::Experimental,
+    requires_explicit_enable: true,
+    conformance_fixture: "compiler_host::actual_project_matched_compilers_client_server_and_runes",
+};
+
 /// Framework compiler requirements and current rendering evidence.
 #[derive(Debug)]
 pub struct FrameworkDescriptor {
     pub name: &'static str,
     pub extensions: &'static [&'static str],
+    pub compiler_profiles: &'static [CompilerProfile],
     pub compiler_package: Option<&'static str>,
     pub client: Support,
     pub ssr: Support,
@@ -28,6 +57,7 @@ pub const FRAMEWORKS: &[FrameworkDescriptor] = &[
     FrameworkDescriptor {
         name: "react",
         extensions: &["jsx", "tsx"],
+        compiler_profiles: &[],
         compiler_package: None,
         client: Support::Experimental,
         ssr: Support::Unavailable,
@@ -36,6 +66,7 @@ pub const FRAMEWORKS: &[FrameworkDescriptor] = &[
     FrameworkDescriptor {
         name: "vue",
         extensions: &["vue"],
+        compiler_profiles: &[VUE_NODE],
         compiler_package: Some("vue/compiler-sfc"),
         client: Support::Unavailable,
         ssr: Support::Unavailable,
@@ -44,6 +75,7 @@ pub const FRAMEWORKS: &[FrameworkDescriptor] = &[
     FrameworkDescriptor {
         name: "svelte",
         extensions: &["svelte", "svelte.js", "svelte.ts"],
+        compiler_profiles: &[SVELTE_NODE],
         compiler_package: Some("svelte/compiler"),
         client: Support::Unavailable,
         ssr: Support::Unavailable,
@@ -71,7 +103,7 @@ pub(crate) fn compiler_unavailable(framework: &str, id: &str) -> ferrite_core::F
         .and_then(|framework| framework.compiler_package)
         .unwrap_or(framework);
     ferrite_core::FerriteError::Build(format!(
-        "cannot compile {id}: {framework} requires project-matched {compiler} on a validated compiler host; this build has no such adapter. Use a supported client JavaScript entry or the framework's upstream toolchain"
+        "cannot compile {id}: {framework} requires project-matched {compiler} on a validated compiler host; no compiler host has been explicitly configured for this plugin. Use a supported client JavaScript entry or the framework's upstream toolchain"
     ))
 }
 

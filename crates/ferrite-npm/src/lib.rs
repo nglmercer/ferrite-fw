@@ -13,6 +13,8 @@ mod manifest;
 mod metadata;
 mod package;
 mod package_json;
+mod projection;
+pub use projection::project_node_modules;
 mod spec;
 
 pub use client::RegistryClient;

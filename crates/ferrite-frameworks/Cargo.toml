@@ -12,6 +12,10 @@ ferrite-plugin = { workspace = true }
 ferrite-resolver = { workspace = true }
 ferrite-transform = { workspace = true }
 serde_json = { workspace = true }
-
-[dev-dependencies]
+serde = { workspace = true }
+ferrite-npm = { workspace = true }
 tokio = { workspace = true }
+tempfile = { workspace = true }
+oxc_sourcemap = { workspace = true }
+
+url = { workspace = true }

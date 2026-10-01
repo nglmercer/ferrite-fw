@@ -11,10 +11,10 @@
 //! adapter spawns nothing until [`NodeAdapterHost::spawn`] runs.
 
 use std::collections::HashMap;
-use std::io::{BufRead as _, BufReader, Write as _};
+use std::io::{BufRead as _, BufReader, Read as _, Write as _};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
@@ -27,6 +27,7 @@ const ADAPTER_SCRIPT: &str = include_str!("adapter.mjs");
 
 /// Default per-hook timeout.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 
 /// Tier-3 host: foreign plugins in a Node.js child process.
 pub struct NodeAdapterHost {
@@ -40,6 +41,8 @@ struct NodeAdapterInner {
     pending: Mutex<HashMap<u64, mpsc::Sender<AdapterResponse>>>,
     registered: Mutex<HashMap<String, String>>,
     timeout: Duration,
+    stopped: AtomicBool,
+    _script: tempfile::TempPath,
     /// Reader thread handle (joined on drop after killing the child).
     reader: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
@@ -74,6 +77,7 @@ impl NodeAdapterHost {
         };
         let script_file = write_adapter_script()?;
         let mut child = Command::new(&node)
+            .arg("--max-old-space-size=256")
             .arg(&script_file)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -98,6 +102,8 @@ impl NodeAdapterHost {
             pending: Mutex::new(HashMap::new()),
             registered: Mutex::new(HashMap::new()),
             timeout,
+            stopped: AtomicBool::new(false),
+            _script: script_file,
             reader: Mutex::new(None),
         });
         // Handshake waiter first: the adapter prints `{"ferrite":3}` on
@@ -111,12 +117,22 @@ impl NodeAdapterHost {
         *inner.reader.lock().map_err(|_| poison("reader"))? = Some(std::thread::spawn(
             reader_loop(stdout, Arc::downgrade(&inner)),
         ));
-        rx.recv_timeout(timeout).map_err(|_| {
+        let boot = rx.recv_timeout(timeout).map_err(|_| {
             FerriteError::Build(
                 "tier-3 node adapter: node did not boot in time (is it a working Node.js?)"
                     .to_string(),
             )
         })?;
+        if !boot.ok {
+            return Err(FerriteError::Build(
+                boot.error.unwrap_or_else(|| "node boot failed".into()),
+            ));
+        }
+        inner
+            .pending
+            .lock()
+            .map_err(|_| poison("pending"))?
+            .remove(&0);
         Ok(Self { inner })
     }
 
@@ -139,6 +155,49 @@ impl NodeAdapterHost {
             .map_err(|_| poison("registered"))?
             .insert(name.to_string(), entry.to_string());
         Ok(())
+    }
+
+    /// Call a typed JSON export; unlike optional hooks, missing exports fail.
+    pub async fn call_export(
+        &self,
+        name: &str,
+        export: &str,
+        input: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        if !self.contains(name) {
+            return Err(FerriteError::Build(format!(
+                "unknown node compiler/plugin {name}"
+            )));
+        }
+        let inner = self.inner.clone();
+        let name = name.to_owned();
+        let export = export.to_owned();
+        let response = tokio::task::spawn_blocking(move || {
+            inner.request(
+                serde_json::json!({"cmd": "call", "name": name, "export": export, "input": input}),
+            )
+        })
+        .await
+        .map_err(|error| FerriteError::Build(format!("node worker task failed: {error}")))??;
+        if !response.ok {
+            return Err(FerriteError::Build(
+                response
+                    .error
+                    .unwrap_or_else(|| "node compiler export failed".into()),
+            ));
+        }
+        Ok(response.result)
+    }
+
+    /// Explicit cancellation/shutdown terminates this worker and all pending calls.
+    /// A timed-out or cancelled worker is never silently restarted.
+    pub fn shutdown(&self) {
+        self.inner.stop("node worker cancelled or shut down");
+    }
+
+    /// Persistent child identity, useful for host diagnostics.
+    pub fn process_id(&self) -> Result<u32> {
+        Ok(self.inner.child.lock().map_err(|_| poison("child"))?.id())
     }
 
     /// True when `name` is registered.
@@ -176,12 +235,16 @@ impl ForeignPluginHost for NodeAdapterHost {
                 plugin.name
             )));
         }
-        let response = self.inner.request(serde_json::json!({
+        let inner = self.inner.clone();
+        let body = serde_json::json!({
             "cmd": "hook",
             "name": plugin.name,
             "hook": hook_name(hook),
             "input": input,
-        }))?;
+        });
+        let response = tokio::task::spawn_blocking(move || inner.request(body))
+            .await
+            .map_err(|error| FerriteError::Build(format!("node hook task failed: {error}")))??;
         if !response.ok {
             return Err(FerriteError::Build(format!(
                 "tier-3 node adapter: `{}` hook `{}` threw: {}",
@@ -198,12 +261,12 @@ impl ForeignPluginHost for NodeAdapterHost {
 
 impl Drop for NodeAdapterInner {
     fn drop(&mut self) {
-        if let Ok(mut child) = self.child.lock() {
-            child.kill().ok();
-        }
+        self.stop("node worker dropped");
         if let Ok(mut reader) = self.reader.lock() {
             if let Some(handle) = reader.take() {
-                handle.join().ok();
+                if handle.thread().id() != std::thread::current().id() {
+                    handle.join().ok();
+                }
             }
         }
     }
@@ -226,62 +289,134 @@ fn poison(what: &str) -> FerriteError {
 }
 
 impl NodeAdapterInner {
+    fn stop(&self, reason: &str) {
+        self.stopped.store(true, Ordering::SeqCst);
+        if let Ok(mut child) = self.child.lock() {
+            child.kill().ok();
+            child.wait().ok();
+        }
+        if let Ok(mut pending) = self.pending.lock() {
+            for (id, sender) in pending.drain() {
+                sender
+                    .send(AdapterResponse {
+                        id,
+                        ok: false,
+                        result: serde_json::Value::Null,
+                        error: Some(reason.into()),
+                    })
+                    .ok();
+            }
+        }
+    }
+
     /// Send one request, await its response (or timeout).
     fn request(&self, mut body: serde_json::Value) -> Result<AdapterResponse> {
+        if self.stopped.load(Ordering::SeqCst) {
+            return Err(FerriteError::Build(
+                "node worker is stopped; explicitly create a new enabled host".into(),
+            ));
+        }
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         body["id"] = serde_json::json!(id);
-        let (tx, rx) = mpsc::channel();
-        self.pending
-            .lock()
-            .map_err(|_| poison("pending"))?
-            .insert(id, tx);
         let mut line = serde_json::to_string(&body).map_err(|error| {
             FerriteError::Build(format!(
                 "tier-3 node adapter: cannot encode request: {error}"
             ))
         })?;
+        if line.len() > MAX_MESSAGE_BYTES {
+            return Err(FerriteError::Build(
+                "node request exceeds the 16 MiB message limit".into(),
+            ));
+        }
+        let (tx, rx) = mpsc::channel();
+        self.pending
+            .lock()
+            .map_err(|_| poison("pending"))?
+            .insert(id, tx);
         line.push('\n');
-        self.stdin
+        let write_result = self
+            .stdin
             .lock()
             .map_err(|_| poison("stdin"))?
             .write_all(line.as_bytes())
             .map_err(|error| {
                 FerriteError::Build(format!("tier-3 node adapter: node stdin closed: {error}"))
-            })?;
-        rx.recv_timeout(self.timeout).map_err(|_| {
-            FerriteError::Build(format!(
-                "tier-3 node adapter: hook call timed out after {}s",
-                self.timeout.as_secs()
-            ))
-        })
+            });
+        if let Err(error) = write_result {
+            self.stop("node input transport failed; worker terminated");
+            return Err(error);
+        }
+        match rx.recv_timeout(self.timeout) {
+            Ok(response) => Ok(response),
+            Err(_) => {
+                self.stop("node compiler/plugin request timed out; worker terminated");
+                Err(FerriteError::Build(format!(
+                    "node worker request timed out after {} ms; worker terminated",
+                    self.timeout.as_millis()
+                )))
+            }
+        }
     }
 }
 
 /// Reader loop: route response lines to waiters by id.
 fn reader_loop(stdout: ChildStdout, inner: std::sync::Weak<NodeAdapterInner>) -> impl FnOnce() {
     move || {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines() {
-            let Ok(line) = line else { break };
-            // Boot handshake (no id yet).
-            if line.contains("\"ferrite\"") {
-                let response = AdapterResponse {
-                    id: 0,
-                    ok: true,
-                    result: serde_json::Value::Null,
-                    error: None,
-                };
+        let mut reader = BufReader::new(stdout);
+        loop {
+            let mut bytes = Vec::new();
+            let size = match reader
+                .by_ref()
+                .take((MAX_MESSAGE_BYTES + 1) as u64)
+                .read_until(b'\n', &mut bytes)
+            {
+                Ok(size) => size,
+                Err(_) => break,
+            };
+            if size == 0 {
+                break;
+            }
+            if size > MAX_MESSAGE_BYTES {
                 if let Some(inner) = inner.upgrade() {
-                    if let Ok(pending) = inner.pending.lock() {
-                        if let Some(tx) = pending.get(&0) {
-                            tx.send(response).ok();
+                    inner.stop("node reply exceeds the 16 MiB limit");
+                }
+                break;
+            }
+            let Ok(line) = std::str::from_utf8(&bytes) else {
+                if let Some(inner) = inner.upgrade() {
+                    inner.stop("node protocol returned non-UTF8 data");
+                }
+                break;
+            };
+            if serde_json::from_str::<serde_json::Value>(line).is_ok_and(|value| {
+                value.as_object().is_some_and(|map| {
+                    map.len() == 1 && map.get("ferrite") == Some(&serde_json::json!(3))
+                })
+            }) {
+                if let Some(inner) = inner.upgrade() {
+                    if let Ok(mut pending) = inner.pending.lock() {
+                        if let Some(tx) = pending.remove(&0) {
+                            tx.send(AdapterResponse {
+                                id: 0,
+                                ok: true,
+                                result: serde_json::Value::Null,
+                                error: None,
+                            })
+                            .ok();
                         }
                     }
                 }
                 continue;
             }
-            let parsed: std::result::Result<AdapterResponse, _> = serde_json::from_str(&line);
-            let Ok(response) = parsed else { continue };
+            let parsed: std::result::Result<AdapterResponse, _> = serde_json::from_str(line);
+            let Ok(response) = parsed else {
+                if let Some(inner) = inner.upgrade() {
+                    inner.stop(
+                        "invalid node protocol response; guest output must use the log channel",
+                    );
+                }
+                break;
+            };
             if let Some(inner) = inner.upgrade() {
                 let tx = inner
                     .pending
@@ -295,21 +430,21 @@ fn reader_loop(stdout: ChildStdout, inner: std::sync::Weak<NodeAdapterInner>) ->
                 break;
             }
         }
+        if let Some(inner) = inner.upgrade() {
+            inner.stop("node worker exited or closed its protocol channel");
+        }
     }
 }
 
 /// Stage the adapter script (`.mjs`, run directly by Node).
-fn write_adapter_script() -> Result<PathBuf> {
-    let path =
-        std::env::temp_dir().join(format!("ferrite-node-adapter-{}.mjs", std::process::id()));
-    // Best-effort: a stale copy from a crashed run is fine to reuse.
-    let fresh = std::fs::read_to_string(&path).is_ok_and(|staged| staged == ADAPTER_SCRIPT);
-    if !fresh {
-        std::fs::write(&path, ADAPTER_SCRIPT).map_err(|error| {
-            FerriteError::Build(format!("tier-3 node adapter: cannot stage script: {error}"))
-        })?;
-    }
-    Ok(path)
+fn write_adapter_script() -> Result<tempfile::TempPath> {
+    let mut file = tempfile::Builder::new()
+        .prefix("ferrite-node-adapter-")
+        .suffix(".mjs")
+        .tempfile()?;
+    file.write_all(ADAPTER_SCRIPT.as_bytes())?;
+    file.as_file().sync_all()?;
+    Ok(file.into_temp_path())
 }
 
 /// Portable `PATH` lookup (no permission-bit checks: Windows-safe).
@@ -465,14 +600,14 @@ mod tests {
         assert!(error.to_string().contains("cannot spawn"), "{error}");
     }
 
-    /// Real end-to-end through the embedded adapter on a real Node.js.
+    /// Real end-to-end through the adapter script on a real Node.js.
     #[tokio::test]
     #[ignore = "needs real node on PATH"]
     async fn real_node_roundtrips_through_adapter() {
-        if super::find_on_path("node").is_none() {
-            eprintln!("skipping: no `node` on PATH");
-            return;
-        }
+        assert!(
+            super::find_on_path("node").is_some(),
+            "real Node test requires node on PATH"
+        );
         let dir = test_dir("realnode");
         std::fs::write(
             dir.join("plug.mjs"),
@@ -508,5 +643,83 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(miss, serde_json::Value::Null);
+    }
+    #[tokio::test]
+    #[ignore = "requires real Node; executed explicitly"]
+    async fn real_node_typed_exports_logs_timeout_and_cancellation() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = dir.path().join("worker.mjs");
+        std::fs::write(
+            &entry,
+            r#"
+            export async function compile(input) {
+                console.log('ordinary log'); process.stdout.write('guest stdout log\n');
+                await Promise.resolve(); return { value: input.value + 1 };
+            }
+            export async function hang() { await new Promise(() => {}); }
+        "#,
+        )
+        .unwrap();
+        let host = NodeAdapterHost::spawn_with_timeout(None, Duration::from_millis(500)).unwrap();
+        host.register_plugin("compiler", &entry.to_string_lossy())
+            .unwrap();
+        let pid = host.process_id().unwrap();
+        for _ in 0..2 {
+            assert_eq!(
+                host.call_export("compiler", "compile", serde_json::json!({"value": 41}))
+                    .await
+                    .unwrap()["value"],
+                42
+            );
+            assert_eq!(host.process_id().unwrap(), pid);
+        }
+        assert!(host
+            .call_export("compiler", "missing", serde_json::Value::Null)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("missing"));
+        assert!(host
+            .call_export("compiler", "hang", serde_json::Value::Null)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("timed out"));
+        assert!(host
+            .call_export("compiler", "compile", serde_json::Value::Null)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("stopped"));
+        assert!(
+            host.inner
+                .child
+                .lock()
+                .unwrap()
+                .try_wait()
+                .unwrap()
+                .is_some(),
+            "timed-out child must be reaped"
+        );
+        let host = Arc::new(NodeAdapterHost::spawn(None).unwrap());
+        host.register_plugin("compiler", &entry.to_string_lossy())
+            .unwrap();
+        let running = host.clone();
+        let task = tokio::spawn(async move {
+            running
+                .call_export("compiler", "hang", serde_json::Value::Null)
+                .await
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        host.shutdown();
+        let error = tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("cancelled") || error.to_string().contains("stopped"),
+            "{error}"
+        );
     }
 }

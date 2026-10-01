@@ -261,3 +261,68 @@ compilation, checker/editor projections, SSR renderers/hydration, remaining npm
 contexts/platform/workspace requirements, additional/upstream adapters, SDK and
 framework/release acceptance remain assigned. No entire-task completion or new
 framework compatibility profile is claimed.
+
+## Official compiler-host foundation
+
+Implemented a typed NodeCompilerHost using the existing persistent NodeAdapterHost
+transport, with no automatic Node spawn on an embedded-host failure. Constructing
+this explicit library host projects the selected v2 lock graph and starts Node;
+it is separate from any SSR runtime. Official project-matched `vue/compiler-sfc`
+3.5.22 and `svelte/compiler` 5.39.6 execute in the worker. Package manifests and
+actual compiler versions must match the locked selection. Other versions fail as
+unvalidated, and a changed lock graph requires explicitly recreating the host.
+Registry schema 2 records these compiler-only experimental profiles separately
+from unavailable Vue/Svelte application and SSR rendering profiles. Neither
+framework plugin nor CLI automatically enables this host yet.
+
+Vue uses official parsing, compileScript, compileTemplate and asynchronous
+compileStyle: script setup/TypeScript, binding metadata, nested templates,
+scoped/module CSS, maps, style/type dependencies and template tips are retained.
+Svelte uses whole-component compile and compileModule for runes-bearing modules;
+.svelte.ts module input is lowered with Oxc and its source map chained. Typed
+results retain code, CSS/modules, maps, dependencies, diagnostics and compiler
+version. Compiler assembly inserts unmapped barriers for generated helper code.
+Custom blocks, external Vue blocks and unsupported preprocessors fail explicitly;
+preprocessor integrations, full macro/type-import coverage and asset integration
+remain unfinished. Svelte HMR is explicitly disabled in this wrapper; no update
+or hydration capability is inferred from compiler execution.
+
+The Node/editor projection materializes importer-specific dependency edges as
+owned node_modules symlinks inside Ferrite's package store, including concurrent
+versions and scoped packages. It runs no alternate resolver or lifecycle scripts.
+It validates every existing destination before writing, refuses unmanaged,
+modified or unsafe links, and atomically replaces each owned view with rollback
+on publish failure. Package contents remain intact. This is not a graph-wide
+atomic projection transaction, and editor/installer CLI integration remains
+unfinished. Node/editor and Windows release compatibility are not claimed.
+
+Transport changes: typed asynchronous JSON exports, Tokio blocking-worker
+isolation, private temporary worker scripts, 16 MiB request/reply limits, 256 MiB
+Node old-space limit, separate ordinary log/protocol channels, request deadlines,
+explicit cancellation, pending-call failure and child kill/reap on shutdown.
+Timeout/cancellation never silently restarts or substitutes a backend. Node is a
+normal subprocess, not a sandbox; complete RSS/descendant-process resource limits
+and foreign-plugin factory/object-hook/config/server lifecycle support remain
+unfinished. These changes do not establish full Vite compatibility.
+
+Validation executed on Linux x86_64 with Node v26.10.0:
+
+- `cargo test -p ferrite-npm -p ferrite-plugin -p ferrite-frameworks --offline`:
+  46 unit tests passed; registry/Node integration tests were separately executed.
+- `cargo test -p ferrite-plugin node_adapter::tests::real_node --locked -- --ignored --nocapture`:
+  both real-Node tests passed, including async exports, process reuse, guest
+  stdout/console logs, missing-export errors, timeout termination and cancellation.
+- `cargo test -p ferrite-frameworks --test compiler_host --locked -- --ignored --nocapture`:
+  passed from a clean directory, installing actual pinned compilers through the
+  Rust Ferrite installer. Client/server output compiled and parsed, Vue development/production scoped, CSS-variable and
+  module CSS validated, Svelte component/module runes and original .svelte.ts maps
+  validated, syntax/preprocessor/custom-block failures and explicit cancellation
+  checked. A prior run against the existing installed fixture also passed.
+- `cargo clippy -p ferrite-npm -p ferrite-plugin -p ferrite-frameworks --all-targets --locked -- -D warnings`:
+  passed; changed Rust files formatted and `git diff --check` passed.
+
+These are compiler-only tests, not clean generated-app browser acceptance.
+Official compiler integration into dev/build resources, watcher ownership, HMR,
+scaffolds, checkers and real SSR renderers/hydration remains assigned. Native and
+embedded compiler hosts, additional framework adapters and release/upstream
+acceptance remain unfinished. The complete mission remains active.
