@@ -3273,3 +3273,18 @@ Clippy passed for E2E, CLI and configuration. The ongoing broad replay built its
 binaries before this increment; it is a checkpoint run, not a complete replay
 of this final source. G04 remains open for the complete final-source replay and
 requirement audit.
+
+## G04 replay checkpoint — Complete target inventory
+
+The checkpoint replay exited successfully with 302 units and all 282 integration
+tests across 51 targets: 584 passed, zero failed/ignored/filtered. Its terminal
+results reconcile exactly with Cargo metadata and the final-source test-list
+inventory. This is the first complete replay of the current target inventory,
+but it is not a coherent final-source run: terminal-stop work was verified
+separately during it. All final-source integration binaries then built.
+
+The coherent final-source `cargo test -p ferrite-e2e --no-fail-fast --
+--test-threads=1` replay is now live, including doctests. Both installed engines
+are mandatory, using Chrome Headless Shell 153.0.8010.12 and Firefox 157.0.
+The [completion index](E2E-PARITY-AUDIT.md) records inventory and gate scope.
+G04 remains unchecked until that command and the requirement audit are complete.
