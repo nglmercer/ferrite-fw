@@ -1,13 +1,13 @@
 # Ferrite E2E implementation TODO
 
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
-Session plan refreshed: 2026-10-01, after verified C03 coverage implementation.
+Session plan refreshed: 2026-10-01, after verified C04 HAR implementation.
 Expanded on request for a longer implementation session; B09/B10/B13/B14 and D01/D02 are verified.
 Uncommitted implementations are not counted complete.
 
 The initial G/A foundations are complete except for the final G04 audit. Follow
 the remaining-work index below through B/D improvements and supported C extensions.
-This backlog contains **51 tasks (47 complete, 4 remaining)**: four foundations,
+This backlog contains **51 tasks (48 complete, 3 remaining)**: four foundations,
 16 core tasks, 19 follow-ups, six optional extensions and six practical additions.
 All A and B tasks and D01–D06 are verified; continue with
 practical additions and supported C extensions. The ordering
@@ -24,7 +24,7 @@ limits remain in [PLAYWRIGHT-PARITY.md](PLAYWRIGHT-PARITY.md).
 
 ## Recommended next implementation
 
-Start **C04 — HAR matching/recording options**, then C05–C06 and the final G04 audit.
+Start **C05 — Additional emulation options**, then C06 and the final G04 audit.
 B10 is verified through `2c042e1`, with owned process-output drainage in
 `ade139b`. The complete phase passed **457 E2E and 28 CLI/configuration checks**,
 485 combined: 211 units, 242 integrations across all 38 targets and four doctests.
@@ -95,7 +95,7 @@ snapshot run missed the required capture pair in its existing 650 ms window;
 the unchanged eight-case snapshot target passed serially. Final native gates
 use `--test-threads=1`. No assertion clock or expected evidence was relaxed.
 The current integration inventory has 43 targets; this phase does not claim
-its complete replay. **Next: C04**, then C05–C06 and the G04 audit.
+its complete replay. **Next: C05**, then C06 and the G04 audit.
 G04 remains open for the wider lifecycle, lag/eviction and cross-feature audit.
 The initial broad audit's reproducible large-console timeout was fixed by draining
 owned child stdout/stderr, retaining a bounded 4-KiB stderr tail and keeping
@@ -137,11 +137,10 @@ there. G04 applies during every phase and closes after the final audit.
 
 | Order | Task | Implementation result | Dependency or capability gate |
 |---|---|---|---|
-| 3 | C04 | HAR matching, not-found and supported content options | A14/B06 complete; engine body/rewrite capabilities |
-| 4 | C05 | Supported media/device emulation options and resets | Chromium native capabilities |
-| 5 | C06 | Independently detachable CDP target sessions | Chromium transport and session ownership |
-| 6 | G04 | Final lifecycle, compatibility and resource-release audit | Evidence from every completed phase |
-Immediate delivery: **C04**. All A/B/D tasks and C01–C03 are complete.
+| 1 | C05 | Supported media/device emulation options and resets | Chromium native capabilities |
+| 2 | C06 | Independently detachable CDP target sessions | Chromium transport and session ownership |
+| 3 | G04 | Final lifecycle, compatibility and resource-release audit | Evidence from every completed phase |
+Immediate delivery: **C05**. All A/B/D tasks and C01–C04 are complete.
 Supported C extensions remain available independently. G04 applies
 throughout and closes after the complete integration/lifecycle audit.
 
@@ -1118,12 +1117,25 @@ complete this section.
   Verified 257 scoped checks: 249 units, four native groups across three targets
   and four doctests, plus strict Clippy/formatting, matrix and local links.
   The 48-target complete replay remains G04; the legacy filter excludes 92 cases.
-- [ ] **C04 — HAR matching/recording options (M, supported subsets).** Extend
+- [x] **C04 — HAR matching/recording options (M, supported subsets).** Extend
   existing HAR tools with shared URL matchers, explicit not-found behavior and
   supported content/timing options. Done when redirects, duplicate request URLs,
   binary bodies and replay failures are tested. Keep Firefox body/response
   rewriting limits visible; ZIP archive/update workflows remain deferred.
   Reference: [HAR routing](https://playwright.dev/docs/api/class-browsercontext#browser-context-route-from-har).
+  Verified scoped abort/fallback (including empty HAR), body/header duplicate
+  selection with stable ties, binary/redirect fulfillment and per-hop snapshots.
+  New exports support full/minimal, omit/embed, timing omission and URL filters,
+  with bounded admitted staging, atomic publication and shared operation controls.
+  [Native tests](crates/ferrite-e2e/tests/har_options.rs) cover future context pages,
+  filtered removal, invalid replay installation and cancellation. Firefox binary
+  fulfillment works; strict POST bytes and native response capture remain unavailable.
+  [Pinned observations](scripts/e2e-conformance/har-reference.json) verify policies,
+  candidate selection and four recording profiles. Legacy fallback remains the
+  default; recording is explicit Page export with approximate aggregate timing.
+  Verified 267 scoped checks: 256 units, seven native groups across four targets,
+  four doctests, plus strict Clippy/formatting, matrix and local links. The legacy
+  HAR filter excludes 91 browser tests. The full 49-target replay remains G04.
 - [ ] **C05 — Additional emulation options (M, Chromium).** Extend current media/
   device descriptors with native forced-colors/contrast/media and custom metrics/
   user-agent metadata where supported. Done when application-observable values
@@ -1365,7 +1377,7 @@ waiting for every future feature before starting independent work.
 | 4a. CI and assertion reliability | D01/D02 — complete | Preserve policy/focus wiring in `a2fd29b` and polling controls/scoped final-only soft retries in `312090d`. |
 | 5. Captures and reports | B09/B10/B18/B11/D03/D04 — complete | Preserve verified capture/stability/path/update and owned diagnostics; preserve bounded ARIA output and searchable reports; preserve frozen metadata and bounded slow summaries. |
 | 5a. Practical storage and diagnostics | D03/D04/D05/D06 — complete | Preserve retention/storage helpers; preserve run metadata/slow summaries; preserve bounded Chromium socket diagnostics. |
-| 6. Supported backend extensions | C01–C03 — complete; C04, C05, C06 | Preserve validated PDF options; extend captured bodies, coverage, HAR, emulation and scoped CDP sessions. Check capability before accepting each option; verify explicit errors on the other engine. |
+| 6. Supported backend extensions | C01–C04 — complete; C05, C06 | Preserve validated PDF options; extend captured bodies, coverage, HAR, emulation and scoped CDP sessions. Check capability before accepting each option; verify explicit errors on the other engine. |
 | 7. Final lifecycle and compatibility audit | G04 | Verify cancellation, zero/enclosing deadlines, retries, disposal and released resources across the additions, then run the complete regression and documentation gates. |
 
 Within a phase, prefer correctness and lifecycle work over convenience methods.

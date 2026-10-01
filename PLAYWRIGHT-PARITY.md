@@ -12,12 +12,12 @@ The initial inventory and existing changes were committed in `d93365a`; this
 report describes the subsequent practical parity implementation. The original
 findings remain available in that commit's history.
 
-Latest completed phase: **C03**, with 257 scoped E2E checks: 249 units,
-four native groups across three targets and four doctests. The new coverage and
-body gates required Chromium and Firefox on Linux; legacy coverage used matching
-Chromium Headless Shell and Firefox. Strict Clippy, package formatting, generated
-matrix and local links passed. Pinned navigation/anonymous-script profiles passed.
-C04 is next. The current inventory has 48 integration targets; this phase does
+Latest completed phase: **C04**, with 267 scoped E2E checks: 256 units,
+seven native groups across four targets and four doctests. New HAR/matcher/body
+gates required Chromium and Firefox on Linux; legacy HAR used matching Chromium
+Headless Shell and Firefox. Strict Clippy, package formatting, generated matrix
+and local links passed. Pinned replay policies and four recording profiles passed.
+C05 is next. The current inventory has 49 integration targets; this phase does
 not claim its complete replay. Earlier sections retain historical evidence,
 including B10's complete audit of its then-existing 38 targets.
 
@@ -2578,3 +2578,79 @@ four doctests. Full Chrome/Firefox were required for the new gates; the legacy
 coverage filter used matching Headless Shell/Firefox with 92 cases excluded.
 Strict Clippy, package formatting, matrix and local links passed. The complete
 48-target integration replay remains G04 work.
+
+## C04 — HAR replay policies and recording subsets
+
+`Page::route_from_har` and `BrowserContext::route_from_har` now accept explicit
+`HarNotFound::Abort` or `Fallback` through `RouteFromHarOptions`. Ferrite preserves
+its existing Fallback default; Playwright defaults to abort. Shared exact/glob/
+regex URL matchers and legacy globs scope both the loaded candidates and installed
+route, so an abort policy never blocks URLs outside its filter. An empty filtered
+HAR can still install an abort policy. Shared filters support `unroute_matching`;
+unfiltered registrations use `unroute("**")`.
+
+Replay chooses candidates by exact method/URL and original request bytes, then
+maximizes matching request headers. Header names compare case-insensitively;
+values remain exact, and equal scores choose the first file entry. Candidates
+are reusable rather than consumed. The returned count includes duplicate
+candidates. URL/method hashing avoids duplicating URL strings in the index and
+always verifies the original values before replay; request header membership
+avoids quadratic candidate-header scans.
+
+Binary bodies decode from base64. Redirects preserve native Location headers,
+with `response.redirectURL` supplying Location when needed. Replay removes
+Content-Length, Content-Encoding and Transfer-Encoding because stored response
+bytes are decoded; native fulfillment derives transport framing. Entries with
+failed status zero remain skipped, and omitted response content remains empty
+for compatibility. Corrupt JSON/base64, unsupported encodings, invalid HTTP
+metadata, oversized files/bodies and unavailable native request bytes fail
+explicitly. Firefox can fulfill imported binary responses, but its native POST
+payload remains unavailable for strict HAR matching; such matches fail instead
+of guessing. Native response capture and response rewriting limits remain intact.
+
+Load runs in the existing two-job CPU/read pool with cancellation checks between
+phases. Input must be a regular file of at most 32 MiB, including actual bytes
+read after metadata inspection. A file has at most 4,096 entries; a decoded body
+or request payload has at most 1 MiB. Retained entry/header slots, string lengths
+and body lengths have a 16 MiB accounting budget. Native/JSON parsing and allocator
+overhead are outside that accounting. Blocking OS/codec phases are opaque;
+abandoning a wait stops later phases and discards the result. Malformed input
+is rejected before routes are installed. The shared operation deadline/caller
+cancellation also covers waiting for file work and route installation; native
+routing can already have changed if cancellation arrives during installation.
+
+`Page::save_har_with_options(HarExportOptions)` snapshots bounded typed native
+observations, including individual redirect hops. It supports Full/Minimal
+metadata, Omit/Embed captured content, recorded aggregate duration or omitted
+timings, and shared URL filters. Bodies require opt-in Chromium request capture;
+Firefox exports metadata without body text. Timing is an aggregate approximation,
+not measured DNS/TCP/TLS phases. Minimal mode omits diagnostic fields/pages;
+full mode keeps the existing generic page metadata and unknown size fields.
+Exports require a live owning page; existing synchronous legacy exports remain
+available and keep their recorded-request source.
+
+Exports clone observations only after admission, with at most two admitted jobs;
+the worker retains admission until inputs are released even if the waiter is
+canceled. Work stages in a private temporary file, checks cancellation between
+serialization writes and caps encoded output at 32 MiB. Only the foreground
+operation publishes by atomic rename after rechecking lifecycle/cancellation.
+Failed or abandoned staging preserves the destination. Rust literals for
+`RouteFromHarOptions` need the new fields or `..Default::default()`.
+
+The [official routing contract](https://playwright.dev/docs/api/class-browsercontext#browser-context-route-from-har),
+[pinned executable comparison](scripts/e2e-conformance/har-reference.mjs) and
+[observations](scripts/e2e-conformance/har-reference.json) cover miss policies,
+body/header duplicate selection, binary replay and four full/minimal/content
+recording profiles. The [native Rust gate](crates/ferrite-e2e/tests/har_options.rs)
+adds redirect snapshots, empty-HAR abort, filtered removal, future context pages,
+invalid-installation preservation and cancellation. This remains Partial:
+recording is an explicit Page export, with bounded/approximate metadata. ZIP,
+update/attached content, automatic context recordHar and service-worker-owned
+request interception remain deferred.
+
+C04 verification passed 267 scoped checks: 256 units, native HAR options (two),
+shared URL matching (two), captured bodies (one), legacy HAR (two), and four
+doctests. Strict Clippy, package formatting and matrix/local links passed. The
+legacy browser filter excluded 91 cases; this is not a complete integration
+replay. The 49-target full replay and routing installation cancellation audit
+remain G04 work.

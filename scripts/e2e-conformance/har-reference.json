@@ -1,0 +1,210 @@
+{
+  "playwright": "1.63.0",
+  "engine": "chromium",
+  "replay": [
+    {
+      "notFound": "abort",
+      "duplicateWinner": "second",
+      "tie": "first matching file candidate",
+      "post": "payload",
+      "binary": [
+        0,
+        255,
+        128,
+        65
+      ],
+      "missReachedNetwork": false
+    },
+    {
+      "notFound": "fallback",
+      "missReachedNetwork": true
+    }
+  ],
+  "recording": [
+    {
+      "mode": "full",
+      "content": "embed",
+      "entryFields": [
+        "_frameref",
+        "_monotonicTime",
+        "_resourceType",
+        "_securityDetails",
+        "_serverPort",
+        "cache",
+        "pageref",
+        "request",
+        "response",
+        "serverIPAddress",
+        "startedDateTime",
+        "time",
+        "timings"
+      ],
+      "requestFields": [
+        "bodySize",
+        "cookies",
+        "headers",
+        "headersSize",
+        "httpVersion",
+        "method",
+        "queryString",
+        "url"
+      ],
+      "responseFields": [
+        "_transferSize",
+        "bodySize",
+        "content",
+        "cookies",
+        "headers",
+        "headersSize",
+        "httpVersion",
+        "redirectURL",
+        "status",
+        "statusText"
+      ],
+      "timings": {
+        "dns": 0.011,
+        "connect": 0.245,
+        "ssl": 1.396,
+        "send": 0,
+        "wait": 0.877,
+        "receive": 2.319
+      },
+      "encodedBinary": "AP+AQQ=="
+    },
+    {
+      "mode": "full",
+      "content": "omit",
+      "entryFields": [
+        "_frameref",
+        "_monotonicTime",
+        "_resourceType",
+        "_securityDetails",
+        "_serverPort",
+        "cache",
+        "pageref",
+        "request",
+        "response",
+        "serverIPAddress",
+        "startedDateTime",
+        "time",
+        "timings"
+      ],
+      "requestFields": [
+        "bodySize",
+        "cookies",
+        "headers",
+        "headersSize",
+        "httpVersion",
+        "method",
+        "queryString",
+        "url"
+      ],
+      "responseFields": [
+        "_transferSize",
+        "bodySize",
+        "content",
+        "cookies",
+        "headers",
+        "headersSize",
+        "httpVersion",
+        "redirectURL",
+        "status",
+        "statusText"
+      ],
+      "timings": {
+        "dns": -1,
+        "connect": -1,
+        "ssl": -1,
+        "send": 0,
+        "wait": 1.12,
+        "receive": 2.27
+      },
+      "encodedBinary": null
+    },
+    {
+      "mode": "minimal",
+      "content": "embed",
+      "entryFields": [
+        "_frameref",
+        "_monotonicTime",
+        "_resourceType",
+        "cache",
+        "request",
+        "response",
+        "startedDateTime",
+        "time",
+        "timings"
+      ],
+      "requestFields": [
+        "bodySize",
+        "cookies",
+        "headers",
+        "headersSize",
+        "httpVersion",
+        "method",
+        "queryString",
+        "url"
+      ],
+      "responseFields": [
+        "bodySize",
+        "content",
+        "cookies",
+        "headers",
+        "headersSize",
+        "httpVersion",
+        "redirectURL",
+        "status",
+        "statusText"
+      ],
+      "timings": {
+        "send": -1,
+        "wait": -1,
+        "receive": 2.347
+      },
+      "encodedBinary": "AP+AQQ=="
+    },
+    {
+      "mode": "minimal",
+      "content": "omit",
+      "entryFields": [
+        "_frameref",
+        "_monotonicTime",
+        "_resourceType",
+        "cache",
+        "request",
+        "response",
+        "startedDateTime",
+        "time",
+        "timings"
+      ],
+      "requestFields": [
+        "bodySize",
+        "cookies",
+        "headers",
+        "headersSize",
+        "httpVersion",
+        "method",
+        "queryString",
+        "url"
+      ],
+      "responseFields": [
+        "bodySize",
+        "content",
+        "cookies",
+        "headers",
+        "headersSize",
+        "httpVersion",
+        "redirectURL",
+        "status",
+        "statusText"
+      ],
+      "timings": {
+        "send": -1,
+        "wait": -1,
+        "receive": 2.326
+      },
+      "encodedBinary": null
+    }
+  ],
+  "note": "Ferrite preserves legacy fallback default; abort is explicit. Ferrite export is an explicit Page snapshot with bounded native/captured data and approximate total timing, not automatic context recordHar. ZIP/update/attached content remain deferred."
+}

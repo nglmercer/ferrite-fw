@@ -1272,41 +1272,56 @@ impl BrowserContext {
 
     /// Replay responses from a HAR 1.2 file on every current and future page.
     ///
-    /// Entries match on exact method + URL; misses fall through. Returns how
-    /// many entries were loaded. Remove with `unroute("**")`.
+    /// Entries match method, exact URL and body; matching request headers score
+    /// duplicates and file order breaks ties. Misses follow not_found. Returns
+    /// candidate count including duplicates; shared filters support unroute_matching.
     pub async fn route_from_har(
         &self,
         path: impl AsRef<std::path::Path>,
         options: crate::page::RouteFromHarOptions,
     ) -> E2eResult<usize> {
-        let file = crate::har::HarFile::load(path)?;
-        let matcher = crate::url_matcher::har_filter(&options, |url| self.resolve_url(url))?;
-        let mut map = file.lookup();
-        if let Some(matcher) = &matcher {
-            map.retain(|_, entry| matcher.matches(&entry.url));
+        let timeout = options.operation.timeout.unwrap_or_else(|| {
+            self.live
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .action_timeout
+                .unwrap_or(self.timeout)
+        });
+        let path = path.as_ref().to_path_buf();
+        let work = self
+            .cancellation
+            .run(crate::operation::Deadline::new(timeout).run(
+                "context HAR replay installation",
+                async {
+                    let filter =
+                        crate::url_matcher::har_filter(&options, |url| self.resolve_url(url))?;
+                    let file = crate::har::load_async(path).await?;
+                    let replay =
+                        Arc::new(crate::har::HarReplay::new(file, filter, options.not_found));
+                    let count = replay.len();
+                    if count == 0 && options.not_found == crate::HarNotFound::Fallback {
+                        return Ok(0);
+                    }
+                    let handler = move |info: RouteInfo| {
+                        let replay = replay.clone();
+                        async move { replay.action(&info) }
+                    };
+                    if let Some(matcher) = &options.url_matcher {
+                        self.route_matching(matcher, handler).await?;
+                    } else {
+                        self.route_with_handler(
+                            options.url_filter.as_deref().unwrap_or("**"),
+                            handler,
+                        )
+                        .await?;
+                    }
+                    Ok(count)
+                },
+            ));
+        match &options.operation.cancellation {
+            Some(token) => token.run(work).await,
+            None => work.await,
         }
-        let count = map.len();
-        if count == 0 {
-            return Ok(0);
-        }
-        let map = Arc::new(map);
-        self.route_with_handler("**", move |info: RouteInfo| {
-            let map = Arc::clone(&map);
-            async move {
-                let key = (info.method.to_ascii_uppercase(), info.url.clone());
-                match map.get(&key) {
-                    Some(entry) => Ok(RouteAction::fulfill_full(
-                        entry.status,
-                        entry.status_text.clone(),
-                        entry.headers.clone(),
-                        entry.body.clone(),
-                    )),
-                    None => Ok(RouteAction::Fallback),
-                }
-            }
-        })
-        .await?;
-        Ok(count)
     }
 
     /// Grant permissions on every current and future page (replaces the set).

@@ -716,6 +716,20 @@ impl NetworkLog {
         }
         Some(RouteHeadersGuard(headers))
     }
+    pub(crate) fn har_records(&self) -> Vec<RecordedRequest> {
+        self.recent
+            .iter()
+            .map(|state| {
+                let mut record = state.snapshot().recorded;
+                record.body = state.body.captured_bytes();
+                record.body_truncated = matches!(
+                    *state.body.state.borrow(),
+                    crate::BodyCaptureState::Truncated { .. }
+                );
+                record
+            })
+            .collect()
+    }
     pub(crate) fn begin_body_capture(&mut self, generation: u64) {
         self.end_body_capture("body capture restarted");
         self.body_generation = Some(generation);

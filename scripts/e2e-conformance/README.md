@@ -659,3 +659,20 @@ verifies source omission/oversize status, dirty-domain recovery after setup
 timeout, zero deadlines, caller cancellation, repeated start/stop, independent
 JS/CSS capture, page/context disposal, transport disconnect and explicit Firefox
 unsupported errors. Source storage is bounded and native event lag fails loudly.
+
+### HAR replay policies and recording subsets
+
+`npm run reference:har` runs [har-reference.mjs](har-reference.mjs) on pinned
+Playwright 1.63 Chromium and writes [har-reference.json](har-reference.json).
+Native checks select duplicate entries by body/headers, preserve file-order ties,
+replay binary data and distinguish abort/fallback misses. Four automatic
+Playwright recording profiles inspect full/minimal metadata and embedded/omitted
+content. Ferrite uses explicit bounded Page exports with approximate timings,
+preserving its legacy fallback default; this does not imply automatic recordHar.
+
+The [Rust gate](../../crates/ferrite-e2e/tests/har_options.rs) additionally verifies
+redirect replay/snapshots, empty-file abort policies, filtered route removal,
+future context pages, invalid installation preservation, cancellation and
+Firefox's unavailable POST matching bytes. Firefox native binary fulfillment
+works; response capture/rewrite restrictions remain separate. ZIP/update and
+attached content are deferred.

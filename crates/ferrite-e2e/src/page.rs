@@ -1168,9 +1168,17 @@ pub struct RouteFromHarOptions {
     pub url_filter: Option<String>,
     /// Shared URL matching; mutually exclusive with the legacy glob filter.
     pub url_matcher: Option<crate::UrlMatcher>,
+    /// Miss behavior; defaults to legacy fallback (Playwright defaults to abort).
+    pub not_found: crate::HarNotFound,
+    /// Shared deadline/cancellation for file load and route installation.
+    pub operation: crate::OperationOptions,
 }
 
 impl RouteFromHarOptions {
+    pub fn not_found(mut self, behavior: crate::HarNotFound) -> Self {
+        self.not_found = behavior;
+        self
+    }
     pub fn matching(mut self, matcher: crate::UrlMatcher) -> Self {
         self.url_matcher = Some(matcher);
         self
@@ -4406,48 +4414,42 @@ impl Page {
 
     /// Replay responses from a HAR 1.2 file (Playwright `routeFromHAR`).
     ///
-    /// Entries match on exact method + URL and fulfill status, headers, and
-    /// body; misses fall through to later handlers/rules and the network.
-    /// Returns how many entries were loaded. Remove with `unroute("**")`.
+    /// Entries match method, exact URL and body; matching request headers score
+    /// duplicate candidates, with file order breaking ties. Misses follow not_found.
+    /// Returns candidate count including duplicates. Remove filtered shared routes
+    /// with unroute_matching; unfiltered routes use unroute("**").
     /// HAR-update mode is not supported (record with [`Page::save_har`]).
     pub async fn route_from_har(
         &self,
         path: impl AsRef<Path>,
         options: RouteFromHarOptions,
     ) -> E2eResult<usize> {
-        self.driver
-            .run(async {
-                let file = crate::har::HarFile::load(path)?;
-                let matcher =
-                    crate::url_matcher::har_filter(&options, |url| self.resolve_url(url))?;
-                let mut map = file.lookup();
-                if let Some(matcher) = &matcher {
-                    map.retain(|_, entry| matcher.matches(&entry.url));
-                }
-                let count = map.len();
-                if count == 0 {
+        let page = self.operation_page(&options.operation);
+        let path = path.as_ref().to_path_buf();
+        page.run_operation(crate::operation::Deadline::new(page.timeout()).run(
+            "HAR replay installation",
+            async {
+                let filter = crate::url_matcher::har_filter(&options, |url| page.resolve_url(url))?;
+                let file = crate::har::load_async(path).await?;
+                let replay = Arc::new(crate::har::HarReplay::new(file, filter, options.not_found));
+                let count = replay.len();
+                if count == 0 && options.not_found == crate::HarNotFound::Fallback {
                     return Ok(0);
                 }
-                let map = Arc::new(map);
-                self.route_with_handler("**", move |info: RouteInfo| {
-                    let map = Arc::clone(&map);
-                    async move {
-                        let key = (info.method.to_ascii_uppercase(), info.url.clone());
-                        match map.get(&key) {
-                            Some(entry) => Ok(RouteAction::fulfill_full(
-                                entry.status,
-                                entry.status_text.clone(),
-                                entry.headers.clone(),
-                                entry.body.clone(),
-                            )),
-                            None => Ok(RouteAction::Fallback),
-                        }
-                    }
-                })
-                .await?;
+                let handler = move |info: RouteInfo| {
+                    let replay = replay.clone();
+                    async move { replay.action(&info) }
+                };
+                if let Some(matcher) = &options.url_matcher {
+                    page.route_matching(matcher, handler).await?;
+                } else {
+                    page.route_with_handler(options.url_filter.as_deref().unwrap_or("**"), handler)
+                        .await?;
+                }
                 Ok(count)
-            })
-            .await
+            },
+        ))
+        .await
     }
 
     /// Apply the stored rules and handlers (page first, context fallback;
@@ -4683,6 +4685,48 @@ impl Page {
         let text = serde_json::to_string_pretty(&har)?;
         std::fs::write(path.as_ref(), text)?;
         Ok(())
+    }
+
+    /// Export observed native redirect hops with bounded optional captured bodies.
+    /// Stages privately and publishes atomically under the owning page lifecycle.
+    pub async fn save_har_with_options(
+        &self,
+        path: impl AsRef<Path>,
+        options: crate::HarExportOptions,
+    ) -> E2eResult<()> {
+        let page = self.operation_page(&options.operation);
+        let path = path.as_ref().to_path_buf();
+        let matcher = options
+            .url_matcher
+            .as_ref()
+            .map(|matcher| matcher.resolved(|url| page.resolve_url(url)))
+            .transpose()?;
+        page.run_operation(crate::operation::Deadline::new(page.timeout()).run(
+            "HAR export",
+            async {
+                let permit = crate::har::export_permit().await?;
+                let records = page
+                    .sink
+                    .network_log
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .har_records();
+                let destination = path.clone();
+                let stage = crate::snapshot_work::run(move |stop| {
+                    let _permit = permit;
+                    crate::har::stage_export(&path, records, &options, matcher, || stop.check())
+                })
+                .await?;
+                page.run_operation(async {
+                    stage
+                        .persist(&destination)
+                        .map_err(|error| E2eError::Io(error.error))?;
+                    Ok(())
+                })
+                .await
+            },
+        ))
+        .await
     }
 
     /// Set files on the file input matching `selector` (empty list clears).

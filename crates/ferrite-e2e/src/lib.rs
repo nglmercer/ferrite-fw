@@ -131,7 +131,10 @@ pub use expect::{
 pub use file_payload::FilePayload;
 pub use frame_locator::FrameLocator;
 pub use function_wait::{FunctionPolling, FunctionWaitOptions};
-pub use har::{HarContentMode, HarFile, HarReplayEntry};
+pub use har::{
+    HarContentMode, HarExportOptions, HarFile, HarNotFound, HarRecordMode, HarReplayEntry,
+    HarTimingMode,
+};
 pub use jshandle::JSHandle;
 pub use lifecycle_events::{DialogClosedInfo, FrameEvent};
 pub use locator::{

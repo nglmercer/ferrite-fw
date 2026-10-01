@@ -1250,3 +1250,37 @@ Start options carry `OperationOptions`; stop methods also have
 `*_with_options` forms. Collection storage and native range counts are bounded;
 lag/capacity loss is explicit. Firefox rejects coverage. Existing entry JSON
 decodes with Included source status; struct literals need the new field.
+
+### Choose HAR replay misses and recording details
+
+```rust,ignore
+let filter = UrlMatcher::glob("**/api/**")?;
+page.route_from_har("fixtures/api.har", RouteFromHarOptions::default()
+    .matching(filter.clone())
+    .not_found(HarNotFound::Abort)).await?;
+// Matching misses abort; other URLs can still reach the network.
+page.unroute_matching(&filter).await?;
+
+page.start_request_capture();
+// Trigger and await the responses whose original bodies you want to export.
+page.save_har_with_options("artifacts/api.har", HarExportOptions {
+    content: HarContentMode::Embed,
+    mode: HarRecordMode::Minimal,
+    timing: HarTimingMode::Omit,
+    url_matcher: Some(filter),
+    ..Default::default()
+}).await?;
+```
+
+Replay matches request bodies and chooses duplicate responses by matching
+headers, with file order breaking ties. It does not consume entries. The count
+includes duplicates; empty HARs can install an abort rule. Existing defaults
+still fall back to the network. Firefox fulfills binary HAR responses, but
+strict POST matching fails when native request bytes are unavailable.
+
+New async exports use typed per-hop observations, so redirects remain visible.
+Source content needs Chromium capture; Firefox exports metadata. Aggregate
+timing is approximate, and Minimal omits diagnostic fields. Import/export is
+bounded plain JSON, with staged atomic writes, operation deadlines and caller
+cancellation. ZIP/update/attached content and automatic context recording remain
+deferred. Use `..Default::default()` with new route option fields.

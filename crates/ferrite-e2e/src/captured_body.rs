@@ -103,6 +103,9 @@ impl BodySlot {
                 _ => 0,
             }
     }
+    pub(crate) fn captured_bytes(&self) -> Option<Vec<u8>> {
+        self.bytes.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
     fn ready(&self, url: &str) -> Option<E2eResult<Vec<u8>>> {
         let bytes = self.bytes.lock().unwrap_or_else(|e| e.into_inner());
         let status = self.state.borrow().clone();
