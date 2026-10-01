@@ -651,6 +651,10 @@ Work in [the audit generator](scripts/playwright-parity/build_matrix.py),
   [Evidence](PLAYWRIGHT-PARITY.md#g04-audit-progress--native-route-stop-acknowledgements).
   Terminal pump cleanup and queued pause-release acknowledgement faults remain
   under audit with native context disposal, detached requests and full replay.
+  Further progress: the native detached-frame in-flight regression passes on
+  Chromium and Firefox with disabled completion timeout, preserved identity,
+  unavailable live-frame lookup, repeated terminal lookup and usable parent.
+  [Evidence](PLAYWRIGHT-PARITY.md#g04-audit-progress--detached-frame-in-flight-requests).
 
 
 

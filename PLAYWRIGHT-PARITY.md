@@ -3098,3 +3098,20 @@ Strict Clippy, formatting and all 867 local documentation links passed.
 Terminal pump-exit cleanup, queued pause-release acknowledgements, dropped native
 context disposal, detached-frame requests, redirect correlation and complete
 51-target replay remain G04 audit work.
+
+## G04 audit progress — Detached-frame in-flight requests
+
+A new mandatory Chromium/Firefox regression starts an iframe fetch with response
+headers and a deliberately non-terminating body, then removes the iframe while
+`Response::finished_with_options` is waiting with its timeout disabled. Both
+native backends report request failure, settle the existing completion waiter,
+retain the original request/frame identity, and return no live frame from the
+request's frame lookup. Repeated completion lookup retains the failure and the
+parent page remains usable. No implementation change was needed for this case.
+
+The focused regression and full five-group `network_metadata` target passed on
+both required engines. Strict Clippy, formatting and all 868 local documentation
+links passed. This test-only increment retains the previously verified 294-unit
+implementation baseline; it is not the complete integration replay. The remaining G04 audit
+covers terminal interception cleanup, queued pause-release acknowledgements,
+native context disposal, redirect correlation and the complete 51-target replay.

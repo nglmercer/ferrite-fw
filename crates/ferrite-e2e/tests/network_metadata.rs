@@ -523,3 +523,59 @@ async fn completion_runner_retries_and_native_transport_disconnection() {
     }
     stop.abort();
 }
+
+#[tokio::test]
+async fn detached_frame_inflight_response_settles_and_keeps_original_identity() {
+    let (base, stop) = server().await;
+    for mut browser in browsers().await {
+        browser.set_base_url(Some(base.clone()));
+        let page = browser.new_page().await.unwrap();
+        page.goto("/").await.unwrap();
+        let child = page
+            .document_frames()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|frame| frame.parent_id().is_some())
+            .unwrap();
+        let target = UrlMatcher::exact("/stall");
+        let (response, trigger) = tokio::join!(
+            page.wait_for_response_handle(&target, options()),
+            child.evaluate_value("fetch('/stall').then(r=>r.text()).catch(()=>{}); true")
+        );
+        trigger.unwrap();
+        let response = response.unwrap();
+        let request = response.request();
+        let id = request.id().to_owned();
+        assert_eq!(request.frame_id(), Some(child.id()));
+        assert_eq!(request.completion(), RequestCompletion::Pending);
+        let (finished, detached, removed) = tokio::time::timeout(WAIT, async {
+            tokio::join!(
+                response.finished_with_options(OperationOptions {
+                    timeout: Some(Duration::ZERO),
+                    cancellation: None
+                }),
+                page.wait_for_event(PageEventKind::FrameDetached, WAIT),
+                page.evaluate_value("document.querySelector('iframe').remove(); true")
+            )
+        })
+        .await
+        .expect("detached-frame in-flight completion must settle with disabled timeout");
+        removed.unwrap();
+        assert!(
+            matches!(detached.unwrap(), PageEvent::FrameDetached(frame) if frame.frame_id == child.id())
+        );
+        assert!(
+            matches!(finished, Err(E2eError::Network { .. })),
+            "native detached request must report its failure: {finished:?}"
+        );
+        assert!(matches!(request.completion(), RequestCompletion::Failed(_)));
+        assert_eq!(request.id(), id);
+        assert_eq!(request.frame_id(), Some(child.id()));
+        assert!(request.frame().await.unwrap().is_none());
+        assert!(response.finished().await.is_err());
+        assert_eq!(page.evaluate_value("6 * 7").await.unwrap(), json!(42));
+        browser.close().await.unwrap();
+    }
+    stop.abort();
+}
