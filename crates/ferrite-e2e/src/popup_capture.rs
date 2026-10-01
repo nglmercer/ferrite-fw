@@ -262,6 +262,8 @@ mod tests {
                         }
                         "Target.closeTarget" => json!({"success":true}),
                         "Target.getTargets" => json!({"targetInfos":[]}),
+                        "Target.getBrowserContexts" => json!({"browserContextIds":[]}),
+                        "browser.getUserContexts" => json!({"userContexts":[]}),
                         "Target.createTarget" => {
                             json!({"targetId":if command["params"]["browserContextId"] == "owner2" {"root2"} else {"root"}})
                         }

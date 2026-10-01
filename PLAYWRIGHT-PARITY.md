@@ -3161,3 +3161,30 @@ documentation links passed. Native diagnostics were removed from the driver.
 The historical detached-request test failures remain recorded in the audit logs;
 the final native replay passes with explicit frame-lifecycle settlement. This is
 not the complete 51-target integration replay.
+
+## G04 audit progress — Confirmed native context disposal
+
+Context disposal now validates native removal results and confirms the owned ID
+is absent from Chromium's `Target.getBrowserContexts` or Firefox's
+`browser.getUserContexts`. The removal command and inventory polling share one
+five-second native-disposal phase. Valid inventory rows are required: missing
+arrays, malformed/empty IDs and failed queries cannot prove absence. As with page
+closure, authoritative absence resolves concurrent external removal even when
+the command itself was rejected.
+
+The existing shared close task continues after a dropped waiter and replays the
+same cleanup result to repeated calls. A new two-transport protocol unit checks
+acknowledgement while the context still exists, later disappearance, malformed
+inventory, rejected removal with the context present, externally removed context,
+exactly one native removal and release of captured context ownership. The popup
+protocol fixture now supplies actual empty context inventories for its cleanup
+phase; it no longer relies on a generic empty-object response.
+
+Context-wide budgets across earlier page/preload cleanup phases, terminal
+interception cleanup, queued pause-release acknowledgements and the complete
+51-target requirement audit/replay remain G04 work.
+
+Scoped verification passed 312 checks: 298 units, ten mandatory two-engine native
+groups across `fixture_budgets` and `browser_ownership`, and four doctests. Strict
+Clippy, formatting and all 870 local documentation links passed. This is not the
+complete 51-target regression replay.

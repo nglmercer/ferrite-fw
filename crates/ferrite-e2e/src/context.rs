@@ -1832,23 +1832,70 @@ impl BrowserContext {
         }
         self.pages.lock().unwrap_or_else(|e| e.into_inner()).clear();
         let native = match (&self.backend, self.id.filter(|_| native_open)) {
-            (Backend::Cdp(cdp), Some(id)) => cdp
-                .call(
-                    None,
-                    "Target.disposeBrowserContext",
-                    serde_json::json!({ "browserContextId": id }),
-                    self.timeout,
+            (Backend::Cdp(cdp), Some(id)) => {
+                crate::native_disposal::confirmed_close(
+                    async {
+                        let result = cdp
+                            .call(
+                                None,
+                                "Target.disposeBrowserContext",
+                                serde_json::json!({"browserContextId":id}),
+                                self.timeout,
+                            )
+                            .await?;
+                        if !result.is_object() {
+                            return Err(E2eError::Config(
+                                "native context disposal returned a malformed result".into(),
+                            ));
+                        }
+                        Ok(())
+                    },
+                    || async {
+                        let inventory = cdp
+                            .call(
+                                None,
+                                "Target.getBrowserContexts",
+                                serde_json::json!({}),
+                                self.timeout,
+                            )
+                            .await?;
+                        crate::native_disposal::context_absent(&inventory, &id, false)
+                    },
+                    Duration::from_secs(5),
                 )
                 .await
-                .map(|_| ()),
-            (Backend::Bidi { conn, .. }, Some(id)) => conn
-                .call(
-                    "browser.removeUserContext",
-                    serde_json::json!({ "userContext": id }),
-                    self.timeout,
+            }
+            (Backend::Bidi { conn, .. }, Some(id)) => {
+                crate::native_disposal::confirmed_close(
+                    async {
+                        let result = conn
+                            .call(
+                                "browser.removeUserContext",
+                                serde_json::json!({"userContext":id}),
+                                self.timeout,
+                            )
+                            .await?;
+                        if !result.is_object() {
+                            return Err(E2eError::Config(
+                                "native context disposal returned a malformed result".into(),
+                            ));
+                        }
+                        Ok(())
+                    },
+                    || async {
+                        let inventory = conn
+                            .call(
+                                "browser.getUserContexts",
+                                serde_json::json!({}),
+                                self.timeout,
+                            )
+                            .await?;
+                        crate::native_disposal::context_absent(&inventory, &id, true)
+                    },
+                    Duration::from_secs(5),
                 )
                 .await
-                .map(|_| ()),
+            }
             _ => Ok(()),
         };
         if let Err(error) = native {
@@ -1868,6 +1915,136 @@ impl BrowserContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn native_context_close_survives_dropped_wait_and_requires_valid_absence() {
+        use futures::{FutureExt, SinkExt, StreamExt};
+        use serde_json::json;
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        for bidi in [false, true] {
+            for mode in 0..4 {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let address = listener.local_addr().unwrap();
+                let release = Arc::new(AtomicBool::new(false));
+                let ready = release.clone();
+                let removals = Arc::new(AtomicUsize::new(0));
+                let count = removals.clone();
+                let (observed, mut commands) = tokio::sync::mpsc::unbounded_channel();
+                let server = tokio::spawn(async move {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                    while let Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) =
+                        socket.next().await
+                    {
+                        let request: Value = serde_json::from_str(&text).unwrap();
+                        let remove = matches!(
+                            request["method"].as_str(),
+                            Some("Target.disposeBrowserContext" | "browser.removeUserContext")
+                        );
+                        if remove {
+                            count.fetch_add(1, Ordering::SeqCst);
+                        }
+                        observed.send(remove).unwrap();
+                        let result = if remove || mode == 2 {
+                            json!({})
+                        } else {
+                            let present =
+                                mode == 1 || (mode == 0 && !ready.load(Ordering::Acquire));
+                            if bidi {
+                                json!({"userContexts":if present { vec![json!({"userContext":"owned"}),json!({"userContext":"other"})] } else { vec![json!({"userContext":"other"})] }})
+                            } else {
+                                json!({"browserContextIds":if present { vec!["owned","other"] } else { vec!["other"] }})
+                            }
+                        };
+                        let reply = if remove && matches!(mode, 1 | 3) {
+                            if bidi {
+                                json!({"type":"error","id":request["id"],"error":"unknown error","message":"removal rejected"})
+                            } else {
+                                json!({"id":request["id"],"error":{"code":-1,"message":"removal rejected"}})
+                            }
+                        } else if bidi {
+                            json!({"type":"success","id":request["id"],"result":result})
+                        } else {
+                            json!({"id":request["id"],"result":result})
+                        };
+                        socket
+                            .send(tokio_tungstenite::tungstenite::Message::Text(
+                                reply.to_string().into(),
+                            ))
+                            .await
+                            .unwrap();
+                    }
+                });
+                let backend = if bidi {
+                    Backend::Bidi {
+                        conn: crate::bidi::BidiConnection::connect(&format!("ws://{address}"))
+                            .await
+                            .unwrap(),
+                        insecure_certs: false,
+                    }
+                } else {
+                    Backend::Cdp(
+                        crate::cdp::CdpConnection::connect(&format!("ws://{address}"))
+                            .await
+                            .unwrap(),
+                    )
+                };
+                let context = BrowserContext::new(
+                    backend,
+                    Some("owned".into()),
+                    ContextOptions::default(),
+                    Duration::ZERO,
+                    Duration::ZERO,
+                    None,
+                    Weak::new(),
+                    None,
+                );
+                let weak = Arc::downgrade(&context.pages);
+                assert!(context.clone().close().now_or_never().is_none());
+                assert!(
+                    tokio::time::timeout(Duration::from_secs(1), commands.recv())
+                        .await
+                        .unwrap()
+                        .unwrap()
+                );
+                assert!(
+                    !tokio::time::timeout(Duration::from_secs(1), commands.recv())
+                        .await
+                        .unwrap()
+                        .unwrap()
+                );
+                if mode == 0 {
+                    assert!(
+                        context.clone().close().now_or_never().is_none(),
+                        "native removal acknowledgement is not disappearance"
+                    );
+                    release.store(true, Ordering::Release);
+                }
+                let (first, second) = tokio::time::timeout(Duration::from_secs(1), async {
+                    tokio::join!(context.clone().close(), context.clone().close())
+                })
+                .await
+                .unwrap();
+                for result in [first, second] {
+                    if matches!(mode, 0 | 3) {
+                        result.unwrap();
+                    } else {
+                        assert!(
+                            matches!(result, Err(E2eError::Config(message)) if message.contains(if mode == 1 {"removal rejected"} else {"inventory omitted"}))
+                        );
+                    }
+                }
+                assert_eq!(removals.load(Ordering::SeqCst), 1);
+                assert!(context.is_closed());
+                drop(context);
+                assert!(
+                    weak.upgrade().is_none(),
+                    "completed disposal must release captured context owners"
+                );
+                server.abort();
+            }
+        }
+    }
 
     #[test]
     fn options_default_accepts_downloads() {

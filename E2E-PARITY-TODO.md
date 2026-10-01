@@ -669,6 +669,13 @@ Work in [the audit generator](scripts/playwright-parity/build_matrix.py),
   (306 scoped checks), strict Clippy/formatting and documentation links. Terminal
   interception cleanup, queued pause-release acknowledgements, native context
   disposal and the complete requirement audit/replay remain open.
+  Further progress: native context close confirms owned-ID disappearance using
+  strict Chromium/Firefox inventories. Removal and confirmation share one
+  five-second native-disposal phase; dropped/repeated waiters retain one cleanup
+  outcome, and malformed inventory cannot claim successful disposal.
+  [Evidence](PLAYWRIGHT-PARITY.md#g04-audit-progress--confirmed-native-context-disposal).
+  Context-wide phase budgets, terminal interception cleanup, queued pause-release
+  acknowledgements and the complete requirement audit/replay remain open.
 
 
 
