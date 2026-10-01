@@ -2260,6 +2260,7 @@ pub struct Runner {
     selected_projects: Option<Vec<String>>,
     configuration_error: Option<String>,
     active_config: Option<Arc<crate::ResolvedRunConfig>>,
+    owned_outputs: Option<Arc<crate::owned_output::OwnedOutputs>>,
     configuration_emitted: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
@@ -2349,6 +2350,7 @@ impl Runner {
                 .then(|| config.selected_projects.clone()),
             configuration_error,
             active_config: None,
+            owned_outputs: None,
             configuration_emitted: None,
         }
     }
@@ -3001,6 +3003,7 @@ impl Runner {
         runner.forbid_only = config.forbid_only;
         runner.fail_on_flaky_tests = config.fail_on_flaky_tests;
         runner.active_config = Some(Arc::new(config));
+        runner.owned_outputs = Some(Arc::new(crate::owned_output::OwnedOutputs::default()));
         runner.configuration_emitted = Some(Arc::new(std::sync::atomic::AtomicBool::new(false)));
         runner.run_resolved_inner(browser, tests).await
     }
@@ -3803,6 +3806,19 @@ async fn run_one(
         expected_failure_observed = false;
         let runtime =
             RuntimeControl::new(timeout, test.slow, expected_fail, test.annotations.clone());
+        let attempt_directory = match runner
+            .owned_outputs
+            .as_ref()
+            .expect("run output registry")
+            .reserve(
+                std::path::Path::new(&project_output_dir),
+                &format!("{slug}-attempt{attempts}"),
+            ) {
+            Ok(path) => path,
+            Err(error) => {
+                return failed_result(&name, format!("attempt output reservation: {error}"))
+            }
+        };
         let mut info = TestInfo {
             title: test.name.clone(),
             file: test.file.clone(),
@@ -3812,10 +3828,7 @@ async fn run_one(
             worker_index,
             repeat_each_index: item.repeat_each_index,
             timeout,
-            output_dir: std::path::Path::new(&project_output_dir)
-                .join(format!("{slug}-attempt{attempts}"))
-                .display()
-                .to_string(),
+            output_dir: attempt_directory.display().to_string(),
             project: item.project.clone(),
             attachments: Arc::clone(&attachments),
             configuration: config.clone(),
@@ -3831,10 +3844,7 @@ async fn run_one(
                 repeat_each: item.repeat_each,
                 repeat_each_index: item.repeat_each_index,
                 project_output_dir: project_output_dir.clone(),
-                output_dir: std::path::Path::new(&project_output_dir)
-                    .join(format!("{slug}-attempt{attempts}"))
-                    .display()
-                    .to_string(),
+                output_dir: attempt_directory.display().to_string(),
                 snapshot_dir: project.snapshot_dir.clone(),
                 snapshot_path_template: project.snapshot_path_template.clone(),
                 snapshot_update: config.snapshot_update,
@@ -4145,7 +4155,7 @@ async fn run_one(
                 .await?;
                 if runner.video.records() {
                     page.start_video(VideoOptions {
-                        dir: std::path::PathBuf::from(&project_output_dir),
+                        dir: attempt_directory.clone(),
                         fps: runner.video_fps,
                         ..VideoOptions::default()
                     })
@@ -4283,8 +4293,7 @@ async fn run_one(
             let keep = runner.video == VideoMode::On
                 || (runner.video == VideoMode::OnlyOnFailure && failed.is_some());
             if keep {
-                let path = std::path::Path::new(&project_output_dir)
-                    .join(format!("{slug}-attempt{attempts}.webm"));
+                let path = attempt_directory.join(format!("{slug}-attempt{attempts}.webm"));
                 match bounded_in(
                     info.steps.as_ref(),
                     cleanup_deadline,
@@ -4332,8 +4341,7 @@ async fn run_one(
         let take_shot =
             runner.screenshot_always || (failed.is_some() && runner.screenshot_on_failure);
         if take_shot {
-            let path = std::path::Path::new(&project_output_dir)
-                .join(format!("{slug}-attempt{attempts}.png"));
+            let path = attempt_directory.join(format!("{slug}-attempt{attempts}.png"));
             match bounded_in(
                 info.steps.as_ref(),
                 cleanup_deadline,
@@ -4357,8 +4365,7 @@ async fn run_one(
             }
         }
         if runner.write_trace {
-            let path = std::path::Path::new(&project_output_dir)
-                .join(format!("{slug}-attempt{attempts}.json"));
+            let path = attempt_directory.join(format!("{slug}-attempt{attempts}.json"));
             let result = bounded_in(
                 info.steps.as_ref(),
                 cleanup_deadline,

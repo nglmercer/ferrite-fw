@@ -67,6 +67,7 @@ mod locator;
 mod network;
 mod operation;
 mod output_retention;
+mod owned_output;
 mod page;
 mod popup_capture;
 mod process_output;

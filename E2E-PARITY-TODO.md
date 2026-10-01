@@ -1189,6 +1189,17 @@ behavior claims must still use the repository's pinned Playwright v1.63.0 corpus
   them into explicitly reserved owned roots before any retention deletion.
   Verify roots, overlap/symlinks, baselines, caller sources and report/export
   publication before activating cleanup. D03 remains open.
+  Ownership preparation: [reserved directories](crates/ferrite-e2e/src/owned_output.rs)
+  and [native repeated-run checks](crates/ferrite-e2e/tests/owned_outputs.rs) now
+  isolate each attempt under a fresh canonical-root container. Attachments,
+  recording work, screenshots, traces and videos use its familiar attempt leaf.
+  Use recorded paths/output_path instead of old root-level filenames. Default
+  outputs still persist; latest-trace aliases remain at the project root.
+  Three reservation units and 19 native integrations across five targets passed
+  (both browsers required, real runner video verified), with 220 total units,
+  four doctests and 28 CLI/config checks: 271 scoped checks. Strict Clippy/fmt and
+  regenerated matrix passed. No deletion exists yet; baseline/caller protection,
+  cleanup-time verification, link handling and policy wiring remain next.
 
 - [ ] **D04 — Run metadata and slow-test reporting (M; needs B14/B11).** Add
   optional JSON-safe user metadata/run name and project metadata, propagated

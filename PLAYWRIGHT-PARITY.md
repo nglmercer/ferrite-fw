@@ -2193,3 +2193,39 @@ table scrolls within its attempt and controls wrap at the smaller Chromium
 viewport. The final capture removes Rust debug formatting from cancellation
 status. No full all-target replay is claimed by this focused phase; G04 remains
 open for that audit. B11 is complete and D03 output retention is next.
+
+### D03 ownership preparation: isolated attempt output paths
+
+Attempt outputs now reserve a fresh `.ferrite-attempt-*` container under the
+canonical configured project output root, with the familiar
+`<test-slug>-attempt<N>` leaf inside it. `TestInfo.output_dir` and effective
+attempt settings point to that actual leaf. Attachments, video capture working
+files, screenshots, attempt traces and final videos use it. Duplicate names,
+retries and subsequent runs no longer acquire the same attempt directory.
+Snapshot baseline identities and configured project roots remain independent.
+The legacy latest-trace alias at the project root remains for compatibility.
+
+Consumers should use recorded paths or `TestInfo.output_path`, rather than
+constructing the old root-level screenshot/trace/video filenames. A symlinked
+configured root is canonicalized for reservation; actual output paths need not
+have its lexical alias prefix. Files continue to be retained by default.
+This path migration is ownership preparation, not activation of retention.
+
+[The reservation registry](crates/ferrite-e2e/src/owned_output.rs) holds directory
+handles and verifies reservation identity (Unix device/inode checks), rejects
+escaping leaf names, and does not delete on Drop. Replacement/symlink tests verify
+reservation rejection and caller-file preservation. No deletion routine exists
+in this increment: checks at reservation are not a claim of deletion-race safety.
+Baseline protection, caller-input protection, cleanup-time ownership verification,
+config/builder wiring, report link preservation/pruning and actual retention
+cleanup still require implementation before D03 can be checked complete.
+
+[Native ownership tests](crates/ferrite-e2e/tests/owned_outputs.rs) run two retries
+on two successive runs with the same name, retaining distinct marker/attachment/
+screenshot/trace paths, shared baselines and usable exports on both engines.
+Five effective-configuration, eight snapshot-artifact and four step/bundle checks
+also passed, plus the native runner video-on-failure case with ffmpeg available.
+Together with 220 units, four E2E doctests and 28 CLI/config checks, this increment
+passed 271 scoped checks. Strict all-target Clippy and package formatting passed;
+regenerated matrix counts are unchanged. The current integration inventory now
+has 41 targets; this focused preparation does not claim a complete replay.
