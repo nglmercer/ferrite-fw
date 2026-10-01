@@ -557,3 +557,16 @@ of caller-owned inputs and baselines, so output classification does not imply
 identical report/link semantics. Rust retention implementation, owned-directory
 isolation, cleanup ordering, symlink/repeat-run safety and native verification
 remain pending. No TODO completion is claimed by this reference preparation.
+
+### Typed Web Storage reference
+
+`npm run reference:web-storage` executes 16 pinned Playwright 1.63 observations
+across Chromium and Firefox and writes [web-storage-reference.json](web-storage-reference.json).
+[web-storage-reference.mjs](web-storage-reference.mjs) verifies enumeration,
+opaque-origin errors, empty/Unicode/prototype-sensitive keys, overwrite,
+same-origin navigation/sharing, session isolation, context storage-state restore
+and disposed pages. Key order is normalized for comparison. The recording also
+preserves whether upstream state capture omitted `__proto__`; repeated native
+captures showed variation, so that omission is not a required Ferrite behavior.
+Ferrite's typed bulk writes are an additional Rust convenience; quota and
+in-flight cancellation are covered in [web_storage.rs](../../crates/ferrite-e2e/tests/web_storage.rs).

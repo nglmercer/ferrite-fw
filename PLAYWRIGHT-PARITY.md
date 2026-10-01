@@ -30,9 +30,9 @@ reporter, Android and Electron APIs:
 | Classification | Members | Meaning |
 |---|---:|---|
 | Equivalent | 15 | Counterpart for the basic operation/value, without full options or engine compatibility |
-| Partial | 635 | Related exposed operation with material semantic, option or engine differences |
+| Partial | 636 | Related exposed operation with material semantic, option or engine differences |
 | Idiomatic | 41 | Comparable operation through Rust language/library facilities |
-| Missing | 327 | No dedicated public counterpart |
+| Missing | 326 | No dedicated public counterpart |
 
 These counts describe an inventory, **not a behavioral compatibility
 percentage**. The earlier inventory had 458 Partial and 503 Missing members.
@@ -2229,3 +2229,30 @@ Together with 220 units, four E2E doctests and 28 CLI/config checks, this increm
 passed 271 scoped checks. Strict all-target Clippy and package formatting passed;
 regenerated matrix counts are unchanged. The current integration inventory now
 has 41 targets; this focused preparation does not claim a complete replay.
+
+### D05: typed Web Storage snapshots and bulk writes
+
+`Page::local_storage_items` and `session_storage_items` return owned
+`StorageEntry` vectors sorted by name, independent of native key ordering.
+`local_storage_set_items` and `session_storage_set_items` serialize typed input
+before mutation and write in input order. Empty input is a no-op, duplicate names
+use the last successful write, unrelated keys survive, and quota/security failures
+can leave earlier writes. All helpers use normal driver operation guards.
+
+Storage-state capture now uses entry snapshots and deterministic origin entry
+ordering, preserving empty, Unicode and prototype-sensitive names. Session
+storage remains page-scoped and excluded from context storage-state files.
+[Native tests](crates/ferrite-e2e/tests/web_storage.rs) require both Chromium and
+Firefox and cover origin/navigation/isolation, quotas, cancellation, disposal and
+round trips. [Pinned observations](scripts/e2e-conformance/web-storage-reference.json)
+verify 16 upstream outcomes; upstream prototype-sensitive state capture varied
+between observed runs. Ferrite deliberately preserves that key consistently.
+The API matrix labels WebStorage operations Partial because they are Page
+helpers, without an upstream-style WebStorage object. Bulk writing is a Rust
+convenience. This phase does not claim IndexedDB/OPFS support.
+
+Verification: 228 scoped E2E checks passed: 220 units, four native integration
+groups (two new storage groups and two existing storage-state regressions), and
+four doctests. Both native engines were required. Strict all-target Clippy,
+package formatting and matrix generation passed. The integration inventory now
+has 42 targets; this scoped phase does not claim a complete inventory replay.

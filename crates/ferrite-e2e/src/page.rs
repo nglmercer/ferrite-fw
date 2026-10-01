@@ -3486,6 +3486,70 @@ impl Page {
             .await
     }
 
+    /// Snapshot current-origin localStorage entries, sorted by name.
+    /// The returned strings are owned; native storage key ordering is not preserved.
+    pub async fn local_storage_items(&self) -> E2eResult<Vec<StorageEntry>> {
+        self.driver
+            .run(Self::storage_items("localStorage", &self.driver))
+            .await
+    }
+
+    /// Snapshot current-origin sessionStorage entries, sorted by name.
+    pub async fn session_storage_items(&self) -> E2eResult<Vec<StorageEntry>> {
+        self.driver
+            .run(Self::storage_items("sessionStorage", &self.driver))
+            .await
+    }
+
+    /// Write typed entries in input order, overwriting existing names.
+    /// Serialization completes before mutation. Writes are not transactional:
+    /// quota or security errors can leave earlier entries written. Duplicate names
+    /// use the last successfully written value. Existing unrelated keys survive.
+    pub async fn local_storage_set_items(&self, entries: &[StorageEntry]) -> E2eResult<()> {
+        self.driver
+            .run(Self::storage_set_items(
+                "localStorage",
+                entries,
+                &self.driver,
+            ))
+            .await
+    }
+
+    /// Write sessionStorage entries with the same semantics as local_storage_set_items.
+    pub async fn session_storage_set_items(&self, entries: &[StorageEntry]) -> E2eResult<()> {
+        self.driver
+            .run(Self::storage_set_items(
+                "sessionStorage",
+                entries,
+                &self.driver,
+            ))
+            .await
+    }
+
+    async fn storage_items(storage: &str, driver: &Driver) -> E2eResult<Vec<StorageEntry>> {
+        let value = driver.evaluate(&format!(
+            "(() => {{ const storage = {storage}; const entries = []; for (let i = 0; i < storage.length; i++) {{ const name = storage.key(i); entries.push({{name, value: storage.getItem(name)}}); }} return JSON.stringify(entries); }})()"
+        )).await?;
+        let mut entries: Vec<StorageEntry> =
+            serde_json::from_str(value.as_str().ok_or_else(|| {
+                E2eError::Expect("storage snapshot was not a JSON string".into())
+            })?)?;
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(entries)
+    }
+
+    async fn storage_set_items(
+        storage: &str,
+        entries: &[StorageEntry],
+        driver: &Driver,
+    ) -> E2eResult<()> {
+        let entries = serde_json::to_string(entries)?;
+        driver.evaluate(&format!(
+            "(() => {{ const storage = {storage}; for (const entry of {entries}) storage.setItem(entry.name, entry.value); return true; }})()"
+        )).await?;
+        Ok(())
+    }
+
     /// Read a web-storage entry.
     async fn storage_get(storage: &str, key: &str, driver: &Driver) -> E2eResult<Option<String>> {
         let key_json = serde_json::to_string(key).unwrap_or_default();
@@ -3801,18 +3865,15 @@ impl Page {
         self.driver
             .run(async {
                 let origin = self.evaluate_string("location.origin").await?;
-                let local_storage: HashMap<String, String> =
-                    serde_json::from_value(self.evaluate_value("({ ...localStorage })").await?)?;
+                let entries = self.local_storage_items().await?;
+                let local_storage: HashMap<String, String> = entries
+                    .iter()
+                    .map(|entry| (entry.name.clone(), entry.value.clone()))
+                    .collect();
                 Ok(StorageState {
                     origins: vec![StorageOrigin {
                         origin: origin.clone(),
-                        local_storage: local_storage
-                            .iter()
-                            .map(|(name, value)| StorageEntry {
-                                name: name.clone(),
-                                value: value.clone(),
-                            })
-                            .collect(),
+                        local_storage: entries,
                     }],
                     origin,
                     cookies: self.cookies().await?,

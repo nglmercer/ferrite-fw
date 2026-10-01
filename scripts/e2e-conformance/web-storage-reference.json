@@ -1,0 +1,185 @@
+{
+  "playwright": "1.63.0",
+  "engines": [
+    {
+      "engine": "chromium",
+      "cases": [
+        {
+          "name": "localStorage:opaque-origin",
+          "outcome": "error"
+        },
+        {
+          "name": "sessionStorage:opaque-origin",
+          "outcome": "error"
+        },
+        {
+          "name": "localStorage:entries-overwrite",
+          "outcome": "passed",
+          "entries": [
+            {
+              "name": "",
+              "value": ""
+            },
+            {
+              "name": "__proto__",
+              "value": "safe"
+            },
+            {
+              "name": "snow",
+              "value": "new"
+            },
+            {
+              "name": "雪",
+              "value": "😺\n\""
+            }
+          ]
+        },
+        {
+          "name": "sessionStorage:entries-overwrite",
+          "outcome": "passed",
+          "entries": [
+            {
+              "name": "",
+              "value": ""
+            },
+            {
+              "name": "__proto__",
+              "value": "safe"
+            },
+            {
+              "name": "snow",
+              "value": "new"
+            },
+            {
+              "name": "雪",
+              "value": "😺\n\""
+            }
+          ]
+        },
+        {
+          "name": "same-origin-sharing-session-isolation",
+          "outcome": "passed"
+        },
+        {
+          "name": "same-origin-navigation",
+          "outcome": "passed"
+        },
+        {
+          "name": "storage-state-round-trip",
+          "outcome": "passed",
+          "captured": [
+            {
+              "name": "",
+              "value": ""
+            },
+            {
+              "name": "__proto__",
+              "value": "safe"
+            },
+            {
+              "name": "snow",
+              "value": "new"
+            },
+            {
+              "name": "雪",
+              "value": "😺\n\""
+            }
+          ],
+          "omittedName": null
+        },
+        {
+          "name": "disposed-page",
+          "outcome": "error"
+        }
+      ]
+    },
+    {
+      "engine": "firefox",
+      "cases": [
+        {
+          "name": "localStorage:opaque-origin",
+          "outcome": "error"
+        },
+        {
+          "name": "sessionStorage:opaque-origin",
+          "outcome": "error"
+        },
+        {
+          "name": "localStorage:entries-overwrite",
+          "outcome": "passed",
+          "entries": [
+            {
+              "name": "",
+              "value": ""
+            },
+            {
+              "name": "__proto__",
+              "value": "safe"
+            },
+            {
+              "name": "snow",
+              "value": "new"
+            },
+            {
+              "name": "雪",
+              "value": "😺\n\""
+            }
+          ]
+        },
+        {
+          "name": "sessionStorage:entries-overwrite",
+          "outcome": "passed",
+          "entries": [
+            {
+              "name": "",
+              "value": ""
+            },
+            {
+              "name": "__proto__",
+              "value": "safe"
+            },
+            {
+              "name": "snow",
+              "value": "new"
+            },
+            {
+              "name": "雪",
+              "value": "😺\n\""
+            }
+          ]
+        },
+        {
+          "name": "same-origin-sharing-session-isolation",
+          "outcome": "passed"
+        },
+        {
+          "name": "same-origin-navigation",
+          "outcome": "passed"
+        },
+        {
+          "name": "storage-state-round-trip",
+          "outcome": "passed",
+          "captured": [
+            {
+              "name": "",
+              "value": ""
+            },
+            {
+              "name": "snow",
+              "value": "new"
+            },
+            {
+              "name": "雪",
+              "value": "😺\n\""
+            }
+          ],
+          "omittedName": "__proto__"
+        },
+        {
+          "name": "disposed-page",
+          "outcome": "error"
+        }
+      ]
+    }
+  ]
+}

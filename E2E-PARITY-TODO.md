@@ -7,9 +7,9 @@ Uncommitted implementations are not counted complete.
 
 The initial G/A foundations are complete except for the final G04 audit. Follow
 the remaining-work index below through B/D improvements and supported C extensions.
-This backlog contains **51 tasks (40 complete, 11 remaining)**: four foundations,
+This backlog contains **51 tasks (41 complete, 10 remaining)**: four foundations,
 16 core tasks, 19 follow-ups, six optional extensions and six practical additions.
-All A and B tasks and D01/D02 are verified; continue with
+All A and B tasks and D01/D02/D05 are verified; continue with
 practical additions and supported C extensions. The ordering
 and effort assessments are recommendations based on the current source and
 parity audit.
@@ -132,7 +132,6 @@ there. G04 applies during every phase and closes after the final audit.
 |---|---|---|---|
 | 1 | D03 | Explicit artifact retention policies with valid report links | B14/B11; final attempt classification and bundle export |
 | 2 | D04 | Run/project metadata and configurable slow-test summaries | B14/B11; existing live/JSON/JUnit/HTML reporters |
-| 3 | D05 | Local/session storage enumeration and typed bulk helpers | Existing page storage APIs on both engines |
 | 4 | D06 | Socket identity, errors, closed state and bounded typed waits | Existing Chromium socket events; Firefox unsupported |
 | 5 | C01 | Validated PDF options | Chromium; explicit Firefox unsupported result |
 | 6 | C02 | Bounded captured-body bytes, text and JSON helpers | B02/B03 complete; Chromium body capture |
@@ -1214,7 +1213,7 @@ behavior claims must still use the repository's pinned Playwright v1.63.0 corpus
   Git diff capture and process-wide stdout/stderr attribution remain deferred.
   Reference: [metadata and reportSlowTests](https://playwright.dev/docs/api/class-testconfig).
 
-- [ ] **D05 — Typed Web Storage enumeration/bulk helpers (S–M, both engines).**
+- [x] **D05 — Typed Web Storage enumeration/bulk helpers (S–M, both engines).**
   Extend current local/session get/set/remove/clear methods with item enumeration
   and typed bulk set operations. Returned data is an owned snapshot of the
   current page origin; use deterministic serialization without promising native
@@ -1225,6 +1224,23 @@ behavior claims must still use the repository's pinned Playwright v1.63.0 corpus
   quotas, cancellation and disposal. Preserve storage-state round trips; this
   does not add session storage to browser-context state or IndexedDB/OPFS support.
   Reference: [WebStorage operations](https://playwright.dev/docs/api/class-webstorage).
+  Delivered: owned name-sorted `StorageEntry` enumeration and ordered typed bulk
+  writes on both engines, with ordinary driver operation/cancellation guards.
+  Existing unrelated keys survive; duplicate names overwrite in input order;
+  native quota errors preserve earlier writes. Storage-state capture now uses
+  entry snapshots, preserving `__proto__` rather than losing it through remote
+  object serialization. Session storage stays outside context state.
+  Evidence: [native tests](crates/ferrite-e2e/tests/web_storage.rs) cover empty,
+  Unicode/empty/prototype-sensitive keys, overwrite, owned snapshots, navigation,
+  origin isolation, same-origin sharing/session page isolation, opaque origins,
+  native local/session quotas, disposal, state restore and in-flight cancellation.
+  [Pinned reference](scripts/e2e-conformance/web-storage-reference.json) contains
+  16 upstream observations, including prototype-sensitive capture variation.
+  Verification: 228 scoped E2E checks (220 units, four native groups and four
+  doctests), strict all-target Clippy, formatting, generated matrix and local
+  links passed. Both engines were required; 91 unrelated browser groups were
+  filtered, and the complete 42-target inventory was not replayed here.
+
 
 - [ ] **D06 — Chromium WebSocket diagnostic lifecycle (M; capability gated).**
   Extend current socket observations with native socket identity, error events,

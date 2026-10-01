@@ -188,8 +188,7 @@ put('Screencast','stop','Page.stop_video','Explicit output path; Chromium assemb
 put('Video','path','TestResult.video','Runner records an optional artifact path, not Page.video()/Video object.')
 put('Video','saveAs','Page.stop_video','Stop recording to a path; no independently awaitable Video handle.')
 put('Video','delete','','Caller deletes artifact through Rust filesystem operations; no Video object.','Idiomatic')
-group('WebStorage',{'getItem':'Page.local_storage_get','setItem':'Page.local_storage_set','removeItem':'Page.local_storage_remove','clear':'Page.local_storage_clear'},'Page helper methods for local and session storage; no WebStorage object.')
-no('WebStorage','items','No dedicated storage enumeration API; general evaluate can be used as a workaround.')
+group('WebStorage',{'getItem':'Page.local_storage_get','setItem':'Page.local_storage_set','removeItem':'Page.local_storage_remove','clear':'Page.local_storage_clear','items':'Page.local_storage_items'},'Page helper methods for local and session storage; no WebStorage object.')
 put('Selectors','setTestIdAttribute','set_test_id_attribute','Process-global attribute override.','Equivalent')
 # Events: only explicit PageEvent variants are supported. Context/browser emitters are absent.
 for m,n in {'close':'Closed','console':'Console','dialog':'Dialog','download':'Download','popup':'Popup','request':'Request','response':'Response','webSocket':'WebSocket'}.items():
