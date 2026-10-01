@@ -4535,14 +4535,15 @@ impl Page {
                     // a subsequent page operation can start another request.
                     // Active default/ignore-errors callbacks never make removal wait.
                     let stopped = self.route_runtime.idle().then(|| task.stopped.clone());
+                    let attempt = self.route_runtime.cleanup_attempt();
                     drop(slot);
                     if let Some(stopped) = stopped {
-                        stopped.cancelled().await;
+                        attempt.wait(&stopped).await?;
                     }
                     return Ok(());
                 }
                 if slot.take().is_some() {
-                    self.driver.stop_routing().await;
+                    self.driver.stop_routing().await?;
                 }
                 if self.route_runtime.empty() {
                     return Ok(());

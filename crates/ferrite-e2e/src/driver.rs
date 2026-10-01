@@ -2144,7 +2144,7 @@ impl Driver {
     }
 
     /// Disable interception.
-    pub async fn stop_routing(&self) {
+    pub async fn stop_routing(&self) -> E2eResult<()> {
         match self {
             Self::Cdp(driver) => driver.stop_routing().await,
             Self::Bidi(driver) => driver.stop_routing().await,
@@ -3438,12 +3438,12 @@ impl CdpDriver {
         ))
     }
 
-    async fn stop_routing(&self) {
+    async fn stop_routing(&self) -> E2eResult<()> {
         if let Ok(mut shared) = self.fetch_auth.lock() {
             shared.routing_patterns = None;
         }
         // Auth-only mode keeps the domain enabled (empty patterns).
-        let _ = self.apply_fetch_config().await;
+        self.apply_fetch_config().await
     }
 
     /// Re-enable the Fetch domain from merged routing/auth state.
@@ -5166,22 +5166,33 @@ impl BidiDriver {
         ))
     }
 
-    async fn stop_routing(&self) {
+    async fn stop_routing(&self) -> E2eResult<()> {
         let intercept = self
             .intercept
             .lock()
-            .map(|mut slot| slot.take())
-            .unwrap_or(None);
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         if let Some(intercept) = intercept {
-            let _ = self
+            match self
                 .bidi
                 .call(
                     "network.removeIntercept",
                     serde_json::json!({ "intercept": intercept }),
                     Duration::from_secs(5),
                 )
-                .await;
+                .await
+            {
+                Ok(_) => {}
+                // A previous timed-out removal may already have taken effect.
+                Err(E2eError::Cdp { method, .. }) if method == "bidi:no such intercept" => {}
+                Err(error) => return Err(error),
+            }
+            let mut slot = self.intercept.lock().unwrap_or_else(|e| e.into_inner());
+            if slot.as_ref() == Some(&intercept) {
+                slot.take();
+            }
         }
+        Ok(())
     }
 
     fn start_request_capture(&self) -> tokio::task::AbortHandle {
@@ -6221,7 +6232,22 @@ async fn route_pump_idle<F: std::future::Future<Output = ()>>(
     if !runtime.idle() {
         return false;
     }
-    let _ = tokio::time::timeout(Duration::from_millis(750), driver.stop_routing()).await;
+    let attempt = runtime.cleanup_attempt();
+    if attempt.failed.is_cancelled() {
+        return false;
+    }
+    let cleanup = tokio::time::timeout(Duration::from_millis(750), driver.stop_routing()).await;
+    match cleanup {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            attempt.fail(error.to_string());
+            return false;
+        }
+        Err(_) => {
+            attempt.fail("native interception stop exceeded 750ms".into());
+            return false;
+        }
+    }
     let _ = tokio::time::timeout(Duration::from_millis(750), drain()).await;
     slot.take();
     true
@@ -6583,6 +6609,145 @@ mod initialization_tests {
         );
         assert_eq!(driver.evaluate("7").await.unwrap(), json!(7));
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn rejected_or_delayed_native_stop_preserves_pump_and_allows_cleanup_retry() {
+        for bidi in [false, true] {
+            for delayed in [false, true] {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let address = listener.local_addr().unwrap();
+                let retry = Arc::new(AtomicBool::new(false));
+                let retry_server = retry.clone();
+                let (observed, mut commands) = tokio::sync::mpsc::unbounded_channel();
+                let server = tokio::spawn(async move {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                    while let Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) =
+                        socket.next().await
+                    {
+                        let request: Value = serde_json::from_str(&text).unwrap();
+                        let stop = request["method"] == "Fetch.disable"
+                            || request["method"] == "network.removeIntercept";
+                        let first = !retry_server.load(Ordering::Acquire);
+                        if stop {
+                            observed.send(request.clone()).unwrap();
+                            if first && delayed {
+                                continue;
+                            }
+                        }
+                        let result = if request["method"] == "Page.getFrameTree" {
+                            json!({"frameTree":{"frame":{"id":"root","url":"about:blank"}}})
+                        } else if request["method"] == "browsingContext.getTree" {
+                            json!({"contexts":[{"context":"page","children":[]}]})
+                        } else {
+                            json!({})
+                        };
+                        let reply = if stop && (first || (bidi && delayed)) {
+                            if bidi {
+                                json!({"type":"error","id":request["id"],"error":if first {"unknown error"} else {"no such intercept"},"message":"cleanup refused"})
+                            } else {
+                                json!({"id":request["id"],"error":{"code":-1,"message":"cleanup refused"}})
+                            }
+                        } else if bidi {
+                            json!({"type":"success","id":request["id"],"result":result})
+                        } else {
+                            json!({"id":request["id"],"result":result})
+                        };
+                        socket
+                            .send(tokio_tungstenite::tungstenite::Message::Text(
+                                reply.to_string().into(),
+                            ))
+                            .await
+                            .unwrap();
+                    }
+                });
+                let driver = if bidi {
+                    let native = BidiDriver::spawn(
+                        BidiConnection::connect(&format!("ws://{address}"))
+                            .await
+                            .unwrap(),
+                        "page".into(),
+                        Duration::ZERO,
+                        false,
+                        ConsoleSink::new(),
+                        None,
+                    )
+                    .await
+                    .unwrap();
+                    *native.intercept.lock().unwrap() = Some("owned-intercept".into());
+                    Driver::Bidi(native)
+                } else {
+                    Driver::Cdp(
+                        CdpDriver::spawn(
+                            CdpConnection::connect(&format!("ws://{address}"))
+                                .await
+                                .unwrap(),
+                            "session".into(),
+                            "page".into(),
+                            Duration::ZERO,
+                            ConsoleSink::new(),
+                            None,
+                        )
+                        .await
+                        .unwrap(),
+                    )
+                };
+                let runtime = Arc::new(crate::routing::RouteRuntime::default());
+                let parked = tokio::spawn(std::future::pending::<()>());
+                let slot = Arc::new(tokio::sync::Mutex::new(Some(
+                    crate::routing::RoutePump::new(
+                        parked.abort_handle(),
+                        crate::CancellationToken::new(),
+                    ),
+                )));
+                let weak = Arc::downgrade(&slot);
+                assert!(!route_pump_idle(&runtime, &weak, &driver, || async {}).await);
+                let first = tokio::time::timeout(Duration::from_secs(1), commands.recv())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert!(runtime.cleanup_attempt().failed.is_cancelled());
+                assert!(runtime
+                    .cleanup_attempt()
+                    .error()
+                    .to_string()
+                    .contains("native route cleanup failed"));
+                assert!(slot.lock().await.is_some());
+                assert!(!parked.is_finished());
+                if let Driver::Bidi(native) = &driver {
+                    assert_eq!(
+                        native.intercept.lock().unwrap().as_deref(),
+                        Some("owned-intercept")
+                    );
+                }
+                assert!(!route_pump_idle(&runtime, &weak, &driver, || async {}).await);
+                assert!(
+                    commands.try_recv().is_err(),
+                    "failed attempt must not spin native cleanup"
+                );
+                retry.store(true, Ordering::Release);
+                runtime.configure(
+                    crate::routing::RouteConfiguration::new(Vec::new(), Vec::new()).unwrap(),
+                );
+                assert!(route_pump_idle(&runtime, &weak, &driver, || async {}).await);
+                let second = tokio::time::timeout(Duration::from_secs(1), commands.recv())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(first["method"], second["method"]);
+                assert!(slot.lock().await.is_none());
+                assert!(!runtime.cleanup_attempt().failed.is_cancelled());
+                if let Driver::Bidi(native) = &driver {
+                    assert!(native.intercept.lock().unwrap().is_none());
+                    assert!(native.bidi.is_open());
+                } else if let Driver::Cdp(native) = &driver {
+                    assert!(native.cdp.is_open());
+                }
+                parked.abort();
+                server.abort();
+            }
+        }
     }
 
     async fn interrupted_fetch_startup(auth: bool, reject: bool) {

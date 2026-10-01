@@ -3072,3 +3072,29 @@ native groups across `route_lifecycle` and `lifecycle_events`, and four doctests
 Strict Clippy, formatting and all 866 local documentation links passed. G04
 remains open for cleanup acknowledgement faults, redirect correlation,
 remaining lifecycle requirements and the complete 51-target replay.
+
+## G04 audit progress — Native route stop acknowledgements
+
+Native route stopping now returns its protocol result. BiDi retains its owned
+intercept ID until removal is acknowledged, and accepts `no such intercept` on
+retry because a previous timed-out removal can already have succeeded. Route
+removal waits observe an explicit cleanup-failure outcome independently of pump
+completion. Failure takes precedence if both outcomes are ready.
+
+Rejected or delayed idle-stop attempts retain the pump slot, allowing its
+existing event loop to continue forwarding requests under the empty routing
+configuration. Failed attempts do not repeatedly send cleanup commands. Explicit
+reconfiguration starts a fresh cleanup attempt without erasing an earlier
+waiter's failure. Driver lifecycle/transport controls and the caller's operation
+budget continue to surround the removal wait.
+
+Two regression units cover CDP/BiDi rejected and unanswered native stop commands,
+retained pump/native identity, no retry spin, acknowledgement-based retry,
+including BiDi's already-removed result, and failure before/during removal waits.
+Scoped verification passed 307 checks: 294 units, nine mandatory two-engine
+native groups across `route_lifecycle` and `har_options`, and four doctests.
+Strict Clippy, formatting and all 867 local documentation links passed.
+
+Terminal pump-exit cleanup, queued pause-release acknowledgements, dropped native
+context disposal, detached-frame requests, redirect correlation and complete
+51-target replay remain G04 audit work.

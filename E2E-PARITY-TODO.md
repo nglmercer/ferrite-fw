@@ -644,6 +644,13 @@ Work in [the audit generator](scripts/playwright-parity/build_matrix.py),
   Requests before/after caller cancellation are released before the late native
   intercept response; unrelated-page requests retain their owner.
   [Evidence](PLAYWRIGHT-PARITY.md#g04-audit-progress--pending-bidi-descendant-ingress).
+  Further progress: native idle-stop rejection/timeout now wakes route-removal
+  waiters with a cleanup failure while retaining the forwarding pump. BiDi keeps
+  its native intercept identity until acknowledgement; later explicit removal
+  retries cleanup without spinning or losing concurrent waiters' outcomes.
+  [Evidence](PLAYWRIGHT-PARITY.md#g04-audit-progress--native-route-stop-acknowledgements).
+  Terminal pump cleanup and queued pause-release acknowledgement faults remain
+  under audit with native context disposal, detached requests and full replay.
 
 
 

@@ -326,9 +326,37 @@ struct State {
     requests: usize,
 }
 #[derive(Default)]
+pub(crate) struct CleanupAttempt {
+    pub(crate) failed: CancellationToken,
+    error: Mutex<Option<String>>,
+}
+impl CleanupAttempt {
+    pub(crate) async fn wait(&self, stopped: &CancellationToken) -> E2eResult<()> {
+        tokio::select! { biased;
+            _ = self.failed.cancelled() => Err(self.error()),
+            _ = stopped.cancelled() => Ok(()),
+        }
+    }
+    pub(crate) fn fail(&self, error: String) {
+        *self.error.lock().unwrap_or_else(|e| e.into_inner()) = Some(error);
+        self.failed.cancel();
+    }
+    pub(crate) fn error(&self) -> E2eError {
+        E2eError::Config(format!(
+            "native route cleanup failed: {}",
+            self.error
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_deref()
+                .unwrap_or("unknown failure")
+        ))
+    }
+}
+#[derive(Default)]
 pub(crate) struct RouteRuntime {
     state: Mutex<State>,
     pub(crate) changed: tokio::sync::Notify,
+    cleanup: Mutex<Arc<CleanupAttempt>>,
 }
 
 pub(crate) fn handler_id(entry: &RouteHandlerEntry) -> usize {
@@ -346,6 +374,12 @@ fn reserve(hits: &AtomicU32, times: Option<u32>) -> bool {
 }
 
 impl RouteRuntime {
+    pub(crate) fn cleanup_attempt(&self) -> Arc<CleanupAttempt> {
+        self.cleanup
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
     pub(crate) fn set_fetch_owner(&self, owner: crate::route_options::RouteFetchOwner) {
         self.state
             .lock()
@@ -354,6 +388,14 @@ impl RouteRuntime {
     }
 
     pub(crate) fn configure(&self, configuration: RouteConfiguration) {
+        {
+            let mut cleanup = self.cleanup.lock().unwrap_or_else(|e| e.into_inner());
+            // Concurrent removals share an outstanding attempt. Replacing it
+            // before failure would strand the first removal's waiter.
+            if cleanup.failed.is_cancelled() {
+                *cleanup = Arc::new(CleanupAttempt::default());
+            }
+        }
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.configuration = Some(Arc::new(configuration));
         state.retired.clear();
@@ -1018,5 +1060,41 @@ mod installation_tests {
         drop(guard);
         assert!(storage.lock().unwrap().is_empty());
         assert!(runtime.idle());
+    }
+}
+
+#[cfg(test)]
+mod cleanup_tests {
+    use super::*;
+    #[tokio::test]
+    async fn removal_wait_observes_cleanup_failure_before_or_during_wait_and_retries() {
+        let runtime = RouteRuntime::default();
+        let stopped = CancellationToken::new();
+        let first = runtime.cleanup_attempt();
+        runtime.configure(RouteConfiguration::new(Vec::new(), Vec::new()).unwrap());
+        assert!(
+            Arc::ptr_eq(&first, &runtime.cleanup_attempt()),
+            "concurrent removals must share an outstanding attempt"
+        );
+        let (result, ()) = tokio::join!(first.wait(&stopped), async {
+            tokio::task::yield_now().await;
+            first.fail("native rejection".into());
+        });
+        assert!(
+            matches!(result, Err(E2eError::Config(message)) if message.contains("native rejection"))
+        );
+        stopped.cancel();
+        assert!(
+            matches!(first.wait(&stopped).await, Err(E2eError::Config(_))),
+            "failure must precede pump completion"
+        );
+        runtime.configure(RouteConfiguration::new(Vec::new(), Vec::new()).unwrap());
+        let retry = runtime.cleanup_attempt();
+        assert!(!retry.failed.is_cancelled());
+        retry.wait(&stopped).await.unwrap();
+        assert!(
+            first.failed.is_cancelled(),
+            "retry must not erase an existing waiter's outcome"
+        );
     }
 }
