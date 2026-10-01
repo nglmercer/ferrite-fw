@@ -37,7 +37,7 @@ pub struct DialogClosedInfo {
 
 /// Only live frame metadata is retained. Child-first removal owns a subtree,
 /// so later native descendant notifications cannot duplicate its detach events.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct FrameEvents {
     root: Option<String>,
     frames: HashMap<String, FrameEvent>,

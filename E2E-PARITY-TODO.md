@@ -639,6 +639,11 @@ Work in [the audit generator](scripts/playwright-parity/build_matrix.py),
   292 units, five mandatory two-engine native groups and four doctests (301 scoped
   checks), strict Clippy/formatting. Descendant observation races, cleanup ACK
   faults, redirect correlation and the complete replay/audit remain open.
+  Further progress: pending BiDi interception tracks child/grandchild native
+  creation in reader order, independently of the asynchronous page listener.
+  Requests before/after caller cancellation are released before the late native
+  intercept response; unrelated-page requests retain their owner.
+  [Evidence](PLAYWRIGHT-PARITY.md#g04-audit-progress--pending-bidi-descendant-ingress).
 
 
 

@@ -3051,3 +3051,24 @@ native groups across `callback_lifecycle` and `frame_lookup`, and four doctests.
 Strict Clippy, formatting and all 865 local documentation links passed. G04
 remains open pending the remaining lifecycle audits and complete 51-target
 integration replay.
+
+## G04 audit progress — Pending BiDi descendant ingress
+
+Pending BiDi intercept installations now retain a private snapshot of live frame
+topology and process context creation/destruction in transport-reader order.
+A newly created child or grandchild can therefore be correlated before the page
+listener consumes its attachment event. This snapshot owns no Page, Context or
+listener and is discarded with the existing bounded installation entry; frame
+metadata is pruned on native destruction.
+
+The late-intercept regression now creates nested descendants without updating
+the page listener, checks requests buffered before caller cancellation, and
+checks a further child created after cancellation but before the native ID
+arrives. All scoped requests are continued; unrelated-page children remain
+untouched, late native removal is acknowledged, and the transport stays usable.
+
+Scoped verification passed 306 checks: 292 units, ten mandatory two-engine
+native groups across `route_lifecycle` and `lifecycle_events`, and four doctests.
+Strict Clippy, formatting and all 866 local documentation links passed. G04
+remains open for cleanup acknowledgement faults, redirect correlation,
+remaining lifecycle requirements and the complete 51-target replay.

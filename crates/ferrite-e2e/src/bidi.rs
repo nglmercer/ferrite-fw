@@ -82,6 +82,7 @@ enum InterceptEntry {
         lease: Weak<InterceptLease>,
         context: String,
         frames: Weak<Mutex<crate::lifecycle_events::FrameEvents>>,
+        scope: crate::lifecycle_events::FrameEvents,
         blocked: Vec<String>,
         overflow: crate::CancellationToken,
     },
@@ -148,6 +149,40 @@ fn remove_intercept_unobserved(
 // removeIntercept does not release requests Firefox already paused. Continue
 // abandoned startup's requests in the reader, including the removal ACK window.
 fn recover_abandoned_interception(inner: &Inner, event: &BidiEvent) {
+    // Track native topology in reader order. The page listener may not have
+    // consumed contextCreated when the child's blocked request arrives.
+    if matches!(
+        event.method.as_str(),
+        "browsingContext.contextCreated" | "browsingContext.contextDestroyed"
+    ) {
+        let mut entries = inner.intercepts.lock().unwrap_or_else(|e| e.into_inner());
+        for entry in entries.values_mut() {
+            if let InterceptEntry::Pending {
+                context,
+                frames,
+                scope,
+                ..
+            } = entry
+            {
+                let belongs = event.context() == Some(context.as_str())
+                    || event.context().is_some_and(|id| scope.contains(id))
+                    || event.params["parent"].as_str().is_some_and(|parent| {
+                        parent == context
+                            || scope.contains(parent)
+                            || frames.upgrade().is_some_and(|frames| {
+                                frames
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .contains(parent)
+                            })
+                    });
+                if belongs {
+                    scope.bidi(context, &event.method, &event.params);
+                }
+            }
+        }
+        return;
+    }
     if event.method != "network.beforeRequestSent" || event.params["isBlocked"] != true {
         return;
     }
@@ -165,11 +200,13 @@ fn recover_abandoned_interception(inner: &Inner, event: &BidiEvent) {
                 lease,
                 context,
                 frames,
+                scope,
                 blocked,
                 overflow,
             } => {
                 if !event.context().is_some_and(|id| {
                     id == context
+                        || scope.contains(id)
                         || frames.upgrade().is_some_and(|frames| {
                             frames
                                 .lock()
@@ -409,12 +446,20 @@ impl BidiConnection {
                 .as_str()
                 .unwrap_or_default()
                 .to_owned();
+            let mut scope = frames
+                .upgrade()
+                .map(|frames| frames.lock().unwrap_or_else(|e| e.into_inner()).clone())
+                .unwrap_or_default();
+            if !scope.contains(&context) {
+                scope.seed_bidi(&context);
+            }
             pending.insert(
                 id,
                 InterceptEntry::Pending {
                     lease: intercept,
                     context,
                     frames,
+                    scope,
                     blocked: Vec::new(),
                     overflow,
                 },
@@ -530,6 +575,7 @@ fn handle_frame(inner: &Arc<Inner>, text: &str) {
                     lease,
                     context,
                     frames,
+                    scope,
                     blocked,
                     overflow,
                 }) => {
@@ -557,6 +603,7 @@ fn handle_frame(inner: &Arc<Inner>, text: &str) {
                                         lease,
                                         context,
                                         frames,
+                                        scope,
                                         blocked,
                                         overflow,
                                     },
@@ -741,20 +788,41 @@ mod tests {
         ));
         assert!(futures::poll!(&mut setup).is_pending());
         let command = outgoing_frame(&mut outgoing);
+        handle_frame(&connection.inner, &json!({"type":"event","method":"browsingContext.contextCreated","params":{"context":"new-child","parent":"page"}}).to_string());
+        handle_frame(&connection.inner, &json!({"type":"event","method":"browsingContext.contextCreated","params":{"context":"grandchild","parent":"new-child"}}).to_string());
+        assert!(!frames.lock().unwrap().contains("grandchild"));
+        blocked(&connection, "grandchild", "late", "new-descendant");
         blocked(&connection, "child", "late", "already-observed");
         assert!(outgoing.try_recv().is_err());
         drop(setup);
         assert_eq!(
             outgoing_frame(&mut outgoing)["params"]["request"],
+            "new-descendant"
+        );
+        assert_eq!(
+            outgoing_frame(&mut outgoing)["params"]["request"],
             "already-observed"
         );
         assert!(connection.inner.pending.lock().unwrap().is_empty());
+        handle_frame(&connection.inner, &json!({"type":"event","method":"browsingContext.contextCreated","params":{"context":"other-child","parent":"other"}}).to_string());
+        blocked(&connection, "other-child", "late", "unrelated-child");
         blocked(&connection, "other", "late", "unrelated");
         assert!(outgoing.try_recv().is_err());
         blocked(&connection, "page", "late", "before-reply");
         let resumed = outgoing_frame(&mut outgoing);
         assert_eq!(resumed["method"], "network.continueRequest");
         assert_eq!(resumed["params"]["request"], "before-reply");
+        handle_frame(&connection.inner, &json!({"type":"event","method":"browsingContext.contextCreated","params":{"context":"post-drop-child","parent":"grandchild"}}).to_string());
+        blocked(
+            &connection,
+            "post-drop-child",
+            "late",
+            "new-child-before-reply",
+        );
+        assert_eq!(
+            outgoing_frame(&mut outgoing)["params"]["request"],
+            "new-child-before-reply"
+        );
         blocked(&connection, "child", "late", "child-before-reply");
         assert_eq!(
             outgoing_frame(&mut outgoing)["params"]["request"],
