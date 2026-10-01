@@ -1,0 +1,155 @@
+{
+  "playwright": "1.63.0",
+  "engine": "chromium",
+  "media": [
+    {
+      "name": "baseline",
+      "values": {
+        "print": false,
+        "screen": true,
+        "(prefers-color-scheme: dark)": false,
+        "(prefers-color-scheme: light)": true,
+        "(prefers-color-scheme: no-preference)": false,
+        "(prefers-reduced-motion: reduce)": false,
+        "(forced-colors: active)": false,
+        "(prefers-contrast: more)": false
+      }
+    },
+    {
+      "name": "full",
+      "values": {
+        "print": true,
+        "screen": false,
+        "(prefers-color-scheme: dark)": true,
+        "(prefers-color-scheme: light)": false,
+        "(prefers-color-scheme: no-preference)": false,
+        "(prefers-reduced-motion: reduce)": true,
+        "(forced-colors: active)": true,
+        "(prefers-contrast: more)": true
+      }
+    },
+    {
+      "name": "patch",
+      "values": {
+        "print": true,
+        "screen": false,
+        "(prefers-color-scheme: dark)": true,
+        "(prefers-color-scheme: light)": false,
+        "(prefers-color-scheme: no-preference)": false,
+        "(prefers-reduced-motion: reduce)": false,
+        "(forced-colors: active)": true,
+        "(prefers-contrast: more)": true
+      }
+    },
+    {
+      "name": "reset",
+      "values": {
+        "print": false,
+        "screen": true,
+        "(prefers-color-scheme: dark)": false,
+        "(prefers-color-scheme: light)": true,
+        "(prefers-color-scheme: no-preference)": false,
+        "(prefers-reduced-motion: reduce)": false,
+        "(forced-colors: active)": false,
+        "(prefers-contrast: more)": false
+      }
+    },
+    {
+      "name": "no-preference",
+      "values": {
+        "print": false,
+        "screen": true,
+        "(prefers-color-scheme: dark)": false,
+        "(prefers-color-scheme: light)": true,
+        "(prefers-color-scheme: no-preference)": false,
+        "(prefers-reduced-motion: reduce)": false,
+        "(forced-colors: active)": false,
+        "(prefers-contrast: more)": false
+      }
+    }
+  ],
+  "rawCdpMetrics": {
+    "custom": {
+      "width": 320,
+      "height": 240,
+      "dpr": 2,
+      "screenWidth": 800,
+      "screenHeight": 900,
+      "x": 20,
+      "y": 40,
+      "type": "landscape-primary",
+      "angle": 90,
+      "touch": 3
+    },
+    "png": [
+      640,
+      480
+    ],
+    "storedPlaywrightViewport": null,
+    "nonQuadrantAngle": 37,
+    "reset": {
+      "width": 780,
+      "height": 493,
+      "dpr": 1,
+      "screenWidth": 800,
+      "screenHeight": 600,
+      "x": 10,
+      "y": 10,
+      "type": "landscape-primary",
+      "angle": 0,
+      "touch": 0
+    }
+  },
+  "rawCdpUserAgent": {
+    "navigator": {
+      "ua": "Ferrite/7.2",
+      "platform": "FerritePlatform",
+      "language": "es-PE"
+    },
+    "hints": {
+      "architecture": "arm",
+      "bitness": "64",
+      "brands": [
+        {
+          "brand": "Ferrite",
+          "version": "7"
+        }
+      ],
+      "formFactors": [
+        "Mobile"
+      ],
+      "fullVersionList": [
+        {
+          "brand": "Ferrite",
+          "version": "7.2.3"
+        }
+      ],
+      "mobile": true,
+      "model": "Phone",
+      "platform": "FerriteOS",
+      "platformVersion": "1.2",
+      "wow64": false
+    },
+    "headers": {
+      "host": "127.0.0.1:34397",
+      "connection": "keep-alive",
+      "sec-ch-ua-platform": "\"FerriteOS\"",
+      "user-agent": "Ferrite/7.2",
+      "sec-ch-ua": "\"Ferrite\";v=\"7\"",
+      "accept-language": "es-PE,en;q=0.9",
+      "sec-ch-ua-mobile": "?1",
+      "accept": "*/*",
+      "sec-fetch-site": "same-origin",
+      "sec-fetch-mode": "cors",
+      "sec-fetch-dest": "empty",
+      "referer": "http://127.0.0.1:34397/",
+      "accept-encoding": "gzip, deflate, br, zstd"
+    },
+    "reset": {
+      "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.0.0 Safari/537.36",
+      "platform": "Linux x86_64",
+      "language": "en-US"
+    }
+  },
+  "note": "Media uses public Playwright methods. Custom screen/position/orientation/UA-metadata profiles use raw CDP and do not imply dedicated Playwright equivalents. Reset clears native metrics, rather than restoring Playwright/context viewport defaults. Raw-CDP profiles use a context with viewport:null to avoid interference from Playwright viewport bookkeeping."
+}

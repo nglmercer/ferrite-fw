@@ -101,7 +101,7 @@ for m in ['waitForRequest','waitForResponse']:
  put('Page',m,'Page.'+pg[m],'URL substring match; returns RecordedRequest rather than rich Request/Response; no predicate overload.')
 put('Page','waitForFunction','Page.wait_for_function','Polling expression to completion returns unit; no JSHandle, argument or configurable polling mode.')
 put('Page','waitForSelector','Page.wait_for_selector_with','Waits for requested state and returns Locator, not ElementHandle.')
-put('Page','emulateMedia','Page.emulate_media','Chromium only; color scheme/reduced motion only, no full media/forcedColors/contrast surface.')
+put('Page','emulateMedia','Page.emulate_media_with','Chromium typed media/color scheme/reduced motion/forced colors/contrast updates and individual resets; legacy partial calls preserve other overrides. Firefox rejects changed profiles; no context/test binding.')
 put('Page','requestGC','Page.request_gc','Chromium only; Firefox returns an unsupported error.')
 put('Page','pdf','Page.pdf_with','Validated Chromium PdfOptions: typed format/custom px/in/cm/mm dimensions, margins, scale/background/landscape, header/footer HTML, CSS size, one-based ranges, tagged/outline flags and a shared font/print clock. Basic pdf() remains native on both engines; new options explicitly reject Firefox. Defaults use zero margins, unlike legacy native defaults. Exact metric conversion differs slightly from pinned rounded JS factors; PDF size quantization/native print CSS remain visible.')
 put('Page','request','ApiClient','Standalone client only; no page.request with shared browser cookies.')

@@ -1284,3 +1284,42 @@ timing is approximate, and Minimal omits diagnostic fields. Import/export is
 bounded plain JSON, with staged atomic writes, operation deadlines and caller
 cancellation. ZIP/update/attached content and automatic context recording remain
 deferred. Use `..Default::default()` with new route option fields.
+
+
+### Set and reset Chromium emulation
+
+```rust
+page.emulate_media_with(MediaOptions {
+    media: EmulationOverride::Set(MediaType::Print),
+    forced_colors: EmulationOverride::Set(ForcedColors::Active),
+    contrast: EmulationOverride::Set(ContrastPreference::More),
+    ..Default::default()
+}).await?;
+// Preserve print and contrast while resetting forced colors.
+page.emulate_media_with(MediaOptions {
+    forced_colors: EmulationOverride::Reset,
+    ..Default::default()
+}).await?;
+page.emulate_media_with(MediaOptions::reset()).await?;
+
+let mut metrics = DeviceMetricsOptions::new(320, 240);
+metrics.device_scale_factor = 2.0;
+metrics.mobile = true;
+metrics.touch_points = Some(3);
+page.emulate_device_metrics(metrics).await?;
+page.reset_device_metrics(OperationOptions::default()).await?;
+
+page.set_user_agent_with(UserAgentOptions {
+    user_agent: "Ferrite/1".into(),
+    accept_language: Some("es-PE,en".into()),
+    platform: Some("FerritePlatform".into()),
+    ..Default::default()
+}).await?;
+page.reset_user_agent(OperationOptions::default()).await?;
+```
+
+These overrides require Chromium. Metrics reset restores native window defaults;
+UA reset restores native values. Mobile metrics do not change UA hints. Optional
+`UserAgentMetadata` explicitly controls client hints. Operations accept timeout
+and cancellation through `operation`; multi-command metrics changes can remain
+partially applied after cancellation. See the [parity notes](../../PLAYWRIGHT-PARITY.md#c05--media-custom-device-metrics-and-user-agent-metadata).

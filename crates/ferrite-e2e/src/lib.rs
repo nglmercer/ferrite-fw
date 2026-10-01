@@ -55,6 +55,7 @@ mod context_cookies;
 mod cookie_filter;
 mod coverage;
 mod driver;
+mod emulation;
 mod error;
 mod event;
 mod expect;
@@ -189,3 +190,9 @@ pub use websocket::{WebSocketDiagnostics, WebSocketSnapshot, WebSocketState};
 pub use pdf::{PdfFormat, PdfLength, PdfMargins, PdfOptions, PdfPageSize};
 
 pub use captured_body::BodyCaptureState;
+
+pub use emulation::{
+    ContrastPreference, DeviceMetricsOptions, EmulationOverride, ForcedColors, MediaColorScheme,
+    MediaOptions, MediaType, ScreenOrientation, ScreenOrientationType, ScreenPosition,
+    UserAgentBrandVersion, UserAgentMetadata, UserAgentOptions,
+};

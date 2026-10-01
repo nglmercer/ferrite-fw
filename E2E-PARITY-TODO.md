@@ -7,7 +7,7 @@ Uncommitted implementations are not counted complete.
 
 The initial G/A foundations are complete except for the final G04 audit. Follow
 the remaining-work index below through B/D improvements and supported C extensions.
-This backlog contains **51 tasks (48 complete, 3 remaining)**: four foundations,
+This backlog contains **51 tasks (49 complete, 2 remaining)**: four foundations,
 16 core tasks, 19 follow-ups, six optional extensions and six practical additions.
 All A and B tasks and D01–D06 are verified; continue with
 practical additions and supported C extensions. The ordering
@@ -1136,11 +1136,24 @@ complete this section.
   Verified 267 scoped checks: 256 units, seven native groups across four targets,
   four doctests, plus strict Clippy/formatting, matrix and local links. The legacy
   HAR filter excludes 91 browser tests. The full 49-target replay remains G04.
-- [ ] **C05 — Additional emulation options (M, Chromium).** Extend current media/
+- [x] **C05 — Additional emulation options (M, Chromium).** Extend current media/
   device descriptors with native forced-colors/contrast/media and custom metrics/
   user-agent metadata where supported. Done when application-observable values
   and reset behavior are verified, and unsupported Firefox options fail explicitly.
   Reference: [media emulation](https://playwright.dev/docs/api/class-page#page-emulate-media).
+  Typed Keep/Set/Reset media profiles preserve unrelated overrides, including
+  legacy partial calls. Custom metrics support screen/position/orientation,
+  scale/DPR/mobile/touch; typed UA overrides include language and client hints.
+  Native reset values, PNG dimensions, JS values and HTTP headers are verified;
+  Firefox rejects changed profiles. Shared operation deadlines include lock
+  waiting, with explicit native partial-application limits after cancellation.
+  [Native gate](crates/ferrite-e2e/tests/emulation_options.rs) and
+  [pinned observations](scripts/e2e-conformance/emulation-reference.json)
+  distinguish public media semantics from raw-CDP metrics/UA comparisons.
+  Verified 273 scoped checks: 259 units, ten native groups across three targets,
+  four doctests, plus strict Clippy/formatting, matrix and local links. The legacy
+  filter excludes 92 cases; the complete 50-target replay remains G04.
+
 - [ ] **C06 — Scoped CDP session ownership (M, Chromium).** Add independently
   detachable target sessions over the existing connection. Done when detaching
   one session leaves other pages and browser transport working, pending calls

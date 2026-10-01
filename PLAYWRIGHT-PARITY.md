@@ -2654,3 +2654,53 @@ doctests. Strict Clippy, package formatting and matrix/local links passed. The
 legacy browser filter excluded 91 cases; this is not a complete integration
 replay. The 49-target full replay and routing installation cancellation audit
 remain G04 work.
+
+
+## C05 — Media, custom device metrics and user-agent metadata
+
+`Page::emulate_media_with(MediaOptions)` supports screen/print, color scheme,
+reduced motion, forced colors and contrast. `EmulationOverride::{Keep,Set,Reset}`
+lets partial updates preserve other typed overrides and reset individual features.
+Legacy `emulate_media` delegates to this profile; omitted arguments preserve
+other settings. `MediaOptions::reset()` restores native media defaults.
+
+`emulate_device_metrics(DeviceMetricsOptions)` sets viewport, DPR, mobile mode,
+optional screen dimensions/position/orientation, scale and touch points.
+`reset_device_metrics` clears native metrics and touch overrides. It restores
+browser window defaults, rather than previous context/device preset values.
+Mobile mode changes viewport behavior; UA strings and hints are separate.
+`set_user_agent_with(UserAgentOptions)` supports language, navigator platform,
+brands/full versions, OS version, architecture/model, mobile, bitness, WOW64 and
+form factors. `reset_user_agent` restores native UA/language/platform defaults.
+
+All changed profiles require Chromium. Firefox fails explicitly; an all-Keep
+media operation remains a lifecycle-checked no-op. New operations and legacy
+viewport/device/UA mutations share an emulation lock with bounded waiting under
+one operation deadline. New options accept caller cancellation. Validation
+rejects native-invalid numeric values and control characters before mutation;
+client hints require printable ASCII. Strings, list lengths and encoded UA
+metadata have explicit limits. Device metrics and touch use separate native
+commands: cancellation can leave an already-applied override. Media retains its
+desired typed profile after an uncertain timeout; the next patch resends it.
+Raw protocol changes are outside that profile's bookkeeping.
+
+The [public Playwright media reference](https://playwright.dev/docs/api/class-page#page-emulate-media)
+and [CDP emulation contract](https://chromedevtools.github.io/devtools-protocol/tot/Emulation/)
+describe the relevant surfaces. Numeric and hint validation also follows the
+[Chromium handler](https://chromium.googlesource.com/chromium/src/%2B/main/content/browser/devtools/protocol/emulation_handler.cc).
+The [pinned executable](scripts/e2e-conformance/emulation-reference.mjs) and
+[observations](scripts/e2e-conformance/emulation-reference.json) verify public
+Playwright media patch/reset semantics and explicit raw-CDP metrics/UA profiles.
+Custom metrics/UA metadata are protocol comparisons, rather than dedicated
+Playwright Page API equivalents. Raw-CDP checks use `viewport:null` to avoid
+Playwright viewport bookkeeping and wait for rendered reset values.
+The [native Rust gate](crates/ferrite-e2e/tests/emulation_options.rs) verifies
+media queries, PNG dimensions, screen/position/orientation/touch, nonquadrant
+angles, HTTP headers, high entropy client hints, reset values and Firefox errors.
+
+
+C05 verification passed 273 scoped checks: 259 units, native emulation (two),
+screenshot options (seven), legacy permissions/emulation (one), and four
+doctests. The legacy filter excluded 92 cases. Strict Clippy, formatting,
+matrix generation and local links passed. The inventory now has 50 integration
+targets; this scoped check is not the complete replay still required by G04.

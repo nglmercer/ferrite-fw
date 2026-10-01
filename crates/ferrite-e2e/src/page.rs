@@ -804,7 +804,7 @@ pub struct DeviceDescriptor {
     pub viewport: Viewport,
     /// Device pixel ratio.
     pub device_scale_factor: f64,
-    /// Mobile UA hints and viewport behavior.
+    /// Mobile viewport behavior; does not override the user agent or client hints.
     pub mobile: bool,
     /// Touch event support.
     pub has_touch: bool,
@@ -1664,6 +1664,7 @@ pub struct Page {
     pub(crate) snapshot_path_context: crate::SnapshotPathContext,
     pub(crate) driver: Driver,
     pub(crate) coverage_state: Arc<tokio::sync::Mutex<crate::coverage::CoverageState>>,
+    pub(crate) emulation_state: Arc<tokio::sync::Mutex<crate::emulation::EmulationState>>,
     pub(crate) sink: ConsoleSink,
     slow_mo: Duration,
     base_url: Option<String>,
@@ -1782,6 +1783,7 @@ impl Page {
             snapshot_attachments: None,
             driver,
             coverage_state: Arc::new(tokio::sync::Mutex::new(Default::default())),
+            emulation_state: Arc::new(tokio::sync::Mutex::new(Default::default())),
             sink,
             slow_mo,
             base_url,
@@ -3638,18 +3640,26 @@ impl Page {
     /// Set the viewport size.
     pub async fn set_viewport(&self, viewport: Viewport) -> E2eResult<()> {
         self.driver
-            .run(async {
-                self.driver
-                    .set_viewport(viewport.width, viewport.height)
-                    .await
-            })
+            .run(
+                crate::operation::Deadline::new(self.timeout()).run("set_viewport", async {
+                    let _state = self.emulation_state.lock().await;
+                    self.driver
+                        .set_viewport(viewport.width, viewport.height)
+                        .await
+                }),
+            )
             .await
     }
 
     /// Emulate a device preset (Chromium only; loud error on Firefox).
     pub async fn emulate_device(&self, device: DeviceDescriptor) -> E2eResult<()> {
         self.driver
-            .run(async { self.driver.emulate_device(device).await })
+            .run(
+                crate::operation::Deadline::new(self.timeout()).run("emulate_device", async {
+                    let _state = self.emulation_state.lock().await;
+                    self.driver.emulate_device(device).await
+                }),
+            )
             .await
     }
 
@@ -3829,7 +3839,12 @@ impl Page {
     /// Override the user agent.
     pub async fn set_user_agent(&self, user_agent: &str) -> E2eResult<()> {
         self.driver
-            .run(async { self.driver.set_user_agent(user_agent).await })
+            .run(
+                crate::operation::Deadline::new(self.timeout()).run("set_user_agent", async {
+                    let _state = self.emulation_state.lock().await;
+                    self.driver.set_user_agent(user_agent).await
+                }),
+            )
             .await
     }
 
@@ -4176,16 +4191,16 @@ impl Page {
         color_scheme: Option<ColorScheme>,
         reduced_motion: Option<ReducedMotion>,
     ) -> E2eResult<()> {
-        self.driver
-            .run(async {
-                if color_scheme.is_none() && reduced_motion.is_none() {
-                    return Ok(());
-                }
-                self.driver
-                    .emulate_media(color_scheme, reduced_motion)
-                    .await
-            })
-            .await
+        self.emulate_media_with(crate::MediaOptions {
+            color_scheme: color_scheme
+                .map(|value| crate::EmulationOverride::Set(value.into()))
+                .unwrap_or_default(),
+            reduced_motion: reduced_motion
+                .map(crate::EmulationOverride::Set)
+                .unwrap_or_default(),
+            ..Default::default()
+        })
+        .await
     }
 
     /// Start intercepting requests with glob rules (replaces page rules;

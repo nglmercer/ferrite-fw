@@ -676,3 +676,15 @@ future context pages, invalid installation preservation, cancellation and
 Firefox's unavailable POST matching bytes. Firefox native binary fulfillment
 works; response capture/rewrite restrictions remain separate. ZIP/update and
 attached content are deferred.
+
+
+### Extended Chromium emulation
+
+`npm run reference:emulation` runs [emulation-reference.mjs](emulation-reference.mjs)
+against pinned Playwright 1.63 and writes [emulation-reference.json](emulation-reference.json).
+Media profiles use public Playwright calls and verify retained partial updates,
+individual resets and no-preference observations. Custom metrics and UA metadata
+use raw CDP on a `viewport:null` context, with native PNG, JS and HTTP assertions.
+They do not imply dedicated Playwright Page API equivalents. Native reset values
+are read after animation frames settle. The [Rust gate](../../crates/ferrite-e2e/tests/emulation_options.rs)
+checks both browser backends, including explicit unsupported Firefox errors.

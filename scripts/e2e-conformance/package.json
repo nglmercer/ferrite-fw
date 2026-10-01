@@ -31,7 +31,8 @@
     "reference:pdf": "node pdf-reference.mjs",
     "reference:bodies": "node body-reference.mjs",
     "reference:coverage": "node coverage-reference.mjs",
-    "reference:har": "node har-reference.mjs"
+    "reference:har": "node har-reference.mjs",
+    "reference:emulation": "node emulation-reference.mjs"
   },
   "devDependencies": {
     "playwright": "1.63.0"

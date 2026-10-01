@@ -17,9 +17,9 @@ use crate::cdp::{CdpConnection, CdpEvent};
 use crate::error::{E2eError, E2eResult};
 use crate::jshandle::JSHandle;
 use crate::page::{
-    ColorScheme, ConsoleMessage, Cookie, DialogDecision, DialogHandler, DialogInfo, ElementRect,
-    FrameInfo, LoadState, NetworkRequest, PageEvent, RecordedRequest, ReducedMotion, RouteAction,
-    RouteInfo, TraceEntry, WebSocketDirection,
+    ConsoleMessage, Cookie, DialogDecision, DialogHandler, DialogInfo, ElementRect, FrameInfo,
+    LoadState, NetworkRequest, PageEvent, RecordedRequest, RouteAction, RouteInfo, TraceEntry,
+    WebSocketDirection,
 };
 use crate::video::{assemble_webm, SpooledFrame, VideoFrame, VideoOptions};
 
@@ -2013,21 +2013,6 @@ impl Driver {
         .await
     }
 
-    /// Emulate media features.
-    pub async fn emulate_media(
-        &self,
-        color_scheme: Option<ColorScheme>,
-        reduced_motion: Option<ReducedMotion>,
-    ) -> E2eResult<()> {
-        self.run(async {
-            match self {
-                Self::Cdp(driver) => driver.emulate_media(color_scheme, reduced_motion).await,
-                Self::Bidi(driver) => driver.emulate_media(color_scheme, reduced_motion).await,
-            }
-        })
-        .await
-    }
-
     pub(crate) fn validate_routing(
         &self,
         configuration: &crate::routing::RouteConfiguration,
@@ -3051,37 +3036,6 @@ impl CdpDriver {
         self.call(
             "Storage.clearDataForOrigin",
             serde_json::json!({ "origin": origin, "storageTypes": storage_types }),
-        )
-        .await?;
-        Ok(())
-    }
-
-    async fn emulate_media(
-        &self,
-        color_scheme: Option<ColorScheme>,
-        reduced_motion: Option<ReducedMotion>,
-    ) -> E2eResult<()> {
-        let mut features = Vec::new();
-        if let Some(scheme) = color_scheme {
-            let value = match scheme {
-                ColorScheme::Dark => "dark",
-                ColorScheme::Light => "light",
-            };
-            features.push(serde_json::json!({ "name": "prefers-color-scheme", "value": value }));
-        }
-        if let Some(motion) = reduced_motion {
-            let value = match motion {
-                ReducedMotion::Reduce => "reduce",
-                ReducedMotion::NoPreference => "no-preference",
-            };
-            features.push(serde_json::json!({ "name": "prefers-reduced-motion", "value": value }));
-        }
-        if features.is_empty() {
-            return Ok(());
-        }
-        self.call(
-            "Emulation.setEmulatedMedia",
-            serde_json::json!({ "features": features }),
         )
         .await?;
         Ok(())
@@ -4847,18 +4801,6 @@ impl BidiDriver {
         Err(E2eError::Config(
             "firefox HTTP auth challenges are not supported \
              (BiDi has no auth-challenge response)"
-                .to_string(),
-        ))
-    }
-
-    async fn emulate_media(
-        &self,
-        _color_scheme: Option<ColorScheme>,
-        _reduced_motion: Option<ReducedMotion>,
-    ) -> E2eResult<()> {
-        Err(E2eError::Config(
-            "firefox media emulation is not supported \
-             (BiDi has no emulated-media override)"
                 .to_string(),
         ))
     }
