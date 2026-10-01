@@ -643,3 +643,19 @@ checks uncaptured bodies, bounded truncation, failed transport after headers,
 pending deadlines/cancellation, stop/restart generation isolation, cached bytes
 after close and explicit Firefox unsupported errors. Playwright can return the
 oversized reference body; Ferrite intentionally preserves its 1 MiB cap.
+
+### Coverage navigation and source controls
+
+`npm run reference:coverage` runs [coverage-reference.mjs](coverage-reference.mjs)
+on pinned Playwright 1.63 Chromium and writes [coverage-reference.json](coverage-reference.json).
+Navigation reset true/false and anonymous scripts false/true are observed on
+real native coverage. In this Chromium run, V8 retained only final-document
+ranges in both modes; CSS retained earlier sheets with empty ranges when reset
+was disabled. Anonymous JS URLs were empty. Duplicate stylesheet URLs represent
+different native IDs.
+
+The [Rust gate](../../crates/ferrite-e2e/tests/coverage_options.rs) additionally
+verifies source omission/oversize status, dirty-domain recovery after setup
+timeout, zero deadlines, caller cancellation, repeated start/stop, independent
+JS/CSS capture, page/context disposal, transport disconnect and explicit Firefox
+unsupported errors. Source storage is bounded and native event lag fails loudly.

@@ -117,7 +117,10 @@ pub use context::{
     TracingOptions,
 };
 pub use cookie_filter::CookieFilter;
-pub use coverage::{Coverage, CoverageFunction, CoverageRange, CssCoverageEntry, JsCoverageEntry};
+pub use coverage::{
+    Coverage, CoverageFunction, CoverageRange, CoverageSourceStatus, CssCoverageEntry,
+    CssCoverageOptions, JsCoverageEntry, JsCoverageOptions,
+};
 pub use driver::FrameStream;
 pub use error::{E2eError, E2eResult};
 pub use event::{DispatchEventOptions, DomEventKind};

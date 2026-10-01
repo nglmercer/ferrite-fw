@@ -900,6 +900,20 @@ impl Driver {
         };
         token.run(future)
     }
+    pub(crate) async fn coverage_call(&self, method: &str, params: Value) -> E2eResult<Value> {
+        match self {
+            Self::Cdp(driver) => {
+                self.run(
+                    driver
+                        .cdp
+                        .call(Some(&driver.session), method, params, self.timeout()),
+                )
+                .await
+            }
+            Self::Bidi(_) => Err(E2eError::Config("coverage requires Chromium".into())),
+        }
+    }
+
     /// Target/context id for diagnostics.
     #[must_use]
     pub fn target_id(&self) -> &str {

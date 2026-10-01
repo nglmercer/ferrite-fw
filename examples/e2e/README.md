@@ -1218,3 +1218,35 @@ timeouts/cancellation; cached bytes survive close. `body_capture_state()` explai
 uncaptured, pending, empty available, truncated, unavailable and failed bodies.
 Bodies are capped at 1 MiB and participate in bounded retained history. Invalid
 JSON returns a parser diagnostic; text replaces invalid UTF-8 sequences.
+
+### Configure Chromium coverage
+
+```rust,ignore
+let coverage = page.coverage();
+coverage.start_js_coverage_with(JsCoverageOptions {
+    reset_on_navigation: false,
+    report_anonymous_scripts: true,
+    include_source: false,
+    ..Default::default()
+}).await?;
+coverage.start_css_coverage_with(CssCoverageOptions {
+    reset_on_navigation: false,
+    ..Default::default()
+}).await?;
+page.goto("/first").await?;
+page.goto("/second").await?;
+let scripts = coverage.stop_js_coverage().await?;
+let sheets = coverage.stop_css_coverage().await?;
+```
+
+Source collection can be omitted independently of ranges; check `source_status`
+for omission, native unavailability or the 1 MiB source cap. Navigation reset is
+on by default. Disabling reset preserves stylesheet/source identities, including
+sheets whose counters become empty. It cannot guarantee V8 counters persist
+across navigation. Distinct stylesheet IDs can share a URL. Anonymous JS keeps
+its native empty URL and script ID; anonymous CSS stays supported.
+
+Start options carry `OperationOptions`; stop methods also have
+`*_with_options` forms. Collection storage and native range counts are bounded;
+lag/capacity loss is explicit. Firefox rejects coverage. Existing entry JSON
+decodes with Included source status; struct literals need the new field.

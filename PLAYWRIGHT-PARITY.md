@@ -6,21 +6,20 @@ assertion/runner API. **It does not provide full Playwright API or behavioral
 parity.** The implementation deliberately defers substantial backend,
 distribution, debugger and orchestration work.
 
-Audit date: **2026-09-30**. Upstream baseline:
+Audit date: **2026-10-01**. Upstream baseline:
 [Playwright v1.63.0](https://github.com/microsoft/playwright/releases/tag/v1.63.0).
 The initial inventory and existing changes were committed in `d93365a`; this
 report describes the subsequent practical parity implementation. The original
 findings remain available in that commit's history.
 
-Latest completed phase: **C02**, with 257 scoped E2E checks: 245 units,
-eight native groups across four targets and four doctests. The body and metadata
-gates required Chromium and Firefox on Linux; legacy capture/HAR gates used
-matching Chromium Headless Shell and Firefox. Strict Clippy, package formatting,
-generated matrix and 802 local links passed. The pinned reference verified six
-original-response profiles. Captured helpers support Chromium; Firefox returns
-explicit unsupported errors. C03 is next. The current inventory has 47 integration
-targets; this phase does not claim its complete replay. Earlier sections retain
-historical evidence, including B10's complete audit of its then-existing 38 targets.
+Latest completed phase: **C03**, with 257 scoped E2E checks: 249 units,
+four native groups across three targets and four doctests. The new coverage and
+body gates required Chromium and Firefox on Linux; legacy coverage used matching
+Chromium Headless Shell and Firefox. Strict Clippy, package formatting, generated
+matrix and local links passed. Pinned navigation/anonymous-script profiles passed.
+C04 is next. The current inventory has 48 integration targets; this phase does
+not claim its complete replay. Earlier sections retain historical evidence,
+including B10's complete audit of its then-existing 38 targets.
 
 The [complete API matrix](PLAYWRIGHT-API-MATRIX.md) covers **73 classes and
 1,018 documented JavaScript-applicable members**, including browser, test,
@@ -2523,3 +2522,59 @@ and 91 filtered cases respectively; these counts do not describe a full browser
 target replay. Strict Clippy and package formatting passed; the member matrix
 remains 73 classes/1,018 members (648 Partial, 314 Missing, 15 Equivalent and
 41 Idiomatic). The 47-target complete integration replay remains G04.
+
+## C03 — Coverage navigation, sources and restart lifecycle
+
+`Coverage::start_js_coverage_with(JsCoverageOptions)` and
+`start_css_coverage_with(CssCoverageOptions)` add navigation reset and optional
+source collection; JavaScript also controls anonymous scripts. Defaults reset
+on navigation, include source and omit anonymous JavaScript. Existing start/stop
+methods delegate to these defaults. The `operation` field on start options and
+`stop_*_coverage_with_options` apply one shared deadline and caller cancellation
+to the complete operation, including waiting for the coverage-state lock.
+Zero disables its local deadline.
+
+Sources are collected while their script/stylesheet IDs are live rather than
+refetched after navigation. `CoverageSourceStatus` explicitly reports Included,
+Omitted, Unavailable (bounded native error), or Truncated. Empty source is
+therefore distinguishable from omission/loss. Each collection retains at most
+4,096 identities and 16 MiB of source/metadata; individual source strings have
+a 1 MiB cap. Oversized source is omitted with Truncated status. Identity/history
+capacity and native event lag fail the collection explicitly; they release
+unusable retained sources. Native protocol ingress is parsed before these caps;
+caller-held returned reports are outside retained collection limits. Returned
+function/rule structures also have a 100,000 range/function-item budget.
+
+Navigation reset follows native `Runtime.executionContextsCleared`. With reset
+disabled, stylesheet metadata/source remains available even when Chrome drops
+its rule counts: those entries return empty ranges. Separate stylesheet IDs can
+share a URL, so duplicate URLs remain visible. JavaScript's native ranges can
+still disappear across navigation with reset disabled; cached sources cannot
+restore counters that V8 no longer returns. The [pinned reference](scripts/e2e-conformance/coverage-reference.json)
+observed only final-document JS in both modes, retained first-document CSS when
+reset was false, and empty URLs for reported anonymous scripts. Ferrite preserves
+those native anonymous URLs and uses script IDs for identity.
+
+The [official coverage reference](https://playwright.dev/docs/api/class-coverage)
+warns that disabling JavaScript navigation reset cannot guarantee persistence.
+The [executable comparison](scripts/e2e-conformance/coverage-reference.mjs) and
+[native Rust gate](crates/ferrite-e2e/tests/coverage_options.rs) verify these
+behaviors. Coverage remains Chromium-only. Ferrite preserves raw V8 function/
+block and CSS rule-use ranges, including unused rules; it does not flatten CSS
+into Playwright's disjoint used ranges. Anonymous CSS remains supported for
+compatibility with existing Ferrite behavior.
+
+Collectors hold protocol drivers rather than Page owners. Stopping, interrupted
+setup/stop, lifecycle cancellation and dropping their owner abort collection;
+failed streams release source storage. A canceled setup marks domains dirty,
+and the next start reconciles native tracking under the same serialized gate.
+Repeated start/stop returns explicit active/inactive errors; JS and CSS captures
+are independent. The new public `source_status` entry field defaults to Included
+when decoding older JSON; Rust struct literals must supply the new field.
+
+C03 passed 257 scoped E2E checks: 249 units, four native groups across three
+targets (coverage options two, captured bodies one, legacy coverage one), and
+four doctests. Full Chrome/Firefox were required for the new gates; the legacy
+coverage filter used matching Headless Shell/Firefox with 92 cases excluded.
+Strict Clippy, package formatting, matrix and local links passed. The complete
+48-target integration replay remains G04 work.
