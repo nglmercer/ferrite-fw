@@ -12,13 +12,13 @@ The initial inventory and existing changes were committed in `d93365a`; this
 report describes the subsequent practical parity implementation. The original
 findings remain available in that commit's history.
 
-Latest completed phase: **D04**, with 290 scoped checks: 231 E2E units,
-24 native integrations across six targets, four E2E doctests and 31 CLI/config
-checks. Native cases required Chromium and Firefox on Linux. Strict Clippy,
-package formatting, generated matrix and 779 local links passed. Metadata and
-slow summaries survived source removal and bundle relocation; both report views
-were inspected. Four pinned Playwright runs verified 24 reference observations.
-D06 is next. The current integration inventory has 44 targets; this phase does
+Latest completed phase: **D06**, with 261 scoped E2E checks: 237 units,
+20 native integrations across six targets and four doctests. Shared/capability
+cases required Chromium and Firefox on Linux. Strict Clippy, package formatting,
+generated matrix and 788 local links passed. Native socket identity, binary/text,
+errors, closure, cancellation, loss, popup scopes and retries were verified;
+the pinned reference records Chromium behavior and stock Firefox BiDi limits.
+C01 is next. The current integration inventory has 45 targets; this phase does
 not claim its complete replay. Earlier increment sections retain historical
 checkpoint evidence, including B10's complete audit of its then-existing 38 targets.
 
@@ -29,9 +29,9 @@ reporter, Android and Electron APIs:
 | Classification | Members | Meaning |
 |---|---:|---|
 | Equivalent | 15 | Counterpart for the basic operation/value, without full options or engine compatibility |
-| Partial | 645 | Related exposed operation with material semantic, option or engine differences |
+| Partial | 648 | Related exposed operation with material semantic, option or engine differences |
 | Idiomatic | 41 | Comparable operation through Rust language/library facilities |
-| Missing | 317 | No dedicated public counterpart |
+| Missing | 314 | No dedicated public counterpart |
 
 These counts describe an inventory, **not a behavioral compatibility
 percentage**. The earlier inventory had 458 Partial and 503 Missing members.
@@ -2363,3 +2363,65 @@ local file links passed. Both relocated metadata report views were inspected.
 The full 44-target integration replay and other-platform verification remain
 G04 work. Matrix inventory: 73 classes/1,018 members, Partial645/Missing317/
 Equivalent15/Idiomatic41.
+
+## D06 — Bounded Chromium socket diagnostics
+
+`Page::wait_for_websocket` observes future creation by full absolute URL matcher;
+`wait_for_websocket_event` waits by native `socket_id` and typed direction.
+Creation means native observation, not completed handshake. `WebSocketEvent`
+adds serde-defaulted identity, opcode, truncation, native error and monotonic
+sequence fields. `WebSocketDirection::Error` is a new enum variant. Update
+exhaustive event literals and enum matches. Old JSON retains its empty identity /
+missing opcode instead of inventing either value.
+
+`websocket_diagnostics` and `websocket_snapshot` return owned serialized data,
+without retaining Page/socket/context/transport owners. `WebSocketSnapshot`
+exposes URL, last error, history and URL truncation, and a typed state.
+`is_closed` is `Some(true)` only for observed native closure; observation loss
+is `None`. Creation, frames, errors and closure resolve by native request ID,
+so simultaneous sockets at the same URL remain distinct. Text opcode 1 retains
+UTF-8; non-text/control payloads retain CDP base64. `payload_bytes` decodes only
+complete payloads and rejects missing opcode, truncation or invalid base64.
+
+Per Page, retention caps sockets at 256, events at 1,024 and history string
+bytes at 1 MiB. Individual payloads cap at 16 KiB, URLs/errors at 4 KiB and
+accepted native IDs at 1 KiB. UTF-8 boundaries survive truncation. Creation
+waits reject truncated URLs instead of matching a prefix as a full URL; error
+text truncation also marks the socket history incomplete. Socket eviction
+removes its history and cannot revive an old identity from later frames; dropped
+events and per-socket truncated history are visible. The socket notification
+channel holds 256 capped events, separate from existing Page/context channels.
+These bound retained observations; native protocol parsing and caller-owned
+copies are outside those budgets.
+
+Scoped waits use shared page/caller lifecycle cancellation and one operation
+clock. Defaults use the Page action timeout; zero disables only the local limit.
+Native error/close, stream lag, popup startup observation-budget loss, page/context
+disposal and transport disconnect settle waiters. A retained native Closed event
+may satisfy a Closed wait immediately; other waits fail on terminal states.
+Lag returns an explicit observation error. Listener/popup observation loss marks
+pending state unavailable and never fabricates close; already observed native
+closes remain true in historical snapshots. Waits do not spawn background tasks.
+
+Stock Firefox/BiDi returns explicit unsupported errors from all new APIs. This
+is a native backend capability limit, distinct from patched Playwright Firefox.
+Socket routes, message injection and service-worker sockets remain deferred.
+The pinned [reference](scripts/e2e-conformance/websocket-reference.json) verifies
+Chromium identity, Unicode/binary frames, errors, timeouts and close semantics,
+and records stock Firefox's bounded observation timeout despite successful
+connections. See [WebSocket API](https://playwright.dev/docs/api/class-websocket)
+and [CDP Network socket events](https://chromedevtools.github.io/devtools-protocol/tot/Network/).
+Native [websocket_diagnostics.rs](crates/ferrite-e2e/tests/websocket_diagnostics.rs)
+also covers caller/enclosing cancellation, teardown, popup isolation and retries;
+bounded/lag/legacy-schema units are in [websocket.rs](crates/ferrite-e2e/src/websocket.rs).
+
+D06 verification passed 261 scoped E2E checks: 237 units, 20 native groups
+across `websocket_diagnostics`, `lifecycle_events`, `network_metadata`,
+`popup_diagnostics`, `step_controls_and_bundles` and the legacy browser socket
+group, plus four doctests. Both engines were required for shared/capability
+cases on Linux. The legacy socket group used matching Headless Shell/Firefox
+with 92 unrelated cases filtered; other native gates used full Chrome/Firefox.
+Strict all-target Clippy, package formatting, generated matrix and 788 local
+file links passed. The current 45-target complete replay and other-platform
+verification remain G04 work. Matrix: Partial648/Missing314/Equivalent15/
+Idiomatic41 across 73 classes and 1,018 members.

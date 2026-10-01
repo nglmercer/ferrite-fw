@@ -277,6 +277,8 @@ pub enum WebSocketDirection {
     Received,
     /// Socket closed.
     Closed,
+    /// Native frame/handshake error.
+    Error,
 }
 
 /// A WebSocket lifecycle or frame observation (Chromium only; BiDi has no
@@ -289,6 +291,21 @@ pub struct WebSocketEvent {
     pub direction: WebSocketDirection,
     /// Frame payload text (`""` for created/closed).
     pub payload: String,
+    /// Native request identity scoped to this Page. Empty for legacy JSON.
+    #[serde(default)]
+    pub socket_id: String,
+    /// Native frame opcode; 1 is text, non-text payloadData uses CDP base64.
+    #[serde(default)]
+    pub opcode: Option<u64>,
+    /// Payload exceeded the retained byte budget. Never decode partial binary.
+    #[serde(default)]
+    pub payload_truncated: bool,
+    /// Native error text for Error observations.
+    #[serde(default)]
+    pub error: Option<String>,
+    /// Monotonic page observation sequence, zero for legacy JSON.
+    #[serde(default)]
+    pub sequence: u64,
 }
 
 /// Identity and metadata for one network request.
@@ -1639,7 +1656,7 @@ pub struct Page {
     pub(crate) snapshot_path_context: crate::SnapshotPathContext,
     pub(crate) driver: Driver,
     pub(crate) coverage_state: Arc<tokio::sync::Mutex<crate::coverage::CoverageState>>,
-    sink: ConsoleSink,
+    pub(crate) sink: ConsoleSink,
     slow_mo: Duration,
     base_url: Option<String>,
     routing: Arc<crate::routing::PumpSlot>,
@@ -1840,7 +1857,7 @@ impl Page {
         page
     }
 
-    fn operation_page(&self, options: &crate::OperationOptions) -> Self {
+    pub(crate) fn operation_page(&self, options: &crate::OperationOptions) -> Self {
         let mut page = options
             .timeout
             .map(|timeout| self.with_timeout(timeout))

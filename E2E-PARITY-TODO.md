@@ -1,15 +1,15 @@
 # Ferrite E2E implementation TODO
 
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
-Session plan refreshed: 2026-09-30, after verified D04 metadata/slow-report implementation.
+Session plan refreshed: 2026-09-30, after verified D06 socket-diagnostics implementation.
 Expanded on request for a longer implementation session; B09/B10/B13/B14 and D01/D02 are verified.
 Uncommitted implementations are not counted complete.
 
 The initial G/A foundations are complete except for the final G04 audit. Follow
 the remaining-work index below through B/D improvements and supported C extensions.
-This backlog contains **51 tasks (43 complete, 8 remaining)**: four foundations,
+This backlog contains **51 tasks (44 complete, 7 remaining)**: four foundations,
 16 core tasks, 19 follow-ups, six optional extensions and six practical additions.
-All A and B tasks and D01/D02/D03/D04/D05 are verified; continue with
+All A and B tasks and D01–D06 are verified; continue with
 practical additions and supported C extensions. The ordering
 and effort assessments are recommendations based on the current source and
 parity audit.
@@ -24,7 +24,7 @@ limits remain in [PLAYWRIGHT-PARITY.md](PLAYWRIGHT-PARITY.md).
 
 ## Recommended next implementation
 
-Start **D06 — Chromium WebSocket diagnostic lifecycle**, then the supported C extensions.
+Start **C01 — PDF options builder**, then C02–C06 and the final G04 audit.
 B10 is verified through `2c042e1`, with owned process-output drainage in
 `ade139b`. The complete phase passed **457 E2E and 28 CLI/configuration checks**,
 485 combined: 211 units, 242 integrations across all 38 targets and four doctests.
@@ -95,7 +95,7 @@ snapshot run missed the required capture pair in its existing 650 ms window;
 the unchanged eight-case snapshot target passed serially. Final native gates
 use `--test-threads=1`. No assertion clock or expected evidence was relaxed.
 The current integration inventory has 43 targets; this phase does not claim
-its complete replay. **Next: D06**, then supported C extensions.
+its complete replay. **Next: C01**, then C02–C06 and the G04 audit.
 G04 remains open for the wider lifecycle, lag/eviction and cross-feature audit.
 The initial broad audit's reproducible large-console timeout was fixed by draining
 owned child stdout/stderr, retaining a bounded 4-KiB stderr tail and keeping
@@ -124,7 +124,7 @@ outer label/error/step/trace and Diagnostic typed causes, and B16's shared owner
 weak context graph and owned base_url getter. G04 remains open for channel lag,
 partial setup, detached in-flight requests and the final cross-feature audit.
 
-The scope of the longer session is **all eight open tasks below**. Completed tasks
+The scope of the longer session is **all seven open tasks below**. Completed tasks
 remain regression requirements. The deferred projects are future work; completing
 this checklist means practical parity within the stated engine capabilities,
 not complete Playwright compatibility.
@@ -137,16 +137,15 @@ there. G04 applies during every phase and closes after the final audit.
 
 | Order | Task | Implementation result | Dependency or capability gate |
 |---|---|---|---|
-| 1 | D06 | Socket identity, errors, closed state and bounded typed waits | Existing Chromium socket events; Firefox unsupported |
-| 2 | C01 | Validated PDF options | Chromium; explicit Firefox unsupported result |
-| 3 | C02 | Bounded captured-body bytes, text and JSON helpers | B02/B03 complete; Chromium body capture |
-| 4 | C03 | Coverage navigation/source options and restart lifecycle | Chromium JS/CSS coverage |
-| 5 | C04 | HAR matching, not-found and supported content options | A14/B06 complete; engine body/rewrite capabilities |
-| 6 | C05 | Supported media/device emulation options and resets | Chromium native capabilities |
-| 7 | C06 | Independently detachable CDP target sessions | Chromium transport and session ownership |
-| 8 | G04 | Final lifecycle, compatibility and resource-release audit | Evidence from every completed phase |
-Immediate delivery: **D06**. All B tasks and D01–D05 are complete.
-D06 and supported C extensions remain available independently. G04 applies
+| 1 | C01 | Validated PDF options | Chromium; explicit Firefox unsupported result |
+| 2 | C02 | Bounded captured-body bytes, text and JSON helpers | B02/B03 complete; Chromium body capture |
+| 3 | C03 | Coverage navigation/source options and restart lifecycle | Chromium JS/CSS coverage |
+| 4 | C04 | HAR matching, not-found and supported content options | A14/B06 complete; engine body/rewrite capabilities |
+| 5 | C05 | Supported media/device emulation options and resets | Chromium native capabilities |
+| 6 | C06 | Independently detachable CDP target sessions | Chromium transport and session ownership |
+| 7 | G04 | Final lifecycle, compatibility and resource-release audit | Evidence from every completed phase |
+Immediate delivery: **C01**. All A/B/D tasks are complete.
+Supported C extensions remain available independently. G04 applies
 throughout and closes after the complete integration/lifecycle audit.
 
 ### Verified B13 delivery sequence
@@ -192,7 +191,7 @@ contracts and pinned behavior; prefer extending existing options and helpers.
 | D03 | `runner.rs`, `bundle.rs`, `report.rs` | Apply retention only to runner-owned output after capture settles; represent removed artifacts explicitly and preserve portable links. |
 | D04 | `resolved_config.rs`, `runner.rs`, `report.rs`; CLI/config packages | Carry user-supplied metadata and bounded slow-test summaries through existing reporter formats without adding a new reporter framework. |
 | D05 | `page.rs`, `driver.rs` | Enumerate local/session storage and add typed bulk operations with deterministic serialization and normal operation guards. |
-| D06 | `page.rs`, `driver.rs`, `network.rs` | Extend existing Chromium socket observations with identity, native errors and bounded lifecycle/wait helpers; do not implement interception. |
+| D06 | `page.rs`, `driver.rs`, `websocket.rs` | Extend existing Chromium socket observations with identity, native errors and bounded lifecycle/wait helpers; do not implement interception. |
 | G04 | `operation.rs`, affected tests and parity documents | Audit every new API's deadlines/cancellation/disposal/retries, resource release and serialization; reconcile the complete test inventory and matrix. |
 
 The diagnostics group **B01/B04/B19**, ownership **B16** and locator labels
@@ -1256,7 +1255,7 @@ behavior claims must still use the repository's pinned Playwright v1.63.0 corpus
   filtered, and the complete 42-target inventory was not replayed here.
 
 
-- [ ] **D06 — Chromium WebSocket diagnostic lifecycle (M; capability gated).**
+- [x] **D06 — Chromium WebSocket diagnostic lifecycle (M; capability gated).**
   Extend current socket observations with native socket identity, error events,
   closed state and scoped typed wait helpers. Two sockets at the same URL must
   remain distinguishable. Preserve text versus binary opcode/payload semantics;
@@ -1267,6 +1266,24 @@ behavior claims must still use the repository's pinned Playwright v1.63.0 corpus
   sockets, binary/text frames, errors, closure and retries, and Firefox returns
   an explicit unsupported result. Any new public fields/enums need compatibility
   notes. Routing, message injection and service-worker sockets remain deferred.
+  Evidence: native socket IDs distinguish same-URL connections; opcode/base64
+  metadata and complete-byte decoding preserve text/binary semantics. Native
+  errors and actual closure are distinct from unavailable observation. Owned
+  snapshots cap sockets (256), events (1,024), history text (1 MiB), payloads
+  (16 KiB), URL/error text (4 KiB) and identities (1 KiB); truncation/drop/loss
+  is explicit. Creation waits reject truncated URLs rather than matching prefixes.
+  Typed waits settle on scoped terminal state, native/listener lag, popup capture
+  budget loss, page/context/transport teardown and caller/enclosing cancellation.
+  Popup/opener and retry scopes are native-verified. Old JSON supplies defaults
+  for new event fields; exhaustive literals/enum matches need migration.
+  The pinned reference confirms Chromium behavior and records stock Firefox
+  BiDi's missing socket observations despite successful socket connections.
+  Verification: **261 scoped E2E checks** (237 units, 20 native integrations
+  across six targets and four doctests), strict all-target Clippy, formatting,
+  generated matrix and 788 local links passed. Both installed engines were
+  mandatory for shared/capability cases on Linux; the legacy socket group passed
+  with 92 unrelated browser cases filtered. All-target compilation is not a
+  complete integration replay: the current 45-target inventory remains G04 work.
   Reference: [WebSocket observation API](https://playwright.dev/docs/api/class-websocket).
 
 ## Deferred substantial work
@@ -1313,7 +1330,7 @@ waiting for every future feature before starting independent work.
 | 4. Runner and developer APIs | B16/B17/B12/B13/B14 — complete | Preserve shared ownership (`1e4d3bb`), labeled diagnostics (`8ae438c`), soft collection (`0ee8245`) and effective configuration (`a7f1e45`) and shared fixture/cleanup budgets with safe disposal (`e2e3ecc`). D01/D02 are complete; preserve the broader runner and polling regressions through capture/report work. |
 | 4a. CI and assertion reliability | D01/D02 — complete | Preserve policy/focus wiring in `a2fd29b` and polling controls/scoped final-only soft retries in `312090d`. |
 | 5. Captures and reports | B09/B10/B18/B11/D03/D04 — complete | Preserve verified capture/stability/path/update and owned diagnostics; preserve bounded ARIA output and searchable reports; preserve frozen metadata and bounded slow summaries. |
-| 5a. Practical storage and diagnostics | D03/D04/D05 — complete; D06 | Preserve retention/storage helpers; preserve run metadata/slow summaries; complete bounded Chromium socket diagnostics. |
+| 5a. Practical storage and diagnostics | D03/D04/D05/D06 — complete | Preserve retention/storage helpers; preserve run metadata/slow summaries; preserve bounded Chromium socket diagnostics. |
 | 6. Supported backend extensions | C01, C02, C03, C04, C05, C06 | Extend PDF, captured bodies, coverage, HAR, emulation and scoped CDP sessions. Check capability before accepting each option; verify explicit errors on the other engine. |
 | 7. Final lifecycle and compatibility audit | G04 | Verify cancellation, zero/enclosing deadlines, retries, disposal and released resources across the additions, then run the complete regression and documentation gates. |
 
@@ -1386,8 +1403,7 @@ also need formatting checks for the modified packages.
 
 Copyable request for the implementation session:
 
-> Implement all eight open tasks (D06,
-> C01–C06 and G04) in E2E-PARITY-TODO.md using the recommended remaining
+> Implement all seven open tasks (C01–C06 and G04) in E2E-PARITY-TODO.md using the recommended remaining
 > phases, dependencies and completion criteria. Preserve the already verified
 > features. Implement all practical
 > features supported by the existing Chromium/Firefox backends. Keep the deferred

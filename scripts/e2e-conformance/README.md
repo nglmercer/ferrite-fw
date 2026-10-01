@@ -595,3 +595,21 @@ is opt-in and groups individual scheduled Rust test/project/repeat results;
 result wall duration. Native live reporters, CLI precedence, empty values,
 legacy JSON, escaped XML/HTML and relocated artifact downloads are checked in
 [run_metadata.rs](../../crates/ferrite-e2e/tests/run_metadata.rs).
+
+### Chromium WebSocket diagnostics reference
+
+`npm run reference:websockets` runs [websocket-reference.mjs](websocket-reference.mjs)
+and writes [websocket-reference.json](websocket-reference.json) using pinned
+Playwright 1.63. Chromium observations verify two distinct socket objects at the
+same URL, Unicode text, binary bytes, native handshake errors, local timeouts,
+real closure and rejection of unmatched waits on close. The stock Firefox
+`moz-firefox` BiDi run connects two sockets but observes no `websocket` event;
+its bounded observation timeout is recorded as a transport capability finding.
+This is not a claim about Playwright's patched Firefox backend.
+
+Ferrite uses native CDP socket request IDs with capped data/history and explicit
+observation loss. Non-text CDP payloads retain base64 plus opcode; complete bytes
+are decoded by `payload_bytes`. Its new APIs return data snapshots rather than
+live Playwright socket objects. The [native suite](../../crates/ferrite-e2e/tests/websocket_diagnostics.rs)
+also checks cancellation, page/context/transport teardown, popup isolation and
+retry scopes; unit tests cover retained-byte/count limits, eviction and lag.

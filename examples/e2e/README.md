@@ -1115,3 +1115,42 @@ source-file aggregation and unlimited zero setting. Old report JSON remains
 readable. Legacy environment overrides are `FERRITE_E2E_RUN_NAME`,
 `FERRITE_E2E_METADATA` (JSON object or `null`) and `FERRITE_E2E_SLOW_TESTS`
 (JSON options or `null`); explicit builders take precedence.
+
+### Chromium socket observations
+
+Start and poll a creation wait before opening a socket. For example, inside an
+async test with `page` and an absolute `ws://` URL:
+
+```rust
+use ferrite_e2e::{OperationOptions, UrlMatcher, WebSocketDirection};
+
+let matcher = UrlMatcher::exact("ws://127.0.0.1:9000/socket");
+let (created, opened) = tokio::join!(
+    page.wait_for_websocket(&matcher, OperationOptions::default()),
+    page.evaluate_value("new Promise((resolve, reject) => { window.socket = new WebSocket('ws://127.0.0.1:9000/socket'); socket.onopen = () => resolve(true); socket.onerror = () => reject(new Error('socket failed')); })")
+);
+opened?;
+let created = created?;
+let (frame, sent) = tokio::join!(
+    page.wait_for_websocket_event(&created.socket_id, WebSocketDirection::Received, OperationOptions::default()),
+    page.evaluate_value("socket.send('hello')")
+);
+sent?;
+let frame = frame?;
+let bytes = frame.payload_bytes()?;
+```
+
+Creation reports the native identity before handshake success. Send only after
+the page's `open` event; the example awaits it before sending. `opcode == Some(1)` means UTF-8 text; non-text frames
+retain native base64, and `payload_bytes` rejects truncated/missing-opcode data.
+`websocket_diagnostics()` and `websocket_snapshot(id)` return owned data with
+bounded history and explicit dropped/truncated/lost flags. Socket IDs are scoped
+to one Page, so use the same Page for subsequent waits.
+
+Waits use the page timeout and `OperationOptions` cancellation; zero disables
+only the local timeout. Close/error, lag, disposal and disconnect settle pending
+waits. `is_closed()` returns `None` after observation loss and `Some(true)` only
+for native closure. Historical JSON gains serde-defaulted event fields;
+exhaustive `WebSocketEvent` literals must supply the new fields, and matches on
+`WebSocketDirection` must handle `Error`. Firefox returns an explicit unsupported
+error. Socket routing, injection and service-worker sockets remain deferred.

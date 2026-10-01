@@ -91,6 +91,7 @@ mod url_matcher;
 mod url_wait;
 mod video;
 mod webserver;
+mod websocket;
 
 pub use action_options::{ActionOptions, ActionPosition, DragOptions, KeyboardModifier};
 pub use api::{
@@ -174,3 +175,5 @@ pub use video::{find_ffmpeg, find_ffprobe, VideoFormat, VideoFrame, VideoMode, V
 pub use webserver::{wait_for_url, RunningWebServer, WebServer};
 
 pub use ferrite_config::{E2eConfig, E2eProjectConfig, ViewportConfig, WebServerConfig};
+
+pub use websocket::{WebSocketDiagnostics, WebSocketSnapshot, WebSocketState};

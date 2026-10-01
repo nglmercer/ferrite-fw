@@ -19,7 +19,7 @@ use crate::jshandle::JSHandle;
 use crate::page::{
     ColorScheme, ConsoleMessage, Cookie, DialogDecision, DialogHandler, DialogInfo, ElementRect,
     FrameInfo, LoadState, NetworkRequest, PageEvent, RecordedRequest, ReducedMotion, RouteAction,
-    RouteInfo, TraceEntry, WebSocketDirection, WebSocketEvent,
+    RouteInfo, TraceEntry, WebSocketDirection,
 };
 use crate::video::{assemble_webm, SpooledFrame, VideoFrame, VideoOptions};
 
@@ -86,7 +86,7 @@ pub struct ConsoleSink {
     pub(crate) network_log: Arc<Mutex<crate::network::NetworkLog>>,
     network_events: tokio::sync::broadcast::Sender<NetworkObservation>,
     /// WebSocket request id to URL (resolves frame events to sockets).
-    sockets: Arc<Mutex<HashMap<String, String>>>,
+    pub(crate) socket_log: Arc<Mutex<crate::websocket::SocketLog>>,
     /// Page event broadcast (console, dialogs, network, downloads, popups).
     events: tokio::sync::broadcast::Sender<PageEvent>,
     pub(crate) download_dir: Arc<Mutex<Option<PathBuf>>>,
@@ -120,7 +120,7 @@ impl ConsoleSink {
             network_activity: Arc::new(AtomicU64::new(0)),
             dialogs: Arc::new(Mutex::new(Vec::new())),
             requests: Arc::new(Mutex::new(VecDeque::new())),
-            sockets: Arc::new(Mutex::new(HashMap::new())),
+            socket_log: Arc::new(Mutex::new(crate::websocket::SocketLog::default())),
             active_requests: Arc::new(Mutex::new(HashMap::new())),
             idle_requests: Arc::new(Mutex::new(HashMap::new())),
             observed_network: Arc::new(Mutex::new(HashMap::new())),
@@ -290,6 +290,10 @@ impl ConsoleSink {
     }
 
     pub(crate) fn close_network(&self, reason: &str) {
+        self.socket_log
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .unavailable(reason);
         self.network_log
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -401,8 +405,14 @@ impl ConsoleSink {
 
     /// Emit a page event (dropped when nobody listens).
     pub(crate) fn emit(&self, event: PageEvent) {
-        if matches!(event, PageEvent::Closed) && self.native_closed.swap(true, Ordering::AcqRel) {
-            return;
+        if matches!(event, PageEvent::Closed) {
+            if self.native_closed.swap(true, Ordering::AcqRel) {
+                return;
+            }
+            self.socket_log
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .unavailable("page closed without observed socket closure");
         }
         if let PageEvent::Download(path) = &event {
             if let Ok(meta) = path.metadata() {
@@ -918,8 +928,19 @@ impl CdpDriver {
         tokio::spawn(async move {
             let _guard = NetworkListenerGuard(sink.clone());
             let mut downloads = HashMap::new();
-            while let Ok(event) = tokio::select! { biased; _ = lifecycle.cancelled() => Err(tokio::sync::broadcast::error::RecvError::Closed), _=transport.cancelled()=>Err(tokio::sync::broadcast::error::RecvError::Closed), event = events.recv() => event }
-            {
+            loop {
+                let received = tokio::select! { biased; _ = lifecycle.cancelled() => Err(tokio::sync::broadcast::error::RecvError::Closed), _=transport.cancelled()=>Err(tokio::sync::broadcast::error::RecvError::Closed), event = events.recv() => event };
+                let event = match received {
+                    Ok(event) => event,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => {
+                        sink.socket_log
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .unavailable(&format!("native event channel lagged by {count}"));
+                        break;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                };
                 if event.method == "Browser.downloadWillBegin"
                     && event.params["frameId"]
                         .as_str()
@@ -5689,23 +5710,16 @@ fn check_script_exception(method: &str, result: &Value, expression: &str) -> E2e
     Ok(())
 }
 
-/// Emit a CDP socket-frame event, resolving the URL from the sink map.
-fn emit_socket_frame(sink: &ConsoleSink, event: &CdpEvent, direction: WebSocketDirection) {
-    let id = event.params["requestId"].as_str().unwrap_or_default();
-    let url = sink
-        .sockets
+/// Bound and retain native socket observations before forwarding legacy events.
+fn emit_socket(sink: &ConsoleSink, event: &CdpEvent, direction: WebSocketDirection) {
+    let observation = sink
+        .socket_log
         .lock()
-        .map(|sockets| sockets.get(id).cloned().unwrap_or_default())
-        .unwrap_or_default();
-    let payload = event.params["response"]["payloadData"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-    sink.emit(PageEvent::WebSocket(WebSocketEvent {
-        url,
-        direction,
-        payload,
-    }));
+        .unwrap_or_else(|e| e.into_inner())
+        .observe(&event.params, direction);
+    if let Some(observation) = observation {
+        sink.emit(PageEvent::WebSocket(observation));
+    }
 }
 
 /// Retag a transport error with the script method that caused it.
@@ -6267,42 +6281,11 @@ fn handle_cdp_event(event: &CdpEvent, sink: &ConsoleSink) {
                 )),
             );
         }
-        "Network.webSocketCreated" => {
-            let id = event.params["requestId"].as_str().unwrap_or_default();
-            let url = event.params["url"].as_str().unwrap_or_default().to_string();
-            if !id.is_empty() {
-                sink.sockets
-                    .lock()
-                    .map(|mut sockets| {
-                        sockets.insert(id.to_string(), url.clone());
-                    })
-                    .ok();
-            }
-            sink.emit(PageEvent::WebSocket(WebSocketEvent {
-                url,
-                direction: WebSocketDirection::Created,
-                payload: String::new(),
-            }));
-        }
-        "Network.webSocketFrameSent" => {
-            emit_socket_frame(sink, event, WebSocketDirection::Sent);
-        }
-        "Network.webSocketFrameReceived" => {
-            emit_socket_frame(sink, event, WebSocketDirection::Received);
-        }
-        "Network.webSocketClosed" => {
-            let id = event.params["requestId"].as_str().unwrap_or_default();
-            let url = sink
-                .sockets
-                .lock()
-                .map(|mut sockets| sockets.remove(id).unwrap_or_default())
-                .unwrap_or_default();
-            sink.emit(PageEvent::WebSocket(WebSocketEvent {
-                url,
-                direction: WebSocketDirection::Closed,
-                payload: String::new(),
-            }));
-        }
+        "Network.webSocketCreated" => emit_socket(sink, event, WebSocketDirection::Created),
+        "Network.webSocketFrameSent" => emit_socket(sink, event, WebSocketDirection::Sent),
+        "Network.webSocketFrameReceived" => emit_socket(sink, event, WebSocketDirection::Received),
+        "Network.webSocketFrameError" => emit_socket(sink, event, WebSocketDirection::Error),
+        "Network.webSocketClosed" => emit_socket(sink, event, WebSocketDirection::Closed),
         _ => {}
     }
 }

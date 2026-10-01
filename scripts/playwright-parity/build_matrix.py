@@ -194,7 +194,15 @@ put('Selectors','setTestIdAttribute','set_test_id_attribute','Process-global att
 for m,n in {'close':'Closed','console':'Console','dialog':'Dialog','download':'Download','popup':'Popup','request':'Request','response':'Response','webSocket':'WebSocket'}.items():
  put('Page',m,'Page.subscribe','PageEvent.'+n+' via broadcast receiver; smaller payload and lifecycle; socket events are Chromium-only.',kind='event')
 for m,n in {'close':'Closed','frameReceived':'Received','frameSent':'Sent'}.items():put('WebSocket',m,'Page.subscribe','PageEvent::WebSocket direction '+n+'; Chromium-only observation without a WebSocket object.',kind='event')
-put('WebSocket','url','WebSocketEvent.url','Captured socket URL, Chromium only.')
+socket_note='Chromium native socket_id scoped to Page, bounded history/payloads and explicit loss/truncation. Stock Firefox BiDi unsupported; no live socket/worker/route owner.'
+for m,direction in {'close':'Closed','frameReceived':'Received','frameSent':'Sent','socketError':'Error'}.items():
+ put('WebSocket',m,'Page.wait_for_websocket_event',socket_note+' Scoped future '+direction+' waits settle on native error/close, lag, disposal/disconnect and cancellation; historical retained native close may satisfy Closed.',kind='event')
+put('WebSocket','isClosed','WebSocketSnapshot.is_closed',socket_note+' Some(true) requires native closure; lost observation returns None rather than inventing successful closure.')
+put('WebSocket','url','WebSocketSnapshot.url',socket_note+' URL capped at 4 KiB with url_truncated; observing creation does not imply successful handshake.')
+put('WebSocket','waitForEvent','Page.wait_for_websocket_event',socket_note+' Typed direction and native ID with shared operation options; no JS predicate/EventEmitter overloads.')
+put('Page','webSocket','Page.wait_for_websocket',socket_note+' Full URL matcher for future creation; no relative URL resolution or successful-handshake promise.',kind='event')
+put('WebSocketFrame','binary','WebSocketEvent.payload_bytes',socket_note+' Native opcode retained; complete CDP non-text base64 decoded only when untruncated. Text also has UTF-8 byte convenience; callers inspect opcode.')
+put('WebSocketFrame','text','WebSocketEvent.payload',socket_note+' Text is UTF-8 only for opcode 1; binary/control frames retain native base64. Check opcode and payload_truncated before consumption.')
 # Runner and configuration.
 for m,t in {'afterAll':'after_all','afterEach':'after_each','beforeAll':'before_all','beforeEach':'before_each'}.items():put('Test',m,'Suite.'+t,'Nested suite hooks; beforeAll/afterAll once per worker/project, beforeEach/afterEach per attempt. Tokio worker state rather than process restarts; explicit typed ContextHook/WorkerHook requests with scope validation; no callback parameter inference.')
 put('Test','(call)','test','Rust test closure; dynamic details/locks/options differ.')

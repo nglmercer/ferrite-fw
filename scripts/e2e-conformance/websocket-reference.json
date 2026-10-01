@@ -1,0 +1,27 @@
+{
+  "playwright": "1.63.0",
+  "engines": [
+    {
+      "engine": "chromium",
+      "sameUrlDistinctSockets": true,
+      "text": "雪<&",
+      "binary": [
+        0,
+        255,
+        240,
+        128,
+        1
+      ],
+      "closed": true,
+      "unmatchedWait": "closed",
+      "nativeError": "Error during WebSocket handshake: Unexpected response code: 400"
+    },
+    {
+      "engine": "firefox",
+      "transport": "stock Firefox BiDi",
+      "websocketObservation": "unsupported",
+      "connectedSockets": 2,
+      "error": "page.waitForEvent: Timeout 3000ms exceeded while waiting for event \"websocket\"\n=========================== logs ===========================\nwaiting for event \"websocket\"\n============================================================"
+    }
+  ]
+}
