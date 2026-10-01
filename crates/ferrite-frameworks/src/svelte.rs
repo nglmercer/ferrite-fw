@@ -1,14 +1,10 @@
-//! Svelte experiment (`ferrite:svelte`, §70 roadmap).
-//!
-//! Mirrors the Vue plugin: splits `.svelte` files into `?svelte` virtual
-//! modules (instance script through the core transform, markup render
-//! stub, style through CSS). The render stub returns the markup string;
-//! real compilation is roadmap.
+//! Svelte adapter: official compilation currently unavailable.
+//! Legacy block utilities are retained for API compatibility, not compilation.
 
-use ferrite_core::{ModuleType, Result};
+use ferrite_core::Result;
 use ferrite_plugin::{LoadRequest, LoadResult, Plugin, PluginContext, ResolveHookRequest};
 
-use crate::vue::{block_lang, SfcBlock};
+use crate::vue::SfcBlock;
 
 /// Split a `.svelte` file: script/style blocks plus the remaining markup.
 /// Unlike [`split_sfc`](crate::vue::split_sfc), markup tags are free-form.
@@ -102,18 +98,6 @@ pub fn main_module_code(
     code
 }
 
-/// Experimental markup stub: render returns the markup string.
-#[must_use]
-pub fn markup_stub(markup: &str) -> String {
-    format!(
-        "// Experimental Svelte markup stub: real compilation is roadmap.\n\
-         export function render() {{\n\
-         return {};\n\
-         }}\n",
-        serde_json::to_string(markup).unwrap_or_else(|_| "\"\"".to_string())
-    )
-}
-
 /// Extract the markup: source minus its script/style blocks.
 #[must_use]
 pub fn extract_markup(source: &str) -> String {
@@ -124,25 +108,13 @@ pub fn extract_markup(source: &str) -> String {
 
 /// Svelte plugin (`ferrite:svelte`).
 #[derive(Debug)]
-pub struct SveltePlugin {
-    /// Project root for file reads.
-    root: std::path::PathBuf,
-}
+pub struct SveltePlugin;
 
 impl SveltePlugin {
-    /// Create the plugin for `root`.
+    /// Create the plugin. Compilation remains unavailable until a validated host exists.
     #[must_use]
-    pub fn new(root: std::path::PathBuf) -> Self {
-        Self { root }
-    }
-
-    /// Read the file behind `id` (strips any `?svelte` query).
-    fn read_file(&self, id: &str) -> Result<String> {
-        let path = id.split('?').next().unwrap_or(id);
-        let fs_path = self.root.join(path.trim_start_matches('/'));
-        std::fs::read_to_string(&fs_path).map_err(|error| {
-            ferrite_core::FerriteError::Build(format!("cannot read {id}: {error}"))
-        })
+    pub fn new(_root: std::path::PathBuf) -> Self {
+        Self
     }
 }
 
@@ -157,86 +129,25 @@ impl Plugin for SveltePlugin {
         _ctx: &PluginContext,
         request: ResolveHookRequest<'_>,
     ) -> Result<Option<ferrite_resolver::ResolvedId>> {
-        if request.specifier.contains(".svelte") {
+        if crate::registry::owns_component("svelte", request.specifier) {
             let id = if request.specifier.starts_with('.') {
                 let importer = request.importer.map(|id| id.0.as_str()).unwrap_or("/");
                 crate::join_relative(importer, request.specifier)
             } else {
                 request.specifier.to_string()
             };
-            return Ok(Some(ferrite_resolver::ResolvedId::new(id)));
+            let mut resolved = ferrite_resolver::ResolvedId::new(id);
+            resolved.module_type = Some(ferrite_core::ModuleType::Custom("svelte".into()));
+            return Ok(Some(resolved));
         }
         Ok(None)
     }
 
     async fn load(&self, _ctx: &PluginContext, request: LoadRequest) -> Result<Option<LoadResult>> {
-        let (path, query) = match request.id.split_once('?') {
-            Some((path, query)) => (path, Some(query)),
-            None => (request.id.as_str(), None),
-        };
-        if !path.ends_with(".svelte") {
+        if !crate::registry::owns_component("svelte", &request.id) {
             return Ok(None);
         }
-        let source = self.read_file(&request.id)?;
-        let query = query.unwrap_or("");
-        if query.contains("type=script") {
-            // Instance script: first <script> block without `context`.
-            let (blocks, _) = split_svelte(&source)?;
-            let script = blocks
-                .iter()
-                .find(|block| block.kind == "script" && !block.attrs.contains("context"))
-                .map(|block| (block.content.clone(), block_lang(&block.attrs, "js")))
-                .unwrap_or_else(|| ("export default {};\n".to_string(), "js".to_string()));
-            let module_type = match script.1.as_str() {
-                "ts" => ModuleType::Ts,
-                _ => ModuleType::Js,
-            };
-            return Ok(Some(LoadResult {
-                code: script.0,
-                module_type,
-                dependencies: vec![path.to_string()],
-            }));
-        }
-        if query.contains("type=markup") {
-            return Ok(Some(LoadResult {
-                code: markup_stub(&extract_markup(&source)),
-                module_type: ModuleType::Js,
-                dependencies: vec![path.to_string()],
-            }));
-        }
-        if query.contains("type=style") {
-            let (blocks, _) = split_svelte(&source)?;
-            let styles: Vec<&crate::vue::SfcBlock> = blocks
-                .iter()
-                .filter(|block| block.kind == "style")
-                .collect();
-            let index: usize = query
-                .split('&')
-                .find_map(|part| part.strip_prefix("index=").and_then(|n| n.parse().ok()))
-                .unwrap_or(0);
-            let style = styles
-                .get(index)
-                .map(|block| block.content.clone())
-                .unwrap_or_default();
-            return Ok(Some(LoadResult {
-                code: style,
-                module_type: ModuleType::Css,
-                dependencies: vec![path.to_string()],
-            }));
-        }
-        let (blocks, _) = split_svelte(&source)?;
-        let style_count = blocks.iter().filter(|block| block.kind == "style").count();
-        let script_lang = blocks
-            .iter()
-            .find(|block| block.kind == "script")
-            .map(|block| block_lang(&block.attrs, "js"))
-            .unwrap_or_else(|| "js".to_string());
-        let has_markup = !extract_markup(&source).is_empty();
-        Ok(Some(LoadResult {
-            code: main_module_code(path, has_markup, style_count, &script_lang),
-            module_type: ModuleType::Js,
-            dependencies: vec![path.to_string()],
-        }))
+        Err(crate::registry::compiler_unavailable("svelte", &request.id))
     }
 }
 

@@ -1,12 +1,7 @@
-//! Vue SFC experiment (`ferrite:vue`, §70 roadmap).
-//!
-//! Splits `.vue` files into virtual modules: `?vue&type=script` (through
-//! the core transform), `?vue&type=template` (experimental render stub —
-//! returns the markup string; real template compilation is roadmap), and
-//! `?vue&type=style&index=N` (through the CSS pipeline). The main module
-//! wires them together with HMR acceptance.
+//! Vue adapter: official compilation currently unavailable.
+//! Legacy block utilities are retained for API compatibility, not compilation.
 
-use ferrite_core::{ModuleType, Result};
+use ferrite_core::Result;
 use ferrite_plugin::{LoadRequest, LoadResult, Plugin, PluginContext, ResolveHookRequest};
 
 /// One SFC block.
@@ -149,39 +144,15 @@ pub fn main_module_code(
     code
 }
 
-/// Experimental template stub: render returns the markup string.
-#[must_use]
-pub fn template_stub(template: &str) -> String {
-    format!(
-        "// Experimental Vue template stub: real compilation is roadmap.\n\
-         export function render() {{\n\
-         return {};\n\
-         }}\n",
-        serde_json::to_string(template).unwrap_or_else(|_| "\"\"".to_string())
-    )
-}
-
 /// Vue SFC plugin (`ferrite:vue`).
 #[derive(Debug)]
-pub struct VuePlugin {
-    /// Project root for SFC reads.
-    root: std::path::PathBuf,
-}
+pub struct VuePlugin;
 
 impl VuePlugin {
-    /// Create the plugin for `root`.
+    /// Create the plugin. Compilation remains unavailable until a validated host exists.
     #[must_use]
-    pub fn new(root: std::path::PathBuf) -> Self {
-        Self { root }
-    }
-
-    /// Read the SFC file behind `id` (strips any `?vue` query).
-    fn read_sfc(&self, id: &str) -> Result<String> {
-        let path = id.split('?').next().unwrap_or(id);
-        let fs_path = self.root.join(path.trim_start_matches('/'));
-        std::fs::read_to_string(&fs_path).map_err(|error| {
-            ferrite_core::FerriteError::Build(format!("cannot read {id}: {error}"))
-        })
+    pub fn new(_root: std::path::PathBuf) -> Self {
+        Self
     }
 }
 
@@ -198,91 +169,25 @@ impl Plugin for VuePlugin {
     ) -> Result<Option<ferrite_resolver::ResolvedId>> {
         // Claim `.vue` ids (plain + `?vue` virtuals), resolving
         // importer-relative specs lexically (plugin hooks run first).
-        if request.specifier.contains(".vue") {
+        if crate::registry::owns_component("vue", request.specifier) {
             let id = if request.specifier.starts_with('.') {
                 let importer = request.importer.map(|id| id.0.as_str()).unwrap_or("/");
                 crate::join_relative(importer, request.specifier)
             } else {
                 request.specifier.to_string()
             };
-            return Ok(Some(ferrite_resolver::ResolvedId::new(id)));
+            let mut resolved = ferrite_resolver::ResolvedId::new(id);
+            resolved.module_type = Some(ferrite_core::ModuleType::Custom("vue".into()));
+            return Ok(Some(resolved));
         }
         Ok(None)
     }
 
     async fn load(&self, _ctx: &PluginContext, request: LoadRequest) -> Result<Option<LoadResult>> {
-        let (path, query) = match request.id.split_once('?') {
-            Some((path, query)) => (path, Some(query)),
-            None => (request.id.as_str(), None),
-        };
-        if !path.ends_with(".vue") {
+        if !crate::registry::owns_component("vue", &request.id) {
             return Ok(None);
         }
-        let source = self.read_sfc(&request.id)?;
-        let blocks = split_sfc(&source)?;
-        let query = query.unwrap_or("");
-        if query.contains("type=script") {
-            let script = blocks
-                .iter()
-                .find(|block| block.kind == "script")
-                .map(|block| (block.content.clone(), block_lang(&block.attrs, "js")))
-                .unwrap_or_else(|| ("export default {};\n".to_string(), "js".to_string()));
-            let module_type = match script.1.as_str() {
-                "ts" => ModuleType::Ts,
-                "tsx" => ModuleType::Tsx,
-                "jsx" => ModuleType::Jsx,
-                _ => ModuleType::Js,
-            };
-            return Ok(Some(LoadResult {
-                code: script.0,
-                module_type,
-                dependencies: vec![path.to_string()],
-            }));
-        }
-        if query.contains("type=template") {
-            let template = blocks
-                .iter()
-                .find(|block| block.kind == "template")
-                .map(|block| block.content.clone())
-                .unwrap_or_default();
-            return Ok(Some(LoadResult {
-                code: template_stub(&template),
-                module_type: ModuleType::Js,
-                dependencies: vec![path.to_string()],
-            }));
-        }
-        if query.contains("type=style") {
-            let styles: Vec<&SfcBlock> = blocks
-                .iter()
-                .filter(|block| block.kind == "style")
-                .collect();
-            let index: usize = query
-                .split('&')
-                .find_map(|part| part.strip_prefix("index=").and_then(|n| n.parse().ok()))
-                .unwrap_or(0);
-            let style = styles
-                .get(index)
-                .map(|block| block.content.clone())
-                .unwrap_or_default();
-            return Ok(Some(LoadResult {
-                code: style,
-                module_type: ModuleType::Css,
-                dependencies: vec![path.to_string()],
-            }));
-        }
-        // Main module.
-        let has_template = blocks.iter().any(|block| block.kind == "template");
-        let style_count = blocks.iter().filter(|block| block.kind == "style").count();
-        let script_lang = blocks
-            .iter()
-            .find(|block| block.kind == "script")
-            .map(|block| block_lang(&block.attrs, "js"))
-            .unwrap_or_else(|| "js".to_string());
-        Ok(Some(LoadResult {
-            code: main_module_code(path, has_template, style_count, &script_lang),
-            module_type: ModuleType::Js,
-            dependencies: vec![path.to_string()],
-        }))
+        Err(crate::registry::compiler_unavailable("vue", &request.id))
     }
 }
 
@@ -323,13 +228,6 @@ mod tests {
         assert!(code.contains("?vue&type=style&index=0"), "{code}");
         assert!(code.contains("__script.render = __render"), "{code}");
         assert!(code.contains("import.meta.hot.accept()"), "{code}");
-    }
-
-    #[test]
-    fn template_stub_returns_markup() {
-        let stub = template_stub("<button>x</button>");
-        assert!(stub.contains("export function render"), "{stub}");
-        assert!(stub.contains("<button>x</button>"), "{stub}");
     }
 
     #[test]

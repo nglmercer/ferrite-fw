@@ -37,33 +37,19 @@ pub(crate) async fn dev(
     let resolved = server.inner().config.clone();
     let mut ssr_mode = String::from("client only");
     if ssr {
-        // SSR adapter: napi-vm entry-server when that backend is selected,
-        // else the index.html shell with preload injection.
-        let shell = std::fs::read_to_string(root.join("index.html")).unwrap_or_else(|_| {
-            "<!doctype html><html><head></head><body><!--ssr-outlet--></body></html>".to_string()
-        });
-        if resolved.runtime.backend == "napi-vm" {
-            // Resolved root is absolute; embedded runtimes cannot `import`
-            // relative module ids.
-            match js_ssr_adapter(&server, &resolved, &resolved.root, &shell) {
-                Ok(adapter) => {
-                    server.set_ssr_adapter(adapter).await;
-                    ssr_mode = String::from("enabled (napi-vm entry-server)");
-                }
-                Err(note) => {
-                    println!("note: {note}; using static shell");
-                    server
-                        .set_ssr_adapter(Arc::new(ferrite::ssr::StaticShellAdapter { shell }))
-                        .await;
-                    ssr_mode = String::from("enabled (static shell)");
-                }
-            }
-        } else {
-            server
-                .set_ssr_adapter(Arc::new(ferrite::ssr::StaticShellAdapter { shell }))
-                .await;
-            ssr_mode = String::from("enabled (static shell)");
+        if resolved.runtime.backend != "napi-vm" {
+            return Err(ferrite::FerriteError::Other(format!(
+                "SSR requires a renderer-capable runtime; selected backend `{}` cannot execute entry-server. Select --runtime napi-vm with the napi-vm feature, or omit --ssr for client serving",
+                resolved.runtime.backend
+            )));
         }
+        let shell = std::fs::read_to_string(root.join("index.html"))?;
+        let adapter =
+            js_ssr_adapter(&server, &resolved, &resolved.root, &shell).map_err(|note| {
+                ferrite::FerriteError::Other(format!("SSR initialization failed: {note}"))
+            })?;
+        server.set_ssr_adapter(adapter).await;
+        ssr_mode = String::from("enabled (napi-vm entry-server)");
     }
     println!();
     println!("  FERRITE v{}", ferrite::VERSION);

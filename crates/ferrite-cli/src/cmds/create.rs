@@ -4,6 +4,7 @@ use crate::cli::*;
 use std::path::PathBuf;
 
 pub(crate) async fn create(args: CreateArgs) -> ferrite::Result<()> {
+    validate_template(&args.template)?;
     let dir = PathBuf::from(&args.name);
     if dir.exists() {
         return Err(ferrite::FerriteError::Other(format!(
@@ -11,16 +12,7 @@ pub(crate) async fn create(args: CreateArgs) -> ferrite::Result<()> {
             dir.display()
         )));
     }
-    let (main_ts, extra) = match args.template.as_str() {
-        "ssr" => (
-            "export function render(url: string): string {\n  return `<h1>hello from ${url}</h1>`;\n}\n",
-            Some(("src/entry-server.ts", "export { render } from \"./main\";\n")),
-        ),
-        _ => (
-            "import \"./style.css\";\n\ndocument.querySelector(\"#app\")!.innerHTML = `<h1>hello ferrite</h1>`;\n",
-            None,
-        ),
-    };
+    let main_ts = "import \"./style.css\";\n\ndocument.querySelector(\"#app\")!.innerHTML = `<h1>hello ferrite</h1>`;\n";
     std::fs::create_dir_all(dir.join("src"))?;
     std::fs::create_dir_all(dir.join("public"))?;
     std::fs::write(dir.join("ferrite.toml"), "[server]\nport = 5173\n")?;
@@ -33,11 +25,33 @@ pub(crate) async fn create(args: CreateArgs) -> ferrite::Result<()> {
         dir.join("src/style.css"),
         "body { font-family: system-ui; }\n",
     )?;
-    if let Some((path, contents)) = extra {
-        std::fs::write(dir.join(path), contents)?;
-    }
     println!("created {} (template: {})", dir.display(), args.template);
     println!("  cd {}", dir.display());
     println!("  ferrite dev");
     Ok(())
+}
+
+fn validate_template(template: &str) -> ferrite::Result<()> {
+    match template {
+        "vanilla" => Ok(()),
+        "ssr" => Err(ferrite::FerriteError::Other(
+            "the legacy ssr template has no validated renderer/hydration profile; use vanilla for a client application".into(),
+        )),
+        _ => Err(ferrite::FerriteError::Other(format!(
+            "unknown template `{template}`; available template: vanilla"
+        ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn templates_fail_closed() {
+        assert!(validate_template("vanilla").is_ok());
+        for template in ["vue", "svelte", "ssr", "vanila", ""] {
+            assert!(validate_template(template).is_err(), "{template}");
+        }
+    }
 }

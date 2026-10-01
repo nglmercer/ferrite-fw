@@ -1,14 +1,9 @@
-//! Framework plugins: React Refresh (§69) plus Vue/Svelte SFC experiments.
-//!
-//! [`ReactPlugin`] appends a Refresh registration footer to JSX modules in
-//! dev (component detection is export-based: capitalized named exports and
-//! named default exports; anonymous default components are a documented
-//! gap). [`VuePlugin`] and [`SveltePlugin`] split single-file components
-//! into script/template/style virtual modules; template compilation is an
-//! experimental stub (render returns the markup string) — the split,
-//! pipeline integration, and HMR wiring are the real deliverable.
+//! Framework adapters and evidence-based capability registry.
+//! Vue/Svelte fail explicitly until official compiler hosts are validated.
+//! React Refresh remains experimental.
 
 pub mod react;
+pub mod registry;
 pub mod svelte;
 pub mod vue;
 
