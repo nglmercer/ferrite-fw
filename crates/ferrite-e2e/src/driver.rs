@@ -79,6 +79,13 @@ impl Drop for NetworkListenerGuard {
     }
 }
 
+struct MainWorldListenerGuard(Arc<Mutex<HashMap<String, i64>>>);
+impl Drop for MainWorldListenerGuard {
+    fn drop(&mut self) {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
+}
+
 /// Live request-start/response-header observation, separate from HAR/body capture.
 #[derive(Clone)]
 pub(crate) struct NetworkObservation {
@@ -1104,8 +1111,11 @@ impl CdpDriver {
         let worlds = self.main_worlds.clone();
         let lifecycle = self.lifecycle.clone();
         let transport = self.cdp.disconnection();
+        let world_guard = MainWorldListenerGuard(worlds.clone());
+        let listener_guard = NetworkListenerGuard(sink.clone());
         tokio::spawn(async move {
-            let _guard = NetworkListenerGuard(sink.clone());
+            let _world_guard = world_guard;
+            let _guard = listener_guard;
             let mut downloads = HashMap::new();
             loop {
                 let received = tokio::select! { biased; _ = lifecycle.cancelled() => Err(tokio::sync::broadcast::error::RecvError::Closed), _=transport.cancelled()=>Err(tokio::sync::broadcast::error::RecvError::Closed), event = events.recv() => event };
@@ -1246,8 +1256,9 @@ impl BidiDriver {
         let sink = self.sink.clone();
         let lifecycle = self.lifecycle.clone();
         let transport = self.bidi.disconnection();
+        let listener_guard = NetworkListenerGuard(sink.clone());
         tokio::spawn(async move {
-            let _guard = NetworkListenerGuard(sink.clone());
+            let _guard = listener_guard;
             let mut downloads = HashMap::new();
             while let Ok(event) = tokio::select! {biased; _=lifecycle.cancelled()=>Err(tokio::sync::broadcast::error::RecvError::Closed), _=transport.cancelled()=>Err(tokio::sync::broadcast::error::RecvError::Closed), event=events.recv()=>event}
             {
@@ -1635,12 +1646,32 @@ impl Driver {
         .await
     }
 
+    // Only main-world cache consumers depend on the console/network listener.
+    // Isolated-world frame evaluation and BiDi's direct context evaluation do not.
+    pub(crate) fn observe_main_world<'a, T: 'a>(
+        &'a self,
+        future: impl std::future::Future<Output = E2eResult<T>> + 'a,
+    ) -> impl std::future::Future<Output = E2eResult<T>> + 'a {
+        self.run(async {
+            match self {
+                Self::Cdp(driver) => {
+                    let source = driver.sink.native_observation_loss();
+                    tokio::select! { biased;
+                        reason = source.cancelled() => Err(E2eError::Config(format!("frame main-world observation source unavailable: {reason}"))),
+                        result = future => result,
+                    }
+                }
+                Self::Bidi(_) => future.await,
+            }
+        })
+    }
+
     pub(crate) async fn frame_main_world_evaluate(
         &self,
         frame_id: &str,
         expression: &str,
     ) -> E2eResult<Value> {
-        self.run(async {
+        self.observe_main_world(async {
             match self {
                 Self::Cdp(driver) => {
                     let id = driver
@@ -6485,6 +6516,75 @@ mod initialization_tests {
     use futures::{SinkExt, StreamExt};
     use serde_json::json;
 
+    #[tokio::test]
+    async fn lost_main_world_source_interrupts_cached_rpc_but_not_direct_evaluation() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (observed, mut requests) = tokio::sync::mpsc::unbounded_channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            while let Some(Ok(message)) = socket.next().await {
+                let tokio_tungstenite::tungstenite::Message::Text(text) = message else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                if request["method"] == "Runtime.evaluate" && request["params"]["contextId"] == 42 {
+                    observed.send(()).unwrap();
+                    continue;
+                }
+                let result = if request["method"] == "Page.getFrameTree" {
+                    json!({"frameTree":{"frame":{"id":"root","url":"about:blank","loaderId":"document"}}})
+                } else if request["method"] == "Runtime.evaluate" {
+                    json!({"result":{"type":"number","value":7}})
+                } else {
+                    json!({})
+                };
+                socket
+                    .send(tokio_tungstenite::tungstenite::Message::Text(
+                        json!({"id":request["id"],"result":result})
+                            .to_string()
+                            .into(),
+                    ))
+                    .await
+                    .unwrap();
+            }
+        });
+        let connection = CdpConnection::connect(&format!("ws://{address}"))
+            .await
+            .unwrap();
+        let sink = ConsoleSink::new();
+        let native = CdpDriver::spawn(
+            connection,
+            "session".into(),
+            "page".into(),
+            Duration::ZERO,
+            sink.clone(),
+            None,
+        )
+        .await
+        .unwrap();
+        native.main_worlds.lock().unwrap().insert("root".into(), 42);
+        let driver = Driver::Cdp(native);
+        let query = driver.frame_main_world_evaluate("root", "7");
+        let loss = async {
+            requests.recv().await.unwrap();
+            sink.mark_native_observation_lost("test listener exit");
+        };
+        let (result, ()) =
+            tokio::time::timeout(Duration::from_secs(2), async { tokio::join!(query, loss) })
+                .await
+                .unwrap();
+        assert!(
+            matches!(result, Err(E2eError::Config(message)) if message.contains("main-world observation source unavailable"))
+        );
+        assert!(
+            matches!(driver.frame_main_world_evaluate("root", "7").await, Err(E2eError::Config(message)) if message.contains("main-world observation source unavailable"))
+        );
+        assert_eq!(driver.evaluate("7").await.unwrap(), json!(7));
+        server.abort();
+    }
+
     async fn interrupted_fetch_startup(auth: bool, reject: bool) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -7146,6 +7246,23 @@ mod network_lifecycle_tests {
 #[cfg(test)]
 mod diagnostic_observation_tests {
     use super::*;
+    #[test]
+    fn unpolled_listener_drop_clears_worlds_and_marks_source_loss() {
+        let worlds = Arc::new(Mutex::new(HashMap::from([("root".into(), 42)])));
+        let sink = ConsoleSink::new();
+        let source = sink.native_observation_loss();
+        let world_guard = MainWorldListenerGuard(worlds.clone());
+        let listener_guard = NetworkListenerGuard(sink);
+        let listener = async move {
+            let _world_guard = world_guard;
+            let _listener_guard = listener_guard;
+            std::future::pending::<()>().await;
+        };
+        drop(listener);
+        assert!(worlds.lock().unwrap().is_empty());
+        assert!(source.is_cancelled());
+    }
+
     #[test]
     fn native_listener_guard_marks_observation_source_terminal() {
         let sink = ConsoleSink::new();

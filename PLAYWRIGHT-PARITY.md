@@ -3031,3 +3031,23 @@ doctests. Strict Clippy and formatting passed. This is not the complete 51-targe
 replay. Frame execution-world cache dependencies, newly created descendant
 observation races, cleanup acknowledgement faults, redirect correlation and the
 final complete requirement audit remain G04 work.
+
+## G04 audit progress — Main-world cache source loss
+
+Chromium binding-source resolution uses execution-context IDs maintained by the
+native listener. That cache is cleared when the listener exits, including when
+its task is dropped before its first poll. Cache-dependent evaluation and the
+whole binding-source scan observe listener loss, so a stalled nonce lookup with
+disabled timeouts settles with an explicit source-unavailable error. Outer driver
+lifecycle and transport checks retain their control-error priority.
+
+Ordinary frame evaluation uses a fresh isolated world, and BiDi evaluates its
+context directly; those operations do not depend on this cache. Two regression
+units verify unpolled-task cleanup and interrupting an unanswered cached-world
+RPC while direct evaluation still succeeds on the same connection.
+
+Scoped verification passed 301 checks: 292 units, five mandatory two-engine
+native groups across `callback_lifecycle` and `frame_lookup`, and four doctests.
+Strict Clippy, formatting and all 865 local documentation links passed. G04
+remains open pending the remaining lifecycle audits and complete 51-target
+integration replay.

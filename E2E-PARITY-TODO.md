@@ -632,6 +632,13 @@ Work in [the audit generator](scripts/playwright-parity/build_matrix.py),
   checks), strict Clippy/formatting. Frame execution-world cache dependencies,
   descendant observation races, cleanup ACK faults, redirect correlation and
   complete replay/audit remain open.
+  Further progress: Chromium binding-source scans and cached main-world RPCs
+  settle explicitly on listener loss; unpolled listener disposal clears the
+  cache. Direct frame/page evaluation retains its independent native path.
+  [Evidence](PLAYWRIGHT-PARITY.md#g04-audit-progress--main-world-cache-source-loss):
+  292 units, five mandatory two-engine native groups and four doctests (301 scoped
+  checks), strict Clippy/formatting. Descendant observation races, cleanup ACK
+  faults, redirect correlation and the complete replay/audit remain open.
 
 
 

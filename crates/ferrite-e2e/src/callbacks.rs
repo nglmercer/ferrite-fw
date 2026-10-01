@@ -395,26 +395,33 @@ impl Page {
         *pump = Some(tokio::spawn(callback_pump(page)).abort_handle());
     }
     async fn binding_source(&self, nonce: &str) -> E2eResult<BindingSource> {
-        let context = self
-            .context()
-            .ok_or_else(|| E2eError::Config("binding context no longer available".into()))?;
-        for frame in self.document_frames().await? {
-            let actual: E2eResult<Option<String>> = self
-                .driver
-                .frame_main_world_evaluate(frame.id(), "window.__ferriteExpose?.nonce || null")
-                .await
-                .and_then(|v| serde_json::from_value(v).map_err(E2eError::Json));
-            if actual.ok().flatten().as_deref() == Some(nonce) {
-                return Ok(BindingSource {
-                    context,
-                    page: self.owning_page(),
-                    frame,
-                });
-            }
-        }
-        Err(E2eError::Config(
-            "binding frame detached or outside same-origin scope".into(),
-        ))
+        self.driver
+            .observe_main_world(async {
+                let context = self.context().ok_or_else(|| {
+                    E2eError::Config("binding context no longer available".into())
+                })?;
+                for frame in self.document_frames().await? {
+                    let actual: E2eResult<Option<String>> = self
+                        .driver
+                        .frame_main_world_evaluate(
+                            frame.id(),
+                            "window.__ferriteExpose?.nonce || null",
+                        )
+                        .await
+                        .and_then(|v| serde_json::from_value(v).map_err(E2eError::Json));
+                    if actual.ok().flatten().as_deref() == Some(nonce) {
+                        return Ok(BindingSource {
+                            context,
+                            page: self.owning_page(),
+                            frame,
+                        });
+                    }
+                }
+                Err(E2eError::Config(
+                    "binding frame detached or outside same-origin scope".into(),
+                ))
+            })
+            .await
     }
 }
 type NativeCall = (String, u64, String, u64, Vec<Value>);
