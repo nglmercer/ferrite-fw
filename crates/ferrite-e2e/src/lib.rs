@@ -67,6 +67,7 @@ mod network;
 mod operation;
 mod page;
 mod popup_capture;
+mod process_output;
 mod report;
 mod resolved_config;
 mod route_options;

@@ -157,19 +157,19 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 635; 
 |---|---|---|---|---|
 | `Browser.context` | event | Missing | — | No matching public event variant/emitter; Page.subscribe exposes only the documented PageEvent variants. |
 | `Browser.disconnected` | event | Missing | — | No matching public event variant/emitter; Page.subscribe exposes only the documented PageEvent variants. |
-| `Browser.browserType` | method | Partial | `Browser.kind` ([source](crates/ferrite-e2e/src/browser.rs#L824)) | Similar lifecycle/introspection; option sets and connection/context ownership differ. |
-| `Browser.close` | method | Partial | `Browser.close` ([source](crates/ferrite-e2e/src/browser.rs#L1355)) | Similar lifecycle/introspection; option sets and connection/context ownership differ. |
-| `Browser.contexts` | method | Partial | `Browser.contexts` ([source](crates/ferrite-e2e/src/browser.rs#L1319)) | Similar lifecycle/introspection; option sets and connection/context ownership differ. |
-| `Browser.isConnected` | method | Partial | `Browser.is_connected` ([source](crates/ferrite-e2e/src/browser.rs#L1171)) | Shared owner shutdown and actual transport reader/writer state. Clones share one process/profile/context registry; closing any handle shuts down all. Remote attachment closes Ferrite without killing the source process. |
-| `Browser.newBrowserCDPSession` | method | Partial | `Browser.cdp` ([source](crates/ferrite-e2e/src/browser.rs#L1148)) | Raw shared browser CDP connection; no independently detachable CDPSession. |
-| `Browser.newContext` | method | Partial | `Browser.new_context` ([source](crates/ferrite-e2e/src/browser.rs#L1191)) | Similar lifecycle/introspection; option sets and connection/context ownership differ. |
-| `Browser.newPage` | method | Partial | `Browser.new_page` ([source](crates/ferrite-e2e/src/browser.rs#L1338)) | Fresh owning context; closing the page disposes it, including its popups. |
+| `Browser.browserType` | method | Partial | `Browser.kind` ([source](crates/ferrite-e2e/src/browser.rs#L838)) | Similar lifecycle/introspection; option sets and connection/context ownership differ. |
+| `Browser.close` | method | Partial | `Browser.close` ([source](crates/ferrite-e2e/src/browser.rs#L1369)) | Similar lifecycle/introspection; option sets and connection/context ownership differ. |
+| `Browser.contexts` | method | Partial | `Browser.contexts` ([source](crates/ferrite-e2e/src/browser.rs#L1333)) | Similar lifecycle/introspection; option sets and connection/context ownership differ. |
+| `Browser.isConnected` | method | Partial | `Browser.is_connected` ([source](crates/ferrite-e2e/src/browser.rs#L1185)) | Shared owner shutdown and actual transport reader/writer state. Clones share one process/profile/context registry; closing any handle shuts down all. Remote attachment closes Ferrite without killing the source process. |
+| `Browser.newBrowserCDPSession` | method | Partial | `Browser.cdp` ([source](crates/ferrite-e2e/src/browser.rs#L1162)) | Raw shared browser CDP connection; no independently detachable CDPSession. |
+| `Browser.newContext` | method | Partial | `Browser.new_context` ([source](crates/ferrite-e2e/src/browser.rs#L1205)) | Similar lifecycle/introspection; option sets and connection/context ownership differ. |
+| `Browser.newPage` | method | Partial | `Browser.new_page` ([source](crates/ferrite-e2e/src/browser.rs#L1352)) | Fresh owning context; closing the page disposes it, including its popups. |
 | `Browser.bind` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Browser.removeAllListeners` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Browser.startTracing` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Browser.stopTracing` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Browser.unbind` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `Browser.version` | method | Partial | `Browser.version` ([source](crates/ferrite-e2e/src/browser.rs#L1165)) | Similar lifecycle/introspection; option sets and connection/context ownership differ. |
+| `Browser.version` | method | Partial | `Browser.version` ([source](crates/ferrite-e2e/src/browser.rs#L1179)) | Similar lifecycle/introspection; option sets and connection/context ownership differ. |
 
 ## BrowserContext
 
@@ -251,12 +251,12 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 635; 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
 | `BrowserType.connect` | method | Missing | — | No Playwright-protocol remote connection; Browser.connect is Chromium CDP over a loopback debug port. |
-| `BrowserType.connectOverCDP` | method | Partial | `Browser.connect_over_cdp` ([source](crates/ferrite-e2e/src/browser.rs#L774)) | Chromium HTTP or browser WebSocket endpoint; no Playwright remote protocol or headers/options surface. |
-| `BrowserType.executablePath` | method | Partial | `find_chromium` ([source](crates/ferrite-e2e/src/browser.rs#L171)) | Stock-browser discovery/launch; no channels/installer or full Playwright connection options. |
-| `BrowserType.launch` | method | Partial | `Browser.launch` ([source](crates/ferrite-e2e/src/browser.rs#L437)) | Stock-browser discovery/launch; no channels/installer or full Playwright connection options. |
+| `BrowserType.connectOverCDP` | method | Partial | `Browser.connect_over_cdp` ([source](crates/ferrite-e2e/src/browser.rs#L787)) | Chromium HTTP or browser WebSocket endpoint; no Playwright remote protocol or headers/options surface. |
+| `BrowserType.executablePath` | method | Partial | `find_chromium` ([source](crates/ferrite-e2e/src/browser.rs#L171)) | Stock-browser discovery/launch; launched stdout/stderr are continuously drained with a bounded startup stderr tail. No channels/installer or full Playwright connection options. |
+| `BrowserType.launch` | method | Partial | `Browser.launch` ([source](crates/ferrite-e2e/src/browser.rs#L444)) | Stock-browser discovery/launch; launched stdout/stderr are continuously drained with a bounded startup stderr tail. No channels/installer or full Playwright connection options. |
 | `BrowserType.launchPersistentContext` | method | Partial | `LaunchOptions.user_data_dir` ([source](crates/ferrite-e2e/src/browser.rs#L140)) | Reusable Chromium/Firefox profile; obtain browser.default_context(). Dedicated contexts remain isolated from persistent storage. |
 | `BrowserType.launchServer` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `BrowserType.name` | method | Partial | `BrowserKind.name` ([source](crates/ferrite-e2e/src/browser.rs#L48)) | Stock-browser discovery/launch; no channels/installer or full Playwright connection options. |
+| `BrowserType.name` | method | Partial | `BrowserKind.name` ([source](crates/ferrite-e2e/src/browser.rs#L48)) | Stock-browser discovery/launch; launched stdout/stderr are continuously drained with a bounded startup stderr tail. No channels/installer or full Playwright connection options. |
 
 ## CDPSession
 
@@ -458,7 +458,7 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 635; 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
 | `Fixtures.browser` | property | Partial | `Browser` ([source](crates/ferrite-e2e/src/browser.rs#L324)) | Manual Browser/Context/client setup or injected Page; runner injects a fresh context/page for every attempt. |
-| `Fixtures.browserName` | property | Partial | `Browser.kind` ([source](crates/ferrite-e2e/src/browser.rs#L824)) | Manual Browser/Context/client setup or injected Page; runner injects a fresh context/page for every attempt. |
+| `Fixtures.browserName` | property | Partial | `Browser.kind` ([source](crates/ferrite-e2e/src/browser.rs#L838)) | Manual Browser/Context/client setup or injected Page; runner injects a fresh context/page for every attempt. |
 | `Fixtures.context` | property | Partial | `TestContext.context` ([source](crates/ferrite-e2e/src/runner.rs#L1243)) | Fresh per-attempt resource, usable as a typed fixture dependency. request is isolated from browser cookies; context.request() shares cookies. |
 | `Fixtures.mount` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
 | `Fixtures.page` | property | Partial | `TestContext.page` ([source](crates/ferrite-e2e/src/runner.rs#L1241)) | Fresh per-attempt resource, usable as a typed fixture dependency. request is isolated from browser cookies; context.request() shares cookies. |
@@ -973,10 +973,10 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 635; 
 
 | Playwright member | Kind | Status | Ferrite counterpart / evidence | Difference or limitation |
 |---|---|---|---|---|
-| `Playwright.chromium` | property | Partial | `Browser.launch` ([source](crates/ferrite-e2e/src/browser.rs#L437)) | Select BrowserKind with LaunchOptions; no BrowserType object or bundled browser installer. |
+| `Playwright.chromium` | property | Partial | `Browser.launch` ([source](crates/ferrite-e2e/src/browser.rs#L444)) | Select BrowserKind with LaunchOptions; no BrowserType object or bundled browser installer. |
 | `Playwright.devices` | property | Partial | `DeviceDescriptor` ([source](crates/ferrite-e2e/src/page.rs#L785)) | Seven metrics presets; no full device catalog or device user-agent metadata. |
 | `Playwright.errors` | property | Idiomatic | `E2eError` ([source](crates/ferrite-e2e/src/error.rs#L8)) | Rust error enum, with different variants and diagnostics. |
-| `Playwright.firefox` | property | Partial | `Browser.launch` ([source](crates/ferrite-e2e/src/browser.rs#L437)) | Select BrowserKind with LaunchOptions; no BrowserType object or bundled browser installer. |
+| `Playwright.firefox` | property | Partial | `Browser.launch` ([source](crates/ferrite-e2e/src/browser.rs#L444)) | Select BrowserKind with LaunchOptions; no BrowserType object or bundled browser installer. |
 | `Playwright.request` | property | Partial | `ApiClient` ([source](crates/ferrite-e2e/src/api.rs#L172)) | Standalone or context-linked HTTP client; smaller APIRequest option surface. |
 | `Playwright.selectors` | property | Partial | `set_test_id_attribute` ([source](crates/ferrite-e2e/src/locator.rs#L21)) | Only test-id configuration; no custom selector registration. |
 | `Playwright.webkit` | property | Missing | — | No WebKit backend; BrowserKind contains Chromium and Firefox only. |

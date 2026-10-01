@@ -67,7 +67,7 @@ put('Playwright','request','ApiClient','Standalone or context-linked HTTP client
 put('Playwright','selectors','set_test_id_attribute','Only test-id configuration; no custom selector registration.')
 put('Playwright','errors','E2eError','Rust error enum, with different variants and diagnostics.','Idiomatic')
 no('Playwright','webkit','No WebKit backend; BrowserKind contains Chromium and Firefox only.')
-group('BrowserType',{'launch':'Browser.launch','connectOverCDP':'Browser.connect','executablePath':'find_chromium','name':'BrowserKind.name'},'Stock-browser discovery/launch; no channels/installer or full Playwright connection options.')
+group('BrowserType',{'launch':'Browser.launch','connectOverCDP':'Browser.connect','executablePath':'find_chromium','name':'BrowserKind.name'},'Stock-browser discovery/launch; launched stdout/stderr are continuously drained with a bounded startup stderr tail. No channels/installer or full Playwright connection options.')
 no('BrowserType','connect','No Playwright-protocol remote connection; Browser.connect is Chromium CDP over a loopback debug port.')
 group('Browser',{'browserType':'Browser.kind','close':'Browser.close','contexts':'Browser.contexts','isConnected':'Browser.is_connected','newContext':'Browser.new_context','version':'Browser.version'},'Similar lifecycle/introspection; option sets and connection/context ownership differ.')
 put('Browser','newPage','Browser.new_page','Uses the shared default context; Playwright creates a new context for this convenience API.')

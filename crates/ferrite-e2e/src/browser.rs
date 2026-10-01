@@ -327,6 +327,7 @@ pub struct Browser {
 
 pub(crate) struct BrowserInner {
     child: tokio::sync::Mutex<Option<tokio::process::Child>>,
+    output: Mutex<Option<crate::process_output::ProcessOutput>>,
     backend: Backend,
     kind: BrowserKind,
     _profile: Mutex<Option<tempfile::TempDir>>,
@@ -392,6 +393,11 @@ fn close_transport(backend: &Backend) {
 
 impl Drop for BrowserInner {
     fn drop(&mut self) {
+        let output = self
+            .output
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
         let profile = self
             ._profile
             .get_mut()
@@ -403,6 +409,7 @@ impl Drop for BrowserInner {
                 runtime.spawn(async move {
                     terminate_process(&backend, &mut child).await;
                     close_transport(&backend);
+                    drop(output);
                     drop(profile);
                 });
                 return;
@@ -495,6 +502,8 @@ impl Browser {
             E2eError::Launch(format!("spawn {}: {error}", executable.display()))
         })?;
 
+        let output = crate::process_output::ProcessOutput::take(&mut child);
+
         // Poll /json/version until the DevTools endpoint answers.
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(2))
@@ -511,7 +520,7 @@ impl Browser {
                 )));
             }
             if let Ok(Some(status)) = child.try_wait() {
-                let stderr = drain_stderr(&mut child).await;
+                let stderr = output.diagnostic().await;
                 return Err(E2eError::Launch(format!(
                     "chromium exited during launch ({status}): {stderr}"
                 )));
@@ -543,6 +552,7 @@ impl Browser {
         let browser = Self {
             inner: Arc::new(BrowserInner {
                 child: tokio::sync::Mutex::new(Some(child)),
+                output: Mutex::new(Some(output)),
                 backend: Backend::Cdp(cdp),
                 kind: BrowserKind::Chromium,
                 _profile: Mutex::new(if options.keep_profile {
@@ -618,6 +628,8 @@ impl Browser {
             E2eError::Launch(format!("spawn {}: {error}", executable.display()))
         })?;
 
+        let output = crate::process_output::ProcessOutput::take(&mut child);
+
         // Poll the Remote Agent HTTP root until it answers.
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(2))
@@ -634,7 +646,7 @@ impl Browser {
                 )));
             }
             if let Ok(Some(status)) = child.try_wait() {
-                let stderr = drain_stderr(&mut child).await;
+                let stderr = output.diagnostic().await;
                 return Err(E2eError::Launch(format!(
                     "firefox exited during launch ({status}): {stderr}"
                 )));
@@ -732,6 +744,7 @@ impl Browser {
         let browser = Self {
             inner: Arc::new(BrowserInner {
                 child: tokio::sync::Mutex::new(Some(child)),
+                output: Mutex::new(Some(output)),
                 backend: Backend::Bidi {
                     conn: bidi,
                     insecure_certs: options.ignore_https_errors,
@@ -798,6 +811,7 @@ impl Browser {
         let browser = Self {
             inner: Arc::new(BrowserInner {
                 child: tokio::sync::Mutex::new(None),
+                output: Mutex::new(None),
                 backend: Backend::Cdp(cdp),
                 kind: BrowserKind::Chromium,
                 _profile: Mutex::new(None),
@@ -1379,6 +1393,11 @@ impl Browser {
             process.take();
         }
         self.inner
+            .output
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        self.inner
             ._profile
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -1478,25 +1497,48 @@ fn proxy_capabilities(proxy: &str) -> Value {
     })
 }
 
-async fn drain_stderr(child: &mut tokio::process::Child) -> String {
-    use tokio::io::AsyncReadExt as _;
-    let mut text = String::new();
-    if let Some(stderr) = child.stderr.as_mut() {
-        let mut buf = vec![0u8; 4096];
-        let Ok(n) = tokio::time::timeout(Duration::from_millis(500), stderr.read(&mut buf))
-            .await
-            .map(|r| r.unwrap_or(0))
-        else {
-            return String::new();
-        };
-        text.push_str(&String::from_utf8_lossy(&buf[..n]));
-    }
-    text.lines().take(5).collect::<Vec<_>>().join(" | ")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn launch_drains_full_pipes_and_preserves_failure_diagnostics() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("noisy-browser");
+        std::fs::write(
+            &executable,
+            r#"#!/bin/sh
+i=0
+while [ "$i" -lt 4096 ]; do printf '%064d' 0; i=$((i+1)); done
+i=0
+while [ "$i" -lt 4096 ]; do printf '%064d' 0 >&2; i=$((i+1)); done
+printf '\nferrite startup marker\n' >&2
+exit 7
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        for kind in [BrowserKind::Chromium, BrowserKind::Firefox] {
+            let started = tokio::time::Instant::now();
+            let error = match Browser::launch(LaunchOptions {
+                browser: kind,
+                executable_path: Some(executable.clone()),
+                timeout: Duration::from_secs(3),
+                ..Default::default()
+            })
+            .await
+            {
+                Ok(_) => panic!("fake browser unexpectedly launched"),
+                Err(error) => error,
+            };
+            assert!(matches!(error, E2eError::Launch(_)));
+            assert!(error.to_string().contains("exited during launch"));
+            assert!(error.to_string().contains("ferrite startup marker"));
+            assert!(started.elapsed() < Duration::from_secs(2));
+        }
+    }
 
     #[test]
     fn launch_options_from_config() {
