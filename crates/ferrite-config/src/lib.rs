@@ -456,6 +456,8 @@ pub struct E2eConfig {
     pub reporter: String,
     /// Artifact directory (screenshots, traces, reports).
     pub output_dir: String,
+    /// Runner-owned attempt output retention: always, never or failures-only.
+    pub preserve_output: String,
     /// Snapshot baseline directory; unset uses output_dir/snapshots.
     pub snapshot_dir: Option<String>,
     /// Template for snapshot baseline paths; inherited by projects when unset.
@@ -510,6 +512,7 @@ impl Default for E2eConfig {
             workers: 4,
             reporter: "list".to_string(),
             output_dir: "test-results".to_string(),
+            preserve_output: "always".to_string(),
             snapshot_dir: None,
             snapshot_path_template: None,
             repeat_each: 1,
@@ -823,6 +826,9 @@ fn merge_e2e(mut base: E2eConfig, over: E2eConfig) -> E2eConfig {
     }
     if over.output_dir != defaults.output_dir {
         base.output_dir = over.output_dir;
+    }
+    if over.preserve_output != defaults.preserve_output {
+        base.preserve_output = over.preserve_output;
     }
     if over.screenshot != defaults.screenshot {
         base.screenshot = over.screenshot;
@@ -1298,5 +1304,23 @@ mod tests {
         let user = load_user_config(&dir).unwrap();
         assert_eq!(user.server.port, 2222);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+    #[test]
+    fn e2e_output_retention_merge_and_legacy_default() {
+        let legacy: E2eConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(legacy.preserve_output, "always");
+        let base = E2eConfig {
+            preserve_output: "never".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            merge_e2e(base.clone(), E2eConfig::default()).preserve_output,
+            "never"
+        );
+        let over = E2eConfig {
+            preserve_output: "failures-only".into(),
+            ..Default::default()
+        };
+        assert_eq!(merge_e2e(base, over).preserve_output, "failures-only");
     }
 }

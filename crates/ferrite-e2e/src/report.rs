@@ -284,7 +284,8 @@ pub struct AttemptResult {
 
 /// Live runner callbacks, in lifecycle order within each attempt.
 /// Callbacks are synchronous and may run concurrently on different workers.
-/// Keep them short (enqueue slow uploads yourself). Callback panics are contained.
+/// Keep them short (enqueue uploads using owned copies when retention is enabled).
+/// Callback panics are contained.
 /// Aggregate file reporters remain available alongside these callbacks.
 pub trait Reporter: Send + Sync + 'static {
     /// Discovered tests, before filtering or project expansion.
@@ -308,6 +309,9 @@ pub trait Reporter: Send + Sync + 'static {
     fn on_attachment(&self, _attempt: &AttemptInfo, _attachment: &Attachment) {}
     /// `None` denotes a run/worker error rather than an attempt error.
     fn on_error(&self, _attempt: Option<&AttemptInfo>, _error: &str) {}
+    /// Source artifact paths remain readable during this callback. Retention
+    /// finalization runs afterward; returned/file reports may prune source links
+    /// or point to portable copies. Retention failures subsequently emit on_error.
     fn on_end(&self, _report: &TestReport) {}
 }
 

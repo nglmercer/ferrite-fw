@@ -12,16 +12,15 @@ The initial inventory and existing changes were committed in `d93365a`; this
 report describes the subsequent practical parity implementation. The original
 findings remain available in that commit's history.
 
-Latest completed phase: **B11**, with 279 scoped checks: 215 E2E units,
-32 integrations across eight targets, four E2E doctests and 28 CLI/configuration
-checks. Shared native cases required Chromium and Firefox. Strict all-target
-Clippy, package formatting, generated matrix and 740 local links passed;
-expanded network/retry, large/filtered and empty reports were visually inspected
-on both engines. D03 is next. The preceding B18 phase passed 219 scoped checks;
-B10's complete inventory remains 485 combined checks across its then-existing
-38 integration targets. B11 adds the 40th target; this scoped increment does not
-claim a complete replay of the current 40-target integration inventory.
-Earlier increment sections retain historical checkpoint evidence.
+Latest completed phase: **D03**, with 284 scoped checks: 225 E2E units,
+26 native integrations across six targets, four E2E doctests and 29 CLI/config
+checks. Native cases required Chromium and Firefox on Linux. Strict Clippy,
+package formatting, generated matrix and local links passed. Real video and
+artifact downloads survived source removal and bundle relocation; both report
+views were inspected. D04 is next. The current integration inventory has 43
+targets; this phase does not claim its complete replay. Earlier increment
+sections retain historical checkpoint evidence, including B10's complete audit
+of its then-existing 38 targets.
 
 The [complete API matrix](PLAYWRIGHT-API-MATRIX.md) covers **73 classes and
 1,018 documented JavaScript-applicable members**, including browser, test,
@@ -30,9 +29,9 @@ reporter, Android and Electron APIs:
 | Classification | Members | Meaning |
 |---|---:|---|
 | Equivalent | 15 | Counterpart for the basic operation/value, without full options or engine compatibility |
-| Partial | 636 | Related exposed operation with material semantic, option or engine differences |
+| Partial | 638 | Related exposed operation with material semantic, option or engine differences |
 | Idiomatic | 41 | Comparable operation through Rust language/library facilities |
-| Missing | 326 | No dedicated public counterpart |
+| Missing | 324 | No dedicated public counterpart |
 
 These counts describe an inventory, **not a behavioral compatibility
 percentage**. The earlier inventory had 458 Partial and 503 Missing members.
@@ -2256,3 +2255,58 @@ groups (two new storage groups and two existing storage-state regressions), and
 four doctests. Both native engines were required. Strict all-target Clippy,
 package formatting and matrix generation passed. The integration inventory now
 has 42 targets; this scoped phase does not claim a complete inventory replay.
+
+### D03: owned attempt output retention
+
+Configure `preserve_output = "always"`, `"never"` or `"failures-only"` in the
+E2E configuration, or use the typed builder:
+
+```rust
+use ferrite_e2e::{OutputRetention, Runner};
+let runner = Runner::default().output_retention(OutputRetention::FailuresOnly);
+```
+
+Always preserves the default behavior. FailuresOnly uses each attempt's final
+expectation classification, including cleanup: failed retries, timeouts,
+interruptions, cleanup failures and unexpected passes survive; successes,
+expected failures and runtime skips do not. Never removes all classified owned
+outputs. An abandoned run future leaves unclassified output intact. There is no
+historical-run pruning. Nondefault policies do not write legacy latest-trace
+aliases; prior aliases survive.
+
+Capture/context cleanup, live reporters and bundle copying finish before
+filesystem retention. Each run owns distinct reserved directories and open
+handles. Root replacement fails closed. Directory traversal uses
+[open_dir_nofollow](https://docs.rs/cap-fs-ext/4.0.3/cap_fs_ext/trait.DirExt.html#tymethod.open_dir_nofollow),
+and links are unlinked rather than traversed. Resolved snapshot baselines,
+including symlink ancestors and awaited spawned-task assertions, survive.
+Weak active-run registration does not retain browser or attempt owners. Caller
+attachment sources and outputs of previous runs survive overlapping roots.
+
+Source-only JSON/JUnit links are pruned with explicit retention annotations.
+An atomic pre-cleanup publication omits selected source links; preparation
+failure preserves the files. Portable HTML bundles keep independent copies;
+returned artifact paths resolve to those copies and HTML/JSON/JUnit keep
+relative portable links. Filesystem/export errors preserve surviving files,
+emit reporter errors and fail the run. `Reporter::on_end` sees readable source
+paths; final returned/file reports may prune or rewrite them, and retention
+errors may emit `on_error` afterward.
+
+E2eConfig.preserve_output, its CLI/env bridge and ResolvedRunConfig.output_retention
+are wired. Legacy JSON defaults to Always. Exhaustive Rust literals need the
+new fields or `..Default::default()`. The matrix remains Partial because Rust
+has explicit ownership and valid-link semantics beyond upstream's stale-path
+JSON behavior. [Pinned observations](scripts/e2e-conformance/output-retention-reference.json)
+retain six upstream invocations, 33 cases, 48 attempts and 45 actual markers.
+
+[Native checks](crates/ferrite-e2e/tests/output_retention.rs) cover policies,
+retry/expected/unexpected outcomes, timeouts, cancellations, attempt cleanup
+errors, caller sources, replaced roots, failed publication, spawned baselines,
+overlapping projects and repeat runs. Real Chromium/Firefox videos and every
+artifact link survive original folder removal and bundle relocation. Both
+rendered report views were inspected. Verification: 284 scoped checks, strict
+all-target Clippy, formatting, matrix and links. The initial concurrent
+650 ms snapshot-pair regression produced no diagnostics; the unchanged eight
+snapshot-artifact checks passed serially. Final native gates use one test thread;
+no assertion clock or evidence requirements changed. Other-platform execution
+and the complete current 43-target replay remain outside this phase's evidence.

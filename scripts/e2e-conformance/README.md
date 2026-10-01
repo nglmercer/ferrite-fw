@@ -570,3 +570,11 @@ preserves whether upstream state capture omitted `__proto__`; repeated native
 captures showed variation, so that omission is not a required Ferrite behavior.
 Ferrite's typed bulk writes are an additional Rust convenience; quota and
 in-flight cancellation are covered in [web_storage.rs](../../crates/ferrite-e2e/tests/web_storage.rs).
+
+The native [output retention suite](../../crates/ferrite-e2e/tests/output_retention.rs)
+now applies those outcome observations to verified owned directories, with
+protected baselines/caller sources, repeat/overlap/symlink safety and explicit
+report-link reconciliation. It tests real video and artifact HTTP downloads from
+relocated HTML after original output removal on Chromium and Firefox. Ferrite
+prunes deleted source links in JSON; the pinned upstream recording preserves
+upstream's stale attachment paths for comparison.

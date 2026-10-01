@@ -2261,6 +2261,7 @@ pub struct Runner {
     configuration_error: Option<String>,
     active_config: Option<Arc<crate::ResolvedRunConfig>>,
     owned_outputs: Option<Arc<crate::owned_output::OwnedOutputs>>,
+    output_retention: crate::OutputRetention,
     configuration_emitted: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
@@ -2332,6 +2333,8 @@ impl Runner {
             global_setup: Vec::new(),
             global_teardown: Vec::new(),
             output_dir: config.output_dir.clone(),
+            output_retention: crate::OutputRetention::parse(&config.preserve_output)
+                .unwrap_or_default(),
             screenshot_on_failure: config.screenshot_on_failure(),
             screenshot_always: config.screenshot_always(),
             write_trace: true,
@@ -2556,6 +2559,7 @@ impl Runner {
             trace: self.write_trace,
             video: self.video,
             video_fps: self.video_fps,
+            output_retention: self.output_retention,
             output_dir,
             snapshot_dir: global_snapshot,
             snapshot_path_template,
@@ -2573,6 +2577,14 @@ impl Runner {
             base_url: browser.base_url(),
             context: browser.effective_context_options(self.context_options.clone()),
         })
+    }
+
+    /// Retain runner-owned attempt outputs after reporters and bundle copying.
+    /// Defaults to Always. Caller files and snapshot baselines are protected.
+    #[must_use]
+    pub fn output_retention(mut self, policy: crate::OutputRetention) -> Self {
+        self.output_retention = policy;
+        self
     }
 
     /// Parallel workers.
@@ -2665,8 +2677,134 @@ impl Runner {
             .map(|s| s.finish_all())
             .unwrap_or_default();
         report.results.sort_by(|a, b| a.name.cmp(&b.name));
-        self.write_artifacts(&report, &self.reporter);
+        let (written, exported) = self.write_artifacts_with_export(&report, &self.reporter);
+        // Live reporters finish while source artifacts are still readable.
         self.reporters.emit(|r| r.on_end(&report));
+        if self.output_retention != crate::OutputRetention::Always {
+            let mut selected: Vec<_> = self
+                .reporter
+                .split(',')
+                .map(str::trim)
+                .filter(|format| matches!(*format, "html" | "json" | "junit"))
+                .collect();
+            if written.len() < selected.len() {
+                let error = "output retention skipped because report export failed";
+                self.reporters.emit(|r| r.on_error(None, error));
+                report
+                    .results
+                    .push(self.report_failure("<output retention>", error.into()));
+                return report;
+            }
+            let mut exported = exported.map(|(_, report)| report);
+            if exported.is_some() {
+                selected.extend(["html", "json", "junit"]);
+            }
+            selected.sort_unstable();
+            selected.dedup();
+            if exported.is_none() {
+                // Publish a report with selected source links omitted before any
+                // deletion. A late final rewrite failure cannot leave broken links.
+                let mut prepared = report.clone();
+                let mut roots = Vec::new();
+                for result in &mut prepared.results {
+                    for attempt in &mut result.attempt_results {
+                        if self.output_retention.retains_attempt(attempt) {
+                            continue;
+                        }
+                        if let Some(settings) = &attempt.settings {
+                            roots.push(std::path::PathBuf::from(&settings.output_dir));
+                            let note = "source artifact links omitted by output retention; cleanup requested";
+                            attempt
+                                .annotations
+                                .push(("output-retention".into(), note.into()));
+                            result
+                                .annotations
+                                .push(("output-retention".into(), note.into()));
+                        }
+                    }
+                }
+                crate::output_retention::visit_artifacts(&mut prepared, |path| {
+                    let path = std::path::Path::new(path);
+                    !roots.iter().any(|root| path.starts_with(root))
+                        || self
+                            .owned_outputs
+                            .as_ref()
+                            .is_some_and(|outputs| outputs.is_protected(path))
+                });
+                for format in &selected {
+                    let (file, data) = match *format {
+                        "json" => ("results.json", prepared.to_json()),
+                        "junit" => ("junit.xml", prepared.to_junit()),
+                        _ => continue,
+                    };
+                    if let Err(error) = crate::output_retention::write_report(
+                        &std::path::Path::new(&self.output_dir).join(file),
+                        &data,
+                    ) {
+                        let error = format!("output retention skipped: preparing {file}: {error}");
+                        self.reporters.emit(|r| r.on_error(None, &error));
+                        report
+                            .results
+                            .push(self.report_failure("<output retention>", error));
+                        return report;
+                    }
+                }
+            }
+            self.finalize_output_retention(&mut report);
+            if let Some(portable) = &mut exported {
+                // Bundle artifacts remain independently owned after source cleanup.
+                // Carry final classification/cleanup annotations into the export.
+                for (source, target) in report.results.iter().zip(&mut portable.results) {
+                    target.annotations = source.annotations.clone();
+                    for (source, target) in source
+                        .attempt_results
+                        .iter()
+                        .zip(&mut target.attempt_results)
+                    {
+                        target.annotations = source.annotations.clone();
+                    }
+                }
+                for result in report.results.iter().skip(portable.results.len()) {
+                    portable.results.push(result.clone());
+                }
+            }
+            let final_files = exported.as_ref().unwrap_or(&report);
+            let mut final_errors = Vec::new();
+            for format in selected {
+                let (file, data) = match format {
+                    "html" => ("report.html", final_files.to_html()),
+                    "json" => ("results.json", final_files.to_json()),
+                    "junit" => ("junit.xml", final_files.to_junit()),
+                    _ => unreachable!(),
+                };
+                if let Err(error) = crate::output_retention::write_report(
+                    &std::path::Path::new(&self.output_dir).join(file),
+                    &data,
+                ) {
+                    let error = format!("final retention report {file}: {error}");
+                    self.reporters.emit(|r| r.on_error(None, &error));
+                    final_errors.push(error);
+                }
+            }
+            for error in final_errors {
+                let result = self.report_failure("<output retention report>", error);
+                if let Some(portable) = &mut exported {
+                    portable.results.push(result.clone());
+                }
+                report.results.push(result);
+            }
+            if let Some(mut portable) = exported {
+                let root = std::fs::canonicalize(&self.output_dir)
+                    .unwrap_or_else(|_| std::path::PathBuf::from(&self.output_dir));
+                crate::output_retention::visit_artifacts(&mut portable, |path| {
+                    if std::path::Path::new(path).is_relative() {
+                        *path = root.join(&*path).display().to_string();
+                    }
+                    true
+                });
+                report = portable;
+            }
+        }
         report
     }
     fn publish_configuration(&self, config: &crate::ResolvedRunConfig) {
@@ -3003,7 +3141,8 @@ impl Runner {
         runner.forbid_only = config.forbid_only;
         runner.fail_on_flaky_tests = config.fail_on_flaky_tests;
         runner.active_config = Some(Arc::new(config));
-        runner.owned_outputs = Some(Arc::new(crate::owned_output::OwnedOutputs::default()));
+        runner.owned_outputs =
+            Some(Arc::new(crate::owned_output::OwnedOutputs::default()).register());
         runner.configuration_emitted = Some(Arc::new(std::sync::atomic::AtomicBool::new(false)));
         runner.run_resolved_inner(browser, tests).await
     }
@@ -3478,6 +3617,54 @@ impl Runner {
             .await
     }
 
+    fn finalize_output_retention(&self, report: &mut TestReport) {
+        let Some(outputs) = &self.owned_outputs else {
+            return;
+        };
+        let mut roots = Vec::new();
+        let mut errors = Vec::new();
+        for result in &mut report.results {
+            for attempt in &mut result.attempt_results {
+                if self.output_retention.retains_attempt(attempt) {
+                    continue;
+                }
+                let Some(settings) = &attempt.settings else {
+                    continue;
+                };
+                let directory = std::path::PathBuf::from(&settings.output_dir);
+                let outcome = match outputs.cleanup(&directory) {
+                    Ok(protected) => format!(
+                        "owned outputs removed; {protected} protected baseline paths retained"
+                    ),
+                    Err(error) => {
+                        let message = format!("{}: {error}", directory.display());
+                        self.reporters
+                            .emit(|r| r.on_error(Some(&attempt.info), &message));
+                        errors.push(message.clone());
+                        format!("cleanup failed; surviving outputs retained: {message}")
+                    }
+                };
+                attempt
+                    .annotations
+                    .push(("output-retention".into(), outcome.clone()));
+                result.annotations.push((
+                    "output-retention".into(),
+                    format!("attempt {}: {outcome}", attempt.info.retry + 1),
+                ));
+                roots.push(directory);
+            }
+        }
+        crate::output_retention::visit_artifacts(report, |path| {
+            let path = std::path::Path::new(path);
+            !roots.iter().any(|root| path.starts_with(root)) || path.is_file()
+        });
+        for error in errors {
+            report
+                .results
+                .push(self.report_failure("<output retention>", error));
+        }
+    }
+
     /// Write file artifacts for the reporters in `spec` (comma-separated).
     ///
     /// `html` exports a portable bundle with relative artifact links and companion
@@ -3486,11 +3673,18 @@ impl Runner {
     /// `list` and `dot` are printed by the caller via [`TestReport::to_list`] /
     /// [`TestReport::to_dot`].
     pub fn write_artifacts(&self, report: &TestReport, spec: &str) -> Vec<String> {
+        self.write_artifacts_with_export(report, spec).0
+    }
+    fn write_artifacts_with_export(
+        &self,
+        report: &TestReport,
+        spec: &str,
+    ) -> (Vec<String>, Option<(crate::ReportBundle, TestReport)>) {
         let mut written = Vec::new();
         std::fs::create_dir_all(&self.output_dir).ok();
         let formats: Vec<_> = spec.split(',').map(str::trim).collect();
         let bundle = if formats.contains(&"html") {
-            match report.write_bundle(&self.output_dir) {
+            match report.write_bundle_with_report(std::path::Path::new(&self.output_dir)) {
                 Ok(bundle) => Some(bundle),
                 Err(error) => {
                     self.reporters
@@ -3505,7 +3699,7 @@ impl Runner {
             let (path, data) = match format {
                 "html" => {
                     if let Some(bundle) = &bundle {
-                        written.push(bundle.html.display().to_string());
+                        written.push(bundle.0.html.display().to_string());
                     }
                     continue;
                 }
@@ -3520,7 +3714,7 @@ impl Runner {
                 written.push(path);
             }
         }
-        written
+        (written, bundle)
     }
 }
 
@@ -3816,7 +4010,9 @@ async fn run_one(
             ) {
             Ok(path) => path,
             Err(error) => {
-                return failed_result(&name, format!("attempt output reservation: {error}"))
+                last_error = format!("attempt output reservation: {error}");
+                expected_failure_observed = false;
+                break;
             }
         };
         let mut info = TestInfo {
@@ -4389,10 +4585,12 @@ async fn run_one(
                     let data = serde_json::to_string_pretty(&payload)?;
                     std::fs::write(&path, &data)?;
                     // Preserve the original latest-attempt filename for existing consumers.
-                    std::fs::write(
-                        std::path::Path::new(&project_output_dir).join(format!("{slug}.json")),
-                        &data,
-                    )?;
+                    if config.output_retention == crate::OutputRetention::Always {
+                        std::fs::write(
+                            std::path::Path::new(&project_output_dir).join(format!("{slug}.json")),
+                            &data,
+                        )?;
+                    }
                     Ok(())
                 },
             )

@@ -98,6 +98,7 @@ fn child_command(
         .env("FERRITE_E2E_FORBID_ONLY", config.forbid_only.to_string())
         .env("FERRITE_E2E_REPEAT_EACH", config.repeat_each.to_string())
         .env("FERRITE_E2E_OUTPUT_DIR", &config.output_dir)
+        .env("FERRITE_E2E_PRESERVE_OUTPUT", &config.preserve_output)
         .env("FERRITE_UPDATE_SNAPSHOTS", &config.update_snapshots)
         .stdin(std::process::Stdio::inherit())
         .stdout(std::process::Stdio::inherit())

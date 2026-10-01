@@ -44,6 +44,7 @@ pub struct ResolvedRunConfig {
     pub trace: bool,
     pub video: VideoMode,
     pub video_fps: u32,
+    pub output_retention: crate::OutputRetention,
     pub output_dir: String,
     pub snapshot_dir: String,
     pub snapshot_path_template: Option<String>,

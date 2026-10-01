@@ -18,6 +18,7 @@ fn config_from_variables(read: impl Fn(&str) -> Option<String>) -> E2eResult<E2e
         ("REPORTER", &mut config.reporter),
         ("VIDEO", &mut config.video),
         ("OUTPUT_DIR", &mut config.output_dir),
+        ("PRESERVE_OUTPUT", &mut config.preserve_output),
         ("UPDATE_SNAPSHOTS", &mut config.update_snapshots),
     ] {
         let variable = if name == "UPDATE_SNAPSHOTS" {
@@ -138,6 +139,7 @@ fn config_from_variables(read: impl Fn(&str) -> Option<String>) -> E2eResult<E2e
 
 pub(crate) fn validate_config(config: &E2eConfig) -> E2eResult<()> {
     crate::BrowserKind::parse(&config.browser)?;
+    crate::OutputRetention::parse(&config.preserve_output)?;
     crate::VideoMode::parse(&config.video)?;
     crate::SnapshotUpdate::parse(&config.update_snapshots)?;
     for template in config.snapshot_path_template.iter().chain(

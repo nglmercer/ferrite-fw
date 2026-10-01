@@ -22,7 +22,13 @@ impl TestReport {
     /// resolved against the working directory; missing/unreadable files fail export.
     /// The original report and source artifacts are never modified.
     pub fn write_bundle(&self, directory: impl AsRef<Path>) -> E2eResult<ReportBundle> {
-        let directory = directory.as_ref();
+        self.write_bundle_with_report(directory.as_ref())
+            .map(|(bundle, _)| bundle)
+    }
+    pub(crate) fn write_bundle_with_report(
+        &self,
+        directory: &Path,
+    ) -> E2eResult<(ReportBundle, TestReport)> {
         fs::create_dir_all(directory.join("artifacts"))?;
         let mut copier = Copier {
             directory: directory.to_path_buf(),
@@ -61,7 +67,7 @@ impl TestReport {
         fs::write(&bundle.html, exported.to_html())?;
         fs::write(&bundle.json, exported.to_json())?;
         fs::write(&bundle.junit, exported.to_junit())?;
-        Ok(bundle)
+        Ok((bundle, exported))
     }
 }
 

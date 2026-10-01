@@ -16,6 +16,8 @@ globset = { workspace = true }
 image = { workspace = true, features = ["jpeg"] }
 regex = { workspace = true }
 reqwest = { workspace = true, features = ["cookies", "multipart"] }
+cap-std = "4.0.3"
+cap-fs-ext = "4.0.3"
 cookie = "0.18"
 cookie_store = "0.22"
 serde = { workspace = true }

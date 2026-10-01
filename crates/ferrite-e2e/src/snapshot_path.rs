@@ -157,6 +157,11 @@ impl SnapshotOptions {
     /// uses root_dir (or current directory) as its relative base. Without a
     /// template, retain the legacy <snapshot-dir>/<slug>.<extension> contract.
     pub fn path(&self, name: &str, kind: SnapshotKind) -> E2eResult<PathBuf> {
+        let path = self.resolve_path(name, kind)?;
+        crate::owned_output::protect_baseline(&path);
+        Ok(path)
+    }
+    fn resolve_path(&self, name: &str, kind: SnapshotKind) -> E2eResult<PathBuf> {
         let extension = kind.extension();
         let directory = crate::snapshot::resolve_dir(self.dir.as_deref());
         let Some(template) = &self.path_template else {

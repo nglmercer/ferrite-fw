@@ -1,15 +1,15 @@
 # Ferrite E2E implementation TODO
 
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
-Session plan refreshed: 2026-09-30, after verified B11 implementation `eeeced5`.
+Session plan refreshed: 2026-09-30, after verified D03 output-retention implementation.
 Expanded on request for a longer implementation session; B09/B10/B13/B14 and D01/D02 are verified.
 Uncommitted implementations are not counted complete.
 
 The initial G/A foundations are complete except for the final G04 audit. Follow
 the remaining-work index below through B/D improvements and supported C extensions.
-This backlog contains **51 tasks (41 complete, 10 remaining)**: four foundations,
+This backlog contains **51 tasks (42 complete, 9 remaining)**: four foundations,
 16 core tasks, 19 follow-ups, six optional extensions and six practical additions.
-All A and B tasks and D01/D02/D05 are verified; continue with
+All A and B tasks and D01/D02/D03/D05 are verified; continue with
 practical additions and supported C extensions. The ordering
 and effort assessments are recommendations based on the current source and
 parity audit.
@@ -24,7 +24,7 @@ limits remain in [PLAYWRIGHT-PARITY.md](PLAYWRIGHT-PARITY.md).
 
 ## Recommended next implementation
 
-Start **D03 — output retention policies**, then D04.
+Start **D04 — run metadata and slow-test reporting**, then D06 and the supported C extensions.
 B10 is verified through `2c042e1`, with owned process-output drainage in
 `ade139b`. The complete phase passed **457 E2E and 28 CLI/configuration checks**,
 485 combined: 211 units, 242 integrations across all 38 targets and four doctests.
@@ -83,12 +83,19 @@ eight expanded/network/large/empty views were inspected on both engines. B11 add
 the 40th integration target; this increment does not claim a complete current
 all-target replay. Preserve its fixture and schema migration evidence.
 
-**Next: D03.** Implement validated always/never/failures-only output retention,
-with a compatible default and explicit retry/expected/interrupted semantics.
-Verify runner ownership before deleting anything; preserve caller-owned sources,
-snapshot baselines, overlapping/symlinked paths, repeat runs and portable links.
-Finish capture/reporter/export work before cleanup, and keep removed paths out of
-JSON/HTML/bundles. D04 follows with metadata and bounded slow-test summaries.
+**D03 is verified.** Policies are wired through configuration, CLI/env and the
+Runner builder. Native tests cover classification, spawned-task baseline
+protection, retries/timeouts/cancellation, caller sources, symlink replacement,
+failed publication, overlapping roots, repeat runs and relocated portable links.
+The phase passed **284 scoped checks**: 225 units, 26 native integrations across
+six targets, four E2E doctests and 29 CLI/config checks. Both engines were required;
+real Chromium/Firefox video and artifact HTTP downloads were verified. Strict
+Clippy/fmt, generated matrix and local links passed. The initial concurrent
+snapshot run missed the required capture pair in its existing 650 ms window;
+the unchanged eight-case snapshot target passed serially. Final native gates
+use `--test-threads=1`. No assertion clock or expected evidence was relaxed.
+The current integration inventory has 43 targets; this phase does not claim
+its complete replay. **Next: D04**, then D06 and supported C extensions.
 G04 remains open for the wider lifecycle, lag/eviction and cross-feature audit.
 The initial broad audit's reproducible large-console timeout was fixed by draining
 owned child stdout/stderr, retaining a bounded 4-KiB stderr tail and keeping
@@ -130,21 +137,18 @@ there. G04 applies during every phase and closes after the final audit.
 
 | Order | Task | Implementation result | Dependency or capability gate |
 |---|---|---|---|
-| 1 | D03 | Explicit artifact retention policies with valid report links | B14/B11; final attempt classification and bundle export |
-| 2 | D04 | Run/project metadata and configurable slow-test summaries | B14/B11; existing live/JSON/JUnit/HTML reporters |
-| 4 | D06 | Socket identity, errors, closed state and bounded typed waits | Existing Chromium socket events; Firefox unsupported |
-| 5 | C01 | Validated PDF options | Chromium; explicit Firefox unsupported result |
-| 6 | C02 | Bounded captured-body bytes, text and JSON helpers | B02/B03 complete; Chromium body capture |
-| 7 | C03 | Coverage navigation/source options and restart lifecycle | Chromium JS/CSS coverage |
-| 8 | C04 | HAR matching, not-found and supported content options | A14/B06 complete; engine body/rewrite capabilities |
-| 9 | C05 | Supported media/device emulation options and resets | Chromium native capabilities |
-| 10 | C06 | Independently detachable CDP target sessions | Chromium transport and session ownership |
-| 11 | G04 | Final lifecycle, compatibility and resource-release audit | Evidence from every completed phase |
-
-Immediate delivery: **D03/D04**. All B tasks and D01/D02 are complete.
-Capture/report work follows; D03/D04 consume its final artifact/report behavior.
-D05/D06 and the supported C extensions can then proceed independently. G04 is
-applied throughout and closed last.
+| 1 | D04 | Run/project metadata and configurable slow-test summaries | B14/B11; existing live/JSON/JUnit/HTML reporters |
+| 2 | D06 | Socket identity, errors, closed state and bounded typed waits | Existing Chromium socket events; Firefox unsupported |
+| 3 | C01 | Validated PDF options | Chromium; explicit Firefox unsupported result |
+| 4 | C02 | Bounded captured-body bytes, text and JSON helpers | B02/B03 complete; Chromium body capture |
+| 5 | C03 | Coverage navigation/source options and restart lifecycle | Chromium JS/CSS coverage |
+| 6 | C04 | HAR matching, not-found and supported content options | A14/B06 complete; engine body/rewrite capabilities |
+| 7 | C05 | Supported media/device emulation options and resets | Chromium native capabilities |
+| 8 | C06 | Independently detachable CDP target sessions | Chromium transport and session ownership |
+| 9 | G04 | Final lifecycle, compatibility and resource-release audit | Evidence from every completed phase |
+Immediate delivery: **D04**. All B tasks and D01/D02/D03/D05 are complete.
+D06 and supported C extensions remain available independently. G04 applies
+throughout and closes after the complete integration/lifecycle audit.
 
 ### Verified B13 delivery sequence
 
@@ -1157,48 +1161,45 @@ behavior claims must still use the repository's pinned Playwright v1.63.0 corpus
   input-acquisition fixture assumptions were corrected with stronger native
   evidence; no runtime navigation/input changes. B09 is next; G04 remains open.
 
-- [ ] **D03 — Output retention policies (M; needs B14/B11).** Add validated
-  always/never/failures-only policies for runner-owned attempt outputs, with a
-  compatible default. Decide and document whether failures-only retains failed
-  attempts of a flaky test, expected failures and interrupted attempts; compare
-  against pinned observations where claiming matching semantics. Finish capture,
-  reporter notifications and bundle copying before removing owned files that
-  are no longer needed. Snapshot baselines and caller-owned attachment sources
-  must survive. Restrict deletion to verified runner-owned attempt directories;
-  handle overlapping project paths and symlinks without deleting unrelated data.
-  Done when retries, cancellation and cleanup errors retain the declared files,
-  JSON/HTML/bundles have no unexplained broken artifact links, and repeat runs
-  do not remove each other's outputs. No automatic historical-run pruning.
+- [x] **D03 — Output retention policies (M; needs B14/B11).** Validated
+  always/never/failures-only policies now apply to explicitly reserved attempt
+  outputs. Always is the compatible default. FailuresOnly preserves unexpected
+  failed attempts, failed retries of recovered tests, timeouts, attempt cleanup
+  failures, interruptions and unexpected passes. Successful attempts, expected
+  failures and runtime skips are removed; Never removes unprotected owned files of every classified attempt.
+  Registered skips create no attempt outputs. Filesystem cleanup or report-export
+  failures are distinct: preserve surviving files, notify reporters and fail the
+  run. An abandoned run future does not trigger deletion of unclassified output.
+  Captures, context cleanup, live callbacks and portable copying finish first.
+  [Owned-directory cleanup](crates/ferrite-e2e/src/owned_output.rs) verifies the
+  reserved root identities and traverses relative to open handles without
+  following directory links. Baselines resolved through SnapshotOptions are
+  protected, including awaited spawned tasks and symlink ancestors. Caller
+  attachment sources and historical runs survive. Overlapping project roots
+  still reserve distinct private containers. Nondefault policies do not create
+  legacy latest-trace aliases, and never remove earlier aliases.
+  JSON/JUnit source links are pruned and annotated; HTML bundles keep independent
+  copies. Source-only reports are published atomically with links omitted before
+  cleanup; a failed preparation preserves outputs. Returned bundle report paths
+  resolve to existing copies, and companion HTML/JSON/JUnit agree after cleanup.
+  Source paths remain readable during Reporter.on_end; cleanup failures may emit
+  on_error afterward. New E2eConfig.preserve_output and
+  ResolvedRunConfig.output_retention fields have legacy serde defaults; Rust
+  exhaustive literals need the added fields or ..Default::default().
+  Evidence: [six native groups](crates/ferrite-e2e/tests/output_retention.rs)
+  cover every policy, retry/expected/interrupted classification, verified
+  ownership rather than inferred filenames, protected baselines, caller sources,
+  timeout/cleanup failures, replaced symlinks, failed publication, overlap and
+  repeat runs. Real videos and all artifact links are downloaded from a relocated
+  report after its original folder is removed. Both report views were inspected.
+  [Pinned corpus](scripts/e2e-conformance/output-retention-reference.json) records
+  six upstream invocations, 33 cases, 48 attempts and 45 created markers. Upstream
+  can leave deleted attachment paths in JSON; Ferrite deliberately prunes them.
+  Verification: **284 scoped checks** (225 units, 26 native integrations across
+  six targets, four E2E doctests and 29 CLI/config checks), strict Clippy/fmt,
+  generated matrix and local links. Chromium and Firefox were mandatory on Linux.
+  Full current 43-target inventory and other-platform verification are not claimed.
   Reference: [preserveOutput](https://playwright.dev/docs/api/class-testconfig#test-config-preserve-output).
-  Reference preparation: [actual pinned corpus](scripts/e2e-conformance/output-retention-reference.json)
-  records six runner invocations, 33 cases and 48 attempt results (45 created
-  markers), covering every policy and actual interruptions. Filesystem-only;
-  no browser backend claim. Failures-only retains unexpected failed attempts,
-  recovered retry failures, timeouts, cleanup failures, interruptions and
-  unexpected passes; expected failures, successful attempts and runtime skips
-  are removed. Upstream JSON can retain deleted attachment paths. Rust ownership,
-  safe deletion and valid/pruned report links remain pending; D03 stays open.
-  Policy foundation: [OutputRetention](crates/ferrite-e2e/src/output_retention.rs)
-  provides the three validated serialized values and `retains_attempt`, using
-  final `AttemptResult.is_expected` rather than raw/final-test status. Default is
-  Always; unexpected retry/cleanup/interruption outcomes stay distinguishable.
-  Two targeted policy tests and strict library Clippy/fmt passed. Runner/config
-  wiring and deletion are not activated yet. Existing screenshots/videos/traces
-  and latest-trace aliases live outside the attempt attachment directory; move
-  them into explicitly reserved owned roots before any retention deletion.
-  Verify roots, overlap/symlinks, baselines, caller sources and report/export
-  publication before activating cleanup. D03 remains open.
-  Ownership preparation: [reserved directories](crates/ferrite-e2e/src/owned_output.rs)
-  and [native repeated-run checks](crates/ferrite-e2e/tests/owned_outputs.rs) now
-  isolate each attempt under a fresh canonical-root container. Attachments,
-  recording work, screenshots, traces and videos use its familiar attempt leaf.
-  Use recorded paths/output_path instead of old root-level filenames. Default
-  outputs still persist; latest-trace aliases remain at the project root.
-  Three reservation units and 19 native integrations across five targets passed
-  (both browsers required, real runner video verified), with 220 total units,
-  four doctests and 28 CLI/config checks: 271 scoped checks. Strict Clippy/fmt and
-  regenerated matrix passed. No deletion exists yet; baseline/caller protection,
-  cleanup-time verification, link handling and policy wiring remain next.
 
 - [ ] **D04 — Run metadata and slow-test reporting (M; needs B14/B11).** Add
   optional JSON-safe user metadata/run name and project metadata, propagated
@@ -1298,8 +1299,8 @@ waiting for every future feature before starting independent work.
 | 3. Native event diagnostics | B01/B04/B19 — complete | Preserve frame/load/dialog observations (`f8c12de`), earliest popup traffic (`1ec7e3e`) and structured console/error data (`34890cc`) through ownership and runner changes. |
 | 4. Runner and developer APIs | B16/B17/B12/B13/B14 — complete | Preserve shared ownership (`1e4d3bb`), labeled diagnostics (`8ae438c`), soft collection (`0ee8245`) and effective configuration (`a7f1e45`) and shared fixture/cleanup budgets with safe disposal (`e2e3ecc`). D01/D02 are complete; preserve the broader runner and polling regressions through capture/report work. |
 | 4a. CI and assertion reliability | D01/D02 — complete | Preserve policy/focus wiring in `a2fd29b` and polling controls/scoped final-only soft retries in `312090d`. |
-| 5. Captures and reports | B09/B10/B18/B11 — complete; D03/D04 | Preserve verified capture/stability/path/update and owned diagnostics; preserve bounded ARIA output and searchable reports; implement output retention and run metadata. |
-| 5a. Practical storage and diagnostics | D03, D04, D05, D06 | Complete output retention, run metadata/slow summaries, typed Web Storage helpers and bounded Chromium socket diagnostics after their prerequisites. |
+| 5. Captures and reports | B09/B10/B18/B11/D03 — complete; D04 | Preserve verified capture/stability/path/update and owned diagnostics; preserve bounded ARIA output and searchable reports; implement run metadata and slow-test reporting. |
+| 5a. Practical storage and diagnostics | D03/D05 — complete; D04, D06 | Preserve retention/storage helpers; complete run metadata/slow summaries and bounded Chromium socket diagnostics. |
 | 6. Supported backend extensions | C01, C02, C03, C04, C05, C06 | Extend PDF, captured bodies, coverage, HAR, emulation and scoped CDP sessions. Check capability before accepting each option; verify explicit errors on the other engine. |
 | 7. Final lifecycle and compatibility audit | G04 | Verify cancellation, zero/enclosing deadlines, retries, disposal and released resources across the additions, then run the complete regression and documentation gates. |
 
@@ -1372,7 +1373,7 @@ also need formatting checks for the modified packages.
 
 Copyable request for the implementation session:
 
-> Implement all 11 open tasks (D03–D06,
+> Implement all nine open tasks (D04, D06,
 > C01–C06 and G04) in E2E-PARITY-TODO.md using the recommended remaining
 > phases, dependencies and completion criteria. Preserve the already verified
 > features. Implement all practical
