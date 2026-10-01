@@ -12,6 +12,12 @@ The initial inventory and existing changes were committed in `d93365a`; this
 report describes the subsequent practical parity implementation. The original
 findings remain available in that commit's history.
 
+Latest completed phase: **B10**, verified by 457 E2E and 28 CLI/configuration
+checks (485 combined): 211 units, 242 integrations/all 38 targets and four
+doctests. All complete gates replayed after `ade139b`; B18 is next. Earlier B10
+increment sections below retain their historical checkpoint evidence; the final
+phase closure at the end supersedes their then-open status.
+
 The [complete API matrix](PLAYWRIGHT-API-MATRIX.md) covers **73 classes and
 1,018 documented JavaScript-applicable members**, including browser, test,
 reporter, Android and Electron APIs:
@@ -1519,7 +1525,7 @@ also timed out at 15 seconds; its terminal process was rerun after native gates
 with a 30-second launch budget and all 52 cases passed. These observations do
 not imply complete screenshot or backend equivalence.
 
-### B10 draft: successive screenshot assertions
+### B10 increment: successive screenshot assertions
 
 The working implementation now requires successive captures for page and locator
 PNG assertions, including missing/all/changed generation; it waits for fonts under
@@ -1559,7 +1565,7 @@ without relaxing capture behavior. Font wait ordering was corrected and the fina
 native scopes reran after that change. CPU/decode/filesystem budget work remains
 part of B10; synchronous computation is not preempted by an async deadline.
 
-### B10 draft: configurable snapshot paths (`b34174d`)
+### B10 increment: configurable snapshot paths (`b34174d`)
 
 `Runner::snapshot_path_template`, `Project::snapshot_path_template`, shared
 `E2eConfig`/project fields, `--snapshot-path-template` and
@@ -1620,7 +1626,7 @@ passed. The final unit run also verifies visible failure-artifact write errors
 without losing the original mismatch. Full current-inventory verification and
 the remaining B10 acceptance criteria are still pending.
 
-### B10 draft: attempt-owned screenshot diagnostics (`b826c56`)
+### B10 increment: attempt-owned screenshot diagnostics (`b826c56`)
 
 Page/locator screenshot mismatches now copy the expected bytes read before
 capture, the last completed actual image and a visual diff into the attempt's
@@ -1673,7 +1679,7 @@ generation and parity-document links passed. This remains focused evidence;
 the expanded full integration inventory is not yet a completed B10 phase gate.
 
 
-### B10 draft: actual downloadable fonts and native animations (`e81d744`)
+### B10 increment: actual downloadable fonts and native animations (`e81d744`)
 
 The [font/animation tests](crates/ferrite-e2e/tests/snapshot_fonts_and_animations.rs)
 use an [original reproducible font](crates/ferrite-e2e/tests/fixtures/README.md)
@@ -1731,7 +1737,7 @@ and caught locator outcomes must identify that native wait. These timeouts are
 recorded without claiming a root cause or universal Chromium limitation.
 
 
-### B10 draft: final screenshot images for failed generic polls (`0509518`)
+### B10 increment: final screenshot images for failed generic polls (`0509518`)
 
 Generic `expect_poll_with`/`expect_to_pass_with` invocations now own a task-local
 collector for the last screenshot mismatch within each probe. Only a completed
@@ -2017,3 +2023,45 @@ and Firefox 157.0, including last-owner process/profile release, dropped/shared
 close, persistent profiles, remote ownership and disconnection. Strict all-target
 Clippy and formatting passed. The complete B10 phase is rerunning after this
 cross-cutting lifecycle fix; B10 and the wider G04 audit remain open.
+
+
+### B10 complete phase verification
+
+The complete phase passed after diagnostic finalization `2c042e1` and launched
+process drainage `ade139b`: **457 E2E plus 28 CLI/configuration checks, 485 combined**.
+The inventory contains 211 units, 242 integrations across all 38 targets and four
+doctests. The final focused run passed 54 native groups over 12 targets; the full
+remainder passed 191 groups over 27 targets. Three browser snapshot groups are
+included again in the full 93-test browser target and are counted only once,
+yielding 242 unique integration checks over 38 distinct targets. No integration
+failures, ignored or filtered cases remain. All production Rust code in this
+phase is the verified current source; B18 reference-only additions do not change
+that code or test inventory.
+
+Full Chrome 153.0.8010.12 and Firefox 157.0 verified captures, fonts/animations,
+paths, diagnostics and related runner scopes. Matching Headless Shell and Firefox
+verified broad core/browser/routing scopes. Shared native cases required both
+engines. The previously failing unchanged structured-console payload now passes
+in the complete run; ownership/profile release and noisy startup diagnostics also
+pass. Strict all-target E2E/CLI/config Clippy, package formatting, regenerated
+matrix and local evidence links pass. Matrix classification counts stay unchanged.
+
+B10's acceptance criteria are covered by successive stable pairs, delayed real
+fonts and native animations, never-stable content, dimensions, frozen baseline
+changes and explicit update/path policies, owned expected/actual/diff/last-pair
+images and portable copies. Shared immutable buffers and cooperative data-only
+workers cover reads/comparison/Css/diff/chunked staging; foreground owners alone
+install files and publish weak-attempt/current-step metadata. Original assertion
+clocks cover matching/capture/update, with one additional shared five-second
+failure-finalization clock under enclosing deadlines/cancellation. Alias,
+permission/race, sealed/expired publication, interrupted real raster/write and
+large non-Send generic-value regressions pass.
+
+This completes the scoped B10 task, while per-channel comparison, Rust visual
+formats, default/update/path/poll-history semantics and application-realm/root
+traversal remain documented subsets of upstream behavior. Codec/resize/OS phases
+are opaque, and active callbacks do not bound queued bytes or blocking threads.
+Current public entry points and input-struct migration notes are documented.
+B18's 26 actual pinned JSON/text option observations are committed as `ef95764`;
+its Rust implementation remains next. The wider G04 audit and 12 other tasks are
+still open; the full TODO objective is not complete.

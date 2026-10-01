@@ -1,16 +1,16 @@
 # Ferrite E2E implementation TODO
 
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
-Session plan refreshed: 2026-09-30, with B10 capture, path, diagnostic, native font/animation, final-poll diagnostic, active image/read and staged baseline increments.
-Expanded on request for a longer implementation session; B09/B13/B14 and D01/D02 are verified.
+Session plan refreshed: 2026-09-30, after complete B10 phase verification and B18 pinned-reference preparation.
+Expanded on request for a longer implementation session; B09/B10/B13/B14 and D01/D02 are verified.
 Uncommitted implementations are not counted complete.
 
 The initial G/A foundations are complete except for the final G04 audit. Follow
 the remaining-work index below through B/D improvements and supported C extensions.
-This backlog contains **51 tasks (37 complete, 14 remaining)**: four foundations,
+This backlog contains **51 tasks (38 complete, 13 remaining)**: four foundations,
 16 core tasks, 19 follow-ups, six optional extensions and six practical additions.
-All A tasks, B01–B09/B12–B17/B19 and D01/D02 are verified; continue with
-stable screenshot assertions, reports and supported C extensions. The ordering
+All A tasks, B01–B10/B12–B17/B19 and D01/D02 are verified; continue with
+bounded ARIA snapshots, reports and supported C extensions. The ordering
 and effort assessments are recommendations based on the current source and
 parity audit.
 D01–D06 add bounded improvements found in the missing/partial member inventory;
@@ -24,125 +24,52 @@ limits remain in [PLAYWRIGHT-PARITY.md](PLAYWRIGHT-PARITY.md).
 
 ## Recommended next implementation
 
-Start **B10 — stable screenshot assertions and snapshot paths**, then **B18/B11**.
-B09 is verified in `1c37e31`: page and locator captures accept supported clip,
-scale, mask color and temporary style options with one capture budget. Owned
-restoration survives cancellation and dropped waits; cleanup failures remain
-visible. Chromium transparent PNG preserves the last acknowledged background
-set through Page.call; Firefox rejects transparency and normalizes Css output
-from its native raster. Captures preserve caller viewport/emulation settings.
-The B10 follow-up now finishes finite animations and cancels/resumes infinite
-animations through native objects; styles cover reachable same-origin documents
-and open shadow roots. Application-realm helpers and traversal remain narrower.
+Start **B18 — bounded ARIA snapshot options**, then **B11**.
+B10 is verified through `2c042e1`, with owned process-output drainage in
+`ade139b`. The complete phase passed **457 E2E and 28 CLI/configuration checks**,
+485 combined: 211 units, 242 integrations across all 38 targets and four doctests.
+The 54 focused native groups and all 27 remainder targets reran after the launch
+fix; three browser snapshot groups overlap the full 93-test browser target and
+are counted only once. No failures, ignored tests or filtered integration cases
+remain in the complete inventory. Capture/runner gates used full Chrome
+153.0.8010.12 and Firefox 157.0; broad core/browser/routing gates used matching
+Headless Shell and Firefox. Both engines were required for shared native cases.
+Strict all-target Clippy, package formatting, generated matrix and links passed.
 
-Latest completed-task checkpoint inventory: **405 E2E and 28 CLI/configuration checks**,
-433 combined: 180 units, 221 integrations across all 34 targets and four doctests.
-Broad batches covered the initial 404 E2E inventory; after adding the trace-step
-regression and fixing private trace capture, all 16 related capture/report/step
-checks reran on final source. Final routing23, doctests, CLI/configuration,
-strict all-target Clippy and formatting passed. Runner/native capture scopes
-used full Chrome 153/Firefox 157; core203/browser93/routing23 used matching
-Headless Shell/Firefox. This is combined verification evidence, not one fresh
-405-check invocation. All native groups required both engines.
+Preserve successive stable capture, real held-font/native-animation evidence,
+project/browser/platform paths, frozen baseline buffers, atomic foreground
+updates and non-overwriting Missing generation. Data-only comparison/read/Css/
+diff/staging jobs have two active callbacks, cooperative abandonment and encoded/
+raster guards. They never retain native or attempt owners. Matching and updates
+use the original assertion clock; final failure diagnostics share one additional
+five-second clock under enclosing waits and cancellation. Attempt/step-owned
+copies, last-pair diagnostics, final-only generic-poll candidates, retry/soft/
+parallel ownership and portable export remain verified. Opaque codec/resize/OS
+phases and queued input memory are not hard bounded. Native styles/font traversal
+and per-channel comparison remain documented subsets rather than full upstream
+semantics. The matrix remains 73 classes/1,018 members: Partial635/Missing327/
+Equivalent15/Idiomatic41.
 
-Fifty-two actual pinned screenshot cases passed on both engines. Native tests
-verify image dimensions/pixels, DPR and scrolling, full-page masks, background
-restoration, concurrent captures, typed validation, cancellation/drop/disposal,
-real cleanup failures, same-origin iframe/open-root styles and one user trace
-step. The reference documents Firefox's native Css/alpha limitations and Rust's
-quality/finite-coordinate validation and retained-background differences. One
-reference launch timed out during concurrent native work; a final run with a
-30-second launch budget passed all cases. One unchanged redirected-header
-regression failed initially, then passed in isolation and in the full routing
-batch; its cause remains an explicit G04 audit item.
+**Current handoff:** implement B18 in the existing DOM approximation and page/
+locator snapshot/assertion entry points. Add explicit validated depth limits,
+optional viewport boxes/state fields and deterministic truncation while
+preserving existing signatures. Verify nested/open-shadow/same-origin-frame
+roots, cancellation/deadlines and assertion consumption on both engines.
+Full accessible-name conformance, AI modes and YAML pattern matching stay outside
+this task. Reference commit `ef95764` records 26 actual pinned JSON/text cases:
+positive depth follows role-tree levels, zero/negative depth is unbounded, boxes
+round viewport CSS geometry to whole pixels and frame-root boxes are local to
+that frame. Static text fragments, mixed/disabled/pressed state, hidden/open-root
+content, validation errors and scrolling/fractional layout are recorded. Use the
+actual observations to define the Rust options and document remaining subsets;
+reference preparation alone does not complete B18.
 
-The matrix remains 73 classes/1,018 members: Partial635/Missing327/Equivalent15/
-Idiomatic41. Capture mappings now describe these options and engine differences;
-they do not imply full compatibility. Current matrix generation, 727 local
-Markdown links across the three parity documents and two reference/fixture
-READMEs, and 655 source anchors passed for the staged baseline increment.
-
-**Current handoff:** B10 is in progress. The verified increment `499c274` in
-`snapshot.rs`,
-`snapshot_capture.rs` and `expect.rs` implements successive captures, bounded font
-readiness waits, typed control failures, retained last-image artifacts and
-`Changed` update mode. Page/locator capture defaults use B09 Css scale, animation
-suppression and hidden carets; no unstable baseline is written on expiry.
-The 56-case actual pinned runner reference records missing/update/negation and
-never-stable behavior differences. Three required two-engine native groups and
-virtual-time tests cover the draft; these are focused evidence, not final phase
-gates. The original font-wait test uses a held readiness promise; the new
-`tests/snapshot_fonts_and_animations.rs` exercises actual held HTTP font responses.
-
-Verified path increment `b34174d` implements browser/project/platform and file/title path
-templates, project/assertion precedence, CLI/config/env plumbing and immutable
-resolved settings. TestInfo.snapshot_path resolves without creating files, and
-snapshot_options supplies standalone helpers with the same identity. Two required
-two-engine native groups verify page/locator/text paths and retries; 36 actual
-pinned path-only calls document naming differences. This remains partial parity.
-
-Diagnostic increment `b826c56` copies expected/actual/diff images into attempt and
-assertion-step attachments, retains previous/stability-diff images for unstable
-content and preserves portability after baseline updates/source removal. Native
-groups cover retry/soft ownership, exact pixels/dimensions, live events, visible
-I/O failures and cancellation/restoration. Generic retry probes suppress intermediate
-report images. Verified deferred increment `0509518` now retains the last screenshot
-mismatch from the last completed failing outer probe; nested polls transfer
-images. Success/control errors and completed pending results discard retained
-images; unfinished probes drop their own images without replacing the earlier
-completed candidate. Weak attempt ownership and one retained mismatch per invocation
-keep deferred retry history from accumulating.
-
-Verified native font/animation increment `e81d744`: seven groups now verify page/locator captures in the main
-document, open roots and same-origin frames, fallback opt-out, timeout/cancellation/
-disposal, native finite/infinite/zero-rate animation behavior and finish/resume errors.
-The original reproducible font fixture is independent of installed system fonts.
-The 32 checked actual pinned font/animation observations document matching
-finite/infinite/zero-rate pixels, stronger same-origin page font waits in Rust
-and observed upstream Chromium locator-stability timeouts.
-
-Verified active image/read increment `92b5a66` moves comparison, Css normalization and baseline
-reads off the async runtime with two active callbacks, cooperative cancellation,
-shared immutable buffers and encoded/raster/intermediate-size guards. Five added
-unit regressions bring the unit inventory to 200, including retaining the last
-completed stability assessment while a newer native image awaits CPU work.
-Opaque codec/resize/OS phases
-are not hard-preempted, and admission does not bound queued bytes or blocking
-threads. Verified staged baseline increment `4e35613` compares `Changed` against frozen expected
-bytes using scalar tolerances and stages chunked temporary files. The foreground
-owner checks the shared deadline before installing; `Missing` cannot overwrite
-a competing file; a matching winner is accepted after bounded validation.
-Existing/dangling symlink aliases and writable permissions are preserved.
-Six added unit groups bring the unit inventory to 206. The 54 focused native
-groups passed, including page/locator alias and parallel Missing generation;
-22 font/path/artifact/polling groups replayed on final source. Workers never
-capture whole SnapshotOptions, whose masks
-can own locators/pages. Verified diagnostic increment `2c042e1` now shares immutable
-buffers, moves diff rendering and chunked attachment writes into data-only workers,
-and installs/publishes in the foreground under a short weak-attempt lifecycle guard.
-Matching/update retain their assertion clock; final failure diagnostics share one
-additional five-second clock, bounded by enclosing step/test waits and cancellation.
-External filename winners survive; expired/sealed publication and the 1,024-name
-collision boundary refuse installation and remove temporary handles. Two added
-unit groups and the expanded real sink regression bring the unit inventory to 208.
-All 54 focused native groups, four doctests and 28 CLI/config checks passed
-(294 combined), along with strict Clippy, formatting and matrix/link validation.
-The initial broader audit passed 24 remainder targets, then reproduced a native
-large-console hang from undrained browser output pipes. Verified lifecycle fix
-`ade139b` continuously drains both streams with a 4-KiB stderr tail, retains
-readers through shutdown and aborts them without native-owner retention. All
-211 units, seven native console/ownership groups and strict Clippy/format checks
-passed. Complete phase gates are now rerunning on this source: the 54 focused
-native groups plus all 27 remainder targets. B10 remains unchecked until that
-audit finishes; G04 still covers the wider final lifecycle review.
-Final-only deferred diagnostics for failing outer generic polls are now
-implemented, including retry/soft/nested/parallel ownership and visible I/O failures.
-The 12 actual pinned screenshot/toPass cases document upstream intermediate image
-history, including eventual/nested success and expected-only missing-target images,
-which differs from the Rust final-only policy.
-Run final complete phase gates, update matrix/capability evidence and commit only
-verified work before checking B10. Preserve entry points and document input-struct
-migration. B18/B11 follow after B10 is complete.
+B11 follows with searchable portable reports and per-attempt network summaries.
+G04 remains open for the wider lifecycle, lag/eviction and cross-feature audit.
+The initial broad audit's reproducible large-console timeout was fixed by draining
+owned child stdout/stderr, retaining a bounded 4-KiB stderr tail and keeping
+readers alive through shutdown. The unchanged native payload and actual startup-
+failure/process/profile release regressions passed; no budgets were relaxed.
 
 Preserve D02's strict typed generic probe errors, immediate/final-repeat cadence,
 5-second defaults, shared local/enclosing clocks, contextual last mismatches,
@@ -166,7 +93,7 @@ outer label/error/step/trace and Diagnostic typed causes, and B16's shared owner
 weak context graph and owned base_url getter. G04 remains open for channel lag,
 partial setup, detached in-flight requests and the final cross-feature audit.
 
-The scope of the longer session is **all 14 open tasks below**. Completed tasks
+The scope of the longer session is **all 13 open tasks below**. Completed tasks
 remain regression requirements. The deferred projects are future work; completing
 this checklist means practical parity within the stated engine capabilities,
 not complete Playwright compatibility.
@@ -179,22 +106,21 @@ there. G04 applies during every phase and closes after the final audit.
 
 | Order | Task | Implementation result | Dependency or capability gate |
 |---|---|---|---|
-| 1 | B10 | Stable screenshot comparisons, paths and update modes | B09; project/path settings from B14 |
-| 2 | B18 | Bounded ARIA snapshots with optional boxes and state | Existing DOM approximation; no full ARIA/YAML implementation |
-| 3 | B11 | Searchable portable reports with per-attempt network diagnostics | B02/B03/B19 complete; browser visual inspection |
-| 4 | D03 | Explicit artifact retention policies with valid report links | B14/B11; final attempt classification and bundle export |
-| 5 | D04 | Run/project metadata and configurable slow-test summaries | B14/B11; existing live/JSON/JUnit/HTML reporters |
-| 6 | D05 | Local/session storage enumeration and typed bulk helpers | Existing page storage APIs on both engines |
-| 7 | D06 | Socket identity, errors, closed state and bounded typed waits | Existing Chromium socket events; Firefox unsupported |
-| 8 | C01 | Validated PDF options | Chromium; explicit Firefox unsupported result |
-| 9 | C02 | Bounded captured-body bytes, text and JSON helpers | B02/B03 complete; Chromium body capture |
-| 10 | C03 | Coverage navigation/source options and restart lifecycle | Chromium JS/CSS coverage |
-| 11 | C04 | HAR matching, not-found and supported content options | A14/B06 complete; engine body/rewrite capabilities |
-| 12 | C05 | Supported media/device emulation options and resets | Chromium native capabilities |
-| 13 | C06 | Independently detachable CDP target sessions | Chromium transport and session ownership |
-| 14 | G04 | Final lifecycle, compatibility and resource-release audit | Evidence from every completed phase |
+| 1 | B18 | Bounded ARIA snapshots with optional boxes and state | Existing DOM approximation; no full ARIA/YAML implementation |
+| 2 | B11 | Searchable portable reports with per-attempt network diagnostics | B02/B03/B19 complete; browser visual inspection |
+| 3 | D03 | Explicit artifact retention policies with valid report links | B14/B11; final attempt classification and bundle export |
+| 4 | D04 | Run/project metadata and configurable slow-test summaries | B14/B11; existing live/JSON/JUnit/HTML reporters |
+| 5 | D05 | Local/session storage enumeration and typed bulk helpers | Existing page storage APIs on both engines |
+| 6 | D06 | Socket identity, errors, closed state and bounded typed waits | Existing Chromium socket events; Firefox unsupported |
+| 7 | C01 | Validated PDF options | Chromium; explicit Firefox unsupported result |
+| 8 | C02 | Bounded captured-body bytes, text and JSON helpers | B02/B03 complete; Chromium body capture |
+| 9 | C03 | Coverage navigation/source options and restart lifecycle | Chromium JS/CSS coverage |
+| 10 | C04 | HAR matching, not-found and supported content options | A14/B06 complete; engine body/rewrite capabilities |
+| 11 | C05 | Supported media/device emulation options and resets | Chromium native capabilities |
+| 12 | C06 | Independently detachable CDP target sessions | Chromium transport and session ownership |
+| 13 | G04 | Final lifecycle, compatibility and resource-release audit | Evidence from every completed phase |
 
-Immediate delivery: **B10/B18/B11**. B09/B13/B14/D01/D02 are complete.
+Immediate delivery: **B18/B11**. B09/B10/B13/B14/D01/D02 are complete.
 Capture/report work follows; D03/D04 consume its final artifact/report behavior.
 D05/D06 and the supported C extensions can then proceed independently. G04 is
 applied throughout and closed last.
@@ -228,7 +154,7 @@ contracts and pinned behavior; prefer extending existing options and helpers.
 | B14 | `config.rs`, `runner.rs`, `report.rs`; CLI/config packages | Resolve project filters, repetition and output/snapshot paths consistently; expose immutable effective settings and verify library/CLI precedence. |
 | B13 | `runner.rs`, `operation.rs` | Bound fixture setup/teardown and share the enclosing cleanup deadline across hooks and reverse teardown; preserve all relevant failure diagnostics. |
 | B09 — complete | `screenshot.rs`, `page.rs`, `locator.rs`, `driver.rs` | Preserve `1c37e31` capture validation, coordinate/scale semantics, owned restoration and explicit native limitations. |
-| B10 | `snapshot.rs`, `expect.rs`, `config.rs` | Compare successive stable captures within one budget; resolve baseline paths/update modes and attach expected/actual/diff artifacts. |
+| B10 — complete | `snapshot.rs`, `expect.rs`, `snapshot_*` | Preserve stable captures, frozen paths/baselines, foreground updates and owned bounded diagnostics verified through `2c042e1`/`ade139b`. |
 | B18 | `dom.js`, `locator.rs`, `snapshot.rs` | Produce bounded structured ARIA snapshots with optional boxes/state and deterministic truncation; document DOM approximation limits. |
 | B11 | `report.rs`, `bundle.rs` | Add search/status/project filters and per-attempt network summaries; verify escaping, retries, large/empty reports and relocated artifact links visually. |
 | C01 | `page.rs`, `driver.rs` | Validate PDF option combinations and inspect actual generated page dimensions/content on Chromium; assert Firefox's unsupported result. |
@@ -246,8 +172,8 @@ contracts and pinned behavior; prefer extending existing options and helpers.
 | G04 | `operation.rs`, affected tests and parity documents | Audit every new API's deadlines/cancellation/disposal/retries, resource release and serialization; reconcile the complete test inventory and matrix. |
 
 The diagnostics group **B01/B04/B19**, ownership **B16** and locator labels
-**B09/B17/B12/B13/B14/D01/D02** are complete; the next delivery is the capture/report
-group **B10/B18/B11**, with D01–D06 placed as in the remaining-work index.
+**B09/B10/B17/B12/B13/B14/D01/D02** are complete; the next delivery is the capture/report
+group **B18/B11**, with D01–D06 placed as in the remaining-work index.
 Implement the six C extensions after checking native
 capabilities, and finish with G04. Each delivery should have usable public APIs,
 examples and verified behavior before its implementation commit.
@@ -549,6 +475,18 @@ they do not constitute differential Playwright conformance coverage.
   Strict Clippy, package formatting, matrix, 727 Markdown links and 655 source
   anchors passed. B10 stays open for diagnostic processing and complete phase
   verification; 14 tasks remain open. Public synchronous helpers are unchanged.
+
+- `2c042e1` / `ade139b`: B10 complete. All 457 E2E and 28 CLI/configuration
+  checks passed (485 combined): 211 units, 242 integrations/all 38 targets and
+  four doctests. The final 54-group focused run plus all 27 remainder targets
+  replayed on updated launch code, with browser3 counted only once within the
+  full browser93 inventory. Full Chrome/Firefox verified captures/runner scopes;
+  matching Headless Shell/Firefox verified broad scopes. No failures or ignored
+  integration cases remain. Strict Clippy, formatting, generated matrix and links
+  passed. Data-only bounded diagnostics and a reproducible unread-output pipe
+  hang are fixed; real noisy startup and native ownership/profile release pass.
+  B18 reference preparation `ef95764` records 26 actual pinned option cases.
+  B18 implementation is next; 38 tasks are complete and 13 remain open.
 
 ## G — Foundations for the larger session
 
@@ -929,45 +867,36 @@ their dependencies are ready. References include
   Raw CDP background tracking is limited to acknowledged Page.call operations;
   cleanup has a separate bounded five-second window. Examples, migration notes,
   matrix, local links and source anchors verified. Route header flakiness stays G04.
-- [ ] **B10 — Stable screenshot assertions and snapshot paths (M; needs B09).**
+- [x] **B10 — Stable screenshot assertions and snapshot paths (M; needs B09).**
   Extend existing snapshot assertions with stable successive captures, browser/
   project/platform path templates and clearly defined update modes. Done when
   delayed fonts/animations, never-stable content, dimension differences and
   baseline changes are bounded and diagnosed; attach expected/actual/diff artifacts.
-  Draft progress: `499c274`; successive stable capture and typed deadline/error handling,
-  font readiness, `Changed` mode, PNG/ratio validation and last-image failures are
-  implemented in this increment. The 56-case actual pinned reference verifies
-  mode/negation/stability differences; three required two-engine groups and
-  virtual-time checks cover the draft. Path templates now cover global/project/
-  assertion precedence, frozen metadata, CLI/env and TestInfo access (`b34174d`); two native
-  groups and 36 pinned path-only cases verify them. Attempt/step-owned expected/
-  actual/diff and last-pair stability attachments (`b826c56`) now preserve immutable retry
-  evidence and portable links, with four native diagnostic groups. `e81d744` adds seven additional
-  native font/animation groups using real held HTTP fonts and native animation
-  objects, including late CSS animation cancellation/resumption and visible
-  finish/resume errors and the 4,096/4,097-object limit boundary. Final-only
-  outer-poll diagnostics (`0509518`) now publish the last completed failing probe only,
-  with four additional native diagnostic groups verifying nested/control/pending/
-  unfinished/soft/parallel/retry/export and publication I/O behavior. Active
-  image/read work (`92b5a66`) now has two callback slots, cooperative cancellation, immutable
-  buffers, bounded regular baseline reads and PNG/JPEG/resize input guards, with
-  five additional unit regressions. Success baseline commits (`4e35613`) now stage data-only
-  temporary files and install in the foreground under the shared clock. Frozen
-  Changed comparisons, non-overwriting Missing generation/matching race winners,
-  writable permissions and existing/dangling aliases are verified by six more
-  unit groups and one added page/locator/parallel native path group. Diagnostic
-  finalization (`2c042e1`) now uses immutable buffers, data-only diff/chunked-write
-  jobs and foreground non-overwriting attachment publication under a separate
-  shared five-second clock. Sealing is excluded only during installation/metadata;
-  cancellation, expired publication, external collisions and the 1,024-name cap
-  are covered. Opaque phases and queued input memory are not hard bounded.
-  Final complete phase gates are still required.
-  Latest focused increment gates passed: 208 units, 54 native integrations/12
-  targets, four doctests and 28 CLI/configuration checks (294 combined), strict
-  Clippy, formatting, regenerated matrix and local links. Font waits now follow
-  owned style preparation across reachable same-origin documents, with real-
-  font HTTP delivery, cancellation/restoration and animation-boundary coverage.
-  These are not full phase gates; keep this task unchecked until the remaining acceptance criteria are verified.
+  Evidence: stable kernel `499c274`, paths `b34174d`, attempt diagnostics
+  `b826c56`, native fonts/animations `e81d744`, final generic-poll images
+  `0509518`, data-only image/read work `92b5a66`, staged baseline installation
+  `4e35613`, bounded diagnostic finalization `2c042e1` and owned pipe drainage
+  `ade139b`. Actual pinned references cover 56 mode/stability, 36 path,
+  32 font/animation and 12 screenshot/toPass cases. Required two-engine native
+  groups verify dimensions/pixels, real HTTP fonts, native animation limits/
+  restoration, delayed/changing content, update/negation/error behavior, aliases/
+  permissions, parallel Missing races, retry/soft/nested ownership and exported
+  immutable expected/actual/diff/last-pair copies. CPU/file work uses shared
+  immutable buffers, scalar settings and cooperative two-slot workers; only
+  the foreground installs files and publishes weak-attempt/current-step metadata.
+  Capture/matching/update share one clock; final diagnostics have one additional
+  five-second clock under enclosing waits/cancellation. Real raster/write barriers,
+  pending CPU stability, large non-Send values, sealed/expired publication and
+  filename collision limits are verified. Opaque phases and queued input memory
+  remain explicitly outside hard-preemption/total-memory guarantees.
+  Complete phase: 211 units, 242 integrations/all 38 targets, four doctests and
+  28 CLI/configuration checks (485 combined), strict Clippy/formatting and matrix/
+  links passed. Full Chrome/Firefox covered capture/runner scopes; matching
+  Headless Shell/Firefox covered broad scopes. The initial large-console hang
+  reproduced twice and was fixed without changing its payload/assertions/budget;
+  native console/ownership, real noisy startup and complete gates replayed after
+  the fix. Public entry points, input-struct migration notes and remaining
+  comparison/format/animation/path/poll-history subsets are documented. B18 is next.
 - [ ] **B11 — Report search, filtering and network diagnostics (M; needs B02/B03).**
   Extend the portable HTML report with test/status/project filters and per-attempt
   network summaries beside existing console output. Done when retries stay
@@ -1286,7 +1215,7 @@ waiting for every future feature before starting independent work.
 | 3. Native event diagnostics | B01/B04/B19 — complete | Preserve frame/load/dialog observations (`f8c12de`), earliest popup traffic (`1ec7e3e`) and structured console/error data (`34890cc`) through ownership and runner changes. |
 | 4. Runner and developer APIs | B16/B17/B12/B13/B14 — complete | Preserve shared ownership (`1e4d3bb`), labeled diagnostics (`8ae438c`), soft collection (`0ee8245`) and effective configuration (`a7f1e45`) and shared fixture/cleanup budgets with safe disposal (`e2e3ecc`). D01/D02 are complete; preserve the broader runner and polling regressions through capture/report work. |
 | 4a. CI and assertion reliability | D01/D02 — complete | Preserve policy/focus wiring in `a2fd29b` and polling controls/scoped final-only soft retries in `312090d`. |
-| 5. Captures and reports | B09 — complete; B10, B18, B11 | Preserve verified capture options and owned restoration (`1c37e31`); implement stabilized comparisons next, then bounded ARIA output and searchable per-attempt reports. |
+| 5. Captures and reports | B09/B10 — complete; B18, B11 | Preserve verified capture/stability/path/update and owned diagnostics; implement bounded ARIA output next, then searchable per-attempt reports. |
 | 5a. Practical storage and diagnostics | D03, D04, D05, D06 | Complete output retention, run metadata/slow summaries, typed Web Storage helpers and bounded Chromium socket diagnostics after their prerequisites. |
 | 6. Supported backend extensions | C01, C02, C03, C04, C05, C06 | Extend PDF, captured bodies, coverage, HAR, emulation and scoped CDP sessions. Check capability before accepting each option; verify explicit errors on the other engine. |
 | 7. Final lifecycle and compatibility audit | G04 | Verify cancellation, zero/enclosing deadlines, retries, disposal and released resources across the additions, then run the complete regression and documentation gates. |
@@ -1360,7 +1289,7 @@ also need formatting checks for the modified packages.
 
 Copyable request for the implementation session:
 
-> Implement all 14 open tasks (B10/B18/B11, D03–D06,
+> Implement all 13 open tasks (B18/B11, D03–D06,
 > C01–C06 and G04) in E2E-PARITY-TODO.md using the recommended remaining
 > phases, dependencies and completion criteria. Preserve the already verified
 > features. Implement all practical

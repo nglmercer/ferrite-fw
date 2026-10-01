@@ -370,7 +370,7 @@ independent restoration with visible failures. Animation suppression, style
 traversal and integer enclosure do not imply every upstream screenshot option
 or rendering algorithm is equivalent.
 
-### Stable snapshot reference (B10 in progress)
+### Stable snapshot reference (B10 verified)
 
 `reference:snapshots` runs the actual pinned Playwright 1.63.0 test runner on
 full Chromium and system Firefox through its public `moz-firefox` BiDi channel.
@@ -396,7 +396,7 @@ attempt-owned report attachments. The font/animation reference below adds actual
 downloadable-font evidence; budget audits and final phase gates remain before
 B10 is complete.
 
-### Snapshot path reference (B10 in progress)
+### Snapshot path reference (B10 verified)
 
 `reference:snapshot-paths` records 36 actual public `TestInfo.snapshotPath` calls
 on pinned Playwright 1.63.0. These path-only runner tests need no browser. Four
@@ -415,7 +415,7 @@ the corrected exact expectations passed all 36 cases. These differences remain
 Partial matrix mappings, rather than a claim of identical naming behavior.
 
 
-### Real font and animation reference (B10 in progress)
+### Real font and animation reference (B10 verified)
 
 `reference:fonts-animations` records 32 checked public screenshot-assertion cases
 using pinned Playwright 1.63.0, Chromium 153.0.8010.12 and Firefox 157 through
