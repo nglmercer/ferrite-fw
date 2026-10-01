@@ -623,6 +623,15 @@ Work in [the audit generator](scripts/playwright-parity/build_matrix.py),
   scoped checks), strict Clippy/formatting. Network/frame source-loss paths,
   cleanup acknowledgement faults, redirect correlation and full replay remain
   under audit.
+  Further progress: direct network subscriptions and idle accounting now settle
+  explicitly on native listener loss. Whole load-state waits, including delayed
+  readiness RPCs and quiet sleeps, share local/enclosing deadlines and preserve
+  control errors. Frame-event source-loss probes also cover in-flight waits.
+  [Evidence](PLAYWRIGHT-PARITY.md#g04-audit-progress--network-source-loss-and-readiness-clocks):
+  290 units, ten mandatory two-engine native groups and four doctests (304 scoped
+  checks), strict Clippy/formatting. Frame execution-world cache dependencies,
+  descendant observation races, cleanup ACK faults, redirect correlation and
+  complete replay/audit remain open.
 
 
 

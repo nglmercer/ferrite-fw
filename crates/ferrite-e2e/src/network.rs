@@ -807,16 +807,14 @@ impl NetworkEvents {
         let notice = page
             .run_operation(
                 crate::operation::Deadline::new(timeout).run("network event", async {
-                    self.receiver.recv().await.map_err(|error| match error {
-                        tokio::sync::broadcast::error::RecvError::Lagged(count) => {
-                            E2eError::Config(format!(
-                                "network event subscription lost {count} events"
-                            ))
-                        }
-                        tokio::sync::broadcast::error::RecvError::Closed => {
-                            E2eError::Disconnected("network event stream closed".into())
-                        }
-                    })
+                    let source = page.sink.native_observation_loss();
+                    tokio::select! { biased;
+                        reason = source.cancelled() => Err(E2eError::Config(format!("network event observation source unavailable: {reason}"))),
+                        notice = self.receiver.recv() => notice.map_err(|error| match error {
+                            tokio::sync::broadcast::error::RecvError::Lagged(count) => E2eError::Config(format!("network event subscription lost {count} events")),
+                            tokio::sync::broadcast::error::RecvError::Closed => E2eError::Disconnected("network event stream closed".into()),
+                        }),
+                    }
                 }),
             )
             .await?;

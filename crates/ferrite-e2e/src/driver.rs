@@ -3754,41 +3754,52 @@ impl CdpDriver {
             LoadState::Commit => return Ok(()),
         };
         let deadline = crate::operation::Deadline::new(timeout);
-        if self.load_state_satisfied(state).await {
-            return settle_quiet(&self.sink, state, deadline).await;
-        }
-        loop {
-            match deadline
-                .run(format!("wait for {want}"), async {
-                    events
-                        .recv()
-                        .await
-                        .map_err(|_| E2eError::Disconnected("load event stream closed".into()))
-                })
-                .await
-            {
-                Ok(event)
-                    if event.session.as_deref() == Some(&self.session) && event.method == want =>
-                {
+        deadline
+            .run(format!("wait for {want}"), async {
+                if self.load_state_satisfied(state).await? {
                     return settle_quiet(&self.sink, state, deadline).await;
                 }
-                Ok(_) => {}
-                Err(error) => {
-                    if self.load_state_satisfied(state).await {
-                        return settle_quiet(&self.sink, state, deadline).await;
+                loop {
+                    match deadline
+                        .run(format!("wait for {want}"), async {
+                            events.recv().await.map_err(|error| match error {
+                                tokio::sync::broadcast::error::RecvError::Lagged(count) => {
+                                    E2eError::Config(format!(
+                                        "load event subscription lost {count} events"
+                                    ))
+                                }
+                                tokio::sync::broadcast::error::RecvError::Closed => {
+                                    E2eError::Disconnected("load event stream closed".into())
+                                }
+                            })
+                        })
+                        .await
+                    {
+                        Ok(event)
+                            if event.session.as_deref() == Some(&self.session)
+                                && event.method == want =>
+                        {
+                            return settle_quiet(&self.sink, state, deadline).await;
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            if self.load_state_satisfied(state).await? {
+                                return settle_quiet(&self.sink, state, deadline).await;
+                            }
+                            return Err(error);
+                        }
                     }
-                    return Err(error);
                 }
-            }
-        }
+            })
+            .await
     }
 
-    async fn load_state_satisfied(&self, state: LoadState) -> bool {
-        let observed = self
-            .evaluate(crate::url_wait::DOCUMENT_OBSERVATION)
-            .await
-            .unwrap_or(Value::Null);
-        crate::url_wait::document_ready(&observed, state)
+    async fn load_state_satisfied(&self, state: LoadState) -> E2eResult<bool> {
+        match self.evaluate(crate::url_wait::DOCUMENT_OBSERVATION).await {
+            Ok(observed) => Ok(crate::url_wait::document_ready(&observed, state)),
+            Err(error) if error.is_control_flow() => Err(error),
+            Err(_) => Ok(false),
+        }
     }
 
     async fn close(&self) -> E2eResult<()> {
@@ -5313,26 +5324,30 @@ impl BidiDriver {
             return Ok(());
         }
         let deadline = crate::operation::Deadline::new(timeout);
-        loop {
-            if self.load_state_satisfied(state).await {
-                return settle_quiet(&self.sink, state, deadline).await;
-            }
-            if deadline.expired() {
-                return Err(E2eError::Timeout(
-                    timeout.as_millis().min(u128::from(u64::MAX)) as u64,
-                    format!("wait for {state:?}"),
-                ));
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
+        deadline
+            .run(format!("wait for {state:?}"), async {
+                loop {
+                    if self.load_state_satisfied(state).await? {
+                        return settle_quiet(&self.sink, state, deadline).await;
+                    }
+                    if deadline.expired() {
+                        return Err(E2eError::Timeout(
+                            timeout.as_millis().min(u128::from(u64::MAX)) as u64,
+                            format!("wait for {state:?}"),
+                        ));
+                    }
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            })
+            .await
     }
 
-    async fn load_state_satisfied(&self, state: LoadState) -> bool {
-        let observed = self
-            .evaluate(crate::url_wait::DOCUMENT_OBSERVATION)
-            .await
-            .unwrap_or(Value::Null);
-        crate::url_wait::document_ready(&observed, state)
+    async fn load_state_satisfied(&self, state: LoadState) -> E2eResult<bool> {
+        match self.evaluate(crate::url_wait::DOCUMENT_OBSERVATION).await {
+            Ok(observed) => Ok(crate::url_wait::document_ready(&observed, state)),
+            Err(error) if error.is_control_flow() => Err(error),
+            Err(_) => Ok(false),
+        }
     }
 
     async fn close(&self) -> E2eResult<()> {
@@ -5770,29 +5785,31 @@ async fn settle_quiet(
     if state != LoadState::NetworkIdle {
         return Ok(());
     }
-    let quiet_for = Duration::from_millis(500);
-    let mut quiet_since = None;
-    let mut previous_activity = None;
-    loop {
-        if deadline.expired() {
-            return Err(E2eError::Timeout(0, "network never went idle".to_string()));
-        }
-        let (active, activity) = sink.network_activity();
-        if previous_activity != Some(activity) {
-            quiet_since = None;
-        }
-        previous_activity = Some(activity);
-        if active == 0 {
-            match quiet_since {
-                None => quiet_since = Some(tokio::time::Instant::now()),
-                Some(since) if since.elapsed() >= quiet_for => return Ok(()),
-                Some(_) => {}
+    let source = sink.native_observation_loss();
+    deadline.run("network idle", async {
+        let quiet_for = Duration::from_millis(500);
+        let mut quiet_since = None;
+        let mut previous_activity = None;
+        loop {
+            if let Some(reason) = source.reason() {
+                return Err(E2eError::Config(format!("network idle observation source unavailable: {reason}")));
             }
-        } else {
-            quiet_since = None;
+            let (active, activity) = sink.network_activity();
+            if previous_activity != Some(activity) { quiet_since = None; }
+            previous_activity = Some(activity);
+            if active == 0 {
+                match quiet_since {
+                    None => quiet_since = Some(tokio::time::Instant::now()),
+                    Some(since) if since.elapsed() >= quiet_for => return Ok(()),
+                    Some(_) => {}
+                }
+            } else { quiet_since = None; }
+            tokio::select! { biased;
+                reason = source.cancelled() => return Err(E2eError::Config(format!("network idle observation source unavailable: {reason}"))),
+                () = tokio::time::sleep(Duration::from_millis(50)) => {}
+            }
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    }).await
 }
 
 /// Host (without port) of an http(s) URL.
@@ -6591,6 +6608,127 @@ mod initialization_tests {
         server.abort();
     }
     #[tokio::test]
+    async fn readiness_rpc_uses_local_and_enclosing_budgets_and_can_retry_on_same_transport() {
+        for bidi in [false, true] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let release = Arc::new(AtomicBool::new(false));
+            let ready = release.clone();
+            let (observed, mut requests) = tokio::sync::mpsc::unbounded_channel();
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                while let Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) =
+                    socket.next().await
+                {
+                    let request: Value = serde_json::from_str(&text).unwrap();
+                    let evaluate = request["method"] == "Runtime.evaluate"
+                        || request["method"] == "script.evaluate";
+                    if evaluate {
+                        observed.send(()).unwrap();
+                        if !ready.load(Ordering::Acquire) {
+                            continue;
+                        }
+                    }
+                    let result = if evaluate {
+                        if bidi {
+                            json!({"type":"success","result":{"type":"object","value":[["ready",{"type":"string","value":"complete"}]]}})
+                        } else {
+                            json!({"result":{"type":"object","value":{"ready":"complete"}}})
+                        }
+                    } else if request["method"] == "Page.getFrameTree" {
+                        json!({"frameTree":{"frame":{"id":"frame","url":"about:blank","loaderId":"document"}}})
+                    } else if request["method"] == "browsingContext.getTree" {
+                        json!({"contexts":[{"context":"page","children":[]}]})
+                    } else {
+                        json!({})
+                    };
+                    let reply = if bidi {
+                        json!({"type":"success","id":request["id"],"result":result})
+                    } else {
+                        json!({"id":request["id"],"result":result})
+                    };
+                    socket
+                        .send(tokio_tungstenite::tungstenite::Message::Text(
+                            reply.to_string().into(),
+                        ))
+                        .await
+                        .unwrap();
+                }
+            });
+            let driver = if bidi {
+                Driver::Bidi(
+                    BidiDriver::spawn(
+                        BidiConnection::connect(&format!("ws://{address}"))
+                            .await
+                            .unwrap(),
+                        "page".into(),
+                        Duration::ZERO,
+                        false,
+                        ConsoleSink::new(),
+                        None,
+                    )
+                    .await
+                    .unwrap(),
+                )
+            } else {
+                Driver::Cdp(
+                    CdpDriver::spawn(
+                        CdpConnection::connect(&format!("ws://{address}"))
+                            .await
+                            .unwrap(),
+                        "session".into(),
+                        "page".into(),
+                        Duration::ZERO,
+                        ConsoleSink::new(),
+                        None,
+                    )
+                    .await
+                    .unwrap(),
+                )
+            };
+            let result = tokio::time::timeout(
+                Duration::from_millis(200),
+                driver.wait_for_load(LoadState::Load, Duration::from_millis(20)),
+            )
+            .await
+            .expect("readiness RPC must share its own load-state deadline");
+            assert!(matches!(result, Err(E2eError::Timeout(..))));
+            tokio::time::timeout(Duration::from_secs(1), requests.recv())
+                .await
+                .expect("native readiness command delivery")
+                .expect("native readiness command was dispatched");
+            let result = crate::operation::Deadline::new(Duration::from_millis(10))
+                .run(
+                    "outer readiness",
+                    driver.wait_for_load(LoadState::Load, Duration::ZERO),
+                )
+                .await;
+            assert!(matches!(result, Err(E2eError::Timeout(..))));
+            tokio::time::timeout(Duration::from_secs(1), requests.recv())
+                .await
+                .expect("zero-local-timeout readiness delivery")
+                .expect("zero-local-timeout readiness was dispatched");
+            release.store(true, Ordering::Release);
+            driver
+                .wait_for_load(LoadState::Load, Duration::from_secs(1))
+                .await
+                .unwrap();
+            match driver {
+                Driver::Cdp(driver) => {
+                    assert!(driver.cdp.is_open());
+                    driver.cdp.close();
+                }
+                Driver::Bidi(driver) => {
+                    assert!(driver.bidi.is_open());
+                    driver.bidi.close();
+                }
+            }
+            server.abort();
+        }
+    }
+
+    #[tokio::test]
     async fn dropped_fetch_startup_disables_interception_and_preserves_auth_profile() {
         interrupted_fetch_startup(false, false).await;
         interrupted_fetch_startup(true, false).await;
@@ -6676,6 +6814,42 @@ mod initialization_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn network_idle_rejects_lost_sources_before_and_during_quiet_accounting() {
+        let sink = ConsoleSink::new();
+        let deadline = crate::operation::Deadline::new(Duration::ZERO);
+        let (result, ()) = tokio::join!(
+            settle_quiet(&sink, LoadState::NetworkIdle, deadline),
+            async {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                sink.mark_native_observation_lost("injected listener exit");
+            }
+        );
+        assert!(
+            matches!(result, Err(E2eError::Config(message)) if message.contains("source unavailable"))
+        );
+        assert!(matches!(
+            settle_quiet(&sink, LoadState::NetworkIdle, deadline).await,
+            Err(E2eError::Config(_))
+        ));
+        // Document readiness itself uses native evaluation and does not need the activity listener.
+        settle_quiet(&sink, LoadState::Load, deadline)
+            .await
+            .unwrap();
+    }
+    #[tokio::test]
+    async fn network_idle_sleep_respects_the_shared_deadline() {
+        let sink = ConsoleSink::new();
+        tokio::select! { biased;
+            result = settle_quiet(&sink, LoadState::NetworkIdle, crate::operation::Deadline::new(Duration::from_millis(10))) => {
+                assert!(matches!(result, Err(E2eError::Timeout(..))));
+            }
+            () = tokio::time::sleep(Duration::from_millis(25)) => {
+                panic!("quiet polling must not wait for a full 50ms polling interval after its shared deadline");
+            }
+        }
+    }
 
     #[test]
     fn host_parses() {

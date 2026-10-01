@@ -585,8 +585,14 @@ mod tests {
             drop(closed);
             drop(recovered);
             let weak = Arc::downgrade(&captures.get("bounded-3").unwrap());
-            let (context_loss, ()) = tokio::join!(
+            let mut network = _root.subscribe_network();
+            let (context_loss, network_loss, frame_loss, ()) = tokio::join!(
                 context.wait_for_event(crate::ContextEventKind::Request, std::time::Duration::ZERO),
+                network.recv(),
+                _root.wait_for_event(
+                    crate::PageEventKind::FrameAttached,
+                    std::time::Duration::ZERO
+                ),
                 async {
                     tokio::task::yield_now().await;
                     _root
@@ -597,6 +603,12 @@ mod tests {
             assert!(
                 matches!(context_loss, Err(crate::E2eError::Config(message)) if message.contains("source unavailable"))
             );
+            assert!(
+                matches!(network_loss, Err(crate::E2eError::Config(message)) if message.contains("source unavailable"))
+            );
+            assert!(
+                matches!(frame_loss, Err(crate::E2eError::Config(message)) if message.contains("source unavailable"))
+            );
             assert!(tokio::time::timeout(
                 std::time::Duration::from_millis(10),
                 context.wait_for_event(crate::ContextEventKind::Request, std::time::Duration::ZERO)
@@ -606,6 +618,20 @@ mod tests {
             assert!(
                 matches!(_root.wait_for_event(crate::PageEventKind::Request, std::time::Duration::ZERO).await, Err(crate::E2eError::Config(message)) if message.contains("source unavailable"))
             );
+            assert!(
+                matches!(_root.wait_for_event(crate::PageEventKind::FrameAttached, std::time::Duration::ZERO).await, Err(crate::E2eError::Config(message)) if message.contains("source unavailable"))
+            );
+            let mut network = _root.subscribe_network();
+            let result =
+                tokio::time::timeout(std::time::Duration::from_millis(100), network.recv())
+                    .await
+                    .expect(
+                        "lost native source must settle a disabled-timeout network subscription",
+                    );
+            assert!(
+                matches!(result, Err(crate::E2eError::Config(message)) if message.contains("source unavailable"))
+            );
+
             let matcher = crate::UrlMatcher::glob("**").unwrap();
             let options = crate::OperationOptions {
                 timeout: Some(std::time::Duration::ZERO),

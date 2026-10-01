@@ -2999,3 +2999,35 @@ passed. The authoritative integration inventory still contains 51 targets; this
 focused gate does not replace their final complete replay. G04 remains open for
 network/frame source-loss paths, cleanup acknowledgement faults, redirect
 correlation and the full requirement-by-requirement audit.
+
+
+## G04 audit progress — Network source loss and readiness clocks
+
+Direct NetworkEvents subscriptions now observe the native listener's terminal
+source-loss signal, including waits with disabled timeouts. Loss takes precedence
+over buffered notices; outer Page lifecycle/transport checks retain their control
+error priority. This closes the gap left by the earlier typed request/response
+handle waits. The subscription adds no background task.
+
+Network-idle accounting checks source availability before using activity
+counters or reporting quiet, and wakes immediately on listener exit. Its quiet
+polling sleep runs under the same deadline. Whole CDP/BiDi load-state waits now
+run native readiness probes, event waits, polling sleeps and quiet accounting
+under one local/enclosing clock; a delayed readiness RPC cannot consume the
+independent protocol timeout. Readiness probes preserve typed control errors,
+and CDP load-event lag is distinguished from actual stream closure. Fresh native
+document evaluation remains available for readiness recovery.
+
+Three new units cover loss before/during quiet accounting, a deadline shorter
+than the quiet polling interval, and delayed CDP/BiDi readiness responses with
+local/enclosing budgets followed by retry on the same live transport. The shared
+protocol fixture additionally checks in-flight and repeated zero-timeout network
+subscriptions and frame-event waits after injected listener loss on both
+transports.
+
+Scoped verification passed 304 checks: 290 units, ten mandatory two-engine native
+groups across `network_metadata`, `lifecycle_events` and `url_readiness`, and four
+doctests. Strict Clippy and formatting passed. This is not the complete 51-target
+replay. Frame execution-world cache dependencies, newly created descendant
+observation races, cleanup acknowledgement faults, redirect correlation and the
+final complete requirement audit remain G04 work.
