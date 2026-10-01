@@ -573,6 +573,12 @@ Work in [the audit generator](scripts/playwright-parity/build_matrix.py),
   [Scoped evidence](PLAYWRIGHT-PARITY.md#g04-audit-progress--queued-pause-release-acknowledgement):
   302 units, eight mandatory two-engine groups, four doctests and strict Clippy.
   Terminal pump cleanup and the complete replay remain under audit.
+  Terminal stop errors and stream loss now fail removal waiters before pump
+  completion. Native stop rejection/held replies and explicit retry are tested
+  on both transports; failed cleanup does not claim confirmed release.
+  [Evidence](PLAYWRIGHT-PARITY.md#g04-audit-progress--terminal-interception-stop-failures):
+  302 units, eight mandatory two-engine groups, four doctests and three-package
+  strict Clippy. The complete final-source replay and requirement audit remain.
   Further progress: native listener guards expose terminal source loss to Page
   event, typed request/response and legacy network predicate waits, including
   zero-timeout probes on both transports. [Evidence](PLAYWRIGHT-PARITY.md#g04-audit-progress--native-listener-source-loss):

@@ -3250,3 +3250,26 @@ These are current gates, separate from historical phase counts. The complete
 and mandatory both-browser setting; it has not yet produced a terminal result.
 The remaining-work index now lists G04 alone, matching the 50 checked tasks.
 Terminal interception cleanup and the final requirement audit remain open.
+
+## G04 audit progress — Terminal interception stop failures
+
+CDP and BiDi route pumps now preserve native stop rejection or timeout before
+terminal task completion wakes removal waiters. The same error is retained in
+the cleanup attempt and recorded in route diagnostics. Event-stream termination
+also fails the attempt explicitly instead of being treated as successful
+shutdown. The native stop uses a bounded cleanup clock even when protocol
+operation timeouts are disabled.
+
+The protocol regression exercises idle and terminal stop failures on both
+transports, including a held reply, failure preceding the stopped notification,
+retained BiDi intercept identity, explicit retry and replay of the original
+waiter's failure. A failed native cleanup does not prove resource release;
+page/context disposal remains the recovery boundary for lost observation or
+unconfirmed cleanup. Already-issued protocol commands are not force-cancelled.
+
+Scoped final-source verification passed 302 units, all eight required
+Chromium/Firefox route-lifecycle groups and four doctests. Strict all-target
+Clippy passed for E2E, CLI and configuration. The ongoing broad replay built its
+binaries before this increment; it is a checkpoint run, not a complete replay
+of this final source. G04 remains open for the complete final-source replay and
+requirement audit.

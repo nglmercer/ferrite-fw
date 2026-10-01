@@ -3261,7 +3261,7 @@ impl CdpDriver {
                     _ = transport.cancelled() => break,
                     Some(_) = tasks.join_next(), if !tasks.is_empty() => continue,
                     _ = runtime.changed.notified() => continue,
-                    event = events.recv(), if tasks.len() < 256 => match event { Ok(event) => event, Err(error) => { sink.record("route", format!("interception event stream ended: {error}")); break; } },
+                    event = events.recv(), if tasks.len() < 256 => match event { Ok(event) => event, Err(error) => { let message = format!("interception event stream ended: {error}"); runtime.cleanup_attempt().fail(message.clone()); sink.record("route", message); break; } },
                 };
                 if event.session.as_deref() != Some(&session) {
                     continue;
@@ -3477,7 +3477,7 @@ impl CdpDriver {
             tasks.shutdown().await;
             decided.lock().unwrap_or_else(|e| e.into_inner()).clear();
             runtime.clear();
-            let _ = tokio::time::timeout(Duration::from_millis(750), driver.stop_routing()).await;
+            route_pump_terminal(&runtime, &driver, &sink).await;
         });
         startup.committed = true;
         Ok(crate::routing::RoutePump::new(
@@ -5059,7 +5059,7 @@ impl BidiDriver {
                     _ = transport.cancelled() => break,
                     Some(_) = tasks.join_next(), if !tasks.is_empty() => continue,
                     _ = runtime.changed.notified() => continue,
-                    event = events.recv(), if tasks.len() < 256 => match event { Ok(event) => event, Err(error) => { sink.record("route", format!("interception event stream ended: {error}")); break; } },
+                    event = events.recv(), if tasks.len() < 256 => match event { Ok(event) => event, Err(error) => { let message = format!("interception event stream ended: {error}"); runtime.cleanup_attempt().fail(message.clone()); sink.record("route", message); break; } },
                 };
                 if !bidi_owned_pause(&event, &context, &intercept) {
                     continue;
@@ -5221,7 +5221,7 @@ impl BidiDriver {
             tasks.abort_all();
             tasks.shutdown().await;
             runtime.clear();
-            let _ = tokio::time::timeout(Duration::from_millis(750), driver.stop_routing()).await;
+            route_pump_terminal(&runtime, &driver, &sink).await;
         });
         Ok(crate::routing::RoutePump::new(
             handle.abort_handle(),
@@ -6367,6 +6367,27 @@ struct CachedRouteDecision {
     _request: crate::routing::RequestGuard,
     network_id: Option<String>,
 }
+/// Preserve a terminal cleanup failure before PumpCompletion wakes removals.
+async fn route_pump_terminal(
+    runtime: &crate::routing::RouteRuntime,
+    driver: &Driver,
+    sink: &ConsoleSink,
+) -> bool {
+    let budget = crate::operation::Deadline::cleanup(Duration::from_millis(750));
+    match budget
+        .run("terminal interception stop", driver.stop_routing())
+        .await
+    {
+        Ok(()) => true,
+        Err(error) => {
+            let message = format!("terminal interception cleanup failed: {error}");
+            runtime.cleanup_attempt().fail(message.clone());
+            sink.record("route", message);
+            false
+        }
+    }
+}
+
 async fn route_pump_idle<F: std::future::Future<Output = E2eResult<()>>>(
     runtime: &crate::routing::RouteRuntime,
     slot: &std::sync::Weak<crate::routing::PumpSlot>,
@@ -6776,9 +6797,10 @@ mod initialization_tests {
     }
 
     #[tokio::test]
-    async fn rejected_or_delayed_native_stop_preserves_pump_and_allows_cleanup_retry() {
+    async fn idle_and_terminal_native_stop_failures_remain_observable_and_retryable() {
         for bidi in [false, true] {
-            for delayed in [false, true] {
+            for (delayed, terminal) in [(false, false), (true, false), (false, true), (true, true)]
+            {
                 let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
                 let address = listener.local_addr().unwrap();
                 let retry = Arc::new(AtomicBool::new(false));
@@ -6858,6 +6880,37 @@ mod initialization_tests {
                     )
                 };
                 let runtime = Arc::new(crate::routing::RouteRuntime::default());
+                if terminal {
+                    let sink = ConsoleSink::new();
+                    assert!(!route_pump_terminal(&runtime, &driver, &sink).await);
+                    commands.recv().await.unwrap();
+                    let failed = runtime.cleanup_attempt();
+                    let stopped = crate::CancellationToken::new();
+                    stopped.cancel();
+                    assert!(
+                        matches!(failed.wait(&stopped).await, Err(E2eError::Config(message)) if message.contains("terminal interception cleanup failed"))
+                    );
+                    if let Driver::Bidi(native) = &driver {
+                        assert_eq!(
+                            native.intercept.lock().unwrap().as_deref(),
+                            Some("owned-intercept")
+                        );
+                    }
+                    retry.store(true, Ordering::Release);
+                    runtime.retry_cleanup();
+                    assert!(route_pump_terminal(&runtime, &driver, &sink).await);
+                    commands.recv().await.unwrap();
+                    assert!(!runtime.cleanup_attempt().failed.is_cancelled());
+                    assert!(
+                        failed.failed.is_cancelled(),
+                        "retry preserves the original failure"
+                    );
+                    if let Driver::Bidi(native) = &driver {
+                        assert!(native.intercept.lock().unwrap().is_none());
+                    }
+                    server.abort();
+                    continue;
+                }
                 let parked = tokio::spawn(std::future::pending::<()>());
                 let slot = Arc::new(tokio::sync::Mutex::new(Some(
                     crate::routing::RoutePump::new(
