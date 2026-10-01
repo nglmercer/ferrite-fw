@@ -515,8 +515,8 @@ they do not constitute differential Playwright conformance coverage.
 
 ## G — Foundations for the larger session
 
-Work in [the audit generator](scripts/playwright-parity/build_matrix.py),
-[tests](crates/ferrite-e2e/tests) and the parity documents.
+Work in [the audit generator](../../scripts/playwright-parity/build_matrix.py),
+[tests](../../crates/ferrite-e2e/tests) and the parity documents.
 
 - [x] **G01 — Reconcile the matrix with current behavior (S).** Audit mappings
   against public APIs and native regressions before treating a Missing label as
@@ -539,7 +539,7 @@ Work in [the audit generator](scripts/playwright-parity/build_matrix.py),
   Node; Ferrite's library and normal Rust tests retain their current runtime.
   Done when failures identify the semantic difference and the corpus can be
   rerun against the pinned version.
-  Evidence: `5c2c7aa`; [pinned corpus](scripts/e2e-conformance/README.md) records actual Playwright 1.63.0 Chromium results and compares shared native Chromium/Firefox behavior.
+  Evidence: `5c2c7aa`; [pinned corpus](../../scripts/e2e-conformance/README.md) records actual Playwright 1.63.0 Chromium results and compares shared native Chromium/Firefox behavior.
 
 - [x] **G04 — Apply lifecycle checks to every new API (M).** Reuse existing
   operation budgets and cancellation rather than adding independent timers.
@@ -722,12 +722,12 @@ Work in [the audit generator](scripts/playwright-parity/build_matrix.py),
 
 ## A — Core features to implement first
 
-Main files: [locator.rs](crates/ferrite-e2e/src/locator.rs),
-[expect.rs](crates/ferrite-e2e/src/expect.rs),
-[page.rs](crates/ferrite-e2e/src/page.rs),
-[context.rs](crates/ferrite-e2e/src/context.rs),
-[driver.rs](crates/ferrite-e2e/src/driver.rs) and
-[dom.js](crates/ferrite-e2e/src/dom.js).
+Main files: [locator.rs](../../crates/ferrite-e2e/src/locator.rs),
+[expect.rs](../../crates/ferrite-e2e/src/expect.rs),
+[page.rs](../../crates/ferrite-e2e/src/page.rs),
+[context.rs](../../crates/ferrite-e2e/src/context.rs),
+[driver.rs](../../crates/ferrite-e2e/src/driver.rs) and
+[dom.js](../../crates/ferrite-e2e/src/dom.js).
 
 ### Events and assertions
 
@@ -1080,11 +1080,11 @@ their dependencies are ready. References include
   distinct, diagnostic text is escaped, empty/large reports remain usable and
   moving the bundle preserves all artifact links. Visually inspect representative
   expanded reports; no Trace Viewer archive implementation is required.
-  Evidence: `eeeced5`; [native tests](crates/ferrite-e2e/tests/report_diagnostics.rs)
+  Evidence: `eeeced5`; [native tests](../../crates/ferrite-e2e/tests/report_diagnostics.rs)
   verify combined filters, every status, page sizes, unnamed/escaped projects,
   1,500-result and empty views, retry isolation, closed-page network history,
   HTTP/transport failures, redirects and relocated artifact downloads on both
-  engines. [Bounded summaries](crates/ferrite-e2e/src/report_network.rs) and native
+  engines. [Bounded summaries](../../crates/ferrite-e2e/src/report_network.rs) and native
   log units verify weak ownership, replay, caps, Unicode and no late resurrection.
   Historical JSON and escaping passed. Scoped 279 checks, strict Clippy/fmt,
   matrix and 740 links passed; eight actual report views inspected. All-row
@@ -1196,8 +1196,8 @@ their dependencies are ready. References include
   open-shadow/frame roots, text fragments and rounded viewport boxes. Zero/negative
   upstream depth is unbounded; fractional depth/type errors and frame-local versus
   main-viewport box coordinates are recorded.
-  Implementation: `310f248`; [options](crates/ferrite-e2e/src/aria_options.rs) and
-  [native tests](crates/ferrite-e2e/tests/aria_options.rs) verify both engines.
+  Implementation: `310f248`; [options](../../crates/ferrite-e2e/src/aria_options.rs) and
+  [native tests](../../crates/ferrite-e2e/tests/aria_options.rs) verify both engines.
   Safety markers, surrogate-safe name limits, role/DOM budgets, frame-local boxes,
   shadow roots, state omission/mixed inputs and exact assertion companions passed.
   JSON string transport avoids deep BiDi serialization timeouts. Legacy signatures
@@ -1255,8 +1255,8 @@ complete this section.
   The 1 MiB body cap and 16 MiB typed/legacy retained-history budgets remain;
   caller-held handles survive pruning/close. Stop/restart generation isolation,
   pending timeout/zero/caller cancellation, native failed transport and explicit
-  Firefox unsupported errors are covered. See [native tests](crates/ferrite-e2e/tests/captured_bodies.rs)
-  and [pinned observations](scripts/e2e-conformance/body-reference.json).
+  Firefox unsupported errors are covered. See [native tests](../../crates/ferrite-e2e/tests/captured_bodies.rs)
+  and [pinned observations](../../scripts/e2e-conformance/body-reference.json).
   Verified 257 scoped checks: 245 units, eight native groups across four targets
   and four doctests, plus strict Clippy/formatting, matrix and local-link checks.
   Legacy browser filters retained 91/92 excluded tests; this is not a full replay.
@@ -1267,9 +1267,9 @@ complete this section.
   predictably. Reference: [Coverage](https://playwright.dev/docs/api/class-coverage).
   Verified reset/source/anonymous options, explicit source status/caps, retained
   stylesheet IDs with empty ranges, and native V8 navigation loss despite reset
-  false. Native [options tests](crates/ferrite-e2e/tests/coverage_options.rs) cover
+  false. Native [options tests](../../crates/ferrite-e2e/tests/coverage_options.rs) cover
   restart, setup-timeout recovery, zero/caller cancellation, page/context disposal,
-  disconnect and Firefox unsupported errors. [Pinned observations](scripts/e2e-conformance/coverage-reference.json)
+  disconnect and Firefox unsupported errors. [Pinned observations](../../scripts/e2e-conformance/coverage-reference.json)
   preserve native duplicate URLs and anonymous empty URLs. Collector storage/
   range budgets and event lag are explicit; sources are fetched while IDs live.
   Verified 257 scoped checks: 249 units, four native groups across three targets
@@ -1285,10 +1285,10 @@ complete this section.
   selection with stable ties, binary/redirect fulfillment and per-hop snapshots.
   New exports support full/minimal, omit/embed, timing omission and URL filters,
   with bounded admitted staging, atomic publication and shared operation controls.
-  [Native tests](crates/ferrite-e2e/tests/har_options.rs) cover future context pages,
+  [Native tests](../../crates/ferrite-e2e/tests/har_options.rs) cover future context pages,
   filtered removal, invalid replay installation and cancellation. Firefox binary
   fulfillment works; strict POST bytes and native response capture remain unavailable.
-  [Pinned observations](scripts/e2e-conformance/har-reference.json) verify policies,
+  [Pinned observations](../../scripts/e2e-conformance/har-reference.json) verify policies,
   candidate selection and four recording profiles. Legacy fallback remains the
   default; recording is explicit Page export with approximate aggregate timing.
   Verified 267 scoped checks: 256 units, seven native groups across four targets,
@@ -1305,8 +1305,8 @@ complete this section.
   Native reset values, PNG dimensions, JS values and HTTP headers are verified;
   Firefox rejects changed profiles. Shared operation deadlines include lock
   waiting, with explicit native partial-application limits after cancellation.
-  [Native gate](crates/ferrite-e2e/tests/emulation_options.rs) and
-  [pinned observations](scripts/e2e-conformance/emulation-reference.json)
+  [Native gate](../../crates/ferrite-e2e/tests/emulation_options.rs) and
+  [pinned observations](../../scripts/e2e-conformance/emulation-reference.json)
   distinguish public media semantics from raw-CDP metrics/UA comparisons.
   Verified 273 scoped checks: 259 units, ten native groups across three targets,
   four doctests, plus strict Clippy/formatting, matrix and local links. The legacy
@@ -1321,9 +1321,9 @@ complete this section.
   idempotent disposal, last-owner drop queues detach and scoped event streams
   report lag/owner loss. Native cleanup survives dropped detach waits; abandoned
   attach replies are detached, with at most 256 outstanding tracked attachments.
-  [Native gate](crates/ferrite-e2e/tests/cdp_sessions.rs) verifies isolation,
+  [Native gate](../../crates/ferrite-e2e/tests/cdp_sessions.rs) verifies isolation,
   pending commands, cancellation, context/transport loss, native/drop disposal,
-  stream lag and retries. [Pinned observations](scripts/e2e-conformance/cdp-session-reference.json)
+  stream lag and retries. [Pinned observations](../../scripts/e2e-conformance/cdp-session-reference.json)
   confirm public session semantics; upstream repeated detach rejects, unlike
   Ferrite's idempotent policy. Browser/Frame factories remain outside this task.
   Verified 276 scoped checks: 260 units, 12 native groups across three targets,
@@ -1399,7 +1399,7 @@ behavior claims must still use the repository's pinned Playwright v1.63.0 corpus
   failures are distinct: preserve surviving files, notify reporters and fail the
   run. An abandoned run future does not trigger deletion of unclassified output.
   Captures, context cleanup, live callbacks and portable copying finish first.
-  [Owned-directory cleanup](crates/ferrite-e2e/src/owned_output.rs) verifies the
+  [Owned-directory cleanup](../../crates/ferrite-e2e/src/owned_output.rs) verifies the
   reserved root identities and traverses relative to open handles without
   following directory links. Baselines resolved through SnapshotOptions are
   protected, including awaited spawned tasks and symlink ancestors. Caller
@@ -1414,13 +1414,13 @@ behavior claims must still use the repository's pinned Playwright v1.63.0 corpus
   on_error afterward. New E2eConfig.preserve_output and
   ResolvedRunConfig.output_retention fields have legacy serde defaults; Rust
   exhaustive literals need the added fields or ..Default::default().
-  Evidence: [six native groups](crates/ferrite-e2e/tests/output_retention.rs)
+  Evidence: [six native groups](../../crates/ferrite-e2e/tests/output_retention.rs)
   cover every policy, retry/expected/interrupted classification, verified
   ownership rather than inferred filenames, protected baselines, caller sources,
   timeout/cleanup failures, replaced symlinks, failed publication, overlap and
   repeat runs. Real videos and all artifact links are downloaded from a relocated
   report after its original folder is removed. Both report views were inspected.
-  [Pinned corpus](scripts/e2e-conformance/output-retention-reference.json) records
+  [Pinned corpus](../../scripts/e2e-conformance/output-retention-reference.json) records
   six upstream invocations, 33 cases, 48 attempts and 45 created markers. Upstream
   can leave deleted attachment paths in JSON; Ferrite deliberately prunes them.
   Verification: **284 scoped checks** (225 units, 26 native integrations across
@@ -1473,11 +1473,11 @@ behavior claims must still use the repository's pinned Playwright v1.63.0 corpus
   native quota errors preserve earlier writes. Storage-state capture now uses
   entry snapshots, preserving `__proto__` rather than losing it through remote
   object serialization. Session storage stays outside context state.
-  Evidence: [native tests](crates/ferrite-e2e/tests/web_storage.rs) cover empty,
+  Evidence: [native tests](../../crates/ferrite-e2e/tests/web_storage.rs) cover empty,
   Unicode/empty/prototype-sensitive keys, overwrite, owned snapshots, navigation,
   origin isolation, same-origin sharing/session page isolation, opaque origins,
   native local/session quotas, disposal, state restore and in-flight cancellation.
-  [Pinned reference](scripts/e2e-conformance/web-storage-reference.json) contains
+  [Pinned reference](../../scripts/e2e-conformance/web-storage-reference.json) contains
   16 upstream observations, including prototype-sensitive capture variation.
   Verification: 228 scoped E2E checks (220 units, four native groups and four
   doctests), strict all-target Clippy, formatting, generated matrix and local

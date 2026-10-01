@@ -251,7 +251,7 @@ both engines; native intercepted-URL/response-stage rewriting stays Chromium-onl
 cancellation to their clones. `with_timeout` overrides their action/protocol
 budgets without changing siblings. Frame helpers include `page`, `set_content`,
 `current_url` and function/URL/load/selector waits. See
-[the parity audit](../../PLAYWRIGHT-PARITY.md) for engine and API limitations.
+[the parity audit](../../docs/e2e/PLAYWRIGHT-PARITY.md) for engine and API limitations.
 
 Define fixtures with explicit Rust dependencies and scopes:
 
@@ -689,7 +689,7 @@ strings normalize text whitespace, while regexes read raw values. Default viewpo
 assertions use native intersection and account for clipping ancestors. Typed
 events are untrusted; use the native action APIs when trusted input matters.
 
-See the [engine table](../../E2E-ENGINE-CAPABILITIES.md) and
+See the [engine table](../../docs/e2e/E2E-ENGINE-CAPABILITIES.md) and
 [pinned conformance corpus](../../scripts/e2e-conformance/README.md) for native
 verification and remaining limits.
 
@@ -1322,7 +1322,7 @@ These overrides require Chromium. Metrics reset restores native window defaults;
 UA reset restores native values. Mobile metrics do not change UA hints. Optional
 `UserAgentMetadata` explicitly controls client hints. Operations accept timeout
 and cancellation through `operation`; multi-command metrics changes can remain
-partially applied after cancellation. See the [parity notes](../../PLAYWRIGHT-PARITY.md#c05--media-custom-device-metrics-and-user-agent-metadata).
+partially applied after cancellation. See the [parity notes](../../docs/e2e/PLAYWRIGHT-PARITY.md#c05--media-custom-device-metrics-and-user-agent-metadata).
 
 
 ### Own a Chromium CDP target session
@@ -1343,4 +1343,4 @@ native cleanup. Streams stop on detach, page/context disposal or disconnect,
 and report event overflow explicitly. `send_with`, `new_cdp_session_with`,
 `detach_with` and stream `next` accept `OperationOptions`. Native detach
 continues after an already-started wait is cancelled or dropped. Only Chromium
-Page target sessions are supported; see the [ownership notes](../../PLAYWRIGHT-PARITY.md#c06--scoped-cdp-target-session-ownership).
+Page target sessions are supported; see the [ownership notes](../../docs/e2e/PLAYWRIGHT-PARITY.md#c06--scoped-cdp-target-session-ownership).

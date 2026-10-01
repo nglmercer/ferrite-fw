@@ -59,25 +59,25 @@ The latest B10 increment passed 195 units, 30 native integration checks/six targ
 four doctests and 28 CLI/configuration checks (257 focused checks), with final
 strict Clippy, package formatting and regenerated links/matrix. All native checks
 required full Chrome 153 and Firefox 157. The
-[snapshot stability tests](crates/ferrite-e2e/tests/snapshot_stability.rs) cover
+[snapshot stability tests](../../crates/ferrite-e2e/tests/snapshot_stability.rs) cover
 update/negation/size/validation, never-stable existing and missing baselines,
 actual typed capture timeout and held font readiness with style ordering,
 caller/owner cancellation and restoration. The new
-[font/animation tests](crates/ferrite-e2e/tests/snapshot_fonts_and_animations.rs)
+[font/animation tests](../../crates/ferrite-e2e/tests/snapshot_fonts_and_animations.rs)
 use actual gated HTTP font responses across page/locator, open roots and
 same-origin frames. They also verify fallback opt-out, disposal, CSS/Web Animations
 API finite/infinite/zero-rate behavior, late CSS animations during font waits,
 visible native finish/resume failures and the 4,096/4,097-object preparation boundary. The 56 pinned runner snapshot cases document intentional
 stability/update differences. The 32 checked
-[font/animation observations](scripts/e2e-conformance/font-animation-reference.json)
+[font/animation observations](../../scripts/e2e-conformance/font-animation-reference.json)
 record actual pixels/states, upstream page capture before child-font delivery
 and Chromium locator-stability timeouts. Ferrite waits for reachable same-origin
 font documents in page assertions too. This is focused increment evidence, not a fresh
 complete integration inventory; B10 remains unchecked. The
-[snapshot path tests](crates/ferrite-e2e/tests/snapshot_paths.rs) verify project,
+[snapshot path tests](../../crates/ferrite-e2e/tests/snapshot_paths.rs) verify project,
 page/locator/text and explicit overrides, retry identity, early validation and
 report serialization. The 36 pinned public path-only cases record naming differences.
-The [snapshot diagnostic tests](crates/ferrite-e2e/tests/snapshot_artifacts.rs)
+The [snapshot diagnostic tests](../../crates/ferrite-e2e/tests/snapshot_artifacts.rs)
 verify immutable expected/actual/diff copies, previous/stability images, soft/
 retry ownership, visible I/O failures, cancellation/restoration and portable
 bundle relocation after deleting source output. The existing D02 native polling
@@ -92,24 +92,24 @@ Success, operational/control errors and completed pending results discard
 retained images; unfinished probes drop their own images and preserve the prior
 completed candidate; publication failures preserve Expect. Decode/encode/filesystem
 bounds remain under audit. The
-[12 screenshot/toPass observations](scripts/e2e-conformance/snapshot-poll-reference.json)
+[12 screenshot/toPass observations](../../scripts/e2e-conformance/snapshot-poll-reference.json)
 show upstream intermediate images retained after eventual/nested success and
 expected-only missing-target images; Rust final-only publication remains a
 documented difference.
 
 
-[screenshot_options.rs](crates/ferrite-e2e/tests/screenshot_options.rs) verifies
+[screenshot_options.rs](../../crates/ferrite-e2e/tests/screenshot_options.rs) verifies
 seven native groups on full Chrome/Firefox, with pixel dimensions/colors, frames/
 open roots, genuine restoration errors, dropped/canceled/timed-out waits,
 actual removed context IDs and one explicit capture step without internal trace
-steps. [screenshot_capabilities.rs](crates/ferrite-e2e/tests/screenshot_capabilities.rs)
+steps. [screenshot_capabilities.rs](../../crates/ferrite-e2e/tests/screenshot_capabilities.rs)
 checks native region/density/alpha behavior. The completed B09 checkpoint inventory is 405 E2E
 plus 28 CLI/config checks: broad 404 passed, followed by 16 related checks after
 the late trace fix, including its added regression. Strict final Clippy and
 formatting passed; 52 actual pinned cases cover both Chromium and moz-firefox
 BiDi. A transient unchanged redirected-header assertion is retained for G04.
 
-[polling_options.rs](crates/ferrite-e2e/tests/polling_options.rs) verifies four
+[polling_options.rs](../../crates/ferrite-e2e/tests/polling_options.rs) verifies four
 native groups on full Chrome 153/Firefox 157: shared cadence, local non-Send
 blocks, final-only soft failures and retry reports, scope isolation, typed errors,
 cancellation/disposal and enclosing timeouts with actual context removal. Seven
@@ -118,7 +118,7 @@ pinned polling cases record intentional upstream differences. The D02 combined
 inventory was 397 E2E plus 28 CLI/config checks, with strict Clippy and package
 formatting. Native polling HTML previews were inspected on both engines.
 
-[ci_policy.rs](crates/ferrite-e2e/tests/ci_policy.rs) verifies flaky policy,
+[ci_policy.rs](../../crates/ferrite-e2e/tests/ci_policy.rs) verifies flaky policy,
 live/serialized reports, retry/repetition/project scheduling, registered focus,
 global/user interruption and isolated child exits. Fourteen pinned runner cases
 record intentional upstream differences; twelve actual CLI cases ran across
@@ -126,7 +126,7 @@ full Chrome 153/Firefox 157 with parsed XML and child exit checks. The D01
 combined inventory was 386 E2E plus 28 CLI/config checks, with strict Clippy and
 package formatting. Native HTML previews were inspected on both engines.
 
-[fixture_budgets.rs](crates/ferrite-e2e/tests/fixture_budgets.rs) verifies six
+[fixture_budgets.rs](../../crates/ferrite-e2e/tests/fixture_budgets.rs) verifies six
 native groups on full Chrome/Firefox, including actual removed target and user
 context IDs after dropped close waits. Six lifecycle/budget unit groups cover
 shared/intersected clocks, disposal error replay and owner release, suite/worker
@@ -137,25 +137,25 @@ package formatting. An already-lost transport permits idempotent local close;
 it does not establish release of a remote native context.
 
 
-[core_conformance.rs](crates/ferrite-e2e/tests/core_conformance.rs) compares
-shared native behavior with the [pinned reference corpus](scripts/e2e-conformance/README.md)
+[core_conformance.rs](../../crates/ferrite-e2e/tests/core_conformance.rs) compares
+shared native behavior with the [pinned reference corpus](../../scripts/e2e-conformance/README.md)
 on Chromium and Firefox, and separately probes native media, locale/timezone,
 headers, GC and JS coverage with explicit Firefox errors. It reports installed
 browser identity and version. Existing
-[browser regressions](crates/ferrite-e2e/tests/browser.rs) cover the remaining
+[browser regressions](../../crates/ferrite-e2e/tests/browser.rs) cover the remaining
 context/emulation/routing/coverage/download/screenshot/video restrictions;
-[network and context lifecycle](crates/ferrite-e2e/tests/scopes_and_network.rs)
-and [wait/upload/console](crates/ferrite-e2e/tests/waits_uploads_and_console.rs)
+[network and context lifecycle](../../crates/ferrite-e2e/tests/scopes_and_network.rs)
+and [wait/upload/console](../../crates/ferrite-e2e/tests/waits_uploads_and_console.rs)
 groups cover metadata and lifecycle semantics.
 
-[browser_ownership.rs](crates/ferrite-e2e/tests/browser_ownership.rs) compares two
+[browser_ownership.rs](../../crates/ferrite-e2e/tests/browser_ownership.rs) compares two
 pinned Chromium observations on both engines and verifies real owner operations,
 shared defaults, failed storage setup cleanup, final-owner release, persistent
 profiles, canceled/concurrent shutdown and actual transport loss. Linux checks
 the launched process and temporary profile are released. Remote Chromium owner
 close leaves its source process running; weak contexts do not retain a browser.
 
-[effective_configuration.rs](crates/ferrite-e2e/tests/effective_configuration.rs)
+[effective_configuration.rs](../../crates/ferrite-e2e/tests/effective_configuration.rs)
 compares four pinned runner observations and verifies five native groups on both
 engines. Actual selected settings, whole-context/suite/test precedence, runtime
 timeout changes, retry isolation, dedicated owner identity/release, project
@@ -164,19 +164,19 @@ covered. A separate child process verifies legacy environment values are fixed
 before hooks without changing the parent's environment. All 29 integration
 targets and strict E2E/CLI/configuration gates passed for this phase.
 
-[soft_assertions.rs](crates/ferrite-e2e/tests/soft_assertions.rs) compares five
+[soft_assertions.rs](../../crates/ferrite-e2e/tests/soft_assertions.rs) compares five
 actual pinned runner cases and verifies contextual sources/steps, retained weak
 handles, setup/cleanup/fixtures, operational cancellation/timeouts and failed
 setup dependency release on both engines. Old report JSON defaults remain valid;
 soft mismatch text and paths are escaped in portable reports.
 
-[locator_descriptions.rs](crates/ferrite-e2e/tests/locator_descriptions.rs) compares
+[locator_descriptions.rs](../../crates/ferrite-e2e/tests/locator_descriptions.rs) compares
 three actual pinned description/resolution/error cases on both engines. It also
 checks native early validation, typed JSON causes, cancellation and local values/
 callbacks, retry/live/source metadata, owned traces, JSON and escaped reports.
 The pinned timeout omits the user label; richer Rust errors deliberately differ.
 
-[lifecycle_events.rs](crates/ferrite-e2e/tests/lifecycle_events.rs) compares four
+[lifecycle_events.rs](../../crates/ferrite-e2e/tests/lifecycle_events.rs) compares four
 pinned frame/readiness/dialog cases and verifies stable native identity,
 child-first subtree detach, replacement/history events, repeated set-content
 readiness, optional metadata and single context forwarding. Zero/live-default/
@@ -184,19 +184,19 @@ caller/enclosing deadlines, disposal, retry and disconnect waits run on both
 engines. A protocol fixture separately verifies that interrupted page setup
 releases its listener while the shared browser transport remains open.
 
-[typed network metadata](crates/ferrite-e2e/tests/network_metadata.rs) verifies
+[typed network metadata](../../crates/ferrite-e2e/tests/network_metadata.rs) verifies
 concurrent requests, child frames, redirects, JSON/form request text, duplicate
 cookies, headers-before-completion, HTTP/transport errors, disposal, disconnect,
 zero/caller/enclosing deadlines and runner retries on both engines. Missing
 Firefox fields are checked as absent rather than inferred.
 
-[header_forwarding.rs](crates/ferrite-e2e/tests/header_forwarding.rs) verifies
+[header_forwarding.rs](../../crates/ferrite-e2e/tests/header_forwarding.rs) verifies
 actual API transport, serialization, binary fulfillment, separate cookies with
 Expires commas, browser cookie storage and per-hop same-URL synthetic redirects.
 Generic native comma folding stays intact; known route-supplied pairs are
 retained separately from native completeness signals.
 
-[route_lifecycle.rs](crates/ferrite-e2e/tests/route_lifecycle.rs) checks active-call
+[route_lifecycle.rs](../../crates/ferrite-e2e/tests/route_lifecycle.rs) checks active-call
 removal, independent dispatch, registration churn, default/wait/ignore-errors/
 cancel, errors/panics, shared finite hit limits, context/future-page routing,
 budgets, retries, disposal and transport loss. Its pinned Chromium reference
@@ -204,7 +204,7 @@ records actual Playwright release behavior; native regressions also run on
 Firefox. Empty interception is released after pending native stages and calls
 settle; Firefox pauses queued before removal are explicitly continued.
 
-[route_options.rs](crates/ferrite-e2e/tests/route_options.rs) compares the pinned
+[route_options.rs](../../crates/ferrite-e2e/tests/route_options.rs) compares the pinned
 fetch/fulfill reference with native binary responses, inferred/explicit headers,
 duplicate cookies and cross-origin CORS results. It also verifies unavailable
 Firefox request bytes, context TLS/proxy/credentials, live budgets, cancellation,

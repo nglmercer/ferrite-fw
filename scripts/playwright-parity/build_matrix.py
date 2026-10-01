@@ -1,6 +1,7 @@
 import pathlib,re,json,collections
 import argparse,urllib.request
 ROOT=pathlib.Path(__file__).resolve().parents[2]
+DOCS=ROOT/'docs/e2e'
 parser=argparse.ArgumentParser(description="Regenerate the pinned Playwright member inventory and source links")
 parser.add_argument('--upstream', type=pathlib.Path, default=pathlib.Path.home()/'.cache/ferrite-playwright-audit/upstream')
 parser.add_argument('--fetch', action='store_true', help='Download pinned API documents listed in sources.json')
@@ -487,12 +488,13 @@ for c,entries in sorted(classes.items()):
  for x in cr:
   target='`'+x['target']+'`' if x['target'] else '—'
   if x['ref']:
-   f,n=x['ref'];target+=f' ([source]({f}#L{n}))'
+   f,n=x['ref'];target+=f' ([source](../../{f}#L{n}))'
   # GitHub links for local file line anchors; absolute user links are used in final response.
   name='`'+x['name']+'`'+(' (deprecated)' if x['deprecated'] else '')
   md.append('| '+ ' | '.join([name,x['kind'],x['status'],target,x['note'].replace('|','\\|').replace('\n',' ')])+' |')
  md+=['']
-(ROOT/'PLAYWRIGHT-API-MATRIX.md').write_text('\n'.join(md))
+DOCS.mkdir(parents=True,exist_ok=True)
+(DOCS/'PLAYWRIGHT-API-MATRIX.md').write_text('\n'.join(md))
 (P/'classified-inventory.json').write_text(json.dumps(rows,indent=2))
 (P/'summary.json').write_text(json.dumps({'classes':len(classes),'members':len(rows),'counts':dict(counts)},indent=2))
 print(json.dumps({'classes':len(classes),'members':len(rows),'counts':dict(counts)},indent=2))

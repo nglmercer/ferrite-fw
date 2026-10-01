@@ -4,7 +4,7 @@ Vite-like developer experience with a Rust-native dev server, JS/TS
 compilation, npm resolution, SSR runtime, and production packager —
 **without requiring Node.js** at runtime or for normal development/builds.
 
-Full design: [`ferrite-rust-ssr-framework-spec.md`](ferrite-rust-ssr-framework-spec.md).
+Documentation: [guides, examples and E2E reference](docs/README.md).
 
 ## Quickstart
 
@@ -294,9 +294,10 @@ Locators are strict by default and wait for actionable elements. The API also
 includes same-origin lazy `FrameLocator`s, independent clock controls,
 Chromium JS/CSS coverage, persistent profiles, context-linked API cookies,
 per-project browser/context options, and named test locks. See the
-[Playwright comparison](PLAYWRIGHT-PARITY.md) and
-[complete member matrix](PLAYWRIGHT-API-MATRIX.md) for remaining differences,
-and the [implementation TODO](E2E-PARITY-TODO.md) for prioritized follow-up work.
+[Playwright comparison](docs/e2e/PLAYWRIGHT-PARITY.md) and
+[complete member matrix](docs/e2e/PLAYWRIGHT-API-MATRIX.md) for remaining differences,
+and the [completed implementation checklist](docs/e2e/E2E-PARITY-TODO.md)
+for task acceptance criteria and history.
 See
 `examples/e2e/` for a runnable project and
 `crates/ferrite-e2e/tests/browser.rs` for coverage (per-engine tests
