@@ -55,6 +55,7 @@ struct Inner {
     tx: mpsc::UnboundedSender<Outbound>,
     pending: Mutex<HashMap<u64, oneshot::Sender<E2eResult<Value>>>>,
     events: broadcast::Sender<CdpEvent>,
+    popup_events: broadcast::Sender<CdpEvent>,
     popup_captures: Mutex<Option<Arc<crate::popup_capture::PopupCaptures>>>,
     downloads: Mutex<VecDeque<DownloadRecord>>,
     next_id: AtomicU64,
@@ -97,6 +98,7 @@ impl CdpConnection {
             popup_captures: Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
             events,
+            popup_events: broadcast::channel(256).0,
             downloads: Mutex::new(VecDeque::new()),
             next_id: AtomicU64::new(1),
             attachments: Mutex::new(HashMap::new()),
@@ -143,6 +145,10 @@ impl CdpConnection {
 
     /// Subscribe to protocol events.
     #[must_use]
+    pub(crate) fn subscribe_popups(&self) -> broadcast::Receiver<CdpEvent> {
+        self.inner.popup_events.subscribe()
+    }
+
     pub fn subscribe(&self) -> broadcast::Receiver<CdpEvent> {
         self.inner.events.subscribe()
     }
@@ -159,6 +165,14 @@ impl CdpConnection {
     }
 
     pub(crate) fn set_popup_captures(&self, captures: Arc<crate::popup_capture::PopupCaptures>) {
+        let weak = Arc::downgrade(&self.inner);
+        captures.set_resume(Arc::new(move |session| {
+            if let Some(inner) = weak.upgrade() {
+                let id = inner.next_id.fetch_add(1, Ordering::SeqCst);
+                let frame = serde_json::json!({"id":id,"sessionId":session,"method":"Runtime.runIfWaitingForDebugger","params":{}});
+                let _ = inner.tx.send(Outbound::Text(frame.to_string()));
+            }
+        }));
         *self
             .inner
             .popup_captures
@@ -386,6 +400,12 @@ fn handle_frame(inner: &Arc<Inner>, text: &str) {
         if let Some(captures) = captures {
             captures.cdp(&event, text.len());
         }
+        if matches!(
+            event.method.as_str(),
+            "Target.attachedToTarget" | "Target.targetDestroyed"
+        ) {
+            let _ = inner.popup_events.send(event.clone());
+        }
         let _ = inner.events.send(event);
     }
 }
@@ -479,6 +499,7 @@ mod tests {
             popup_captures: Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
             events,
+            popup_events: broadcast::channel(256).0,
             next_id: AtomicU64::new(1),
             attachments: Mutex::new(HashMap::new()),
             sessions: Mutex::new(HashMap::new()),
@@ -509,6 +530,7 @@ mod tests {
             popup_captures: Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
             events: broadcast::channel(4).0,
+            popup_events: broadcast::channel(256).0,
             downloads: Mutex::new(VecDeque::new()),
             next_id: AtomicU64::new(1),
             attachments: Mutex::new(HashMap::new()),
@@ -570,6 +592,45 @@ mod tests {
         assert!(connection.inner.attachments.lock().unwrap().is_empty());
     }
 
+    #[tokio::test]
+    async fn popup_channel_ignores_unrelated_traffic_and_reports_lifecycle_overflow() {
+        let (connection, _) = scoped_fixture();
+        let mut popups = connection.subscribe_popups();
+        let mut general = connection.subscribe();
+        for _ in 0..5000 {
+            handle_frame(
+                &connection.inner,
+                r#"{"method":"Runtime.consoleAPICalled","sessionId":"main","params":{}}"#,
+            );
+        }
+        assert!(matches!(
+            general.recv().await,
+            Err(broadcast::error::RecvError::Lagged(_))
+        ));
+        assert!(matches!(
+            popups.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+        handle_frame(
+            &connection.inner,
+            r#"{"method":"Target.attachedToTarget","params":{"sessionId":"popup"}}"#,
+        );
+        assert_eq!(
+            popups.recv().await.unwrap().method,
+            "Target.attachedToTarget"
+        );
+        for _ in 0..300 {
+            handle_frame(
+                &connection.inner,
+                r#"{"method":"Target.targetDestroyed","params":{"targetId":"popup"}}"#,
+            );
+        }
+        assert!(matches!(
+            popups.recv().await,
+            Err(broadcast::error::RecvError::Lagged(_))
+        ));
+    }
+
     #[test]
     fn event_frame_parses() {
         let text = r#"{"method":"Page.loadEventFired","sessionId":"ABC","params":{"timestamp":1}}"#;
@@ -588,6 +649,7 @@ mod tests {
             popup_captures: Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
             events,
+            popup_events: broadcast::channel(256).0,
             downloads: Mutex::new(VecDeque::new()),
             next_id: AtomicU64::new(1),
             attachments: Mutex::new(HashMap::new()),

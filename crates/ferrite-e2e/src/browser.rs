@@ -859,8 +859,12 @@ impl Browser {
             Backend::Bidi { conn, .. } => conn.set_popup_captures(captures.clone()),
         }
         let mut cdp_events = None;
+        let mut bidi_events = match &self.inner.backend {
+            Backend::Bidi { conn, .. } => Some(conn.subscribe_popups()),
+            _ => None,
+        };
         if let Backend::Cdp(cdp) = &self.inner.backend {
-            cdp_events = Some(cdp.subscribe());
+            cdp_events = Some(cdp.subscribe_popups());
             cdp.call(
                 None,
                 "Target.setDiscoverTargets",
@@ -879,12 +883,22 @@ impl Browser {
                     let mut events = cdp_events
                         .take()
                         .expect("CDP subscription created before enabling attachment");
+                    let mut recovery = std::collections::VecDeque::new();
                     loop {
                         let disconnected = cdp.disconnection();
-                        let event = match tokio::select! {biased; _=disconnected.cancelled()=>break, event=events.recv()=>event}
-                        {
+                        let received = if let Some(event) = recovery.pop_front() {
+                            Ok(event)
+                        } else {
+                            tokio::select! {biased; _=disconnected.cancelled()=>break, event=events.recv()=>event}
+                        };
+                        let event = match received {
                             Ok(event) => event,
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                recovery = captures.recovery().into_iter().filter_map(|(target,opener,session)| {
+                                    Some(crate::cdp::CdpEvent { session: None, method: "Target.attachedToTarget".into(), params: serde_json::json!({"sessionId":session?,"targetInfo":{"targetId":target,"openerId":opener,"type":"page"}}) })
+                                }).collect();
+                                continue;
+                            }
                             Err(_) => break,
                         };
                         if event.method == "Target.targetDestroyed" {
@@ -958,18 +972,30 @@ impl Browser {
                             .as_ref()
                             .map(|capture| capture.sink())
                             .unwrap_or_default();
-                        let spawned = CdpDriver::spawn(
-                            cdp.clone(),
-                            session.clone(),
-                            target.to_string(),
-                            timeout,
-                            sink.clone(),
-                            owner.id().map(str::to_string),
-                        )
-                        .await;
+                        let setup = crate::operation::Deadline::new(timeout);
+                        let setup_cancellation = owner.lifecycle_cancellation();
+                        let spawned = setup_cancellation
+                            .run(setup.run(
+                                "popup native initialization",
+                                CdpDriver::spawn(
+                                    cdp.clone(),
+                                    session.clone(),
+                                    target.to_string(),
+                                    timeout,
+                                    sink.clone(),
+                                    owner.id().map(str::to_string),
+                                ),
+                            ))
+                            .await;
                         let driver = match spawned {
                             Ok(driver) => driver,
                             Err(error) => {
+                                owner.popup_observation_lost(&format!(
+                                    "popup initialization failed: {error}"
+                                ));
+                                opener.sink.popup_observation_lost(&format!(
+                                    "popup initialization failed: {error}"
+                                ));
                                 if let Some(capture) = &capture {
                                     capture.failed(&error.to_string());
                                 }
@@ -987,7 +1013,13 @@ impl Browser {
                         };
                         let driver = Driver::Cdp(driver);
                         let control = driver.clone();
-                        match owner.finish_page(driver, sink, false).await {
+                        match setup_cancellation
+                            .run(setup.run(
+                                "popup context setup",
+                                owner.finish_page(driver, sink, false),
+                            ))
+                            .await
+                        {
                             Ok(page) => {
                                 if let Some(capture) = &capture {
                                     capture.adopted();
@@ -997,6 +1029,12 @@ impl Browser {
                                 opener.emit(PageEvent::Popup(Box::new(page)));
                             }
                             Err(error) => {
+                                owner.popup_observation_lost(&format!(
+                                    "popup context setup failed: {error}"
+                                ));
+                                opener.sink.popup_observation_lost(&format!(
+                                    "popup context setup failed: {error}"
+                                ));
                                 control.cancel_lifecycle();
                                 if let Some(capture) = &capture {
                                     capture.failed(&error.to_string());
@@ -1018,13 +1056,23 @@ impl Browser {
                     conn,
                     insecure_certs,
                 } => {
-                    let mut events = conn.subscribe();
+                    let mut events = bidi_events
+                        .take()
+                        .expect("BiDi popup subscription created before pump spawn");
+                    let mut recovery = std::collections::VecDeque::new();
                     loop {
                         let disconnected = conn.disconnection();
-                        let event = match tokio::select! {biased; _=disconnected.cancelled()=>break, event=events.recv()=>event}
-                        {
+                        let received = if let Some(event) = recovery.pop_front() {
+                            Ok(event)
+                        } else {
+                            tokio::select! {biased; _=disconnected.cancelled()=>break, event=events.recv()=>event}
+                        };
+                        let event = match received {
                             Ok(event) => event,
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                recovery = captures.recovery().into_iter().filter(|(_,_,session)| session.is_none()).map(|(id,opener,_)| crate::bidi::BidiEvent { method: "browsingContext.contextCreated".into(), params: serde_json::json!({"context":id,"parent":null,"originalOpener":opener}) }).collect();
+                                continue;
+                            }
                             Err(_) => break,
                         };
                         if event.method == "browsingContext.contextDestroyed" {
@@ -1080,18 +1128,30 @@ impl Browser {
                             .as_ref()
                             .map(|capture| capture.sink())
                             .unwrap_or_default();
-                        let driver = match BidiDriver::spawn(
-                            conn.clone(),
-                            context_id.to_string(),
-                            timeout,
-                            insecure_certs,
-                            sink.clone(),
-                            owner.id().map(str::to_string),
-                        )
-                        .await
+                        let setup = crate::operation::Deadline::new(timeout);
+                        let setup_cancellation = owner.lifecycle_cancellation();
+                        let driver = match setup_cancellation
+                            .run(setup.run(
+                                "popup native initialization",
+                                BidiDriver::spawn(
+                                    conn.clone(),
+                                    context_id.to_string(),
+                                    timeout,
+                                    insecure_certs,
+                                    sink.clone(),
+                                    owner.id().map(str::to_string),
+                                ),
+                            ))
+                            .await
                         {
                             Ok(driver) => driver,
                             Err(error) => {
+                                owner.popup_observation_lost(&format!(
+                                    "popup initialization failed: {error}"
+                                ));
+                                opener.sink.popup_observation_lost(&format!(
+                                    "popup initialization failed: {error}"
+                                ));
                                 if let Some(capture) = &capture {
                                     capture.failed(&error.to_string());
                                 }
@@ -1111,6 +1171,12 @@ impl Browser {
                                 opener.emit(PageEvent::Popup(Box::new(page)));
                             }
                             Err(error) => {
+                                owner.popup_observation_lost(&format!(
+                                    "popup context setup failed: {error}"
+                                ));
+                                opener.sink.popup_observation_lost(&format!(
+                                    "popup context setup failed: {error}"
+                                ));
                                 control.cancel_lifecycle();
                                 if let Some(capture) = &capture {
                                     capture.failed(&error.to_string());

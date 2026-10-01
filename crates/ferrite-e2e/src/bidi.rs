@@ -54,6 +54,7 @@ struct Inner {
     tx: mpsc::UnboundedSender<Outbound>,
     pending: Mutex<HashMap<u64, oneshot::Sender<E2eResult<Value>>>>,
     events: broadcast::Sender<BidiEvent>,
+    popup_events: broadcast::Sender<BidiEvent>,
     popup_captures: Mutex<Option<Arc<crate::popup_capture::PopupCaptures>>>,
     next_id: AtomicU64,
 }
@@ -96,6 +97,7 @@ impl BidiConnection {
             popup_captures: Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
             events,
+            popup_events: broadcast::channel(256).0,
             next_id: AtomicU64::new(1),
         });
 
@@ -135,6 +137,10 @@ impl BidiConnection {
 
     /// Subscribe to protocol events.
     #[must_use]
+    pub(crate) fn subscribe_popups(&self) -> broadcast::Receiver<BidiEvent> {
+        self.inner.popup_events.subscribe()
+    }
+
     pub fn subscribe(&self) -> broadcast::Receiver<BidiEvent> {
         self.inner.events.subscribe()
     }
@@ -270,6 +276,12 @@ fn handle_frame(inner: &Arc<Inner>, text: &str) {
             if let Some(captures) = captures {
                 captures.bidi(&event, text.len());
             }
+            if matches!(
+                event.method.as_str(),
+                "browsingContext.contextCreated" | "browsingContext.contextDestroyed"
+            ) {
+                let _ = inner.popup_events.send(event.clone());
+            }
             let _ = inner.events.send(event);
         }
         return;
@@ -388,6 +400,7 @@ mod tests {
             popup_captures: Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
             events,
+            popup_events: broadcast::channel(256).0,
             next_id: AtomicU64::new(1),
         });
         let connection = BidiConnection {

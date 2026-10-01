@@ -437,6 +437,13 @@ mod tests {
             captures.discard_closed("popup");
             assert!(weak.upgrade().is_none());
             context.clear_popup_diagnostics();
+            let resumed = Arc::new(Mutex::new(Vec::<String>::new()));
+            if !bidi {
+                let resumed = resumed.clone();
+                captures.set_resume(Arc::new(move |session| {
+                    resumed.lock().unwrap().push(session.into())
+                }));
+            }
             for index in 0..MAX_POPUP_HISTORY {
                 captures.create(
                     &format!("bounded-{index}"),
@@ -479,8 +486,58 @@ mod tests {
             );
             contexts.lock().unwrap().push(owner2.clone());
             let _root2 = owner2.new_page().await.unwrap();
-            captures.create("other-owner", "root2", Some("other-session".into()), !bidi);
+            let (page_loss, context_loss, ()) = tokio::join!(
+                _root.wait_for_popup(std::time::Duration::ZERO),
+                context.wait_for_event(crate::ContextEventKind::Page, std::time::Duration::ZERO),
+                async {
+                    tokio::task::yield_now().await;
+                    captures.create("other-owner", "root2", Some("other-session".into()), !bidi);
+                }
+            );
+            assert!(
+                matches!(page_loss, Err(crate::E2eError::Config(message)) if message.contains("observation limit"))
+            );
+            assert!(
+                matches!(context_loss, Err(crate::E2eError::Config(message)) if message.contains("observation limit"))
+            );
+            // A new wait is a retry with a fresh observation baseline.
+            assert!(tokio::time::timeout(
+                std::time::Duration::from_millis(10),
+                _root.wait_for_popup(std::time::Duration::ZERO)
+            )
+            .await
+            .is_err());
+            let (page_lag, context_lag, ()) = tokio::join!(
+                _root.wait_for_event(crate::PageEventKind::Request, std::time::Duration::ZERO),
+                context.wait_for_event(crate::ContextEventKind::Request, std::time::Duration::ZERO),
+                async {
+                    tokio::task::yield_now().await;
+                    for _ in 0..600 {
+                        _root.emit(crate::PageEvent::Console(
+                            serde_json::from_value(json!({"kind":"log","text":"buffer flood"}))
+                                .unwrap(),
+                        ));
+                    }
+                }
+            );
+            assert!(
+                matches!(page_lag, Err(crate::E2eError::Config(message)) if message.contains("lost"))
+            );
+            assert!(
+                matches!(context_lag, Err(crate::E2eError::Config(message)) if message.contains("lost"))
+            );
             assert!(captures.get("bounded-0").is_none());
+            let recovery = captures.recovery();
+            assert_eq!(recovery.len(), MAX_POPUP_HISTORY);
+            assert!(!recovery.iter().any(|(id, _, _)| id == "bounded-0"));
+            assert_eq!(recovery.first().unwrap().0, "bounded-1");
+            if !bidi {
+                assert!(resumed
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|id| id == "bounded-session-0"));
+            }
             let history = context.popup_diagnostics();
             assert_eq!(history.entries[0].adoption, PopupAdoption::Pending);
             assert!(history.entries[0].truncated);
@@ -499,7 +556,9 @@ mod tests {
                 "recovery must not duplicate history"
             );
             assert!(captures.get("bounded-1").is_none());
-            while events.try_recv().is_ok() {}
+            while let Ok(_) | Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) =
+                events.try_recv()
+            {}
             captures.close_native("bounded-1");
             captures.close_native("bounded-1");
             let closed = captures
@@ -761,10 +820,13 @@ struct Entry {
     order: u64,
 }
 /// Transport ingress owns pending captures; adopted captures have weak ownership.
+type NativeResume = Arc<dyn Fn(&str) + Send + Sync>;
+
 pub(crate) struct PopupCaptures {
     contexts: Weak<Mutex<Vec<BrowserContext>>>,
     entries: Mutex<HashMap<String, Entry>>,
     next: std::sync::atomic::AtomicU64,
+    resume: Mutex<Option<NativeResume>>,
 }
 impl PopupCaptures {
     pub(crate) fn new(contexts: Weak<Mutex<Vec<BrowserContext>>>) -> Self {
@@ -772,7 +834,53 @@ impl PopupCaptures {
             contexts,
             entries: Mutex::new(HashMap::new()),
             next: std::sync::atomic::AtomicU64::new(0),
+            resume: Mutex::new(None),
         }
+    }
+    fn observation_lost(&self, opener: &str, reason: &str) {
+        if let Some((context, page)) = crate::browser::find_owner(&self.contexts, opener) {
+            context.popup_observation_lost(reason);
+            page.sink.popup_observation_lost(reason);
+        }
+    }
+    pub(crate) fn set_resume(&self, resume: NativeResume) {
+        *self.resume.lock().unwrap_or_else(|e| e.into_inner()) = Some(resume);
+    }
+    fn resume(&self, session: &str) {
+        let resume = self
+            .resume
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(resume) = resume {
+            resume(session);
+        }
+    }
+    /// Retained pending attachments can reconstruct missed adoption notifications.
+    /// The snapshot has at most MAX_POPUP_HISTORY entries and no strong owners.
+    pub(crate) fn recovery(&self) -> Vec<(String, String, Option<String>)> {
+        let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        let mut pending: Vec<_> = entries
+            .values()
+            .filter_map(|entry| {
+                let capture = entry.pending.as_ref()?;
+                let record = capture.record.lock().unwrap_or_else(|e| e.into_inner());
+                (record.metadata.adoption == PopupAdoption::Pending && !record.metadata.closed)
+                    .then(|| {
+                        (
+                            entry.order,
+                            capture.page_id.clone(),
+                            record.metadata.opener_id.clone(),
+                            capture.session.clone(),
+                        )
+                    })
+            })
+            .collect();
+        pending.sort_by_key(|entry| entry.0);
+        pending
+            .into_iter()
+            .map(|(_, id, opener, session)| (id, opener, session))
+            .collect()
     }
     fn create(&self, id: &str, opener: &str, session: Option<String>, cdp: bool) {
         if id.is_empty() || opener.is_empty() || self.get(id).is_some() {
@@ -873,7 +981,20 @@ impl PopupCaptures {
                             record.metadata.truncated = true;
                             record.metadata.error = Some("pending popup observation limit exceeded; initial observations unavailable".into());
                         }
+                        let opener = capture
+                            .record
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .metadata
+                            .opener_id
+                            .clone();
+                        self.observation_lost(&opener, "pending popup observation limit exceeded; adoption notifications may be lost");
                         capture.stop("pending popup capture limit exceeded", false);
+                        // Eviction must not strand a paused native target. Its eventual
+                        // adopter can still recover owned history and report actual success.
+                        if let Some(session) = capture.session.as_deref() {
+                            self.resume(session);
+                        }
                     }
                 }
             }
@@ -958,6 +1079,10 @@ impl PopupCaptures {
         }
     }
     fn close_native(&self, id: &str) {
+        // Native destruction is authoritative even if the adoption pump lags.
+        if let Some((_, page)) = crate::browser::find_owner(&self.contexts, id) {
+            page.mark_closed();
+        }
         let Some(capture) = self.get(id) else {
             // An observation slot may have been evicted while its owned
             // diagnostics remain. Destruction is still an authoritative fact.
@@ -1017,6 +1142,17 @@ impl PopupCaptures {
                 event.params["sessionId"].as_str(),
             ) {
                 self.create(id, opener, Some(session.into()), true);
+                if self.get(id).is_none() {
+                    self.resume(session);
+                }
+            }
+        }
+        if event.method == "Target.attachedToTarget"
+            && event.session.is_none()
+            && event.params["targetInfo"]["openerId"].as_str().is_none()
+        {
+            if let Some(session) = event.params["sessionId"].as_str() {
+                self.resume(session);
             }
         }
         if event.method == "Target.targetDestroyed" {

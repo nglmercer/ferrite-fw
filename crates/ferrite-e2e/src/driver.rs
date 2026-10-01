@@ -108,6 +108,7 @@ pub struct ConsoleSink {
     pub(crate) socket_log: Arc<Mutex<crate::websocket::SocketLog>>,
     /// Page event broadcast (console, dialogs, network, downloads, popups).
     events: tokio::sync::broadcast::Sender<PageEvent>,
+    popup_loss: Arc<tokio::sync::watch::Sender<Option<String>>>,
     pub(crate) download_dir: Arc<Mutex<Option<PathBuf>>>,
     downloads_emitted: Arc<Mutex<HashMap<PathBuf, (u64, SystemTime)>>>,
     context_events: Arc<Mutex<Option<ContextEventForwarding>>>,
@@ -129,6 +130,12 @@ pub(crate) const MAX_RESPONSE_BODY: usize = 1024 * 1024;
 const MAX_EVENT_BUFFER: usize = 256;
 
 impl ConsoleSink {
+    pub(crate) fn popup_losses(&self) -> tokio::sync::watch::Receiver<Option<String>> {
+        self.popup_loss.subscribe()
+    }
+    pub(crate) fn popup_observation_lost(&self, reason: &str) {
+        self.popup_loss.send_replace(Some(reason.into()));
+    }
     /// Empty sinks.
     #[must_use]
     pub fn new() -> Self {
@@ -147,6 +154,7 @@ impl ConsoleSink {
             body_capture_control: Arc::new(Mutex::new(BodyCaptureControl::default())),
             network_events: tokio::sync::broadcast::channel(MAX_EVENT_BUFFER).0,
             events: tokio::sync::broadcast::channel(MAX_EVENT_BUFFER).0,
+            popup_loss: Arc::new(tokio::sync::watch::channel(None).0),
             context_events: Arc::new(Mutex::new(None)),
             page_id: Arc::new(Mutex::new(None)),
             frame_events: Arc::new(Mutex::new(crate::lifecycle_events::FrameEvents::default())),

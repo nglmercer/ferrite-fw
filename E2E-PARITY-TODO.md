@@ -562,6 +562,14 @@ Work in [the audit generator](scripts/playwright-parity/build_matrix.py),
   strict two-engine target and subsequent full routing23 batch passed; no cause
   is proven and no assertion was relaxed. Audit native fulfillment acknowledgement,
   extra-event correlation and redirect-hop identity before closing this item.
+  Audit progress: popup pumps use dedicated lifecycle channels with bounded
+  ordered recovery. Pending Chromium capture eviction queues resume; native
+  closure is authoritative at ingress. Shared setup deadlines, current-wait
+  source-loss notifications and explicit Page/context broadcast lag are verified.
+  [Scoped evidence](PLAYWRIGHT-PARITY.md#g04-audit-progress--popup-lifecycle-channels-and-loss):
+  261 units, 12 mandatory two-engine native groups, four doctests (277 checks).
+  This item remains open for the other audit cases and complete 51-target replay.
+
 
 ## A — Core features to implement first
 

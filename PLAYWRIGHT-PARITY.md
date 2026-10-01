@@ -2754,3 +2754,41 @@ four) and four doctests. Strict Clippy, formatting, matrix and local links passe
 The matrix now has 650 Partial, 312 Missing, 15 Equivalent and 41 Idiomatic
 members across 73 classes/1,018 members. Integration inventory: 51 targets;
 the complete replay and remaining lifecycle audit remain G04 work.
+
+
+## G04 audit progress — Popup lifecycle channels and loss
+
+The popup adoption pumps now subscribe to dedicated 256-event lifecycle channels
+on both transports, created before pump startup. Unrelated console/network
+traffic cannot evict their attachment/destruction notifications. After lifecycle
+channel lag, the pump reconstructs missed pending notifications from at most
+64 captures in arrival order; it does not retain a second set of Page owners.
+Chromium pending-capture eviction queues `Runtime.runIfWaitingForDebugger`,
+using a weak transport callback, so eviction cannot silently leave a target
+paused. Existing queued adoption can still recover retained history and record
+its actual outcome. Truncation/source-loss remains explicit rather than being
+reported as an invented setup failure.
+
+Native target destruction updates tracked Page closure at ingress, independently
+of pump lag. Popup native initialization and context setup share one deadline
+and context cancellation. Setup failures and capture loss wake current Page
+popup and context Page/Popup waits with explicit errors. The watch notification
+is per-wait: a new wait starts from the latest observed version and can retry.
+General Page/context event waiters also report broadcast lag rather than silently
+skipping it; a close waiter can use already-known native closure after lag.
+
+The [transport unit gate](crates/ferrite-e2e/src/cdp.rs) proves unrelated traffic
+can overflow the general channel without reaching the popup channel, and that
+popup overflow is reported. The [popup ownership gate](crates/ferrite-e2e/src/popup_capture.rs)
+verifies bounded ordered recovery, eviction resume, zero-timeout source-loss
+settlement, retry baselines, event-wait lag, capture release and exactly one
+native close forwarding. Existing [native popup](crates/ferrite-e2e/tests/popup_diagnostics.rs),
+[lifecycle](crates/ferrite-e2e/tests/lifecycle_events.rs) and
+[session](crates/ferrite-e2e/tests/cdp_sessions.rs) regressions passed on mandatory
+Chromium/Firefox: 12 groups. Combined scoped evidence is 261 units, 12 native
+groups and four doctests (277 checks), with strict Clippy and formatting.
+This is progress within G04, not its completion or the full integration replay.
+Remaining audit work includes routing installation cancellation/rollback,
+listener-exit source loss, native disposal acknowledgment, detached-frame and
+empty-context waits, assertion/step control errors, redirect/header correlation,
+and the final 51-target replay and requirement-by-requirement backlog audit.

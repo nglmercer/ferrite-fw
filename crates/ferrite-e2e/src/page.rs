@@ -2034,8 +2034,15 @@ impl Page {
                         loop {
                             match events.recv().await {
                                 Ok(PageEvent::Closed) => return Ok(PageEvent::Closed),
-                                Ok(_)
-                                | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                                Ok(_) => {}
+                                Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => {
+                                    if self.is_closed() {
+                                        return Ok(PageEvent::Closed);
+                                    }
+                                    return Err(E2eError::Config(format!(
+                                        "page close wait lost {count} events"
+                                    )));
+                                }
                                 Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                                     return Err(E2eError::Disconnected(
                                         "page event stream closed".into(),
@@ -2088,13 +2095,21 @@ impl Page {
                     return Ok(PageEvent::Download(path));
                 }
                 let mut events = self.subscribe();
+                let mut losses = (kind == PageEventKind::Popup).then(|| self.sink.popup_losses());
                 crate::operation::Deadline::new(timeout)
                     .run(format!("wait for {kind:?} event"), async {
                         loop {
-                            match events.recv().await {
+                            let observed = tokio::select! {biased;
+                                changed=async { match losses.as_mut() { Some(loss) => loss.changed().await, None => std::future::pending().await } } => {
+                                    changed.map_err(|_| E2eError::Disconnected("popup adoption source closed".into()))?;
+                                    return Err(E2eError::Config(losses.as_ref().unwrap().borrow().clone().unwrap_or_else(|| "popup adoption observations lost".into())));
+                                },
+                                event=events.recv()=>event,
+                            };
+                            match observed {
                                 Ok(event) if event.kind() == kind => return Ok(event),
-                                Ok(_)
-                                | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                                Ok(_) => {},
+                                Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => return Err(E2eError::Config(format!("page event wait lost {count} events"))),
                                 Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                                     return Err(E2eError::Disconnected(
                                         "page event stream closed".into(),

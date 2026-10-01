@@ -404,6 +404,7 @@ pub struct BrowserContext {
     close_task: crate::operation::SharedClose,
     cancellation: crate::CancellationToken,
     events: tokio::sync::broadcast::Sender<ContextEvent>,
+    popup_loss: Arc<tokio::sync::watch::Sender<Option<String>>>,
     backend: Backend,
     id: Option<String>,
     options: ContextOptions,
@@ -454,6 +455,7 @@ impl BrowserContext {
             close_task: crate::operation::SharedClose::default(),
             cancellation: crate::CancellationToken::new(),
             events: tokio::sync::broadcast::channel(512).0,
+            popup_loss: Arc::new(tokio::sync::watch::channel(None).0),
             backend,
             id,
             options,
@@ -543,6 +545,9 @@ impl BrowserContext {
     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<ContextEvent> {
         self.events.subscribe()
     }
+    pub(crate) fn popup_observation_lost(&self, reason: &str) {
+        self.popup_loss.send_replace(Some(reason.into()));
+    }
     pub async fn wait_for_event(
         &self,
         kind: ContextEventKind,
@@ -585,6 +590,8 @@ impl BrowserContext {
             }
         }
         let mut events = self.subscribe();
+        let mut losses = matches!(kind, ContextEventKind::Page | ContextEventKind::Popup)
+            .then(|| self.popup_loss.subscribe());
         let timeout = options.timeout.unwrap_or_else(|| {
             self.live
                 .lock()
@@ -596,12 +603,20 @@ impl BrowserContext {
             format!("wait for context {kind:?}"),
             async {
                 loop {
-                    match events.recv().await {
+                    let observed = tokio::select! {biased;
+                        changed=async { match losses.as_mut() { Some(loss) => loss.changed().await, None => std::future::pending().await } } => {
+                            changed.map_err(|_| E2eError::Disconnected("popup adoption source closed".into()))?;
+                            return Err(E2eError::Config(losses.as_ref().unwrap().borrow().clone().unwrap_or_else(|| "popup adoption observations lost".into())));
+                        },
+                        event=events.recv()=>event,
+                    };
+                    match observed {
                         Ok(event) if event.kind() == kind => return Ok(event),
                         Ok(ContextEvent::Closed) => {
                             return Err(E2eError::Cancelled("browser context closed".into()))
                         }
-                        Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                        Ok(_) => {},
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => return Err(E2eError::Config(format!("context event wait lost {count} events"))),
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                             return Err(E2eError::Disconnected(
                                 "context event stream closed".into(),
