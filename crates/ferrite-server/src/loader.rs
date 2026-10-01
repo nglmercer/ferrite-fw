@@ -46,6 +46,9 @@ impl DevServer {
         }
         let resolved_id = resolved.id.clone();
         let (path_part, query) = resolved_id.split_query();
+        if path_part.ends_with(".node") {
+            return Err(FerriteError::Resolve(format!("native addon {path_part} is unavailable in the browser/embedded pipeline; use an explicitly configured Node runtime")));
+        }
         // 2. Asset-shim requests (`?asset-shim` appended by import rewriting).
         if query.is_some_and(|q| q.starts_with("asset-shim")) {
             let plain = path_part.to_string();
@@ -137,7 +140,20 @@ impl DevServer {
         module.map = merge_maps(module.map, pre_map, module.code == pre.code)?;
         module.side_effects = loaded.side_effects.or(resolved.side_effects);
         module.dependencies = loaded.dependencies;
-        module.dependencies.push(self.inner.config.lockfile().to_string_lossy().into_owned());
+        // Generated query resources belong to their physical source. A plain
+        // file watcher event must invalidate every compiled resource for it.
+        if query.is_some() {
+            if let Ok(file) = self.id_to_file(&resolved_id) {
+                if file.is_file() {
+                    module
+                        .dependencies
+                        .push(file.to_string_lossy().into_owned());
+                }
+            }
+        }
+        module
+            .dependencies
+            .push(self.inner.config.lockfile().to_string_lossy().into_owned());
         module.dependencies.extend(pre.dependencies);
         // Normal/post transforms see lowered output; retain maps and watches.
         if module.module_type.is_js_like() {
@@ -201,8 +217,32 @@ impl DevServer {
             module.has_module_syntax = parsed.has_module_syntax;
             module.uses_import_meta_hot = parsed.uses_import_meta_hot;
         }
-        // 10. CJS conversion (dev ESM interop, §18).
-        if needs_cjs_conversion(&resolved_id, &module.code, module.has_module_syntax) {
+        let factory = resolved_id.split_query().1.is_some_and(|query| {
+            query
+                .split('&')
+                .any(|part| part == ferrite_transform::CJS_FACTORY_QUERY)
+        });
+        if factory && path_part.ends_with(".json") {
+            let (code, map) = ferrite_transform::commonjs_json_factory(
+                &resolved_id.0,
+                &module.code,
+                self.inner.config.build.sourcemap.enabled(),
+            )?;
+            module.map = merge_maps(map, module.map, false)?;
+            module.code = code;
+            module.commonjs = Some(Default::default());
+        } else if factory
+            || (module.module_type.is_js_like()
+                && ferrite_transform::analyze_commonjs(&module.id.0, &module.code)?.is_commonjs)
+        {
+            module = self.convert_cjs(&ctx, module, &environment).await?;
+        }
+        // Legacy path is retained only for explicitly named .cjs/.cts bodies.
+
+        if !factory
+            && module.commonjs.is_none()
+            && needs_cjs_conversion(&resolved_id, &module.code, module.has_module_syntax)
+        {
             module = self.convert_cjs(&ctx, module, &environment).await?;
         }
         // 11. Import rewriting (dev URLs, §26/§28).
@@ -243,6 +283,18 @@ impl DevServer {
         importer: Option<&ModuleId>,
         environment: &ferrite_core::Environment,
     ) -> Result<ResolvedId> {
+        self.resolve_id_with_kind(ctx, specifier, importer, environment, ResolveKind::Import)
+            .await
+    }
+
+    pub(crate) async fn resolve_id_with_kind(
+        &self,
+        ctx: &PluginContext<'_>,
+        specifier: &str,
+        importer: Option<&ModuleId>,
+        environment: &ferrite_core::Environment,
+        kind: ResolveKind,
+    ) -> Result<ResolvedId> {
         // Plugin `resolveId` first.
         if let Some(resolved) = self
             .inner
@@ -254,6 +306,7 @@ impl DevServer {
                     importer,
                     environment: environment.kind.clone(),
                     ssr: environment.kind.is_ssr(),
+                    kind,
                 },
             )
             .await?
@@ -296,7 +349,7 @@ impl DevServer {
             specifier,
             importer,
             environment: environment.kind.clone(),
-            kind: ResolveKind::Import,
+            kind,
         })
     }
 

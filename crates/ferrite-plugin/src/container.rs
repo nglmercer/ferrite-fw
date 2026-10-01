@@ -35,6 +35,12 @@ impl PluginContainer {
         self.mode
     }
 
+    /// Share the ordered active plugin instances with another pipeline service.
+    #[must_use]
+    pub fn instances(&self) -> Vec<Arc<dyn Plugin>> {
+        self.plugins.clone()
+    }
+
     /// Plugin names in hook order.
     #[must_use]
     pub fn names(&self) -> Vec<&'static str> {

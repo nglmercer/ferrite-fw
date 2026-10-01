@@ -107,7 +107,9 @@ mod tests {
     #[test]
     fn requires_collected() {
         let code = "const a = require(\"./a\"); const b = require('./b');";
-        let requires = collect_requires(code);
+        let requires = ferrite_transform::analyze_commonjs("/fixture.cjs", code)
+            .unwrap()
+            .requires;
         assert_eq!(requires.len(), 2);
     }
 

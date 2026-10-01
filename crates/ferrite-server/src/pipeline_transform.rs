@@ -79,6 +79,7 @@ impl DevServer {
                         is_raw_bytes: false,
                         dependencies: Vec::new(),
                         shake: Some(ferrite_transform::ShakeInfo::default()),
+                        commonjs: None,
                     });
                 }
                 // Production builds emit self-contained JS (no /@ferrite/client
@@ -131,6 +132,7 @@ impl DevServer {
                     is_raw_bytes: false,
                     dependencies: Vec::new(),
                     shake: None, // filled during rewriting
+                    commonjs: None,
                 })
             }
             _ => Ok(PipelineModule::code_only(
@@ -275,6 +277,35 @@ impl DevServer {
         Ok(module)
     }
 
+    /// Apply shared CommonJS interop to already-lowered plugin output.
+    /// Library callers reuse this service without running compiler hooks twice.
+    pub async fn interop_commonjs_module(
+        &self,
+        mut module: PipelineModule,
+        environment_kind: ferrite_core::EnvironmentKind,
+    ) -> Result<PipelineModule> {
+        let environment = if environment_kind.is_ssr() {
+            self.inner.config.ssr_env()
+        } else {
+            self.inner.config.client_env()
+        };
+        let ctx = self.plugin_context(&environment);
+        if module.id.split_query().0.ends_with(".json") {
+            let (code, map) = ferrite_transform::commonjs_json_factory(
+                &module.id.0,
+                &module.code,
+                self.inner.config.build.sourcemap.enabled(),
+            )?;
+            module.map = crate::loader::merge_maps(map, module.map, false)?;
+            module.code = code;
+            module.commonjs = Some(Default::default());
+        } else {
+            module = self.convert_cjs(&ctx, module, &environment).await?;
+        }
+        self.rewrite_module_imports(&ctx, module, &environment)
+            .await
+    }
+
     /// Convert CJS to an ESM wrapper (§18).
     pub(crate) async fn convert_cjs(
         &self,
@@ -282,66 +313,179 @@ impl DevServer {
         module: PipelineModule,
         environment: &ferrite_core::Environment,
     ) -> Result<PipelineModule> {
-        let requires = collect_requires(&module.code);
-        let mut mapping: HashMap<String, String> = HashMap::new();
-        let mut imports = module.imports.clone();
-        let mut shake = module.shake.clone();
-        for specifier in &requires {
-            if let Ok(resolved) = self
-                .resolve_id(ctx, specifier, Some(&module.id), environment)
+        self.convert_cjs_output(ctx, module, environment, false)
+            .await
+    }
+
+    pub(crate) async fn convert_cjs_output(
+        &self,
+        ctx: &PluginContext<'_>,
+        module: PipelineModule,
+        environment: &ferrite_core::Environment,
+        inline: bool,
+    ) -> Result<PipelineModule> {
+        use ferrite_transform::{
+            analyze_commonjs, commonjs_facade, commonjs_factory, commonjs_factory_id,
+            validate_commonjs, CJS_FACTORY_QUERY,
+        };
+        use std::collections::{BTreeMap, BTreeSet};
+        let factory = module
+            .id
+            .split_query()
+            .1
+            .is_some_and(|query| query.split('&').any(|part| part == CJS_FACTORY_QUERY));
+        let analysis = analyze_commonjs(&module.id.0, &module.code)?;
+        validate_commonjs(&module.id.0, &module.code, &analysis)?;
+        if self
+            .inner
+            .compiler
+            .parse(ferrite_transform::ParseRequest {
+                id: module.id.0.clone(),
+                code: module.code.clone(),
+                module_type: ModuleType::Js,
+            })?
+            .has_module_syntax
+        {
+            return Err(ferrite_core::FerriteError::Transform {
+                id: module.id.0.clone(),
+                message:
+                    "mixed ESM/CommonJS or synchronous require(ESM) is unavailable; use ESM imports"
+                        .into(),
+            });
+        }
+        let mut targets = BTreeMap::new();
+        let mut metadata = crate::types::CommonJsMetadata {
+            names: analysis.named_exports,
+            reexports: Vec::new(),
+        };
+        for specifier in &analysis.requires {
+            let resolved = self
+                .resolve_id_with_kind(
+                    ctx,
+                    specifier,
+                    Some(&module.id),
+                    environment,
+                    ResolveKind::Require,
+                )
                 .await
+                .map_err(|error| {
+                    ferrite_core::FerriteError::Resolve(format!(
+                        "cannot resolve require({specifier:?}) from {}: {error}",
+                        module.id.0
+                    ))
+                })?;
+            if resolved.external {
+                return Err(ferrite_core::FerriteError::Resolve(format!("require({specifier:?}) in {} resolves to an external module; this pipeline needs a synchronous factory, not an unprovided Node builtin", module.id.0)));
+            }
+            let target = if resolved.id.0.starts_with('\0') {
+                virtual_url(&resolved.id.0)
+            } else {
+                resolved.id.0
+            };
+            if target
+                .split('?')
+                .next()
+                .is_some_and(|path| path.ends_with(".node"))
             {
-                mapping.insert(specifier.clone(), resolved.id.0.clone());
-                imports.push((specifier.clone(), resolved.id, ImportKind::Static));
-                // The interop reads `default ?? whole`: namespace use.
-                if let Some(shake) = shake.as_mut() {
-                    shake
-                        .import_bindings
-                        .push(vec![ferrite_transform::ImportBinding::Namespace]);
-                }
+                return Err(ferrite_core::FerriteError::Resolve(format!("native addon {target} is unavailable in the browser/embedded pipeline; use an explicitly configured Node runtime")));
+            }
+            targets.insert(specifier.clone(), commonjs_factory_id(&target));
+            if analysis.reexports.contains(specifier) {
+                metadata.reexports.push(target);
             }
         }
-        let mut prelude = String::from(
-            "const __ferrite_interop__ = (m) => (m && m.__esModule ? m.default : (m?.default ?? m));\n",
-        );
-        let mut code = module.code.clone();
-        for (index, specifier) in requires.iter().enumerate() {
-            if let Some(url) = mapping.get(specifier) {
-                prelude.push_str(&format!(
-                    "import * as __ferrite_cjs_dep{index}__ from {url:?};\n"
-                ));
-                let replacement = format!("__ferrite_interop__(__ferrite_cjs_dep{index}__)");
-                code = replace_require(&code, specifier, &replacement);
+        let sourcemap = self.inner.config.build.sourcemap.enabled();
+        let (code, map) = if factory {
+            commonjs_factory(&module.id.0, &module.code, &targets, sourcemap)?
+        } else {
+            let mut names = metadata.names.clone();
+            let mut dependencies = module.dependencies.clone();
+            let mut visited = BTreeSet::new();
+            for target in &metadata.reexports {
+                self.collect_commonjs_exports(
+                    target,
+                    environment,
+                    &mut visited,
+                    &mut names,
+                    &mut dependencies,
+                )
+                .await?;
             }
-        }
-        let wrapped = format!(
-            "{prelude}\
-             const module = {{ exports: {{}} }};\n\
-             const exports = module.exports;\n\
-             const __filename = {:?};\n\
-             const __dirname = {:?};\n\
-             {code}\n\
-             export default module.exports;\n",
-            module.id.0,
-            module.id.0.rsplit_once('/').map_or("/", |(dir, _)| dir),
-        );
-        // The wrapper exports only `default`; re-export facts from the
-        // original source no longer describe this code.
-        if let Some(shake) = shake.as_mut() {
-            shake.exports = vec![ferrite_transform::ParsedExport {
-                exported: "default".to_string(),
-                local: None,
-                from: None,
-                imported: None,
-                target: None,
-            }];
-        }
+            let (code, map) = if inline {
+                ferrite_transform::commonjs_inline(
+                    &module.id.0,
+                    &module.code,
+                    &names,
+                    &targets,
+                    sourcemap,
+                )?
+            } else {
+                commonjs_facade(&module.id.0, &module.code, &names, sourcemap)?
+            };
+            let map = crate::loader::merge_maps(map, module.map, false)?;
+            return Ok(PipelineModule {
+                code,
+                map,
+                has_module_syntax: true,
+                commonjs: Some(metadata),
+                dependencies,
+                ..module
+            });
+        };
+        let map = crate::loader::merge_maps(map, module.map, false)?;
         Ok(PipelineModule {
-            code: wrapped,
-            imports,
+            code,
+            map,
             has_module_syntax: true,
-            shake,
+            commonjs: Some(metadata),
+            side_effects: Some(false),
             ..module
+        })
+    }
+
+    fn collect_commonjs_exports<'a>(
+        &'a self,
+        target: &'a str,
+        environment: &'a ferrite_core::Environment,
+        visited: &'a mut std::collections::BTreeSet<String>,
+        names: &'a mut std::collections::BTreeSet<String>,
+        dependencies: &'a mut Vec<String>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            if !visited.insert(target.into()) {
+                return Ok(());
+            }
+            let factory = ModuleId::new(ferrite_transform::commonjs_factory_id(target));
+            let module = self
+                .pipeline_module(
+                    &factory,
+                    None,
+                    if environment.kind.is_ssr() {
+                        "ssr"
+                    } else {
+                        "client"
+                    },
+                )
+                .await?;
+            if let Ok(file) = self.id_to_file(&factory) {
+                self.watch_extra(&file);
+                dependencies.push(file.to_string_lossy().into_owned());
+            }
+            dependencies.extend(module.dependencies);
+            let metadata = module.commonjs.ok_or_else(|| {
+                ferrite_core::FerriteError::Transform {
+                    id: target.into(),
+                    message:
+                        "CommonJS re-export target is not a synchronous factory; use ESM re-exports"
+                            .into(),
+                }
+            })?;
+            names.extend(metadata.names);
+            for target in &metadata.reexports {
+                self.collect_commonjs_exports(target, environment, visited, names, dependencies)
+                    .await?;
+            }
+            Ok(())
         })
     }
 

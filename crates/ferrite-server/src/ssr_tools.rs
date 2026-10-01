@@ -65,10 +65,7 @@ impl ModuleRunner {
         if let Ok(mut cache) = self.cache.lock() {
             cache.remove(url);
         }
-        self.server
-            .inner
-            .graph
-            .invalidate_tree(&ModuleId::new(url));
+        self.server.inner.graph.invalidate_tree(&ModuleId::new(url));
     }
 
     /// Drop the whole runner cache (the graph is untouched).
@@ -100,23 +97,53 @@ impl DevServer {
         ModuleRunner::new(self.clone())
     }
 
-    /// Transform `code` for SSR without touching the graph or caches
-    /// (`ssrTransform`): core SSR transform → plugin transforms →
+    /// Transform supplied `code` for SSR without inserting it into the graph.
+    /// Re-export discovery can consult the shared dependency pipeline/cache.
+    /// (`ssrTransform`): pre transforms → JS/TS lowering → post transforms →
     /// CJS interop → import rewriting.
     pub async fn ssr_transform(&self, code: &str, url: &str) -> Result<SsrTransformResult> {
         let environment = self.inner.config.ssr_env();
-        let ctx = self.plugin_context(&environment);
+        let mut ctx = self.plugin_context(&environment);
+        let module_watches = std::sync::Mutex::new(Vec::new());
+        ctx.watch_files = &module_watches;
         let id = ModuleId::new(url);
         let (path_part, _) = id.split_query();
         let module_type = ModuleType::from_path(path_part);
-        let mut module = self
-            .core_transform(&ctx, &id, code, &module_type, &environment)
+        let pre = self
+            .inner
+            .plugins
+            .hook_transform_phase(
+                &ctx,
+                HookTransformRequest {
+                    id: id.0.clone(),
+                    code: code.into(),
+                    module_type: module_type.clone(),
+                    environment: environment.kind.clone(),
+                    ssr: true,
+                },
+                ferrite_plugin::TransformPhase::BeforeLowering,
+            )
             .await?;
+        let mut module = self
+            .core_transform(
+                &ctx,
+                &id,
+                &pre.code,
+                &pre.module_type.unwrap_or(module_type),
+                &environment,
+            )
+            .await?;
+        module.map = crate::loader::merge_maps(
+            module.map,
+            pre.map.map(|map| map.mappings),
+            module.code == pre.code,
+        )?;
+        module.dependencies.extend(pre.dependencies);
         if module.module_type.is_js_like() {
             let hooked = self
                 .inner
                 .plugins
-                .hook_transform(
+                .hook_transform_phase(
                     &ctx,
                     HookTransformRequest {
                         id: id.0.clone(),
@@ -125,14 +152,33 @@ impl DevServer {
                         environment: environment.kind.clone(),
                         ssr: true,
                     },
+                    ferrite_plugin::TransformPhase::AfterLowering,
                 )
                 .await?;
+            module.map = crate::loader::merge_maps(
+                hooked.map.map(|map| map.mappings),
+                module.map,
+                hooked.code == module.code,
+            )?;
             module.code = hooked.code;
-        }
-        if needs_cjs_conversion(&id, &module.code, module.has_module_syntax) {
-            module = self.convert_cjs(&ctx, module, &environment).await?;
-        }
-        if module.module_type.is_js_like() {
+            module.dependencies.extend(hooked.dependencies);
+            if let Some(kind) = hooked.module_type {
+                module.module_type = kind;
+            }
+            let parsed = self.inner.compiler.parse(ferrite_transform::ParseRequest {
+                id: id.0.clone(),
+                code: module.code.clone(),
+                module_type: module.module_type.clone(),
+            })?;
+            module.has_module_syntax = parsed.has_module_syntax;
+            module.uses_import_meta_hot = parsed.uses_import_meta_hot;
+            if ferrite_transform::analyze_commonjs(&id.0, &module.code)?.is_commonjs
+                || needs_cjs_conversion(&id, &module.code, module.has_module_syntax)
+            {
+                module = self
+                    .convert_cjs_output(&ctx, module, &environment, true)
+                    .await?;
+            }
             module = self
                 .rewrite_module_imports(&ctx, module, &environment)
                 .await?;
@@ -195,7 +241,8 @@ impl DevServer {
         let cached: CachedTransform = serde_json::from_slice(&bytes).ok()?;
         let map = cached.map?;
         let (source_idx, orig_line, orig_col) = map_generated_position(&map, line_no, col_no)?;
-        let source_name = map_source_name(&map, source_idx).unwrap_or_else(|| normalized.to_string());
+        let source_name =
+            map_source_name(&map, source_idx).unwrap_or_else(|| normalized.to_string());
         Some(format!("{source_name}:{orig_line}:{orig_col}"))
     }
 }
@@ -325,8 +372,7 @@ fn map_source_name(map_json: &str, source_idx: usize) -> Option<String> {
 
 /// Decode one VLQ mapping segment into its integer fields.
 fn decode_vlq_segment(segment: &str) -> Option<Vec<i64>> {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut table = [0i64; 256];
     for (index, byte) in ALPHABET.iter().enumerate() {
         table[*byte as usize] = index as i64;

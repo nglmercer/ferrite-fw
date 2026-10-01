@@ -94,9 +94,11 @@ impl DevServer {
         env: &str,
         defines: &HashMap<String, String>,
     ) -> Hash {
-        let lock_state = std::fs::read(self.inner.config.lockfile()).ok().map(|bytes| Hash::of_bytes(&bytes).0);
+        let lock_state = std::fs::read(self.inner.config.lockfile())
+            .ok()
+            .map(|bytes| Hash::of_bytes(&bytes).0);
         let pipeline = format!(
-            "pipeline-v4:{}:{:?}:{}:{}:{:?}:{lock_state:?}",
+            "pipeline-v5:{}:{:?}:{}:{}:{:?}:{lock_state:?}",
             self.inner.plugins.cache_key(),
             self.inner.config.react,
             self.inner.config.is_production,
@@ -208,7 +210,11 @@ impl DevServer {
     ) -> PluginContext<'a> {
         PluginContext {
             graph: &self.inner.graph,
-            resolver: &self.inner.client_resolver,
+            resolver: if environment.kind.is_ssr() {
+                &self.inner.ssr_resolver
+            } else {
+                &self.inner.client_resolver
+            },
             environment,
             emitted: &self.inner.emitted,
             watch_files: &self.inner.watch_files,

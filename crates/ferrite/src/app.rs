@@ -29,6 +29,7 @@ pub struct Ferrite {
     emitted: Mutex<HashMap<String, ferrite_plugin::EmittedFile>>,
     /// Watch files (plugin context backing).
     watch_files: Mutex<Vec<String>>,
+    commonjs_server: tokio::sync::OnceCell<ferrite_server::DevServer>,
     /// Warnings (plugin context backing).
     warnings: Mutex<Vec<String>>,
 }
@@ -72,6 +73,7 @@ impl Ferrite {
             emitted: Mutex::new(HashMap::new()),
             watch_files: Mutex::new(Vec::new()),
             warnings: Mutex::new(Vec::new()),
+            commonjs_server: tokio::sync::OnceCell::new(),
         }
     }
 
@@ -80,11 +82,26 @@ impl Ferrite {
         &self,
         request: ModuleRequest,
     ) -> Result<ferrite_transform::TransformResult> {
-        let environment = ferrite_core::Environment::new("client", request.environment.clone());
+        let environment = if request.environment.is_ssr() {
+            self.config.ssr_env()
+        } else {
+            self.config.client_env()
+        };
+        let mut ssr_resolver = ferrite_resolver::Resolver::for_environment(
+            self.config.root.clone(),
+            &self.config.resolve,
+            &request.environment,
+        );
+        ssr_resolver.lockfile = self.config.lockfile();
+        let resolver = if request.environment.is_ssr() {
+            &ssr_resolver
+        } else {
+            self.resolver.as_ref()
+        };
         let module_watches = Mutex::new(Vec::new());
         let ctx = ferrite_plugin::PluginContext {
             graph: &self.graph,
-            resolver: &self.resolver,
+            resolver,
             environment: &environment,
             emitted: &self.emitted,
             watch_files: &module_watches,
@@ -96,6 +113,7 @@ impl Ferrite {
             .hook_resolve_id(
                 &ctx,
                 ferrite_plugin::ResolveHookRequest {
+                    kind: ferrite_resolver::ResolveKind::Import,
                     specifier: &request.specifier,
                     importer: request.importer.as_ref(),
                     environment: request.environment.clone(),
@@ -105,7 +123,7 @@ impl Ferrite {
             .await?
         {
             Some(resolved) => resolved,
-            None => self.resolver.resolve(&ferrite_resolver::ResolveRequest {
+            None => resolver.resolve(&ferrite_resolver::ResolveRequest {
                 specifier: &request.specifier,
                 importer: request.importer.as_ref(),
                 environment: request.environment.clone(),
@@ -179,16 +197,17 @@ impl Ferrite {
                     id: resolved.id.0.clone(),
                     code: compiled.code.clone(),
                     module_type: ModuleType::Js,
-                    environment: request.environment,
+                    environment: request.environment.clone(),
                     ssr,
                 },
                 ferrite_plugin::TransformPhase::AfterLowering,
             )
             .await?;
-        let map = merge_maps(hooked.map, compiled_map, hooked.code == compiled.code)?;
-        let parsed = self.compiler.parse(ferrite_transform::ParseRequest {
-            id: resolved.id.0,
-            code: hooked.code.clone(),
+        let mut map = merge_maps(hooked.map, compiled_map, hooked.code == compiled.code)?;
+        let mut code = hooked.code;
+        let mut parsed = self.compiler.parse(ferrite_transform::ParseRequest {
+            id: resolved.id.0.clone(),
+            code: code.clone(),
             module_type: hooked.module_type.unwrap_or(ModuleType::Js),
         })?;
         let mut dependencies = loaded.dependencies;
@@ -202,6 +221,46 @@ impl Ferrite {
                 .map_err(|_| FerriteError::Other("module watch lock poisoned".into()))?
                 .clone(),
         );
+        let factory = resolved.id.split_query().1.is_some_and(|query| {
+            query
+                .split('&')
+                .any(|part| part == ferrite_transform::CJS_FACTORY_QUERY)
+        });
+        if ferrite_transform::analyze_commonjs(&resolved.id.0, &code)?.is_commonjs
+            || [".cjs", ".cts"]
+                .iter()
+                .any(|extension| resolved.id.split_query().0.ends_with(extension))
+            || factory
+        {
+            let server = self
+                .commonjs_server
+                .get_or_try_init(|| {
+                    ferrite_server::DevServer::new_without_watcher(
+                        self.config.clone(),
+                        self.plugins.instances(),
+                    )
+                })
+                .await?;
+            let mut module = ferrite_server::PipelineModule::code_only(
+                resolved.id.clone(),
+                code,
+                ModuleType::Js,
+            );
+            module.map = map.map(|map| map.mappings);
+            module.dependencies = dependencies;
+            module.has_module_syntax = parsed.has_module_syntax;
+            let module = server
+                .interop_commonjs_module(module, request.environment)
+                .await?;
+            code = module.code;
+            map = module.map.map(ferrite_core::SourceMap::external);
+            dependencies = module.dependencies;
+            parsed = self.compiler.parse(ferrite_transform::ParseRequest {
+                id: resolved.id.0,
+                code: code.clone(),
+                module_type: ModuleType::Js,
+            })?;
+        }
         if let Ok(mut watches) = self.watch_files.lock() {
             watches.extend(dependencies.clone());
             watches.sort();
@@ -210,7 +269,7 @@ impl Ferrite {
         dependencies.sort();
         dependencies.dedup();
         Ok(ferrite_transform::TransformResult {
-            code: hooked.code,
+            code,
             map,
             dependencies,
             imports: parsed.imports,

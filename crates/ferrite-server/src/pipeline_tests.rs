@@ -211,6 +211,15 @@ async fn shared_pipeline_orders_transforms_and_invalidates_compiler_dependencies
         let deleted = server.pipeline_module(&id, None, "client").await.unwrap();
         assert!(deleted.code.contains("= 1"));
         assert_eq!(*calls.lock().unwrap(), 4);
+        let inline = server
+            .ssr_transform("export const value: number = SOURCE;", "/src/main.ts")
+            .await
+            .unwrap();
+        assert!(inline.code.contains("= 1"));
+        assert!(inline.code.contains("added"));
+        assert!(!inline.code.contains(": number"));
+        assert!(!inline.code.contains("/@ferrite/client"));
+        assert!(inline.map.is_some());
         server.close();
     }
 }

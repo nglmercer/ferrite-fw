@@ -1185,9 +1185,11 @@ name = "ferrite-test"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "axum",
  "ferrite",
  "ferrite-config",
  "ferrite-core",
+ "ferrite-e2e",
  "ferrite-frameworks",
  "serde_json",
  "tempfile",

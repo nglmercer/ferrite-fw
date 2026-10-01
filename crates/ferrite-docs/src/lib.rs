@@ -385,6 +385,7 @@ mod tests {
             .resolve_id(
                 &ctx,
                 ResolveHookRequest {
+                    kind: ferrite_resolver::ResolveKind::Import,
                     specifier: "../guide.md",
                     importer: Some(&importer),
                     environment: ferrite_core::EnvironmentKind::Client,
@@ -399,6 +400,7 @@ mod tests {
             .resolve_id(
                 &ctx,
                 ResolveHookRequest {
+                    kind: ferrite_resolver::ResolveKind::Import,
                     specifier: "./app.js",
                     importer: Some(&importer),
                     environment: ferrite_core::EnvironmentKind::Client,

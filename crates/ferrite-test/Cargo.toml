@@ -18,3 +18,5 @@ ferrite = { workspace = true }
 ferrite-frameworks = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
+ferrite-e2e = { workspace = true }
+axum = { workspace = true }

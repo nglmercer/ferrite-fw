@@ -354,6 +354,7 @@ mod tests {
             .resolve_id(
                 &ctx,
                 ResolveHookRequest {
+                    kind: ferrite_resolver::ResolveKind::Import,
                     specifier: TAILWIND_SPEC,
                     importer: None,
                     environment: ferrite_core::EnvironmentKind::Client,

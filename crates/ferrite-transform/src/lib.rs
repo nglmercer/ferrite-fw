@@ -7,7 +7,13 @@
 #[cfg(feature = "swc")]
 mod swc_impl;
 
+mod commonjs;
 mod compiler;
+pub use commonjs::{
+    analyze_commonjs, commonjs_facade, commonjs_factory, commonjs_factory_id, commonjs_inline,
+    commonjs_json_factory, validate_commonjs, CommonJsAnalysis, CJS_FACTORY_QUERY,
+    CJS_REQUIRE_EXPORT,
+};
 pub mod concat;
 mod minify;
 mod parse;

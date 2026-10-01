@@ -219,6 +219,8 @@ impl OutputBundle {
 /// `resolveId` hook request.
 #[derive(Debug, Clone)]
 pub struct ResolveHookRequest<'a> {
+    /// Import/require condition context.
+    pub kind: ferrite_resolver::ResolveKind,
     /// Raw specifier.
     pub specifier: &'a str,
     /// Importer, if any.

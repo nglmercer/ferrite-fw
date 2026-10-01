@@ -57,9 +57,10 @@ feature matrices, lint/workspace tests, release checks, and scheduled upstream
 compatibility testing. Compiler versions are not pinned because no official
 compiler execution was implemented or tested in this slice.
 
-No Chromium/Firefox acceptance, Node-free profile, SSR request isolation,
-stream cancellation, production CSS/chunk verification, or cross-platform release
-check has executed. These are outstanding requirements, not skipped support proof.
+At the initial checkpoint, none of the required browser/runtime acceptance had
+executed. The CommonJS slice below subsequently exercises both browsers and a
+Node-free fixture. Framework acceptance, SSR isolation/cancellation, production
+CSS/chunk verification, and cross-platform release checks remain outstanding.
 
 ## Shared pipeline slice (continued implementation)
 
@@ -178,3 +179,85 @@ instance; root workspaces/optionalDependencies fail instead of silently omitting
 requests. Peer contexts and frozen replay are tested on the current host only.
 Editor/compiler-host package projections are not implemented. No new framework
 compilation, browser, SSR, or release compatibility profile is advertised.
+
+
+## CommonJS and conditional-resolution slice (continued implementation)
+
+Replaced regex collection/replacement and the default-only CommonJS wrapper with
+Oxc AST/scope analysis. Comments, strings, escaped literals, whitespace and locally
+shadowed require/exports/module bindings are handled as syntax. Static property
+assignments, object literals, Object.defineProperty, Object.assign and direct
+module.exports=require(...) chains expose named snapshots alongside the complete
+module.exports default value. The __esModule marker does not discard the module's
+other properties or unwrap its nested default. This follows the namespace model
+in [Node's ESM documentation](https://nodejs.org/download/release/v22.11.0/docs/api/esm.html),
+without claiming complete Node runtime compatibility.
+
+Lazy factory resources (`?ferrite-cjs-factory`) close circular require edges and
+preserve conditional execution. Facades and require calls share one factory/cache
+per module; module.exports replacements and null values are preserved. Factories
+cache before executing a body and clear failed executions for a later retry.
+JSON require factories retain object identity. Generated helper text is unmapped;
+original body locations survive wrapping, import rewriting and HMR injection.
+Hashbangs are removed from the wrapped body with source-map edits.
+
+Unresolved require, dynamic/aliased require, require.resolve/module.require,
+native .node addons, mixed ESM/CommonJS and synchronous require(ESM) fail explicitly
+with source/module context. No Node process is started or substituted. Namespace
+property discovery remains a static subset; arbitrary dynamic exports and all
+transpiler re-export helper patterns are not yet complete.
+
+The resolver selects mutually exclusive import/require conditions and uses main
+for legacy require entries. JSON object order is retained. Conditional keys follow
+manifest order, nested null blocks fallback, arrays retain null/no-match semantics,
+and wildcard selection prioritizes prefix length before total pattern length.
+Root conditional exports do not accidentally expose private subpaths. These
+regressions are grounded in the [Node 22.11 package resolution source](https://github.com/nodejs/node/blob/v22.11.0/lib/internal/modules/esm/resolve.js).
+Invalid targets, external package imports maps and remaining full exports/imports
+validation still need implementation.
+
+Generated query resources now depend on their physical source in the graph/cache,
+so a plain-file watcher event invalidates all owned resources. Re-export facade
+name discovery watches contributing files; cached CommonJS facts survive replay.
+The cache schema key is bumped to pipeline-v5. Compiler maps/watched dependencies
+are preserved through the SSR text-transform pre/core/post phases too; caller-
+supplied CJS text stays inline rather than referring to an invented source file.
+Library CommonJS transformation reuses the server interop service, and SSR plugin
+contexts/resolution use SSR conditions. This is transformation evidence, not an
+SSR renderer/runtime/hydration claim.
+
+API migration: ResolveHookRequest adds `kind: ResolveKind`; ordinary imports use
+Import, CJS calls Require. PipelineModule/CachedTransform add `commonjs` static
+facts; use code_only constructors or `commonjs: None` in literals. Factory query
+resources are implementation IDs, not new user-facing rendering modes.
+
+Validation executed:
+
+- `cargo test -p ferrite-transform -p ferrite-resolver -p ferrite-plugin -p ferrite-server -p ferrite-frameworks -p ferrite -p ferrite-cli --locked`:
+  134 unit tests and 3 facade doc tests passed. One pre-existing real-Node plugin
+  test remained ignored and establishes no Node-host support. Final resolver
+  rerun passed 14 tests after adding nested-null/pattern regressions.
+- With FERRITE_CHROMIUM_PATH set to the installed executable,
+  `cargo test -p ferrite-test --test commonjs --test config_resolver --test dev_pipeline --test build --test plugins_virtual --test vite_parity --locked`:
+  23 integration tests passed, including both actual browsers. Browser tests fail
+  when the executable is missing; they do not silently skip. One earlier run
+  omitted the Chromium path and failed that prerequisite, then was rerun correctly.
+- The CommonJS Rust test binary was executed with PATH=/nonexistent and explicit
+  Chromium/Firefox executable paths: all 3 tests passed. Each browser asserted
+  default/named/namespace/re-export values, circular require, shared identity,
+  conditional nonexecution, JSON loading, interaction, actual watcher-driven
+  source edit/reload and intentional state reset, production build/preview,
+  absence of dev client code in emitted JS and absence of console/page errors.
+  Tested host: Linux x86_64; Chrome for Testing 153.0.8010.12, Firefox 157.0;
+  compiler Oxc 0.151.0. No framework template was used in this fixture.
+- `cargo test -p ferrite-server --features swc pipeline_tests --locked`: 2 tests
+  passed, including pre/post SSR transformation with maps on Oxc/SWC.
+- Final library/server `pipeline_tests` rerun: 3 tests passed.
+- `cargo clippy -p ferrite-transform -p ferrite-resolver -p ferrite-plugin -p ferrite-server -p ferrite -p ferrite-test -p ferrite-cli --all-targets --locked -- -D warnings`:
+  passed. Changed Rust files formatted; `git diff --check` passed.
+
+Framework compiler hosts, scaffold variants, complete React Refresh, Vue/Svelte
+compilation, checker/editor projections, SSR renderers/hydration, remaining npm
+contexts/platform/workspace requirements, additional/upstream adapters, SDK and
+framework/release acceptance remain assigned. No entire-task completion or new
+framework compatibility profile is claimed.

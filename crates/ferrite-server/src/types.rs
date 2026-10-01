@@ -29,6 +29,8 @@ pub struct PipelineModule {
     pub dependencies: Vec<String>,
     /// Statement-DCE facts (`None` = opaque, keep everything).
     pub shake: Option<ferrite_transform::ShakeInfo>,
+    /// Static CommonJS facts retained for facade export discovery.
+    pub commonjs: Option<CommonJsMetadata>,
 }
 
 impl PipelineModule {
@@ -47,6 +49,7 @@ impl PipelineModule {
             is_raw_bytes: false,
             dependencies: Vec::new(),
             shake: None,
+            commonjs: None,
         }
     }
 
@@ -65,6 +68,7 @@ impl PipelineModule {
             is_raw_bytes: true,
             dependencies: Vec::new(),
             shake: None,
+            commonjs: None,
         }
     }
 
@@ -87,6 +91,7 @@ impl PipelineModule {
             is_raw_bytes: false,
             dependencies: cached.dependency_state.keys().cloned().collect(),
             shake: cached.shake,
+            commonjs: cached.commonjs,
         }
     }
 }
@@ -114,6 +119,8 @@ pub struct CachedTransform {
     /// Statement-DCE facts (`None` for stale caches → keep everything).
     #[serde(default)]
     pub shake: Option<ferrite_transform::ShakeInfo>,
+    #[serde(default)]
+    pub commonjs: Option<CommonJsMetadata>,
 }
 
 impl CachedTransform {
@@ -138,6 +145,7 @@ impl CachedTransform {
             has_module_syntax: module.has_module_syntax,
             uses_import_meta_hot: module.uses_import_meta_hot,
             shake: module.shake.clone(),
+            commonjs: module.commonjs.clone(),
         }
     }
 }
@@ -184,4 +192,13 @@ impl CachedTransform {
             .iter()
             .all(|(path, hash)| dependency_hash(path) == *hash)
     }
+}
+
+/// Statically discovered export names and resolved require re-exports.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct CommonJsMetadata {
+    /// Statically discovered property names.
+    pub names: std::collections::BTreeSet<String>,
+    /// Resolved dependency module IDs (without the factory query).
+    pub reexports: Vec<String>,
 }

@@ -73,36 +73,7 @@ pub(crate) fn needs_cjs_conversion(id: &ModuleId, code: &str, has_module_syntax:
     if path.ends_with(".cjs") || path.ends_with(".cts") {
         return true;
     }
-    code.contains("module.exports") || code.contains("require(")
-}
-
-/// Collect `require("...")` specifiers (documented approximation).
-pub(crate) fn collect_requires(code: &str) -> Vec<String> {
-    let pattern = regex_lite_require();
-    pattern
-        .captures_iter(code)
-        .filter_map(|captures| captures.get(1).map(|m| m.as_str().to_string()))
-        .collect::<Vec<_>>()
-        .into_iter()
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
-pub(crate) fn regex_lite_require() -> regex::Regex {
-    regex::Regex::new(r#"require\(\s*["']([^"']+)["']\s*\)"#).unwrap()
-}
-
-/// Replace `require("spec")` with `replacement`.
-pub(crate) fn replace_require(code: &str, specifier: &str, replacement: &str) -> String {
-    let mut output = code.to_string();
-    for quote in ['"', '\''] {
-        for space in ["", " ", "  "] {
-            let from = format!("require({space}{quote}{specifier}{quote}{space})");
-            output = output.replace(&from, replacement);
-        }
-    }
-    output
+    ferrite_transform::analyze_commonjs(&id.0, code).is_ok_and(|analysis| analysis.is_commonjs)
 }
 
 /// Self-contained production CSS injection (no dev client import).
