@@ -588,6 +588,14 @@ Work in [the audit generator](scripts/playwright-parity/build_matrix.py),
   disconnect assertion passes unchanged. [Evidence](PLAYWRIGHT-PARITY.md#g04-audit-progress--context-source-loss-propagation):
   265 units, seven mandatory two-engine native groups and four doctests (276
   scoped checks), strict Clippy/formatting. Remaining G04 cases are still open.
+  Further progress: handler installation rollback removes the exact failed
+  registration, preserves concurrent entries and matcher alignment, and releases
+  abandoned callback ownership even with stale snapshots. Publication shares
+  registration locks; native awaits hold none.
+  [Evidence](PLAYWRIGHT-PARITY.md#g04-audit-progress--handler-installation-rollback):
+  268 units, seven mandatory two-engine native groups and four doctests (279
+  scoped checks), strict Clippy/formatting. Native startup cancellation and
+  declarative replacement rollback remain open.
 
 
 

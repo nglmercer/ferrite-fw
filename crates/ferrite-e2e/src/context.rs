@@ -1124,16 +1124,18 @@ impl BrowserContext {
             crate::url_matcher::legacy_glob(pattern)?;
         }
         let handler: RouteHandler = Arc::new(move |info| Box::pin(handler(info)));
-        self.handlers
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(RouteHandlerEntry {
+        let installation = crate::routing::HandlerInstallation::new(
+            self.handlers.clone(),
+            RouteHandlerEntry {
                 pattern: pattern.to_owned(),
                 matcher,
                 handler,
                 times,
                 hits: Arc::new(std::sync::atomic::AtomicU32::new(0)),
-            });
+            },
+            Default::default(),
+            Arc::downgrade(&self.pages),
+        );
         let mut failed = None;
         for page in self.pages() {
             if let Err(error) = page.restart_routing().await {
@@ -1141,14 +1143,10 @@ impl BrowserContext {
                 break;
             }
         }
-        // Roll back the stored handler on failure to keep pages in sync.
         if let Some(error) = failed {
-            self.handlers
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .pop();
             return Err(error);
         }
+        installation.commit();
         Ok(())
     }
 

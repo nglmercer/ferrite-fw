@@ -77,6 +77,7 @@ impl Drop for PumpCompletion {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct RouteConfiguration {
     rules: Vec<RouteRule>,
     handlers: Vec<RouteHandlerEntry>,
@@ -156,6 +157,26 @@ impl RouteRuntime {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.configuration = Some(Arc::new(configuration));
         state.retired.clear();
+        drop(state);
+        self.changed.notify_one();
+    }
+    fn rollback_handler(&self, entry: &RouteHandlerEntry) {
+        let id = handler_id(entry);
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(configuration) = state.configuration.as_ref() {
+            let mut configuration = (**configuration).clone();
+            let pairs = configuration
+                .handlers
+                .into_iter()
+                .zip(configuration.handler_matchers)
+                .filter(|(handler, _)| handler_id(handler) != id);
+            (configuration.handlers, configuration.handler_matchers) = pairs.unzip();
+            state.configuration = Some(Arc::new(configuration));
+        }
+        for call in state.calls.values().filter(|call| call.handler == id) {
+            call.cancel.cancel();
+            call.forward.cancel();
+        }
         drop(state);
         self.changed.notify_one();
     }
@@ -374,4 +395,230 @@ pub(crate) async fn wait_calls(calls: Vec<CancellationToken>) -> E2eResult<()> {
         done.cancelled().await;
     }
     Ok(())
+}
+
+/// Roll back exactly this registration on error or future drop. The guard holds
+/// no Page owner and reconciles already-registered runtime snapshots synchronously.
+struct InstallationLease {
+    handler: Mutex<Option<crate::page::RouteHandler>>,
+    cancelled: CancellationToken,
+}
+
+pub(crate) struct HandlerInstallation {
+    lease: Arc<InstallationLease>,
+    storage: Arc<Mutex<Vec<RouteHandlerEntry>>>,
+    entry: RouteHandlerEntry,
+    runtime: std::sync::Weak<RouteRuntime>,
+    pages: std::sync::Weak<Mutex<Vec<crate::Page>>>,
+    committed: bool,
+}
+impl HandlerInstallation {
+    pub(crate) fn new(
+        storage: Arc<Mutex<Vec<RouteHandlerEntry>>>,
+        mut entry: RouteHandlerEntry,
+        runtime: std::sync::Weak<RouteRuntime>,
+        pages: std::sync::Weak<Mutex<Vec<crate::Page>>>,
+    ) -> Self {
+        let lease = Arc::new(InstallationLease {
+            handler: Mutex::new(Some(entry.handler.clone())),
+            cancelled: CancellationToken::new(),
+        });
+        let callback_lease = lease.clone();
+        entry.handler = Arc::new(move |info| {
+            let lease = callback_lease.clone();
+            Box::pin(async move {
+                if lease.cancelled.is_cancelled() {
+                    return Ok(RouteAction::Fallback);
+                }
+                lease
+                    .cancelled
+                    .run(async {
+                        let handler = lease
+                            .handler
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .clone();
+                        match handler {
+                            Some(handler) => handler(info).await,
+                            None => Ok(RouteAction::Fallback),
+                        }
+                    })
+                    .await
+            })
+        });
+        storage
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(entry.clone());
+        Self {
+            lease,
+            storage,
+            entry,
+            runtime,
+            pages,
+            committed: false,
+        }
+    }
+    pub(crate) fn commit(mut self) {
+        self.committed = true;
+    }
+}
+impl Drop for HandlerInstallation {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        self.lease
+            .cancelled
+            .cancel_with_reason("route installation abandoned");
+        self.lease
+            .handler
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        let id = handler_id(&self.entry);
+        self.storage
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|entry| handler_id(entry) != id);
+        if let Some(runtime) = self.runtime.upgrade() {
+            runtime.rollback_handler(&self.entry);
+        }
+        let pages = self
+            .pages
+            .upgrade()
+            .map(|pages| pages.lock().unwrap_or_else(|e| e.into_inner()).clone())
+            .unwrap_or_default();
+        for page in pages {
+            page.route_runtime.rollback_handler(&self.entry);
+        }
+    }
+}
+
+#[cfg(test)]
+mod installation_tests {
+    use super::*;
+    fn entry(pattern: &str) -> RouteHandlerEntry {
+        RouteHandlerEntry {
+            pattern: pattern.into(),
+            matcher: None,
+            handler: Arc::new(|_| Box::pin(async { Ok(RouteAction::Fallback) })),
+            times: None,
+            hits: Arc::new(AtomicU32::new(0)),
+        }
+    }
+    #[test]
+    fn abandoned_registration_preserves_concurrent_entries_and_runtime_matchers() {
+        let storage = Arc::new(Mutex::new(Vec::new()));
+        let runtime = Arc::new(RouteRuntime::default());
+        let failed = entry("**/failed");
+        let successful = entry("**/kept");
+        let failed_id = handler_id(&failed);
+        let successful_id = handler_id(&successful);
+        let guard = HandlerInstallation::new(
+            storage.clone(),
+            failed.clone(),
+            Arc::downgrade(&runtime),
+            Default::default(),
+        );
+        let kept = HandlerInstallation::new(
+            storage.clone(),
+            successful.clone(),
+            Arc::downgrade(&runtime),
+            Default::default(),
+        );
+        kept.commit();
+        runtime.configure(
+            RouteConfiguration::new(Vec::new(), storage.lock().unwrap().clone()).unwrap(),
+        );
+        drop(guard);
+        assert_eq!(
+            storage
+                .lock()
+                .unwrap()
+                .iter()
+                .map(handler_id)
+                .collect::<Vec<_>>(),
+            vec![successful_id]
+        );
+        let state = runtime.state.lock().unwrap();
+        let configuration = state.configuration.as_ref().unwrap();
+        assert_eq!(configuration.handlers.len(), 1);
+        assert_eq!(configuration.handler_matchers.len(), 1);
+        assert_eq!(handler_id(&configuration.handlers[0]), successful_id);
+        assert_ne!(handler_id(&configuration.handlers[0]), failed_id);
+        drop(state);
+        assert!(runtime.begin(&failed, &CancellationToken::new()).is_none());
+        assert!(runtime
+            .begin(&successful, &CancellationToken::new())
+            .is_some());
+    }
+    #[tokio::test]
+    async fn cancellation_drops_installation_metadata_and_callback_ownership() {
+        let storage = Arc::new(Mutex::new(Vec::new()));
+        let runtime = Arc::new(RouteRuntime::default());
+        let owned = Arc::new(());
+        let weak = Arc::downgrade(&owned);
+        let mut handler = entry("**");
+        handler.handler = Arc::new(move |_| {
+            let owned = owned.clone();
+            Box::pin(async move {
+                drop(owned);
+                Ok(RouteAction::Abort)
+            })
+        });
+        let cancel = CancellationToken::new();
+        let started = CancellationToken::new();
+        let stale = Arc::new(Mutex::new(None::<RouteHandlerEntry>));
+        let work = async {
+            let installation = HandlerInstallation::new(
+                storage.clone(),
+                handler,
+                Arc::downgrade(&runtime),
+                Default::default(),
+            );
+            runtime.configure(
+                RouteConfiguration::new(Vec::new(), storage.lock().unwrap().clone()).unwrap(),
+            );
+            *stale.lock().unwrap() = Some(storage.lock().unwrap()[0].clone());
+            started.cancel();
+            std::future::pending::<()>().await;
+            installation.commit();
+            Ok(())
+        };
+        let (result, ()) = tokio::join!(cancel.run(work), async {
+            started.cancelled().await;
+            assert_eq!(storage.lock().unwrap().len(), 1);
+            cancel.cancel();
+        });
+        assert!(matches!(result, Err(E2eError::Cancelled(_))));
+        assert!(storage.lock().unwrap().is_empty());
+        assert!(runtime.idle());
+        assert!(
+            weak.upgrade().is_none(),
+            "stale profile must not retain the abandoned user callback"
+        );
+        let stale = stale.lock().unwrap().take().unwrap();
+        let result =
+            (stale.handler)(RouteInfo::new("http://fixture/", "GET", Vec::new(), None)).await;
+        assert!(matches!(result, Ok(RouteAction::Fallback)));
+    }
+
+    #[test]
+    fn dropping_last_uncommitted_handler_leaves_runtime_idle() {
+        let storage = Arc::new(Mutex::new(Vec::new()));
+        let runtime = Arc::new(RouteRuntime::default());
+        let guard = HandlerInstallation::new(
+            storage.clone(),
+            entry("**"),
+            Arc::downgrade(&runtime),
+            Default::default(),
+        );
+        runtime.configure(
+            RouteConfiguration::new(Vec::new(), storage.lock().unwrap().clone()).unwrap(),
+        );
+        drop(guard);
+        assert!(storage.lock().unwrap().is_empty());
+        assert!(runtime.idle());
+    }
 }

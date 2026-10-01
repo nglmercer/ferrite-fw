@@ -6157,6 +6157,7 @@ async fn route_pump_idle<F: std::future::Future<Output = ()>>(
     true
 }
 
+#[derive(Clone)]
 pub(crate) enum RouteMatcher {
     Shared(crate::UrlMatcher),
     Legacy(globset::GlobMatcher),

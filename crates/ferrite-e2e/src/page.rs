@@ -1669,7 +1669,7 @@ pub struct Page {
     slow_mo: Duration,
     base_url: Option<String>,
     routing: Arc<crate::routing::PumpSlot>,
-    route_runtime: Arc<crate::routing::RouteRuntime>,
+    pub(crate) route_runtime: Arc<crate::routing::RouteRuntime>,
     dialogs: Arc<Mutex<Option<tokio::task::AbortHandle>>>,
     capture: Arc<Mutex<Option<CaptureState>>>,
     routes: Arc<Mutex<Vec<RouteRule>>>,
@@ -4316,17 +4316,21 @@ impl Page {
             crate::url_matcher::legacy_glob(pattern)?;
         }
         let handler: RouteHandler = Arc::new(move |info| Box::pin(handler(info)));
-        self.handlers
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(RouteHandlerEntry {
+        let installation = crate::routing::HandlerInstallation::new(
+            self.handlers.clone(),
+            RouteHandlerEntry {
                 pattern: pattern.to_string(),
                 matcher,
                 handler,
                 times,
                 hits: Arc::new(std::sync::atomic::AtomicU32::new(0)),
-            });
-        self.restart_routing().await
+            },
+            Arc::downgrade(&self.route_runtime),
+            Default::default(),
+        );
+        self.restart_routing().await?;
+        installation.commit();
+        Ok(())
     }
 
     /// Stop page-level interception; current handler calls continue.
@@ -4490,37 +4494,33 @@ impl Page {
         self.driver
             .run(async {
                 let mut slot = self.routing.lock().await;
-                let mut rules = self
-                    .routes
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .clone();
-                rules.extend(
-                    self.context_routes
+                {
+                    // Keep metadata snapshots and publication coherent with installation
+                    // rollback. No std mutex guard crosses the native await below.
+                    let local_handlers = self.handlers.lock().unwrap_or_else(|e| e.into_inner());
+                    let context_handlers = self
+                        .context_handlers
                         .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .clone(),
-                );
-                let mut handlers = self
-                    .handlers
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .clone();
-                handlers.extend(
-                    self.context_handlers
+                        .unwrap_or_else(|e| e.into_inner());
+                    let local_rules = self.routes.lock().unwrap_or_else(|e| e.into_inner());
+                    let context_rules = self
+                        .context_routes
                         .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .clone(),
-                );
-                let configuration = crate::routing::RouteConfiguration::new(rules, handlers)?;
-                self.driver.validate_routing(&configuration)?;
-                self.route_runtime
-                    .set_fetch_owner(self.driver.route_fetch_owner(
-                        self.context_registry.clone(),
-                        self.context_id.clone(),
-                        self.action_timeout.clone(),
-                    ));
-                self.route_runtime.configure(configuration);
+                        .unwrap_or_else(|e| e.into_inner());
+                    let mut rules = local_rules.clone();
+                    rules.extend(context_rules.iter().cloned());
+                    let mut handlers = local_handlers.clone();
+                    handlers.extend(context_handlers.iter().cloned());
+                    let configuration = crate::routing::RouteConfiguration::new(rules, handlers)?;
+                    self.driver.validate_routing(&configuration)?;
+                    self.route_runtime
+                        .set_fetch_owner(self.driver.route_fetch_owner(
+                            self.context_registry.clone(),
+                            self.context_id.clone(),
+                            self.action_timeout.clone(),
+                        ));
+                    self.route_runtime.configure(configuration);
+                }
                 if let Some(task) = slot.as_ref().filter(|task| !task.is_finished()) {
                     // If no call/stage remains, complete native shutdown before
                     // a subsequent page operation can start another request.

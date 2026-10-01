@@ -2867,3 +2867,23 @@ and [lifecycle](crates/ferrite-e2e/tests/lifecycle_events.rs), four doctests,
 strict Clippy and formatting. Route installation cancellation/rollback,
 assertion/step control errors, detached-frame requests, redirect/header
 correlation and complete integration/backlog replay remain G04 work.
+
+
+## G04 audit progress — Handler installation rollback
+
+Page and context handler registration now use an installation guard keyed by
+the handler's identity. Failure or dropped installation removes that exact
+entry, preserving concurrently installed handlers. Runtime rollback preserves
+compiled matcher alignment and cancels matching active calls. A callback lease
+releases the original user callback on abandonment and makes stale snapshots
+fall back rather than invoke it. Metadata snapshots and runtime publication
+share the registration locks, preventing rollback from being overwritten by an
+already captured profile; those locks are released before native awaits.
+
+Three unit cases cover concurrent registrations, cancellation with a retained
+stale snapshot, callback ownership release, and an idle runtime after rollback.
+Verification passed 279 scoped checks: 268 units, seven mandatory two-engine
+native groups (`route_lifecycle` and `har_options`), and four doctests. Strict
+Clippy and formatting passed. Native interception startup cancellation,
+declarative rule replacement rollback, and the complete integration replay
+remain G04 work; this does not promise atomic native installation.
