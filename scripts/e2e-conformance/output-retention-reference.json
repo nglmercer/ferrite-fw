@@ -1,0 +1,1020 @@
+{
+  "playwright": "1.63.0",
+  "scope": "Filesystem-only test runner; no browser backend used",
+  "cases": [
+    {
+      "policy": "always",
+      "scenario": "outcomes",
+      "exitCode": 1,
+      "tests": [
+        {
+          "name": "cleanup failure",
+          "outcome": "unexpected",
+          "expectedStatus": "passed",
+          "attempts": [
+            {
+              "retry": 0,
+              "status": "failed",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-cleanup-failure/attachments/marker-d0189924e3e71ea2a844cf5262416bec5f21b231.txt",
+                  "retained": true
+                },
+                {
+                  "name": "error-context",
+                  "path": "output/retention-cleanup-failure/error-context.md",
+                  "retained": true
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": true
+            },
+            {
+              "retry": 1,
+              "status": "failed",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-cleanup-failure-retry1/attachments/marker-0d2f5df8f3190c64a14b2c16a25905a65511efe2.txt",
+                  "retained": true
+                },
+                {
+                  "name": "error-context",
+                  "path": "output/retention-cleanup-failure-retry1/error-context.md",
+                  "retained": true
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": true
+            }
+          ]
+        },
+        {
+          "name": "expected failure",
+          "outcome": "expected",
+          "expectedStatus": "failed",
+          "attempts": [
+            {
+              "retry": 0,
+              "status": "failed",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-expected-failure/attachments/marker-e52d2cb7c9ab5c44db433428ec16ee5a55cd176f.txt",
+                  "retained": true
+                },
+                {
+                  "name": "error-context",
+                  "path": "output/retention-expected-failure/error-context.md",
+                  "retained": true
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": true
+            }
+          ]
+        },
+        {
+          "name": "failed",
+          "outcome": "unexpected",
+          "expectedStatus": "passed",
+          "attempts": [
+            {
+              "retry": 0,
+              "status": "failed",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-failed/attachments/marker-b229a573f379962552a626aaacf7dcb38ba2ec32.txt",
+                  "retained": true
+                },
+                {
+                  "name": "error-context",
+                  "path": "output/retention-failed/error-context.md",
+                  "retained": true
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": true
+            },
+            {
+              "retry": 1,
+              "status": "failed",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-failed-retry1/attachments/marker-4d4498bc70f42116031c4f0062c9fe7c7c058de3.txt",
+                  "retained": true
+                },
+                {
+                  "name": "error-context",
+                  "path": "output/retention-failed-retry1/error-context.md",
+                  "retained": true
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": true
+            }
+          ]
+        },
+        {
+          "name": "passing",
+          "outcome": "expected",
+          "expectedStatus": "passed",
+          "attempts": [
+            {
+              "retry": 0,
+              "status": "passed",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-passing/attachments/marker-6cdf1228e7674d631d638509113ce47ef455ea4f.txt",
+                  "retained": true
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": true
+            }
+          ]
+        },
+        {
+          "name": "recovers",
+          "outcome": "flaky",
+          "expectedStatus": "passed",
+          "attempts": [
+            {
+              "retry": 0,
+              "status": "failed",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-recovers/attachments/marker-f4d957f40d7fdf32110bb0add3591a0aa1e60624.txt",
+                  "retained": true
+                },
+                {
+                  "name": "error-context",
+                  "path": "output/retention-recovers/error-context.md",
+                  "retained": true
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": true
+            },
+            {
+              "retry": 1,
+              "status": "passed",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-recovers-retry1/attachments/marker-007557eca3e04fbeb3d1b812c40e31cf1803517e.txt",
+                  "retained": true
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": true
+            }
+          ]
+        },
+        {
+          "name": "registered skip",
+          "outcome": "skipped",
+          "expectedStatus": "skipped",
+          "attempts": [
+            {
+              "retry": 0,
+              "status": "skipped",
+              "attachments": [],
+              "markerCreated": false,
+              "markerRetained": false
+            }
+          ]
+        },
+        {
+          "name": "runtime skip",
+          "outcome": "skipped",
+          "expectedStatus": "skipped",
+          "attempts": [
+            {
+              "retry": 0,
+              "status": "skipped",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-runtime-skip/attachments/marker-a0d4657cfd7d824fbaddbd4bd50f90ad73d366f0.txt",
+                  "retained": true
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": true
+            }
+          ]
+        },
+        {
+          "name": "timeout",
+          "outcome": "unexpected",
+          "expectedStatus": "passed",
+          "attempts": [
+            {
+              "retry": 0,
+              "status": "timedOut",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-timeout/attachments/marker-bf08b766a51ed88ab97370a8dcd0bf31a8b6bbe2.txt",
+                  "retained": true
+                },
+                {
+                  "name": "error-context",
+                  "path": "output/retention-timeout/error-context.md",
+                  "retained": true
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": true
+            },
+            {
+              "retry": 1,
+              "status": "timedOut",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-timeout-retry1/attachments/marker-04f2d8bdc1c3d5c1e4494374ac935c8461413052.txt",
+                  "retained": true
+                },
+                {
+                  "name": "error-context",
+                  "path": "output/retention-timeout-retry1/error-context.md",
+                  "retained": true
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": true
+            }
+          ]
+        },
+        {
+          "name": "unexpected pass",
+          "outcome": "unexpected",
+          "expectedStatus": "failed",
+          "attempts": [
+            {
+              "retry": 0,
+              "status": "passed",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-unexpected-pass/attachments/marker-93fd256fc6d63b71aaebdbf6d81d31e1175c7a68.txt",
+                  "retained": true
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": true
+            },
+            {
+              "retry": 1,
+              "status": "passed",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-unexpected-pass-retry1/attachments/marker-090d77a3a5699b1345a897284bb26f2d1164daca.txt",
+                  "retained": true
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "policy": "always",
+      "scenario": "interruption",
+      "exitCode": 1,
+      "tests": [
+        {
+          "name": "interrupted",
+          "outcome": "skipped",
+          "expectedStatus": "passed",
+          "attempts": [
+            {
+              "retry": 0,
+              "status": "interrupted",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-interrupted/attachments/marker-4f6060759a55fb6f00c22a476c5c077dd5940e6b.txt",
+                  "retained": true
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": true
+            }
+          ]
+        },
+        {
+          "name": "trigger",
+          "outcome": "unexpected",
+          "expectedStatus": "passed",
+          "attempts": [
+            {
+              "retry": 0,
+              "status": "failed",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-trigger/attachments/marker-78981be8ec83fe01c279354cb27d3fc04a88b51b.txt",
+                  "retained": true
+                },
+                {
+                  "name": "error-context",
+                  "path": "output/retention-trigger/error-context.md",
+                  "retained": true
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "policy": "never",
+      "scenario": "outcomes",
+      "exitCode": 1,
+      "tests": [
+        {
+          "name": "cleanup failure",
+          "outcome": "unexpected",
+          "expectedStatus": "passed",
+          "attempts": [
+            {
+              "retry": 0,
+              "status": "failed",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-cleanup-failure/attachments/marker-89ba37829817e16923b1386879d6881fc44e80f2.txt",
+                  "retained": false
+                },
+                {
+                  "name": "error-context",
+                  "path": "output/retention-cleanup-failure/error-context.md",
+                  "retained": false
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": false
+            },
+            {
+              "retry": 1,
+              "status": "failed",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-cleanup-failure-retry1/attachments/marker-89e5856d0f6d2028acb7984e5049459ae2671243.txt",
+                  "retained": false
+                },
+                {
+                  "name": "error-context",
+                  "path": "output/retention-cleanup-failure-retry1/error-context.md",
+                  "retained": false
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": false
+            }
+          ]
+        },
+        {
+          "name": "expected failure",
+          "outcome": "expected",
+          "expectedStatus": "failed",
+          "attempts": [
+            {
+              "retry": 0,
+              "status": "failed",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-expected-failure/attachments/marker-9d4508dbb893eb491da17dd035543ab5506e00c9.txt",
+                  "retained": false
+                },
+                {
+                  "name": "error-context",
+                  "path": "output/retention-expected-failure/error-context.md",
+                  "retained": false
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": false
+            }
+          ]
+        },
+        {
+          "name": "failed",
+          "outcome": "unexpected",
+          "expectedStatus": "passed",
+          "attempts": [
+            {
+              "retry": 0,
+              "status": "failed",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-failed/attachments/marker-58dfc4ef2c78bba124a7a6f139c04fb92432b866.txt",
+                  "retained": false
+                },
+                {
+                  "name": "error-context",
+                  "path": "output/retention-failed/error-context.md",
+                  "retained": false
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": false
+            },
+            {
+              "retry": 1,
+              "status": "failed",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-failed-retry1/attachments/marker-172589fa78a8287d037c5aca9d292d9661a73000.txt",
+                  "retained": false
+                },
+                {
+                  "name": "error-context",
+                  "path": "output/retention-failed-retry1/error-context.md",
+                  "retained": false
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": false
+            }
+          ]
+        },
+        {
+          "name": "passing",
+          "outcome": "expected",
+          "expectedStatus": "passed",
+          "attempts": [
+            {
+              "retry": 0,
+              "status": "passed",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-passing/attachments/marker-850c25a55fa1a2ff67e8ca8cf3ac2962484572c6.txt",
+                  "retained": false
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": false
+            }
+          ]
+        },
+        {
+          "name": "recovers",
+          "outcome": "flaky",
+          "expectedStatus": "passed",
+          "attempts": [
+            {
+              "retry": 0,
+              "status": "failed",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-recovers/attachments/marker-b37cfced146d64008e41ded830ef2aefd3fe8971.txt",
+                  "retained": false
+                },
+                {
+                  "name": "error-context",
+                  "path": "output/retention-recovers/error-context.md",
+                  "retained": false
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": false
+            },
+            {
+              "retry": 1,
+              "status": "passed",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-recovers-retry1/attachments/marker-37a894da82d29e22946a85f3b43db1fb3dee138c.txt",
+                  "retained": false
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": false
+            }
+          ]
+        },
+        {
+          "name": "registered skip",
+          "outcome": "skipped",
+          "expectedStatus": "skipped",
+          "attempts": [
+            {
+              "retry": 0,
+              "status": "skipped",
+              "attachments": [],
+              "markerCreated": false,
+              "markerRetained": false
+            }
+          ]
+        },
+        {
+          "name": "runtime skip",
+          "outcome": "skipped",
+          "expectedStatus": "skipped",
+          "attempts": [
+            {
+              "retry": 0,
+              "status": "skipped",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-runtime-skip/attachments/marker-74447e5458894ff10b912f430b83b77626633c04.txt",
+                  "retained": false
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": false
+            }
+          ]
+        },
+        {
+          "name": "timeout",
+          "outcome": "unexpected",
+          "expectedStatus": "passed",
+          "attempts": [
+            {
+              "retry": 0,
+              "status": "timedOut",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-timeout/attachments/marker-8f409ceaa97b8ec28b4177d1deb05599a5da988b.txt",
+                  "retained": false
+                },
+                {
+                  "name": "error-context",
+                  "path": "output/retention-timeout/error-context.md",
+                  "retained": false
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": false
+            },
+            {
+              "retry": 1,
+              "status": "timedOut",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-timeout-retry1/attachments/marker-86359fb2afc86686aa5e2358d031bd3572c8cda6.txt",
+                  "retained": false
+                },
+                {
+                  "name": "error-context",
+                  "path": "output/retention-timeout-retry1/error-context.md",
+                  "retained": false
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": false
+            }
+          ]
+        },
+        {
+          "name": "unexpected pass",
+          "outcome": "unexpected",
+          "expectedStatus": "failed",
+          "attempts": [
+            {
+              "retry": 0,
+              "status": "passed",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-unexpected-pass/attachments/marker-3ac858eb4e1521f6d7eae61bfc54f31b49cea2a9.txt",
+                  "retained": false
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": false
+            },
+            {
+              "retry": 1,
+              "status": "passed",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-unexpected-pass-retry1/attachments/marker-36c88c55ea0c5b72a2946d471883b0c1b421fe0b.txt",
+                  "retained": false
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "policy": "never",
+      "scenario": "interruption",
+      "exitCode": 1,
+      "tests": [
+        {
+          "name": "interrupted",
+          "outcome": "skipped",
+          "expectedStatus": "passed",
+          "attempts": [
+            {
+              "retry": 0,
+              "status": "interrupted",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-interrupted/attachments/marker-27ac27fe6d4670713a1c5b24721a5d80e0d5020b.txt",
+                  "retained": false
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": false
+            }
+          ]
+        },
+        {
+          "name": "trigger",
+          "outcome": "unexpected",
+          "expectedStatus": "passed",
+          "attempts": [
+            {
+              "retry": 0,
+              "status": "failed",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-trigger/attachments/marker-0cd9bb8028ebb6e7d936209db75cc9cdc1a68b7f.txt",
+                  "retained": false
+                },
+                {
+                  "name": "error-context",
+                  "path": "output/retention-trigger/error-context.md",
+                  "retained": false
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "policy": "failures-only",
+      "scenario": "outcomes",
+      "exitCode": 1,
+      "tests": [
+        {
+          "name": "cleanup failure",
+          "outcome": "unexpected",
+          "expectedStatus": "passed",
+          "attempts": [
+            {
+              "retry": 0,
+              "status": "failed",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-cleanup-failure/attachments/marker-af824fb04e252a697346d9184c2506763a7cb346.txt",
+                  "retained": true
+                },
+                {
+                  "name": "error-context",
+                  "path": "output/retention-cleanup-failure/error-context.md",
+                  "retained": true
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": true
+            },
+            {
+              "retry": 1,
+              "status": "failed",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-cleanup-failure-retry1/attachments/marker-79a7450e9d76e08a20dc829e1c535162d1bbd163.txt",
+                  "retained": true
+                },
+                {
+                  "name": "error-context",
+                  "path": "output/retention-cleanup-failure-retry1/error-context.md",
+                  "retained": true
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": true
+            }
+          ]
+        },
+        {
+          "name": "expected failure",
+          "outcome": "expected",
+          "expectedStatus": "failed",
+          "attempts": [
+            {
+              "retry": 0,
+              "status": "failed",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-expected-failure/attachments/marker-87031978713f188cf2e3129bf41c0a6e9977cc20.txt",
+                  "retained": false
+                },
+                {
+                  "name": "error-context",
+                  "path": "output/retention-expected-failure/error-context.md",
+                  "retained": false
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": false
+            }
+          ]
+        },
+        {
+          "name": "failed",
+          "outcome": "unexpected",
+          "expectedStatus": "passed",
+          "attempts": [
+            {
+              "retry": 0,
+              "status": "failed",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-failed/attachments/marker-85b6606c2c1c86ed8a5fe2ba56f851826dfbfd96.txt",
+                  "retained": true
+                },
+                {
+                  "name": "error-context",
+                  "path": "output/retention-failed/error-context.md",
+                  "retained": true
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": true
+            },
+            {
+              "retry": 1,
+              "status": "failed",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-failed-retry1/attachments/marker-19880a06a0aba73237c9015eb578272e23886971.txt",
+                  "retained": true
+                },
+                {
+                  "name": "error-context",
+                  "path": "output/retention-failed-retry1/error-context.md",
+                  "retained": true
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": true
+            }
+          ]
+        },
+        {
+          "name": "passing",
+          "outcome": "expected",
+          "expectedStatus": "passed",
+          "attempts": [
+            {
+              "retry": 0,
+              "status": "passed",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-passing/attachments/marker-5633441714ce5e665f5ec1721eaa050ea98d2c65.txt",
+                  "retained": false
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": false
+            }
+          ]
+        },
+        {
+          "name": "recovers",
+          "outcome": "flaky",
+          "expectedStatus": "passed",
+          "attempts": [
+            {
+              "retry": 0,
+              "status": "failed",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-recovers/attachments/marker-36e32fc7947d42efd94a781702ed97a97d1cda2f.txt",
+                  "retained": true
+                },
+                {
+                  "name": "error-context",
+                  "path": "output/retention-recovers/error-context.md",
+                  "retained": true
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": true
+            },
+            {
+              "retry": 1,
+              "status": "passed",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-recovers-retry1/attachments/marker-5f54eeda7f7476784b16e6f92423ef31e1915957.txt",
+                  "retained": false
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": false
+            }
+          ]
+        },
+        {
+          "name": "registered skip",
+          "outcome": "skipped",
+          "expectedStatus": "skipped",
+          "attempts": [
+            {
+              "retry": 0,
+              "status": "skipped",
+              "attachments": [],
+              "markerCreated": false,
+              "markerRetained": false
+            }
+          ]
+        },
+        {
+          "name": "runtime skip",
+          "outcome": "skipped",
+          "expectedStatus": "skipped",
+          "attempts": [
+            {
+              "retry": 0,
+              "status": "skipped",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-runtime-skip/attachments/marker-a261369e4545fdede8af992393b439a866ea1c89.txt",
+                  "retained": false
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": false
+            }
+          ]
+        },
+        {
+          "name": "timeout",
+          "outcome": "unexpected",
+          "expectedStatus": "passed",
+          "attempts": [
+            {
+              "retry": 0,
+              "status": "timedOut",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-timeout/attachments/marker-26a2f318f9297cc3fa4e298682c661e5c43342ec.txt",
+                  "retained": true
+                },
+                {
+                  "name": "error-context",
+                  "path": "output/retention-timeout/error-context.md",
+                  "retained": true
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": true
+            },
+            {
+              "retry": 1,
+              "status": "timedOut",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-timeout-retry1/attachments/marker-bb90427c8797d2bd7a61ffe6bfb9d0c1e1596436.txt",
+                  "retained": true
+                },
+                {
+                  "name": "error-context",
+                  "path": "output/retention-timeout-retry1/error-context.md",
+                  "retained": true
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": true
+            }
+          ]
+        },
+        {
+          "name": "unexpected pass",
+          "outcome": "unexpected",
+          "expectedStatus": "failed",
+          "attempts": [
+            {
+              "retry": 0,
+              "status": "passed",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-unexpected-pass/attachments/marker-2727676a0a81cf7a8308892f84f1de582bd45c3b.txt",
+                  "retained": true
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": true
+            },
+            {
+              "retry": 1,
+              "status": "passed",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-unexpected-pass-retry1/attachments/marker-95d89b818fea90ffc610383a78d73edb8c83784c.txt",
+                  "retained": true
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "policy": "failures-only",
+      "scenario": "interruption",
+      "exitCode": 1,
+      "tests": [
+        {
+          "name": "interrupted",
+          "outcome": "skipped",
+          "expectedStatus": "passed",
+          "attempts": [
+            {
+              "retry": 0,
+              "status": "interrupted",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-interrupted/attachments/marker-b7b85bf5e64f5bba83e05870f88234835e7e2a2b.txt",
+                  "retained": true
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": true
+            }
+          ]
+        },
+        {
+          "name": "trigger",
+          "outcome": "unexpected",
+          "expectedStatus": "passed",
+          "attempts": [
+            {
+              "retry": 0,
+              "status": "failed",
+              "attachments": [
+                {
+                  "name": "marker",
+                  "path": "output/retention-trigger/attachments/marker-7901d9d403a80f92fbb0ad187802ab9762018575.txt",
+                  "retained": true
+                },
+                {
+                  "name": "error-context",
+                  "path": "output/retention-trigger/error-context.md",
+                  "retained": true
+                }
+              ],
+              "markerCreated": true,
+              "markerRetained": true
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

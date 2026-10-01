@@ -1171,6 +1171,14 @@ behavior claims must still use the repository's pinned Playwright v1.63.0 corpus
   JSON/HTML/bundles have no unexplained broken artifact links, and repeat runs
   do not remove each other's outputs. No automatic historical-run pruning.
   Reference: [preserveOutput](https://playwright.dev/docs/api/class-testconfig#test-config-preserve-output).
+  Reference preparation: [actual pinned corpus](scripts/e2e-conformance/output-retention-reference.json)
+  records six runner invocations, 33 cases and 48 attempt results (45 created
+  markers), covering every policy and actual interruptions. Filesystem-only;
+  no browser backend claim. Failures-only retains unexpected failed attempts,
+  recovered retry failures, timeouts, cleanup failures, interruptions and
+  unexpected passes; expected failures, successful attempts and runtime skips
+  are removed. Upstream JSON can retain deleted attachment paths. Rust ownership,
+  safe deletion and valid/pruned report links remain pending; D03 stays open.
 
 - [ ] **D04 — Run metadata and slow-test reporting (M; needs B14/B11).** Add
   optional JSON-safe user metadata/run name and project metadata, propagated

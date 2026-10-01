@@ -527,3 +527,33 @@ boxes, deterministic visit/node/depth/name limits and exact-text assertion
 consumption. Rust remains a DOM approximation with explicit safety markers;
 it does not reproduce the complete upstream tree, text fragments or YAML syntax.
 The `states` and safety-budget fields are Rust conveniences, not upstream options.
+
+### D03 output-retention reference preparation
+
+`output-retention-reference.mjs` records six actual Playwright 1.63.0 runner
+invocations: each of `always`, `never` and `failures-only` across ordinary
+outcomes and a two-worker interruption. The 33 selected cases contain 48 attempt
+results; 45 attempts actually create a marker. This is a filesystem-only runner
+corpus; it uses no browser backend and makes no Chromium/Firefox claim.
+
+```bash
+TMPDIR=/path/to/cache \
+FERRITE_PLAYWRIGHT_MODULE=/path/to/node_modules/playwright \
+node scripts/e2e-conformance/output-retention-reference.mjs
+```
+
+The corpus checks both marker survival and every reported attachment path after
+the runner exits. `always` retains created outputs; `never` removes them.
+`failures-only` retains unexpected failures (including the failed attempt of a
+recovered test), timeouts, cleanup failures, interruptions and unexpected passes.
+It removes successful attempts, expected failures and runtime skips. Registered
+skips create no marker. The interrupted case must have actually entered its
+fixture and written output. All these classifications are verified by the script
+against observed statuses, expected statuses and filesystem results.
+
+Upstream JSON continues to contain attachment paths even when retention removed
+the files. Ferrite's D03 task requires explicit valid/pruned links and preservation
+of caller-owned inputs and baselines, so output classification does not imply
+identical report/link semantics. Rust retention implementation, owned-directory
+isolation, cleanup ordering, symlink/repeat-run safety and native verification
+remain pending. No TODO completion is claimed by this reference preparation.
