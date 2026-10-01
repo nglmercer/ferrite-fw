@@ -579,6 +579,24 @@ mod tests {
             drop(closed);
             drop(recovered);
             let weak = Arc::downgrade(&captures.get("bounded-3").unwrap());
+            _root
+                .sink
+                .native_observation_loss()
+                .cancel_with_reason("injected native listener exit");
+            assert!(
+                matches!(_root.wait_for_event(crate::PageEventKind::Request, std::time::Duration::ZERO).await, Err(crate::E2eError::Config(message)) if message.contains("source unavailable"))
+            );
+            let matcher = crate::UrlMatcher::glob("**").unwrap();
+            let options = crate::OperationOptions {
+                timeout: Some(std::time::Duration::ZERO),
+                cancellation: None,
+            };
+            assert!(
+                matches!(_root.wait_for_request_handle(&matcher, options.clone()).await, Err(crate::E2eError::Config(message)) if message.contains("source unavailable"))
+            );
+            assert!(
+                matches!(_root.wait_for_response_handle(&matcher, options).await, Err(crate::E2eError::Config(message)) if message.contains("source unavailable"))
+            );
             context.close().await.unwrap();
             assert!(
                 weak.upgrade().is_none(),

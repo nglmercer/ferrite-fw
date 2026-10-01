@@ -2096,10 +2096,12 @@ impl Page {
                 }
                 let mut events = self.subscribe();
                 let mut losses = (kind == PageEventKind::Popup).then(|| self.sink.popup_losses());
+                let native_loss = self.sink.native_observation_loss();
                 crate::operation::Deadline::new(timeout)
                     .run(format!("wait for {kind:?} event"), async {
                         loop {
                             let observed = tokio::select! {biased;
+                                reason=native_loss.cancelled(), if kind != PageEventKind::Popup => return Err(E2eError::Config(format!("page event source unavailable: {reason}"))),
                                 changed=async { match losses.as_mut() { Some(loss) => loss.changed().await, None => std::future::pending().await } } => {
                                     changed.map_err(|_| E2eError::Disconnected("popup adoption source closed".into()))?;
                                     return Err(E2eError::Config(losses.as_ref().unwrap().borrow().clone().unwrap_or_else(|| "popup adoption observations lost".into())));
@@ -4628,8 +4630,13 @@ impl Page {
                     "typed request",
                     async {
                         let mut events = page.subscribe_network();
+                        let source_loss = page.sink.native_observation_loss();
                         loop {
-                            if let crate::NetworkEvent::Request(request) = events.recv().await? {
+                            let observed = tokio::select! {biased;
+                                reason=source_loss.cancelled()=>return Err(E2eError::Config(format!("typed network source unavailable: {reason}"))),
+                                event=events.recv()=>event?,
+                            };
+                            if let crate::NetworkEvent::Request(request) = observed {
                                 if predicate(&request) {
                                     return Ok(crate::Request::new(
                                         self.clone(),
@@ -4676,8 +4683,13 @@ impl Page {
                     "typed response headers",
                     async {
                         let mut events = page.subscribe_network();
+                        let source_loss = page.sink.native_observation_loss();
                         loop {
-                            if let crate::NetworkEvent::Response(response) = events.recv().await? {
+                            let observed = tokio::select! {biased;
+                                reason=source_loss.cancelled()=>return Err(E2eError::Config(format!("typed network source unavailable: {reason}"))),
+                                event=events.recv()=>event?,
+                            };
+                            if let crate::NetworkEvent::Response(response) = observed {
                                 if predicate(&response) {
                                     return Ok(response.with_page(self.clone()));
                                 }
@@ -5332,8 +5344,13 @@ impl Page {
                 async {
                     let mut events = scoped.sink.subscribe_network();
                     scoped.ensure_request_capture();
+                    let source_loss = scoped.sink.native_observation_loss();
                     loop {
-                        let observed = events.recv().await.map_err(|error| match error {
+                        let received = tokio::select! {biased;
+                            reason=source_loss.cancelled()=>return Err(E2eError::Config(format!("network event source unavailable: {reason}"))),
+                            event=events.recv()=>event,
+                        };
+                        let observed = received.map_err(|error| match error {
                             tokio::sync::broadcast::error::RecvError::Lagged(count) => {
                                 E2eError::Config(format!(
                                     "network wait lost {count} events; predicate could not keep up"

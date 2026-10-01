@@ -63,6 +63,9 @@ impl Drop for PageInitialization {
 }
 impl Drop for NetworkListenerGuard {
     fn drop(&mut self) {
+        self.0
+            .native_observation
+            .cancel_with_reason("native event listener ended");
         // Popup observation belongs to transport ingress and can outlive a
         // failed driver initialization. Ingress closes its independent state.
         if self.0.popup_capture.is_some() {
@@ -109,6 +112,7 @@ pub struct ConsoleSink {
     /// Page event broadcast (console, dialogs, network, downloads, popups).
     events: tokio::sync::broadcast::Sender<PageEvent>,
     popup_loss: Arc<tokio::sync::watch::Sender<Option<String>>>,
+    native_observation: crate::CancellationToken,
     pub(crate) download_dir: Arc<Mutex<Option<PathBuf>>>,
     downloads_emitted: Arc<Mutex<HashMap<PathBuf, (u64, SystemTime)>>>,
     context_events: Arc<Mutex<Option<ContextEventForwarding>>>,
@@ -130,6 +134,9 @@ pub(crate) const MAX_RESPONSE_BODY: usize = 1024 * 1024;
 const MAX_EVENT_BUFFER: usize = 256;
 
 impl ConsoleSink {
+    pub(crate) fn native_observation_loss(&self) -> crate::CancellationToken {
+        self.native_observation.clone()
+    }
     pub(crate) fn popup_losses(&self) -> tokio::sync::watch::Receiver<Option<String>> {
         self.popup_loss.subscribe()
     }
@@ -155,6 +162,7 @@ impl ConsoleSink {
             network_events: tokio::sync::broadcast::channel(MAX_EVENT_BUFFER).0,
             events: tokio::sync::broadcast::channel(MAX_EVENT_BUFFER).0,
             popup_loss: Arc::new(tokio::sync::watch::channel(None).0),
+            native_observation: crate::CancellationToken::new(),
             context_events: Arc::new(Mutex::new(None)),
             page_id: Arc::new(Mutex::new(None)),
             frame_events: Arc::new(Mutex::new(crate::lifecycle_events::FrameEvents::default())),
@@ -6735,6 +6743,18 @@ mod network_lifecycle_tests {
 #[cfg(test)]
 mod diagnostic_observation_tests {
     use super::*;
+    #[test]
+    fn native_listener_guard_marks_observation_source_terminal() {
+        let sink = ConsoleSink::new();
+        let source = sink.native_observation_loss();
+        assert!(!source.is_cancelled());
+        drop(NetworkListenerGuard(sink));
+        assert_eq!(
+            source.reason().as_deref(),
+            Some("native event listener ended")
+        );
+    }
+
     #[test]
     fn console_protocol_metadata_is_preserved_in_events_buffers_and_context_history() {
         let sink = ConsoleSink::new();

@@ -2792,3 +2792,24 @@ Remaining audit work includes routing installation cancellation/rollback,
 listener-exit source loss, native disposal acknowledgment, detached-frame and
 empty-context waits, assertion/step control errors, redirect/header correlation,
 and the final 51-target replay and requirement-by-requirement backlog audit.
+
+
+## G04 audit progress — Native listener source loss
+
+Native listener guards now mark their observation source terminal on exit,
+including popup driver listeners whose startup capture can outlive that listener.
+Page event waits report an explicit source-unavailable error for events supplied
+by that listener. Popup adoption and authoritative native close notifications
+retain their separate lifecycle paths. Typed future request/response waits and
+legacy predicate-based network waits also check source loss under their existing
+operation budget. Cached request/response values keep their existing behavior.
+
+The [guard unit test](crates/ferrite-e2e/src/driver.rs) proves listener drop marks
+the source terminal. The [two-transport ownership fixture](crates/ferrite-e2e/src/popup_capture.rs)
+checks zero-timeout Page and typed network waits settle on source loss.
+Verification passed 273 scoped checks: 262 units, seven mandatory Chromium/Firefox
+native groups across [lifecycle events](crates/ferrite-e2e/tests/lifecycle_events.rs)
+and [network metadata](crates/ferrite-e2e/tests/network_metadata.rs), plus four
+doctests. Strict Clippy and formatting passed. Context-wide listener loss,
+native disposal error handling and the other G04 cases remain under audit;
+this does not claim the full integration replay.
