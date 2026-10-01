@@ -688,3 +688,14 @@ use raw CDP on a `viewport:null` context, with native PNG, JS and HTTP assertion
 They do not imply dedicated Playwright Page API equivalents. Native reset values
 are read after animation frames settle. The [Rust gate](../../crates/ferrite-e2e/tests/emulation_options.rs)
 checks both browser backends, including explicit unsupported Firefox errors.
+
+
+### Scoped Chromium CDP sessions
+
+`npm run reference:cdp-sessions` runs [cdp-session-reference.mjs](cdp-session-reference.mjs)
+on pinned Playwright 1.63 and writes [cdp-session-reference.json](cdp-session-reference.json).
+It verifies raw session events, detach settlement of a pending command, closed
+session errors, isolation of another session/page/browser and target-close
+notifications. Pinned repeated detach rejects; Ferrite disposal is intentionally
+idempotent. The [native Rust gate](../../crates/ferrite-e2e/tests/cdp_sessions.rs)
+also covers clone/drop ownership, lag and caller lifecycle controls.

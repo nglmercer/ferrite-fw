@@ -48,6 +48,7 @@ mod bundle;
 mod callbacks;
 mod captured_body;
 mod cdp;
+mod cdp_session;
 mod config;
 mod console;
 mod context;
@@ -108,7 +109,7 @@ pub use bidi::BidiConnection;
 pub use browser::{find_chromium, find_firefox, Browser, BrowserKind, LaunchOptions};
 pub use bundle::ReportBundle;
 pub use callbacks::BindingSource;
-pub use cdp::CdpConnection;
+pub use cdp::{CdpConnection, CdpEvent};
 pub use config::config_from_env;
 pub use console::{
     ConsoleArgument, ConsoleArgumentValue, ConsoleArguments, ErrorStackFrame, PageErrorInfo,
@@ -196,3 +197,5 @@ pub use emulation::{
     MediaOptions, MediaType, ScreenOrientation, ScreenOrientationType, ScreenPosition,
     UserAgentBrandVersion, UserAgentMetadata, UserAgentOptions,
 };
+
+pub use cdp_session::{CdpSession, CdpSessionEvents};

@@ -7,7 +7,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use futures::{SinkExt as _, StreamExt as _};
@@ -58,6 +58,8 @@ struct Inner {
     popup_captures: Mutex<Option<Arc<crate::popup_capture::PopupCaptures>>>,
     downloads: Mutex<VecDeque<DownloadRecord>>,
     next_id: AtomicU64,
+    attachments: Mutex<HashMap<u64, Weak<crate::cdp_session::SessionState>>>,
+    sessions: Mutex<HashMap<String, Weak<crate::cdp_session::SessionState>>>,
 }
 
 struct PendingCall {
@@ -97,6 +99,8 @@ impl CdpConnection {
             events,
             downloads: Mutex::new(VecDeque::new()),
             next_id: AtomicU64::new(1),
+            attachments: Mutex::new(HashMap::new()),
+            sessions: Mutex::new(HashMap::new()),
         });
 
         // Writer task.
@@ -186,10 +190,35 @@ impl CdpConnection {
         params: Value,
         timeout: Duration,
     ) -> E2eResult<Value> {
+        self.call_owned(session, method, params, timeout, None)
+            .await
+    }
+
+    pub(crate) async fn call_owned(
+        &self,
+        session: Option<&str>,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+        attachment: Option<Weak<crate::cdp_session::SessionState>>,
+    ) -> E2eResult<Value> {
         if let Some(reason) = self.inner.closed.reason() {
             return Err(E2eError::Disconnected(reason));
         }
         let id = self.inner.next_id.fetch_add(1, Ordering::SeqCst);
+        if let Some(attachment) = attachment {
+            let mut attachments = self
+                .inner
+                .attachments
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if attachments.len() >= 256 {
+                return Err(E2eError::Config(
+                    "256 pending scoped CDP attachments; await responses or reconnect".into(),
+                ));
+            }
+            attachments.insert(id, attachment);
+        }
         let mut frame = serde_json::json!({
             "id": id,
             "method": method,
@@ -209,10 +238,14 @@ impl CdpConnection {
             inner: self.inner.clone(),
             id,
         };
-        self.inner
-            .tx
-            .send(Outbound::Text(text))
-            .map_err(|_| E2eError::Disconnected("cdp writer gone".to_string()))?;
+        if self.inner.tx.send(Outbound::Text(text)).is_err() {
+            self.inner
+                .attachments
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&id);
+            return Err(E2eError::Disconnected("cdp writer gone".into()));
+        }
         crate::operation::Deadline::new(timeout)
             .run(format!("cdp {method}"), async {
                 tokio::select! {biased;
@@ -221,6 +254,23 @@ impl CdpConnection {
                 }
             })
             .await
+    }
+
+    pub(crate) fn forget_session(&self, session: &str) {
+        self.inner
+            .sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(session);
+    }
+
+    pub(crate) fn detach_unobserved(&self, session: &str) {
+        self.inner
+            .sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(session);
+        detach_unobserved(&self.inner, session);
     }
 
     /// Fire-and-forget variant that still surfaces transport errors.
@@ -247,6 +297,25 @@ fn handle_frame(inner: &Arc<Inner>, text: &str) {
         return;
     };
     if let Some(id) = frame.get("id").and_then(Value::as_u64) {
+        let attachment = inner
+            .attachments
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&id);
+        if let Some(attachment) = attachment {
+            if let Some(session) = frame["result"]["sessionId"].as_str() {
+                if let Some(state) = attachment.upgrade() {
+                    *state.id.lock().unwrap_or_else(|e| e.into_inner()) = Some(session.into());
+                    inner
+                        .sessions
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(session.into(), Arc::downgrade(&state));
+                } else {
+                    detach_unobserved(inner, session);
+                }
+            }
+        }
         let sender = inner
             .pending
             .lock()
@@ -282,6 +351,33 @@ fn handle_frame(inner: &Arc<Inner>, text: &str) {
             method: method.to_string(),
             params: frame.get("params").cloned().unwrap_or(Value::Null),
         };
+        if method == "Target.detachedFromTarget" {
+            if let Some(id) = event.params["sessionId"].as_str() {
+                let state = inner
+                    .sessions
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(id)
+                    .and_then(|s| s.upgrade());
+                if let Some(state) = state {
+                    state.native_gone.store(true, Ordering::Release);
+                    state
+                        .closed
+                        .cancel_with_reason("CDP session detached by browser");
+                }
+            }
+        }
+        if let Some(id) = event.session.as_ref() {
+            let state = inner
+                .sessions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(id)
+                .and_then(Weak::upgrade);
+            if let Some(state) = state {
+                let _ = state.events.send(event.clone());
+            }
+        }
         let captures = inner
             .popup_captures
             .lock()
@@ -334,6 +430,12 @@ fn track_download(inner: &Arc<Inner>, method: &str, frame: &Value) {
     }
 }
 
+fn detach_unobserved(inner: &Arc<Inner>, session: &str) {
+    let id = inner.next_id.fetch_add(1, Ordering::SeqCst);
+    let frame = serde_json::json!({"id":id,"method":"Target.detachFromTarget","params":{"sessionId":session}});
+    let _ = inner.tx.send(Outbound::Text(frame.to_string()));
+}
+
 fn fail_all(inner: &Arc<Inner>, reason: &str) {
     let captures = inner
         .popup_captures
@@ -344,6 +446,16 @@ fn fail_all(inner: &Arc<Inner>, reason: &str) {
         captures.disconnect(reason);
     }
     inner.closed.cancel_with_reason(reason);
+    inner
+        .attachments
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clear();
+    inner
+        .sessions
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clear();
     let senders = inner
         .pending
         .lock()
@@ -368,6 +480,8 @@ mod tests {
             pending: Mutex::new(HashMap::new()),
             events,
             next_id: AtomicU64::new(1),
+            attachments: Mutex::new(HashMap::new()),
+            sessions: Mutex::new(HashMap::new()),
             downloads: Mutex::new(VecDeque::new()),
         });
         let connection = CdpConnection {
@@ -385,6 +499,75 @@ mod tests {
         );
         assert!(matches!(result, Err(E2eError::Cancelled(_))));
         assert!(inner.pending.lock().unwrap().is_empty());
+    }
+
+    fn scoped_fixture() -> (CdpConnection, mpsc::UnboundedReceiver<Outbound>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let inner = Arc::new(Inner {
+            closed: crate::CancellationToken::new(),
+            tx,
+            popup_captures: Mutex::new(None),
+            pending: Mutex::new(HashMap::new()),
+            events: broadcast::channel(4).0,
+            downloads: Mutex::new(VecDeque::new()),
+            next_id: AtomicU64::new(1),
+            attachments: Mutex::new(HashMap::new()),
+            sessions: Mutex::new(HashMap::new()),
+        });
+        (CdpConnection { inner }, rx)
+    }
+    #[tokio::test]
+    async fn abandoned_attachment_late_reply_detaches_and_cap_releases_on_disconnect() {
+        let (connection, mut outgoing) = scoped_fixture();
+        // An expired weak owner models a cancelled attach before its native reply.
+        let future = connection.call_owned(
+            None,
+            "Target.attachToTarget",
+            Value::Null,
+            Duration::from_millis(5),
+            Some(Weak::new()),
+        );
+        assert!(matches!(future.await, Err(E2eError::Timeout(_, _))));
+        assert!(connection.inner.pending.lock().unwrap().is_empty());
+        assert_eq!(connection.inner.attachments.lock().unwrap().len(), 1);
+        let Outbound::Text(command) = outgoing.recv().await.unwrap() else {
+            panic!()
+        };
+        let id: Value = serde_json::from_str(&command).unwrap();
+        handle_frame(
+            &connection.inner,
+            &serde_json::json!({"id":id["id"],"result":{"sessionId":"late"}}).to_string(),
+        );
+        let Outbound::Text(command) = outgoing.recv().await.unwrap() else {
+            panic!()
+        };
+        let command: Value = serde_json::from_str(&command).unwrap();
+        assert_eq!(command["method"], "Target.detachFromTarget");
+        assert_eq!(command["params"]["sessionId"], "late");
+        assert!(connection.inner.attachments.lock().unwrap().is_empty());
+        for id in 100..356 {
+            connection
+                .inner
+                .attachments
+                .lock()
+                .unwrap()
+                .insert(id, Weak::new());
+        }
+        assert!(matches!(
+            connection
+                .call_owned(
+                    None,
+                    "Target.attachToTarget",
+                    Value::Null,
+                    Duration::ZERO,
+                    Some(Weak::new())
+                )
+                .await,
+            Err(E2eError::Config(_))
+        ));
+        assert!(outgoing.try_recv().is_err());
+        fail_all(&connection.inner, "test disconnect");
+        assert!(connection.inner.attachments.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -407,6 +590,8 @@ mod tests {
             events,
             downloads: Mutex::new(VecDeque::new()),
             next_id: AtomicU64::new(1),
+            attachments: Mutex::new(HashMap::new()),
+            sessions: Mutex::new(HashMap::new()),
         });
         let begin = serde_json::json!({
             "method": "Browser.downloadWillBegin",

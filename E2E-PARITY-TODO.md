@@ -7,7 +7,7 @@ Uncommitted implementations are not counted complete.
 
 The initial G/A foundations are complete except for the final G04 audit. Follow
 the remaining-work index below through B/D improvements and supported C extensions.
-This backlog contains **51 tasks (49 complete, 2 remaining)**: four foundations,
+This backlog contains **51 tasks (50 complete, 1 remaining)**: four foundations,
 16 core tasks, 19 follow-ups, six optional extensions and six practical additions.
 All A and B tasks and D01–D06 are verified; continue with
 practical additions and supported C extensions. The ordering
@@ -24,7 +24,8 @@ limits remain in [PLAYWRIGHT-PARITY.md](PLAYWRIGHT-PARITY.md).
 
 ## Recommended next implementation
 
-Start **C05 — Additional emulation options**, then C06 and the final G04 audit.
+Start **G04 — Final lifecycle audit and complete integration replay**. C05 and
+C06 are verified; their scoped evidence is recorded below.
 B10 is verified through `2c042e1`, with owned process-output drainage in
 `ade139b`. The complete phase passed **457 E2E and 28 CLI/configuration checks**,
 485 combined: 211 units, 242 integrations across all 38 targets and four doctests.
@@ -1154,11 +1155,24 @@ complete this section.
   four doctests, plus strict Clippy/formatting, matrix and local links. The legacy
   filter excludes 92 cases; the complete 50-target replay remains G04.
 
-- [ ] **C06 — Scoped CDP session ownership (M, Chromium).** Add independently
+- [x] **C06 — Scoped CDP session ownership (M, Chromium).** Add independently
   detachable target sessions over the existing connection. Done when detaching
   one session leaves other pages and browser transport working, pending calls
   fail cleanly and repeated disposal is safe. Cross-backend protocol session
   equivalence is deferred. Reference: [CDPSession](https://playwright.dev/docs/api/class-cdpsession).
+  Page factories attach independent flattened Chromium sessions. Clones share
+  idempotent disposal, last-owner drop queues detach and scoped event streams
+  report lag/owner loss. Native cleanup survives dropped detach waits; abandoned
+  attach replies are detached, with at most 256 outstanding tracked attachments.
+  [Native gate](crates/ferrite-e2e/tests/cdp_sessions.rs) verifies isolation,
+  pending commands, cancellation, context/transport loss, native/drop disposal,
+  stream lag and retries. [Pinned observations](scripts/e2e-conformance/cdp-session-reference.json)
+  confirm public session semantics; upstream repeated detach rejects, unlike
+  Ferrite's idempotent policy. Browser/Frame factories remain outside this task.
+  Verified 276 scoped checks: 260 units, 12 native groups across three targets,
+  four doctests, strict Clippy/formatting, matrix and local links. The 51-target
+  complete replay and final lifecycle audit remain G04.
+
 
 ## D — Additional practical features for the longer session
 

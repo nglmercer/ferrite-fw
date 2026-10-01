@@ -13,7 +13,7 @@ This inventory covers every JavaScript-applicable method, property and event doc
 | Idiomatic | Comparable checks/operations are expressed through Rust language/library facilities; no Playwright-style API object. |
 | Missing | No dedicated counterpart found; arbitrary JS evaluation or raw CDP/BiDi calls do not establish feature parity. |
 
-Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 648; Idiomatic: 41; Missing: 314. These counts are inventory labels, not a percentage of behavioral compatibility.
+Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 650; Idiomatic: 41; Missing: 312. These counts are inventory labels, not a percentage of behavioral compatibility.
 
 ## APIRequest
 
@@ -210,7 +210,7 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 648; 
 | `BrowserContext.exposeFunction` | method | Partial | `BrowserContext.expose_function_async` ([source](crates/ferrite-e2e/src/callbacks.rs#L549)) | Sync/async JSON callbacks in current/future same-origin documents; independent bounded dispatch, native preload ownership, duplicate-name errors and named removal. Rust errors/panics reject JS promises; cross-origin dispatch/handle arguments deferred. |
 | `BrowserContext.grantPermissions` | method | Partial | `BrowserContext.grant_permissions` ([source](crates/ferrite-e2e/src/context.rs#L1331)) | No origin argument; Chromium grants broadly, Firefox grants after navigation for the current origin. |
 | `BrowserContext.isClosed` | method | Partial | `BrowserContext.is_closed` ([source](crates/ferrite-e2e/src/context.rs#L1663)) | Tracks explicit context disposal, shared browser shutdown, last-owner drop and native transport loss. Enum event waits distinguish disconnect errors from observed native events; no full upstream emitter/reason surface. |
-| `BrowserContext.newCDPSession` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
+| `BrowserContext.newCDPSession` | method | Partial | `Page.new_cdp_session_with` ([source](crates/ferrite-e2e/src/cdp_session.rs#L186)) | Independent flattened Chromium Page-target session; Page convenience API, no Frame target overload or BrowserContext factory. |
 | `BrowserContext.newPage` | method | Partial | `BrowserContext.new_page` ([source](crates/ferrite-e2e/src/context.rs#L643)) | Context API exists, with fewer options and engine restrictions; see the feature audit. |
 | `BrowserContext.pages` | method | Partial | `BrowserContext.pages` ([source](crates/ferrite-e2e/src/context.rs#L848)) | Context API exists, with fewer options and engine restrictions; see the feature audit. |
 | `BrowserContext.removeAllListeners` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
@@ -266,8 +266,8 @@ Inventory: **73 classes, 1018 distinct members**. Equivalent: 15; Partial: 648; 
 |---|---|---|---|---|
 | `CDPSession.close` | event | Missing | — | No matching public event variant/emitter; Page.subscribe exposes only the documented PageEvent variants. |
 | `CDPSession.event` | event | Missing | — | No matching public event variant/emitter; Page.subscribe exposes only the documented PageEvent variants. |
-| `CDPSession.detach` | method | Missing | — | No dedicated public equivalent found in exported ferrite-e2e APIs. Raw protocol calls/general evaluate are not counted as implemented API parity. |
-| `CDPSession.send` | method | Partial | `CdpConnection.call` ([source](crates/ferrite-e2e/src/cdp.rs#L182)) | Low-level CDP transport, with caller-managed session IDs; no dedicated CDPSession lifecycle. |
+| `CDPSession.detach` | method | Partial | `CdpSession.detach_with` ([source](crates/ferrite-e2e/src/cdp_session.rs#L100)) | Independently owned Chromium Page target sessions; Rust streams/operation controls with explicit loss/disposal errors, no callback close event. Page/context/transport lifecycle checked; last-owner drop queues detach. |
+| `CDPSession.send` | method | Partial | `CdpSession.send_with` ([source](crates/ferrite-e2e/src/cdp_session.rs#L58)) | Independently owned Chromium Page target sessions; Rust streams/operation controls with explicit loss/disposal errors, no callback close event. Page/context/transport lifecycle checked; last-owner drop queues detach. |
 
 ## Clock
 

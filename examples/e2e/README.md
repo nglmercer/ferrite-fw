@@ -1323,3 +1323,24 @@ UA reset restores native values. Mobile metrics do not change UA hints. Optional
 `UserAgentMetadata` explicitly controls client hints. Operations accept timeout
 and cancellation through `operation`; multi-command metrics changes can remain
 partially applied after cancellation. See the [parity notes](../../PLAYWRIGHT-PARITY.md#c05--media-custom-device-metrics-and-user-agent-metadata).
+
+
+### Own a Chromium CDP target session
+
+```rust
+let session = page.new_cdp_session().await?;
+let mut events = session.events();
+session.send("Runtime.enable", serde_json::json!({})).await?;
+let event = events.next(OperationOptions::default()).await?;
+assert_eq!(event.method, "Runtime.executionContextCreated");
+session.detach().await?;
+// Page and browser remain usable.
+page.evaluate_value("1 + 1").await?;
+```
+
+Clones share disposal. Last-owner drop queues detach; explicit detach waits for
+native cleanup. Streams stop on detach, page/context disposal or disconnect,
+and report event overflow explicitly. `send_with`, `new_cdp_session_with`,
+`detach_with` and stream `next` accept `OperationOptions`. Native detach
+continues after an already-started wait is cancelled or dropped. Only Chromium
+Page target sessions are supported; see the [ownership notes](../../PLAYWRIGHT-PARITY.md#c06--scoped-cdp-target-session-ownership).

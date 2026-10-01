@@ -1,0 +1,19 @@
+{
+  "playwright": "1.63.0",
+  "engine": "chromium",
+  "pendingAfterDetach": "cdpSession.send: Target page, context or browser has been closed",
+  "sendAfterDetach": "cdpSession.send: Target page, context or browser has been closed",
+  "repeatedDetach": "cdpSession.detach: Target page, context or browser has been closed",
+  "isolation": {
+    "otherSession": true,
+    "page": true,
+    "otherPage": true,
+    "browser": true
+  },
+  "pageDisposalClosesSession": true,
+  "eventsBeforeDetach": [
+    "Runtime.executionContextCreated",
+    "Runtime.executionContextCreated"
+  ],
+  "note": "Public Playwright target sessions. Ferrite adds Rust clone/last-owner disposal, idempotent detach, explicit event lag and caller operation controls."
+}

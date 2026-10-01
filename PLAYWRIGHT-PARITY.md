@@ -2704,3 +2704,53 @@ screenshot options (seven), legacy permissions/emulation (one), and four
 doctests. The legacy filter excluded 92 cases. Strict Clippy, formatting,
 matrix generation and local links passed. The inventory now has 50 integration
 targets; this scoped check is not the complete replay still required by G04.
+
+
+## C06 — Scoped CDP target session ownership
+
+`Page::new_cdp_session_with(OperationOptions)` creates a distinct flattened
+Chromium target session over the browser connection. `CdpSession::send_with`
+uses shared page/context/transport lifecycle checks and a single operation
+budget. `events()` returns a session-filtered 256-event stream; `next` reports
+lag explicitly and makes that stream terminal after loss. Detach and disposal
+settle streams and pending commands without closing the page or transport.
+
+Session clones share one owner. Dropping the last owner queues native detach;
+event streams do not keep that owner alive. `detach_with` uses shared disposal:
+once started, native cleanup survives dropped/cancelled waits and repeated
+waits replay its result. The first caller selects the cleanup timeout; zero
+means no timeout. No independent listener tasks are spawned. Native detach
+notifications update ownership directly in the transport reader, avoiding lag
+in a separate disposal observer. Concurrent external detach counts as success
+when native closure was observed.
+
+Cancelled attachment requests remain weakly tracked until their native reply.
+A late session ID is detached even when its caller has gone. At most 256
+unanswered scoped attachments are admitted; reaching that bound fails before
+sending another command. Replies remove entries and disconnect clears them.
+Explicit operations reclaim cancelled pending protocol calls. Last-owner drop
+queues best-effort cleanup without awaiting acknowledgment; explicit detach is
+the observable cleanup path. Existing raw `CdpConnection::close` still closes
+its entire transport. This addition covers Page targets; independent browser
+sessions, Frame overloads and cross-backend protocol equivalence remain outside
+C06. Firefox rejects the factory explicitly.
+
+The [Playwright session contract](https://playwright.dev/docs/api/class-cdpsession)
+provides raw commands, events and detach. The [pinned comparison](scripts/e2e-conformance/cdp-session-reference.mjs)
+and [observations](scripts/e2e-conformance/cdp-session-reference.json) verify
+pending-call settlement, event delivery, target disposal and transport isolation.
+Pinned Playwright rejects repeated detach; Ferrite intentionally makes disposal
+idempotent. Rust streams return lifecycle errors rather than an `on(close)`
+callback. The [native gate](crates/ferrite-e2e/tests/cdp_sessions.rs) additionally
+verifies clone invalidation, last-owner drop, external detach, caller cancellation,
+zero timeout, stream timeout/lag, context disposal, disconnect, dropped disposal
+waits and retry attachment. A transport unit test proves orphan reply cleanup,
+request admission and disconnect reclamation.
+
+
+C06 verification passed 276 scoped checks: 260 units, 12 native groups across
+three targets (scoped sessions five, lifecycle events three, popup diagnostics
+four) and four doctests. Strict Clippy, formatting, matrix and local links passed.
+The matrix now has 650 Partial, 312 Missing, 15 Equivalent and 41 Idiomatic
+members across 73 classes/1,018 members. Integration inventory: 51 targets;
+the complete replay and remaining lifecycle audit remain G04 work.

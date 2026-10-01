@@ -923,6 +923,15 @@ impl Driver {
         }
     }
 
+    pub(crate) fn cdp_connection(&self) -> E2eResult<CdpConnection> {
+        match self {
+            Self::Cdp(driver) => Ok(driver.cdp.clone()),
+            Self::Bidi(_) => Err(E2eError::Config(
+                "scoped CDP sessions require Chromium".into(),
+            )),
+        }
+    }
+
     pub(crate) fn cdp_events(
         &self,
     ) -> E2eResult<(String, tokio::sync::broadcast::Receiver<CdpEvent>)> {
