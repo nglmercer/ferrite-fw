@@ -582,6 +582,13 @@ Work in [the audit generator](scripts/playwright-parity/build_matrix.py),
   [Evidence](PLAYWRIGHT-PARITY.md#g04-audit-progress--confirmed-native-page-disposal):
   264 units, 11 mandatory two-engine native groups and four doctests (279 scoped
   checks), strict Clippy/formatting. This does not complete the remaining audit.
+  Further progress: weak context notifications settle listener-supplied event
+  waits on source loss, preserve known-close handling, and allow fresh waits to
+  retry. Disconnection takes precedence over observation loss; the strict native
+  disconnect assertion passes unchanged. [Evidence](PLAYWRIGHT-PARITY.md#g04-audit-progress--context-source-loss-propagation):
+  265 units, seven mandatory two-engine native groups and four doctests (276
+  scoped checks), strict Clippy/formatting. Remaining G04 cases are still open.
+
 
 
 

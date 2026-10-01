@@ -405,6 +405,7 @@ pub struct BrowserContext {
     cancellation: crate::CancellationToken,
     events: tokio::sync::broadcast::Sender<ContextEvent>,
     popup_loss: Arc<tokio::sync::watch::Sender<Option<String>>>,
+    source_loss: Arc<tokio::sync::watch::Sender<Option<String>>>,
     backend: Backend,
     id: Option<String>,
     options: ContextOptions,
@@ -456,6 +457,7 @@ impl BrowserContext {
             cancellation: crate::CancellationToken::new(),
             events: tokio::sync::broadcast::channel(512).0,
             popup_loss: Arc::new(tokio::sync::watch::channel(None).0),
+            source_loss: Arc::new(tokio::sync::watch::channel(None).0),
             backend,
             id,
             options,
@@ -535,6 +537,7 @@ impl BrowserContext {
     }
     pub(crate) fn bind_popup_sink(&self, sink: &ConsoleSink, page_id: &str) {
         sink.forward_context(&self.events, page_id, &self.console);
+        sink.bind_context_source_loss(&self.source_loss);
         sink.network_log
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -592,6 +595,14 @@ impl BrowserContext {
         let mut events = self.subscribe();
         let mut losses = matches!(kind, ContextEventKind::Page | ContextEventKind::Popup)
             .then(|| self.popup_loss.subscribe());
+        let mut native_loss = (!matches!(
+            kind,
+            ContextEventKind::Closed
+                | ContextEventKind::Page
+                | ContextEventKind::Popup
+                | ContextEventKind::PageClose
+        ))
+        .then(|| self.source_loss.subscribe());
         let timeout = options.timeout.unwrap_or_else(|| {
             self.live
                 .lock()
@@ -604,6 +615,10 @@ impl BrowserContext {
             async {
                 loop {
                     let observed = tokio::select! {biased;
+                        changed=async { match native_loss.as_mut() { Some(loss) => loss.changed().await, None => std::future::pending().await } } => {
+                            changed.map_err(|_| E2eError::Disconnected("context native source closed".into()))?;
+                            return Err(E2eError::Config(native_loss.as_ref().unwrap().borrow().clone().unwrap_or_else(|| "context native observations lost".into())));
+                        },
                         changed=async { match losses.as_mut() { Some(loss) => loss.changed().await, None => std::future::pending().await } } => {
                             changed.map_err(|_| E2eError::Disconnected("popup adoption source closed".into()))?;
                             return Err(E2eError::Config(losses.as_ref().unwrap().borrow().clone().unwrap_or_else(|| "popup adoption observations lost".into())));
@@ -639,8 +654,11 @@ impl BrowserContext {
         };
         let wait = async {
             tokio::select! {biased;
+                reason=transport.cancelled()=>{
+                    if kind == ContextEventKind::Closed && self.closed.load(std::sync::atomic::Ordering::Acquire) { Ok(ContextEvent::Closed) }
+                    else { Err(E2eError::Disconnected(reason)) }
+                },
                 result=wait=>result,
-                reason=transport.cancelled()=>Err(E2eError::Disconnected(reason)),
             }
         };
         match options.cancellation {

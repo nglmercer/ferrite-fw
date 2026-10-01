@@ -2842,3 +2842,28 @@ native groups across [ownership](crates/ferrite-e2e/tests/browser_ownership.rs),
 doctests, strict Clippy and formatting. G04 remains open for context-wide source
 loss, route installation cancellation/rollback, assertion/step control errors,
 detached-frame requests, redirect/header correlation and complete final replay.
+
+
+## G04 audit progress — Context source-loss propagation
+
+Context event waits now receive native page-listener loss through a weak watch
+notification. Current waits for listener-supplied events fail explicitly even
+with zero timeout. A subsequent context wait starts from a fresh notification
+baseline and can observe another live page. Native listener loss remains
+terminal for the affected Page. Known page closure does not publish a context
+source-loss notification; Page/Popup creation and closure keep their separate
+lifecycle paths. The weak notification retains neither a context owner nor a
+page registration.
+
+Transport disconnection takes precedence over source-loss errors. The native
+lifecycle test exposed that race during implementation; its existing strict
+Disconnected assertion now passes unchanged. A known explicit Context close
+still produces its close event. The [unit ownership fixture](crates/ferrite-e2e/src/popup_capture.rs)
+checks zero-timeout context settlement and retry baselines; [guard tests](crates/ferrite-e2e/src/driver.rs)
+check notification, weak lifetime and suppression after known native closure.
+Scoped verification passed 276 checks: 265 units, seven mandatory two-engine
+native groups across [ownership](crates/ferrite-e2e/tests/browser_ownership.rs)
+and [lifecycle](crates/ferrite-e2e/tests/lifecycle_events.rs), four doctests,
+strict Clippy and formatting. Route installation cancellation/rollback,
+assertion/step control errors, detached-frame requests, redirect/header
+correlation and complete integration/backlog replay remain G04 work.

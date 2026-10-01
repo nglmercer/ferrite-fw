@@ -585,10 +585,24 @@ mod tests {
             drop(closed);
             drop(recovered);
             let weak = Arc::downgrade(&captures.get("bounded-3").unwrap());
-            _root
-                .sink
-                .native_observation_loss()
-                .cancel_with_reason("injected native listener exit");
+            let (context_loss, ()) = tokio::join!(
+                context.wait_for_event(crate::ContextEventKind::Request, std::time::Duration::ZERO),
+                async {
+                    tokio::task::yield_now().await;
+                    _root
+                        .sink
+                        .mark_native_observation_lost("injected native listener exit");
+                }
+            );
+            assert!(
+                matches!(context_loss, Err(crate::E2eError::Config(message)) if message.contains("source unavailable"))
+            );
+            assert!(tokio::time::timeout(
+                std::time::Duration::from_millis(10),
+                context.wait_for_event(crate::ContextEventKind::Request, std::time::Duration::ZERO)
+            )
+            .await
+            .is_err());
             assert!(
                 matches!(_root.wait_for_event(crate::PageEventKind::Request, std::time::Duration::ZERO).await, Err(crate::E2eError::Config(message)) if message.contains("source unavailable"))
             );

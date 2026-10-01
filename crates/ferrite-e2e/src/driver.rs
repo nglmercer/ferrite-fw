@@ -64,8 +64,7 @@ impl Drop for PageInitialization {
 impl Drop for NetworkListenerGuard {
     fn drop(&mut self) {
         self.0
-            .native_observation
-            .cancel_with_reason("native event listener ended");
+            .mark_native_observation_lost("native event listener ended");
         // Popup observation belongs to transport ingress and can outlive a
         // failed driver initialization. Ingress closes its independent state.
         if self.0.popup_capture.is_some() {
@@ -113,6 +112,7 @@ pub struct ConsoleSink {
     events: tokio::sync::broadcast::Sender<PageEvent>,
     popup_loss: Arc<tokio::sync::watch::Sender<Option<String>>>,
     native_observation: crate::CancellationToken,
+    context_source_loss: Arc<Mutex<std::sync::Weak<tokio::sync::watch::Sender<Option<String>>>>>,
     pub(crate) download_dir: Arc<Mutex<Option<PathBuf>>>,
     downloads_emitted: Arc<Mutex<HashMap<PathBuf, (u64, SystemTime)>>>,
     context_events: Arc<Mutex<Option<ContextEventForwarding>>>,
@@ -134,6 +134,30 @@ pub(crate) const MAX_RESPONSE_BODY: usize = 1024 * 1024;
 const MAX_EVENT_BUFFER: usize = 256;
 
 impl ConsoleSink {
+    pub(crate) fn bind_context_source_loss(
+        &self,
+        source: &Arc<tokio::sync::watch::Sender<Option<String>>>,
+    ) {
+        *self
+            .context_source_loss
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Arc::downgrade(source);
+    }
+    pub(crate) fn mark_native_observation_lost(&self, reason: &str) {
+        self.native_observation.cancel_with_reason(reason);
+        if !self.native_closed() {
+            let source = self
+                .context_source_loss
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .upgrade();
+            if let Some(source) = source {
+                source.send_replace(Some(format!(
+                    "context page event source unavailable: {reason}"
+                )));
+            }
+        }
+    }
     pub(crate) fn native_observation_loss(&self) -> crate::CancellationToken {
         self.native_observation.clone()
     }
@@ -163,6 +187,7 @@ impl ConsoleSink {
             events: tokio::sync::broadcast::channel(MAX_EVENT_BUFFER).0,
             popup_loss: Arc::new(tokio::sync::watch::channel(None).0),
             native_observation: crate::CancellationToken::new(),
+            context_source_loss: Arc::new(Mutex::new(std::sync::Weak::new())),
             context_events: Arc::new(Mutex::new(None)),
             page_id: Arc::new(Mutex::new(None)),
             frame_events: Arc::new(Mutex::new(crate::lifecycle_events::FrameEvents::default())),
@@ -6795,12 +6820,36 @@ mod diagnostic_observation_tests {
     fn native_listener_guard_marks_observation_source_terminal() {
         let sink = ConsoleSink::new();
         let source = sink.native_observation_loss();
+        let context_source = Arc::new(tokio::sync::watch::channel(None).0);
+        let receiver = context_source.subscribe();
+        sink.bind_context_source_loss(&context_source);
+        assert_eq!(Arc::strong_count(&context_source), 1);
         assert!(!source.is_cancelled());
         drop(NetworkListenerGuard(sink));
+        assert!(receiver.has_changed().unwrap());
+        assert!(receiver
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .contains("source unavailable"));
         assert_eq!(
             source.reason().as_deref(),
             Some("native event listener ended")
         );
+    }
+
+    #[test]
+    fn context_source_is_not_retained_and_closed_pages_do_not_report_listener_loss() {
+        let sink = ConsoleSink::new();
+        let context_source = Arc::new(tokio::sync::watch::channel(None).0);
+        let weak = Arc::downgrade(&context_source);
+        let receiver = context_source.subscribe();
+        sink.bind_context_source_loss(&context_source);
+        sink.seed_popup_closed();
+        drop(NetworkListenerGuard(sink));
+        assert!(!receiver.has_changed().unwrap());
+        drop(context_source);
+        assert!(weak.upgrade().is_none());
     }
 
     #[test]
