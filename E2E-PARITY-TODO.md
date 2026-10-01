@@ -569,6 +569,12 @@ Work in [the audit generator](scripts/playwright-parity/build_matrix.py),
   [Scoped evidence](PLAYWRIGHT-PARITY.md#g04-audit-progress--popup-lifecycle-channels-and-loss):
   261 units, 12 mandatory two-engine native groups, four doctests (277 checks).
   This item remains open for the other audit cases and complete 51-target replay.
+  Queued pause release now retains IDs through native acknowledgement, shares
+  the stop/drain deadline and supports explicit retry before fresh installation.
+  Native child-frame routing uses owned BiDi intercept identity.
+  [Scoped evidence](PLAYWRIGHT-PARITY.md#g04-audit-progress--queued-pause-release-acknowledgement):
+  302 units, eight mandatory two-engine groups, four doctests and strict Clippy.
+  Terminal pump cleanup and the complete replay remain under audit.
   Further progress: native listener guards expose terminal source loss to Page
   event, typed request/response and legacy network predicate waits, including
   zero-timeout probes on both transports. [Evidence](PLAYWRIGHT-PARITY.md#g04-audit-progress--native-listener-source-loss):

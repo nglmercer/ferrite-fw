@@ -4503,6 +4503,21 @@ impl Page {
         self.driver
             .run(async {
                 let mut slot = self.routing.lock().await;
+                while self
+                    .route_runtime
+                    .cleanup_started
+                    .load(std::sync::atomic::Ordering::Acquire)
+                {
+                    let Some(task) = slot.as_ref().filter(|task| !task.is_finished()) else {
+                        break;
+                    };
+                    let stopped = task.stopped.clone();
+                    self.route_runtime.retry_cleanup();
+                    let attempt = self.route_runtime.cleanup_attempt();
+                    drop(slot);
+                    attempt.wait(&stopped).await?;
+                    slot = self.routing.lock().await;
+                }
                 {
                     // Keep metadata snapshots and publication coherent with installation
                     // rollback. No std mutex guard crosses the native await below.
@@ -4552,6 +4567,9 @@ impl Page {
                     .driver
                     .start_routing(self.route_runtime.clone(), Arc::downgrade(&self.routing))
                     .await?;
+                self.route_runtime
+                    .cleanup_started
+                    .store(false, std::sync::atomic::Ordering::Release);
                 *slot = Some(task);
                 Ok(())
             })

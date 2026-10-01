@@ -813,3 +813,61 @@ async fn native_rule_replacement_drop_validation_and_empty_context_lifecycle() {
     }
     stop.abort();
 }
+
+#[tokio::test]
+async fn native_page_routes_cover_new_descendants_without_intercepting_sibling_pages() {
+    let (base, stop) = fixture().await;
+    for kind in [BrowserKind::Chromium, BrowserKind::Firefox] {
+        let Some(browser) = launch(kind, &base).await else {
+            continue;
+        };
+        let parent = browser.new_page().await.unwrap();
+        parent.goto("/").await.unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = calls.clone();
+        parent
+            .route_matching(&UrlMatcher::exact("/descendant-fetch"), move |_| {
+                observed.fetch_add(1, Ordering::SeqCst);
+                async { Ok(RouteAction::fulfill(200, b"owned".to_vec(), "text/plain")) }
+            })
+            .await
+            .unwrap();
+        parent.evaluate::<serde_json::Value>("new Promise(resolve => {const child=document.createElement('iframe'); child.src='/child'; child.onload=()=>resolve(true); document.body.append(child);})").await.unwrap();
+        let child = parent
+            .document_frames()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|frame| frame.parent_id().is_some())
+            .unwrap();
+        let body = tokio::time::timeout(
+            Duration::from_secs(4),
+            child.evaluate_value("fetch('/descendant-fetch').then(response=>response.text())"),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(body, serde_json::json!("owned"));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let sibling = parent.context().unwrap().new_page().await.unwrap();
+        sibling.goto("/").await.unwrap();
+        let body: String = sibling
+            .evaluate("fetch('/descendant-fetch').then(response=>response.text())")
+            .await
+            .unwrap();
+        assert_eq!(body, "network");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        parent.unroute_all().await.unwrap();
+        let body = tokio::time::timeout(
+            Duration::from_secs(4),
+            child.evaluate_value("fetch('/descendant-fetch').then(response=>response.text())"),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(body, serde_json::json!("network"));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        browser.close().await.unwrap();
+    }
+    stop.abort();
+}

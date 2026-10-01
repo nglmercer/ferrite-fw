@@ -3219,3 +3219,23 @@ Scoped verification passed 317 checks: 299 units, fourteen mandatory two-engine
 native groups across `fixture_budgets`, `browser_ownership` and
 `callback_lifecycle`, and four doctests. Strict Clippy, formatting and all 871
 local documentation links passed. This is not the complete 51-target replay.
+
+## G04 audit progress — Queued pause release acknowledgement
+
+Idle interception shutdown retains each queued native request ID until its
+continuation is acknowledged. Rejection, malformed success and timeout retain
+ownership and fail route-removal waiters. An explicit retry resumes the queue;
+the precise native already-unpaused errors settle a previously accepted release.
+Stopping interception and draining pauses share one 750-millisecond clock.
+The queue bounds native IDs, count and bytes, and reports observation loss.
+
+A pump whose shutdown has begun finishes cleanup before a new installation.
+New rule publication remains intact, old waiter failures remain available, and
+callbacks cannot begin on the stopping interception. Firefox descendant pauses
+are correlated by the owned native intercept ID, so newly created child frames
+are handled without intercepting sibling pages in the same browser context.
+
+Scoped verification: 302 unit tests, all eight mandatory Chromium/Firefox
+`route_lifecycle` groups and four doctests passed. Strict Clippy passed.
+The complete 51-target replay is running separately. Terminal pump cleanup and
+the final requirement audit remain open; this scoped gate does not close G04.

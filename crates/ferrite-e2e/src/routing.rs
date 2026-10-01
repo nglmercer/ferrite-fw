@@ -357,6 +357,7 @@ pub(crate) struct RouteRuntime {
     state: Mutex<State>,
     pub(crate) changed: tokio::sync::Notify,
     cleanup: Mutex<Arc<CleanupAttempt>>,
+    pub(crate) cleanup_started: AtomicBool,
 }
 
 pub(crate) fn handler_id(entry: &RouteHandlerEntry) -> usize {
@@ -385,6 +386,15 @@ impl RouteRuntime {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .fetch_owner = Some(owner);
+    }
+
+    pub(crate) fn retry_cleanup(&self) {
+        let mut cleanup = self.cleanup.lock().unwrap_or_else(|e| e.into_inner());
+        if cleanup.failed.is_cancelled() {
+            *cleanup = Arc::new(CleanupAttempt::default());
+        }
+        drop(cleanup);
+        self.changed.notify_one();
     }
 
     pub(crate) fn configure(&self, configuration: RouteConfiguration) {
@@ -443,7 +453,8 @@ impl RouteRuntime {
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.requests == 0
             && state.calls.is_empty()
-            && state.configuration.as_ref().is_none_or(|c| c.empty())
+            && (self.cleanup_started.load(Ordering::Acquire)
+                || state.configuration.as_ref().is_none_or(|c| c.empty()))
     }
     /// Removal is synchronous so no old snapshot can begin another removed call.
     pub(crate) fn retire(
@@ -530,6 +541,9 @@ impl RouteRuntime {
         sink: &ConsoleSink,
         forward: &CancellationToken,
     ) -> (Option<RouteAction>, Option<HandlerGuard>) {
+        if self.cleanup_started.load(Ordering::Acquire) {
+            return (None, None);
+        }
         let Some(configuration) = self
             .state
             .lock()
@@ -1066,6 +1080,31 @@ mod installation_tests {
 #[cfg(test)]
 mod cleanup_tests {
     use super::*;
+    #[test]
+    fn shutdown_retry_preserves_new_rules_and_existing_waiter_failure() {
+        let runtime = RouteRuntime::default();
+        runtime.cleanup_started.store(true, Ordering::Release);
+        let first = runtime.cleanup_attempt();
+        first.fail("release rejected".into());
+        runtime
+            .configure(RouteConfiguration::new(vec![RouteRule::abort("**")], Vec::new()).unwrap());
+        assert!(!runtime.empty());
+        assert!(
+            runtime.idle(),
+            "shutdown must finish despite newly published rules"
+        );
+        runtime.cleanup_attempt().fail("retry rejected".into());
+        runtime.retry_cleanup();
+        assert!(!runtime.cleanup_attempt().failed.is_cancelled());
+        assert!(first.failed.is_cancelled());
+        assert!(
+            !runtime.empty(),
+            "retry must preserve the replacement configuration"
+        );
+        runtime.cleanup_started.store(false, Ordering::Release);
+        assert!(!runtime.idle());
+    }
+
     #[tokio::test]
     async fn removal_wait_observes_cleanup_failure_before_or_during_wait_and_retries() {
         let runtime = RouteRuntime::default();
