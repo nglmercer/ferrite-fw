@@ -130,3 +130,91 @@ fn missing_or_ambiguous_store_versions_fail_and_custom_locks_work() {
         .to_string()
         .contains("frozen-lockfile"));
 }
+
+#[test]
+fn require_conditions_and_manifest_order_select_the_correct_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let package = dir.path().join("node_modules/dual");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(package.join("package.json"), r#"{"name":"dual","exports":{".":{"require":"./require.cjs","browser":"./browser.js","import":"./import.js","default":"./fallback.js"}}}"#).unwrap();
+    for file in [
+        "require.cjs",
+        "browser.js",
+        "import.js",
+        "fallback.js",
+        "module.js",
+        "main.cjs",
+    ] {
+        std::fs::write(package.join(file), "").unwrap();
+    }
+    let resolver = Resolver::new(dir.path().into(), &Default::default());
+    for (kind, expected) in [
+        (ResolveKind::Import, "browser.js"),
+        (ResolveKind::Require, "require.cjs"),
+    ] {
+        let resolved = resolver
+            .resolve(&ResolveRequest {
+                specifier: "dual",
+                importer: None,
+                environment: EnvironmentKind::Client,
+                kind,
+            })
+            .unwrap();
+        assert!(resolved.id.0.ends_with(expected), "{}", resolved.id.0);
+    }
+    std::fs::write(
+        package.join("package.json"),
+        r#"{"name":"dual","module":"./module.js","main":"./main.cjs"}"#,
+    )
+    .unwrap();
+    let resolved = resolver
+        .resolve(&ResolveRequest {
+            specifier: "dual",
+            importer: None,
+            environment: EnvironmentKind::Client,
+            kind: ResolveKind::Require,
+        })
+        .unwrap();
+    assert!(resolved.id.0.ends_with("main.cjs"));
+    let exports: serde_json::Value =
+        serde_json::from_str(r#"{"default":"./first.js","browser":"./second.js"}"#).unwrap();
+    assert_eq!(
+        crate::resolve_exports(&exports, ".", &["browser".into()]),
+        Some("./first.js".into())
+    );
+}
+
+#[test]
+fn conditional_null_and_pattern_priority_do_not_fall_back_silently() {
+    let parse = |json| serde_json::from_str::<serde_json::Value>(json).unwrap();
+    let conditions = vec!["browser".into(), "require".into()];
+    let blocked = parse(r#"{"browser":{"require":null},"default":"./fallback.js"}"#);
+    assert_eq!(crate::resolve_exports(&blocked, ".", &conditions), None);
+    let unmatched = parse(r#"{"browser":{"import":"./esm.js"},"default":"./fallback.js"}"#);
+    assert_eq!(
+        crate::resolve_exports(&unmatched, ".", &conditions),
+        Some("./fallback.js".into())
+    );
+    assert_eq!(
+        crate::resolve_exports(&unmatched, "./private", &conditions),
+        None
+    );
+    let patterns = parse(
+        r#"{"./a/*":{"default":"./first/*.js","browser":"./second/*.js"},"./*long-suffix":"./other/*.js"}"#,
+    );
+    assert_eq!(
+        crate::resolve_exports(&patterns, "./a/blong-suffix", &conditions),
+        Some("./first/blong-suffix.js".into())
+    );
+    let blocked_pattern =
+        parse(r#"{"./a/*":{"browser":{"require":null},"default":"./fallback/*.js"}}"#);
+    assert_eq!(
+        crate::resolve_exports(&blocked_pattern, "./a/file", &conditions),
+        None
+    );
+    let alternatives = parse(r#"[null,{"import":"./esm.js"},"./cjs.js"]"#);
+    assert_eq!(
+        crate::resolve_exports(&alternatives, ".", &conditions),
+        Some("./cjs.js".into())
+    );
+}

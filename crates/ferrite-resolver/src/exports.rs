@@ -8,88 +8,99 @@ pub fn resolve_exports(
     subpath: &str,
     conditions: &[String],
 ) -> Option<String> {
-    resolve_exports_inner(exports, subpath, conditions, true)
+    match resolve_target(exports, subpath, conditions, true) {
+        Resolution::Target(target) => Some(target),
+        Resolution::Blocked | Resolution::NoMatch => None,
+    }
 }
 
-pub(crate) fn resolve_exports_inner(
+// A selected null target must stop conditional fallback. An unmatched
+// condition is different: the enclosing object can try its next key.
+enum Resolution {
+    Target(String),
+    Blocked,
+    NoMatch,
+}
+
+fn resolve_target(
     value: &serde_json::Value,
     subpath: &str,
     conditions: &[String],
     top: bool,
-) -> Option<String> {
+) -> Resolution {
     match value {
+        serde_json::Value::Null => Resolution::Blocked,
         serde_json::Value::String(target) => {
             if !top || subpath == "." || subpath.is_empty() {
-                Some(target.clone())
+                Resolution::Target(target.clone())
             } else {
-                None
+                Resolution::NoMatch
             }
         }
         serde_json::Value::Array(items) => {
-            // First matching entry wins; `null` entries are skipped.
-            items.iter().find_map(|item| {
-                if item.is_null() {
-                    None
-                } else {
-                    resolve_exports_inner(item, subpath, conditions, false)
+            let mut last = if items.is_empty() {
+                Resolution::Blocked
+            } else {
+                Resolution::NoMatch
+            };
+            for item in items {
+                match resolve_target(item, subpath, conditions, false) {
+                    target @ Resolution::Target(_) => return target,
+                    Resolution::Blocked => last = Resolution::Blocked,
+                    Resolution::NoMatch => (),
                 }
-            })
+            }
+            last
         }
         serde_json::Value::Object(map) => {
-            // `#`-prefixed keys are `imports` subpath keys; condition names
-            // (`import`, `default`, ...) never start with `.` or `#`.
             let has_subpath_keys = map
                 .keys()
                 .any(|key| key.starts_with('.') || key.starts_with('#'));
             if top && has_subpath_keys {
-                // Subpath map: exact match, then `*` patterns (longest first).
                 if let Some(target) = map.get(subpath) {
-                    if target.is_null() {
-                        return None;
-                    }
-                    return resolve_exports_inner(target, subpath, conditions, false);
+                    return resolve_target(target, subpath, conditions, false);
                 }
-                let mut patterns: Vec<&String> =
-                    map.keys().filter(|key| key.contains('*')).collect();
-                patterns.sort_by_key(|key| std::cmp::Reverse(key.len()));
+                let mut patterns: Vec<&String> = map
+                    .keys()
+                    .filter(|key| key.matches('*').count() == 1)
+                    .collect();
+                patterns.sort_by_key(|key| std::cmp::Reverse((key.find('*').unwrap(), key.len())));
                 for pattern in patterns {
                     if let Some(captured) = match_pattern(pattern, subpath) {
-                        let target = &map[pattern];
-                        if target.is_null() {
-                            return None;
-                        }
-                        return resolve_target_pattern(target, &captured, conditions);
+                        return match resolve_target(&map[pattern], ".", conditions, false) {
+                            Resolution::Target(target) => {
+                                Resolution::Target(target.replace('*', &captured))
+                            }
+                            result => result,
+                        };
                     }
                 }
-                None
+                Resolution::NoMatch
             } else {
-                // Conditional map: first matching condition wins.
-                for condition in conditions
-                    .iter()
-                    .chain(std::iter::once(&"default".to_string()))
-                {
-                    if let Some(target) = map.get(condition) {
-                        if target.is_null() {
-                            return None;
-                        }
-                        if let Some(resolved) =
-                            resolve_exports_inner(target, subpath, conditions, false)
-                        {
-                            return Some(resolved);
+                if top && subpath != "." && !subpath.is_empty() {
+                    return Resolution::NoMatch;
+                }
+                // Package key insertion order defines priority. Active
+                // conditions are a set, not a separate priority ordering.
+                for (condition, target) in map {
+                    if condition == "default" || conditions.contains(condition) {
+                        match resolve_target(target, subpath, conditions, false) {
+                            Resolution::NoMatch => (),
+                            selected => return selected,
                         }
                     }
                 }
-                None
+                Resolution::NoMatch
             }
         }
-        _ => None,
+        _ => Resolution::NoMatch,
     }
 }
 
 /// Match a `*` subpath pattern, returning the captured text.
 pub(crate) fn match_pattern(pattern: &str, subpath: &str) -> Option<String> {
     let (prefix, suffix) = pattern.split_once('*')?;
-    if subpath.starts_with(prefix) && subpath.ends_with(suffix) {
+    if subpath.len() >= pattern.len() && subpath.starts_with(prefix) && subpath.ends_with(suffix) {
         let end = subpath.len() - suffix.len();
         // Prefix and suffix may overlap (e.g. `abc*abc` vs `abc`), which
         // would make the capture range `prefix.len()..end` inverted.
@@ -99,34 +110,5 @@ pub(crate) fn match_pattern(pattern: &str, subpath: &str) -> Option<String> {
         Some(subpath[prefix.len()..end].to_string())
     } else {
         None
-    }
-}
-
-/// Substitute `*` captures into a target value.
-pub(crate) fn resolve_target_pattern(
-    target: &serde_json::Value,
-    captured: &str,
-    conditions: &[String],
-) -> Option<String> {
-    match target {
-        serde_json::Value::String(template) => Some(template.replace('*', captured)),
-        serde_json::Value::Array(items) => items
-            .iter()
-            .find_map(|item| resolve_target_pattern(item, captured, conditions)),
-        serde_json::Value::Object(_) => {
-            // Conditional wrapping a pattern target.
-            for condition in conditions
-                .iter()
-                .chain(std::iter::once(&"default".to_string()))
-            {
-                if let Some(nested) = target.get(condition) {
-                    if let Some(resolved) = resolve_target_pattern(nested, captured, conditions) {
-                        return Some(resolved);
-                    }
-                }
-            }
-            None
-        }
-        _ => None,
     }
 }

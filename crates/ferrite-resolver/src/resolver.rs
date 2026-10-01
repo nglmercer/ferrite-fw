@@ -21,7 +21,7 @@ use std::path::PathBuf;
 pub struct Resolver {
     /// Project root.
     pub root: PathBuf,
-    /// Export conditions (ordered).
+    /// Active export conditions; package key order defines priority.
     pub conditions: Vec<String>,
     /// Extensions to probe.
     pub extensions: Vec<String>,
@@ -62,6 +62,41 @@ impl Resolver {
 
     /// Resolve a specifier.
     pub fn resolve(&self, request: &ResolveRequest<'_>) -> Result<ResolvedId> {
+        let desired = if request.kind == ResolveKind::Require {
+            "require"
+        } else {
+            "import"
+        };
+        let unwanted = if request.kind == ResolveKind::Require {
+            "import"
+        } else {
+            "require"
+        };
+        if !self.conditions.iter().any(|condition| condition == desired)
+            || self
+                .conditions
+                .iter()
+                .any(|condition| condition == unwanted)
+            || (request.kind == ResolveKind::Require
+                && self
+                    .conditions
+                    .iter()
+                    .any(|condition| condition == "module"))
+        {
+            let mut selected = self.clone();
+            selected.conditions.retain(|condition| {
+                condition != unwanted
+                    && !(request.kind == ResolveKind::Require && condition == "module")
+            });
+            if !selected
+                .conditions
+                .iter()
+                .any(|condition| condition == desired)
+            {
+                selected.conditions.push(desired.into());
+            }
+            return selected.resolve(request);
+        }
         let (specifier, query) = split_query(request.specifier);
 
         // 1. Already-internal virtual modules pass through.
@@ -307,7 +342,18 @@ impl Resolver {
         }
         // 3. `module`/`main` fields, then index.
         if let Some(pkg) = pkg.as_ref() {
-            for entry in [&pkg.module, &pkg.main].into_iter().flatten() {
+            for entry in if self
+                .conditions
+                .iter()
+                .any(|condition| condition == "require")
+            {
+                [&pkg.main, &None]
+            } else {
+                [&pkg.module, &pkg.main]
+            }
+            .into_iter()
+            .flatten()
+            {
                 let file = dir.join(entry.trim_start_matches("./"));
                 if let Ok(resolved) =
                     self.finalize_package_file(dir, &file, query, Some(pkg), in_store)
