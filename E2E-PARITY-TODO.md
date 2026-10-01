@@ -1,16 +1,16 @@
 # Ferrite E2E implementation TODO
 
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
-Session plan refreshed: 2026-09-30, after complete B10 phase verification and B18 pinned-reference preparation.
+Session plan refreshed: 2026-09-30, after verified B18 implementation `310f248`.
 Expanded on request for a longer implementation session; B09/B10/B13/B14 and D01/D02 are verified.
 Uncommitted implementations are not counted complete.
 
 The initial G/A foundations are complete except for the final G04 audit. Follow
 the remaining-work index below through B/D improvements and supported C extensions.
-This backlog contains **51 tasks (38 complete, 13 remaining)**: four foundations,
+This backlog contains **51 tasks (39 complete, 12 remaining)**: four foundations,
 16 core tasks, 19 follow-ups, six optional extensions and six practical additions.
-All A tasks, B01–B10/B12–B17/B19 and D01/D02 are verified; continue with
-bounded ARIA snapshots, reports and supported C extensions. The ordering
+All A tasks, B01–B10/B12–B19 and D01/D02 are verified; continue with
+reports and supported C extensions. The ordering
 and effort assessments are recommendations based on the current source and
 parity audit.
 D01–D06 add bounded improvements found in the missing/partial member inventory;
@@ -24,7 +24,7 @@ limits remain in [PLAYWRIGHT-PARITY.md](PLAYWRIGHT-PARITY.md).
 
 ## Recommended next implementation
 
-Start **B18 — bounded ARIA snapshot options**, then **B11**.
+Start **B11 — searchable portable reports**.
 B10 is verified through `2c042e1`, with owned process-output drainage in
 `ade139b`. The complete phase passed **457 E2E and 28 CLI/configuration checks**,
 485 combined: 211 units, 242 integrations across all 38 targets and four doctests.
@@ -50,21 +50,24 @@ and per-channel comparison remain documented subsets rather than full upstream
 semantics. The matrix remains 73 classes/1,018 members: Partial635/Missing327/
 Equivalent15/Idiomatic41.
 
-**Current handoff:** implement B18 in the existing DOM approximation and page/
-locator snapshot/assertion entry points. Add explicit validated depth limits,
-optional viewport boxes/state fields and deterministic truncation while
-preserving existing signatures. Verify nested/open-shadow/same-origin-frame
-roots, cancellation/deadlines and assertion consumption on both engines.
-Full accessible-name conformance, AI modes and YAML pattern matching stay outside
-this task. Reference commit `ef95764` records 26 actual pinned JSON/text cases:
-positive depth follows role-tree levels, zero/negative depth is unbounded, boxes
-round viewport CSS geometry to whole pixels and frame-root boxes are local to
-that frame. Static text fragments, mixed/disabled/pressed state, hidden/open-root
-content, validation errors and scrolling/fractional layout are recorded. Use the
-actual observations to define the Rust options and document remaining subsets;
-reference preparation alone does not complete B18.
+**Current handoff:** B18 is complete in `310f248`. Opt-in
+`AriaSnapshotOptions` and page/locator capture/assertion companions preserve
+legacy entry points. Positive role depth, rounded frame-local boxes, optional
+state, explicit visit/node/name budgets and safety-depth truncation are verified
+on both engines, including open shadow roots and same-origin frame labels,
+scroll/fractional geometry, mixed inputs, exact assertion consumption,
+cancellation/deadlines, deep trees and Unicode boundaries. JSON travels as a
+string to avoid Firefox's deep remote-value timeout. Native layout/name work
+remains opaque; full accessible-name conformance, AI modes and YAML patterns
+stay deferred. The 26-case pinned corpus remains `ef95764`.
 
-B11 follows with searchable portable reports and per-attempt network summaries.
+B18 scoped gates passed **219 checks**: 212 units, three new native groups and
+four legacy browser groups, with both browsers required. Strict all-target
+Clippy, formatting, regenerated matrix and 733 local links passed. This scoped
+increment does not repeat B10's entire 38-target integration inventory; B18 adds
+a 39th target. Preserve both sets of evidence during the wider G04 audit.
+
+Implement B11 with searchable portable reports and per-attempt network summaries.
 G04 remains open for the wider lifecycle, lag/eviction and cross-feature audit.
 The initial broad audit's reproducible large-console timeout was fixed by draining
 owned child stdout/stderr, retaining a bounded 4-KiB stderr tail and keeping
@@ -93,7 +96,7 @@ outer label/error/step/trace and Diagnostic typed causes, and B16's shared owner
 weak context graph and owned base_url getter. G04 remains open for channel lag,
 partial setup, detached in-flight requests and the final cross-feature audit.
 
-The scope of the longer session is **all 13 open tasks below**. Completed tasks
+The scope of the longer session is **all 12 open tasks below**. Completed tasks
 remain regression requirements. The deferred projects are future work; completing
 this checklist means practical parity within the stated engine capabilities,
 not complete Playwright compatibility.
@@ -106,21 +109,20 @@ there. G04 applies during every phase and closes after the final audit.
 
 | Order | Task | Implementation result | Dependency or capability gate |
 |---|---|---|---|
-| 1 | B18 | Bounded ARIA snapshots with optional boxes and state | Existing DOM approximation; no full ARIA/YAML implementation |
-| 2 | B11 | Searchable portable reports with per-attempt network diagnostics | B02/B03/B19 complete; browser visual inspection |
-| 3 | D03 | Explicit artifact retention policies with valid report links | B14/B11; final attempt classification and bundle export |
-| 4 | D04 | Run/project metadata and configurable slow-test summaries | B14/B11; existing live/JSON/JUnit/HTML reporters |
-| 5 | D05 | Local/session storage enumeration and typed bulk helpers | Existing page storage APIs on both engines |
-| 6 | D06 | Socket identity, errors, closed state and bounded typed waits | Existing Chromium socket events; Firefox unsupported |
-| 7 | C01 | Validated PDF options | Chromium; explicit Firefox unsupported result |
-| 8 | C02 | Bounded captured-body bytes, text and JSON helpers | B02/B03 complete; Chromium body capture |
-| 9 | C03 | Coverage navigation/source options and restart lifecycle | Chromium JS/CSS coverage |
-| 10 | C04 | HAR matching, not-found and supported content options | A14/B06 complete; engine body/rewrite capabilities |
-| 11 | C05 | Supported media/device emulation options and resets | Chromium native capabilities |
-| 12 | C06 | Independently detachable CDP target sessions | Chromium transport and session ownership |
-| 13 | G04 | Final lifecycle, compatibility and resource-release audit | Evidence from every completed phase |
+| 1 | B11 | Searchable portable reports with per-attempt network diagnostics | B02/B03/B19 complete; browser visual inspection |
+| 2 | D03 | Explicit artifact retention policies with valid report links | B14/B11; final attempt classification and bundle export |
+| 3 | D04 | Run/project metadata and configurable slow-test summaries | B14/B11; existing live/JSON/JUnit/HTML reporters |
+| 4 | D05 | Local/session storage enumeration and typed bulk helpers | Existing page storage APIs on both engines |
+| 5 | D06 | Socket identity, errors, closed state and bounded typed waits | Existing Chromium socket events; Firefox unsupported |
+| 6 | C01 | Validated PDF options | Chromium; explicit Firefox unsupported result |
+| 7 | C02 | Bounded captured-body bytes, text and JSON helpers | B02/B03 complete; Chromium body capture |
+| 8 | C03 | Coverage navigation/source options and restart lifecycle | Chromium JS/CSS coverage |
+| 9 | C04 | HAR matching, not-found and supported content options | A14/B06 complete; engine body/rewrite capabilities |
+| 10 | C05 | Supported media/device emulation options and resets | Chromium native capabilities |
+| 11 | C06 | Independently detachable CDP target sessions | Chromium transport and session ownership |
+| 12 | G04 | Final lifecycle, compatibility and resource-release audit | Evidence from every completed phase |
 
-Immediate delivery: **B18/B11**. B09/B10/B13/B14/D01/D02 are complete.
+Immediate delivery: **B11**. B09/B10/B13/B14/B18/D01/D02 are complete.
 Capture/report work follows; D03/D04 consume its final artifact/report behavior.
 D05/D06 and the supported C extensions can then proceed independently. G04 is
 applied throughout and closed last.
@@ -1000,7 +1002,7 @@ their dependencies are ready. References include
   all three links per engine resolved. The pinned timeout omits labels; Rust's
   richer errors and enum migration are documented. Automatic locations remain
   test definitions, with explicit user-step caller locations unchanged.
-- [ ] **B18 — Bounded ARIA snapshot options (M).** Extend the current structured
+- [x] **B18 — Bounded ARIA snapshot options (M).** Extend the current structured
   DOM snapshots with depth limits and optional boxes/state fields. Done when
   nested/open-shadow/same-origin-frame cases are consistent, limits are explicit
   and snapshot assertions can consume the output. Full accessible-name conformance,
@@ -1009,7 +1011,14 @@ their dependencies are ready. References include
   public cases on Chromium/Firefox, including role-depth trimming, native state,
   open-shadow/frame roots, text fragments and rounded viewport boxes. Zero/negative
   upstream depth is unbounded; fractional depth/type errors and frame-local versus
-  main-viewport box coordinates are recorded. Rust implementation is still pending.
+  main-viewport box coordinates are recorded.
+  Implementation: `310f248`; [options](crates/ferrite-e2e/src/aria_options.rs) and
+  [native tests](crates/ferrite-e2e/tests/aria_options.rs) verify both engines.
+  Safety markers, surrogate-safe name limits, role/DOM budgets, frame-local boxes,
+  shadow roots, state omission/mixed inputs and exact assertion companions passed.
+  JSON string transport avoids deep BiDi serialization timeouts. Legacy signatures
+  remain unchanged. Scoped 219 checks, strict Clippy/fmt/matrix and 733 links passed;
+  native layout/name phases remain opaque and full ARIA/YAML semantics deferred.
 - [x] **B19 — Structured page errors and console value previews (M).** Add optional
   error name/message/stack frames and JSON-safe console argument previews where
   native events provide them. Done when page/context events, traces and attempt
@@ -1215,7 +1224,7 @@ waiting for every future feature before starting independent work.
 | 3. Native event diagnostics | B01/B04/B19 — complete | Preserve frame/load/dialog observations (`f8c12de`), earliest popup traffic (`1ec7e3e`) and structured console/error data (`34890cc`) through ownership and runner changes. |
 | 4. Runner and developer APIs | B16/B17/B12/B13/B14 — complete | Preserve shared ownership (`1e4d3bb`), labeled diagnostics (`8ae438c`), soft collection (`0ee8245`) and effective configuration (`a7f1e45`) and shared fixture/cleanup budgets with safe disposal (`e2e3ecc`). D01/D02 are complete; preserve the broader runner and polling regressions through capture/report work. |
 | 4a. CI and assertion reliability | D01/D02 — complete | Preserve policy/focus wiring in `a2fd29b` and polling controls/scoped final-only soft retries in `312090d`. |
-| 5. Captures and reports | B09/B10 — complete; B18, B11 | Preserve verified capture/stability/path/update and owned diagnostics; implement bounded ARIA output next, then searchable per-attempt reports. |
+| 5. Captures and reports | B09/B10/B18 — complete; B11 | Preserve verified capture/stability/path/update and owned diagnostics; preserve bounded ARIA output and implement searchable per-attempt reports. |
 | 5a. Practical storage and diagnostics | D03, D04, D05, D06 | Complete output retention, run metadata/slow summaries, typed Web Storage helpers and bounded Chromium socket diagnostics after their prerequisites. |
 | 6. Supported backend extensions | C01, C02, C03, C04, C05, C06 | Extend PDF, captured bodies, coverage, HAR, emulation and scoped CDP sessions. Check capability before accepting each option; verify explicit errors on the other engine. |
 | 7. Final lifecycle and compatibility audit | G04 | Verify cancellation, zero/enclosing deadlines, retries, disposal and released resources across the additions, then run the complete regression and documentation gates. |
@@ -1289,7 +1298,7 @@ also need formatting checks for the modified packages.
 
 Copyable request for the implementation session:
 
-> Implement all 13 open tasks (B18/B11, D03–D06,
+> Implement all 12 open tasks (B11, D03–D06,
 > C01–C06 and G04) in E2E-PARITY-TODO.md using the recommended remaining
 > phases, dependencies and completion criteria. Preserve the already verified
 > features. Implement all practical
