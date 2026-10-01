@@ -19,8 +19,6 @@ use ferrite_plugin::TransformRequest as HookTransformRequest;
 use ferrite_resolver::ResolveKind;
 use ferrite_resolver::ResolveRequest;
 use ferrite_resolver::ResolvedId;
-use ferrite_transform::rewrite_import_meta_hot;
-use ferrite_transform::with_hmr_client;
 
 impl DevServer {
     /// Full module pipeline shared by HTTP + bundler loader.
@@ -32,7 +30,10 @@ impl DevServer {
     ) -> Result<PipelineModule> {
         let ssr = env == "ssr";
         let environment = self.environment_for(env);
-        let ctx = self.plugin_context(&environment);
+        let mut ctx = self.plugin_context(&environment);
+        // Watch registrations belong to this request, not unrelated concurrent modules.
+        let module_watches = std::sync::Mutex::new(Vec::new());
+        ctx.watch_files = &module_watches;
         // 0. `/@id/` URLs map back to internal `\0` virtual ids (§14).
         let id = unvirtualize(id);
         // 1. Resolve (plugin first, then resolver).
@@ -57,7 +58,11 @@ impl DevServer {
         // 3. `?direct` CSS (from `<link>` tags).
         let direct_css = query.is_some_and(|q| q.contains("direct")) && path_part.ends_with(".css");
         // 4. Load (plugin first, then built-ins / fs).
-        let (source, mut module_type) = self.load_source(&ctx, &resolved_id, &environment).await?;
+        let loaded = self
+            .load_source_full(&ctx, &resolved_id, &environment)
+            .await?;
+        let source = loaded.code;
+        let mut module_type = loaded.module_type;
         if direct_css {
             module_type = ModuleType::Css;
         }
@@ -77,7 +82,11 @@ impl DevServer {
         // 7. Cache lookup (`shouldTransformCachedModule` may force a
         //    re-transform; by default the cached entry wins).
         let defines = self.transform_defines(&environment);
-        let cache_key = self.cache_key(&resolved_id, &source, env, &defines);
+        let source_identity = format!(
+            "{source}\0{module_type:?}\0{:?}\0{:?}\0{:?}\0{:?}",
+            loaded.dependencies, loaded.map, loaded.side_effects, resolved.side_effects
+        );
+        let cache_key = self.cache_key(&resolved_id, &source_identity, env, &defines);
         if let Some(cached) = self.inner.cache.get(&cache_key.0) {
             if let Ok(cached) = serde_json::from_slice::<CachedTransform>(&cached) {
                 let retransform = self
@@ -91,23 +100,50 @@ impl DevServer {
                         },
                     )
                     .await?;
-                if !retransform {
+                if !retransform && cached.dependencies_current() {
                     let module = PipelineModule::from_cached(resolved_id.clone(), cached);
                     self.update_graph(&module, env);
                     return Ok(module);
                 }
             }
         }
-        // 8. Core transform.
-        let mut module = self
-            .core_transform(&ctx, &resolved_id, &source, &module_type, &environment)
+        // Framework/pre transforms see the original syntax, before JS/TS lowering.
+        let pre = self
+            .inner
+            .plugins
+            .hook_transform_phase(
+                &ctx,
+                HookTransformRequest {
+                    id: resolved_id.0.clone(),
+                    code: source.clone(),
+                    module_type: module_type.clone(),
+                    environment: environment.kind.clone(),
+                    ssr,
+                },
+                ferrite_plugin::TransformPhase::BeforeLowering,
+            )
             .await?;
-        // 9. Plugin transform chain (JS-like only).
+        if let Some(kind) = pre.module_type {
+            module_type = kind;
+        }
+        let pre_map = merge_maps(
+            pre.map.map(|map| map.mappings),
+            loaded.map.map(|map| map.mappings),
+            pre.code == source,
+        )?;
+        let mut module = self
+            .core_transform(&ctx, &resolved_id, &pre.code, &module_type, &environment)
+            .await?;
+        module.map = merge_maps(module.map, pre_map, module.code == pre.code)?;
+        module.side_effects = loaded.side_effects.or(resolved.side_effects);
+        module.dependencies = loaded.dependencies;
+        module.dependencies.extend(pre.dependencies);
+        // Normal/post transforms see lowered output; retain maps and watches.
         if module.module_type.is_js_like() {
             let hooked = self
                 .inner
                 .plugins
-                .hook_transform(
+                .hook_transform_phase(
                     &ctx,
                     HookTransformRequest {
                         id: resolved_id.0.clone(),
@@ -116,9 +152,53 @@ impl DevServer {
                         environment: environment.kind.clone(),
                         ssr,
                     },
+                    ferrite_plugin::TransformPhase::AfterLowering,
                 )
                 .await?;
+            module.map = merge_maps(
+                hooked.map.map(|map| map.mappings),
+                module.map,
+                hooked.code == module.code,
+            )?;
             module.code = hooked.code;
+            if let Some(kind) = hooked.module_type {
+                module.module_type = kind;
+            }
+            module.dependencies.extend(hooked.dependencies);
+        }
+        module.dependencies.extend(
+            module_watches
+                .lock()
+                .map_err(|_| FerriteError::Other("module watch lock poisoned".into()))?
+                .clone(),
+        );
+        module.dependencies = module
+            .dependencies
+            .iter()
+            .map(|dependency| {
+                let path = std::path::Path::new(dependency);
+                let file = if path.is_absolute() {
+                    path.to_path_buf()
+                } else {
+                    self.inner.config.root.join(path)
+                };
+                ferrite_core::normalize_path(&file)
+            })
+            .collect();
+        module.dependencies.sort();
+        module.dependencies.dedup();
+        for dependency in &module.dependencies {
+            self.watch_extra(std::path::Path::new(dependency));
+        }
+        // Determine CJS from the final plugin output, never stale core metadata.
+        if module.module_type.is_js_like() {
+            let parsed = self.inner.compiler.parse(ferrite_transform::ParseRequest {
+                id: module.id.0.clone(),
+                code: module.code.clone(),
+                module_type: module.module_type.clone(),
+            })?;
+            module.has_module_syntax = parsed.has_module_syntax;
+            module.uses_import_meta_hot = parsed.uses_import_meta_hot;
         }
         // 10. CJS conversion (dev ESM interop, §18).
         if needs_cjs_conversion(&resolved_id, &module.code, module.has_module_syntax) {
@@ -132,10 +212,13 @@ impl DevServer {
         }
         // 12. HMR injection (dev client only; never in production builds).
         if !ssr && !self.inner.config.is_production && module.module_type.is_js_like() {
-            if module.uses_import_meta_hot {
-                module.code = rewrite_import_meta_hot(&module.code, &resolved_id.0);
-            }
-            module.code = with_hmr_client(&module.code);
+            let (code, map) = ferrite_transform::inject_hmr_mapped(
+                &module.id.0,
+                &module.code,
+                module.map.is_some(),
+            )?;
+            module.map = merge_maps(map, module.map, code == module.code)?;
+            module.code = code;
         }
         // 13. Graph update + hooks + cache.
         self.update_graph(&module, env);
@@ -281,6 +364,16 @@ impl DevServer {
         id: &ModuleId,
         environment: &ferrite_core::Environment,
     ) -> Result<(String, ModuleType)> {
+        let loaded = self.load_source_full(ctx, id, environment).await?;
+        Ok((loaded.code, loaded.module_type))
+    }
+
+    pub(crate) async fn load_source_full(
+        &self,
+        ctx: &PluginContext<'_>,
+        id: &ModuleId,
+        environment: &ferrite_core::Environment,
+    ) -> Result<ferrite_plugin::LoadResult> {
         // Plugin `load` first.
         if let Some(loaded) = self
             .inner
@@ -294,20 +387,20 @@ impl DevServer {
             )
             .await?
         {
-            return Ok((loaded.code, loaded.module_type));
+            return Ok(loaded);
         }
         // Built-in virtual modules.
         if let Some(virtual_source) = self.builtin_virtual(id) {
-            return Ok((virtual_source, ModuleType::Js));
+            return Ok(source_result(virtual_source, ModuleType::Js));
         }
         // `node:` shims.
         if let Some(name) = id.0.strip_prefix("\0node:") {
-            return Ok((node_shim(name), ModuleType::Js));
+            return Ok(source_result(node_shim(name), ModuleType::Js));
         }
         // Remote modules (§72).
         if let Some(url) = id.0.strip_prefix("\0remote:") {
             let source = self.fetch_remote(url).await?;
-            return Ok((source, ModuleType::Js));
+            return Ok(source_result(source, ModuleType::Js));
         }
         if id.is_virtual() {
             return Err(FerriteError::Resolve(format!(
@@ -321,11 +414,11 @@ impl DevServer {
         let module_type = ModuleType::from_path(path_part);
         // Binary assets: content served separately; loader returns a marker.
         if is_binary_asset(path_part, &bytes) {
-            return Ok((String::new(), ModuleType::Asset));
+            return Ok(source_result(String::new(), ModuleType::Asset));
         }
         let source = String::from_utf8(bytes)
             .map_err(|_| FerriteError::Resolve(format!("`{id}` is not valid UTF-8")))?;
-        Ok((source, module_type))
+        Ok(source_result(source, module_type))
     }
 
     /// Built-in virtual modules (`virtual:ferrite/*`, §14).
@@ -345,5 +438,28 @@ impl DevServer {
             "ferrite/routes" => Some("export const routes = [];\n".to_string()),
             _ => None,
         }
+    }
+}
+
+fn source_result(code: String, module_type: ModuleType) -> ferrite_plugin::LoadResult {
+    ferrite_plugin::LoadResult {
+        code,
+        module_type,
+        ..Default::default()
+    }
+}
+
+pub(crate) fn merge_maps(
+    outer: Option<String>,
+    inner: Option<String>,
+    unchanged: bool,
+) -> Result<Option<String>> {
+    match (outer, inner) {
+        (Some(outer), Some(inner)) => {
+            ferrite_transform::chain_source_maps(&outer, &inner).map(Some)
+        }
+        (Some(outer), None) => Ok(Some(outer)),
+        (None, inner) if unchanged => Ok(inner),
+        (None, _) => Ok(None),
     }
 }

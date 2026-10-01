@@ -25,6 +25,8 @@ pub struct PipelineModule {
     pub uses_import_meta_hot: bool,
     /// True when the response must be raw file bytes.
     pub is_raw_bytes: bool,
+    /// Compiler/preprocessor files whose changes invalidate this module.
+    pub dependencies: Vec<String>,
     /// Statement-DCE facts (`None` = opaque, keep everything).
     pub shake: Option<ferrite_transform::ShakeInfo>,
 }
@@ -43,6 +45,7 @@ impl PipelineModule {
             has_module_syntax: true,
             uses_import_meta_hot: false,
             is_raw_bytes: false,
+            dependencies: Vec::new(),
             shake: None,
         }
     }
@@ -60,6 +63,7 @@ impl PipelineModule {
             has_module_syntax: false,
             uses_import_meta_hot: false,
             is_raw_bytes: true,
+            dependencies: Vec::new(),
             shake: None,
         }
     }
@@ -78,9 +82,10 @@ impl PipelineModule {
             side_effects: cached.side_effects,
             module_type: cached.module_type,
             map: cached.map,
-            has_module_syntax: true,
+            has_module_syntax: cached.has_module_syntax,
             uses_import_meta_hot: cached.uses_import_meta_hot,
             is_raw_bytes: false,
+            dependencies: cached.dependency_state.keys().cloned().collect(),
             shake: cached.shake,
         }
     }
@@ -99,6 +104,11 @@ pub struct CachedTransform {
     pub module_type: ModuleType,
     /// Map JSON.
     pub map: Option<String>,
+    /// Exact compiler input dependency state (missing files are represented explicitly).
+    #[serde(default)]
+    pub dependency_state: std::collections::BTreeMap<String, Option<String>>,
+    #[serde(default)]
+    pub has_module_syntax: bool,
     /// HMR flag.
     pub uses_import_meta_hot: bool,
     /// Statement-DCE facts (`None` for stale caches → keep everything).
@@ -120,6 +130,12 @@ impl CachedTransform {
             side_effects: module.side_effects,
             module_type: module.module_type.clone(),
             map: module.map.clone(),
+            dependency_state: module
+                .dependencies
+                .iter()
+                .map(|path| (path.clone(), dependency_hash(path)))
+                .collect(),
+            has_module_syntax: module.has_module_syntax,
             uses_import_meta_hot: module.uses_import_meta_hot,
             shake: module.shake.clone(),
         }
@@ -152,5 +168,20 @@ impl PipelineResponse {
             body: bytes,
             content_type: content_type.into(),
         }
+    }
+}
+
+/// Missing dependencies must differ from newly created files, even when empty.
+pub(crate) fn dependency_hash(path: &str) -> Option<String> {
+    std::fs::read(path)
+        .ok()
+        .map(|bytes| ferrite_core::Hash::of_bytes(&bytes).0)
+}
+
+impl CachedTransform {
+    pub(crate) fn dependencies_current(&self) -> bool {
+        self.dependency_state
+            .iter()
+            .all(|(path, hash)| dependency_hash(path) == *hash)
     }
 }

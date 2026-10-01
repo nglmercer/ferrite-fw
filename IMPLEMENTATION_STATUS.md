@@ -59,3 +59,57 @@ compiler execution was implemented or tested in this slice.
 No Chromium/Firefox acceptance, Node-free profile, SSR request isolation,
 stream cancellation, production CSS/chunk verification, or cross-platform release
 check has executed. These are outstanding requirements, not skipped support proof.
+
+## Shared pipeline slice (continued implementation)
+
+Implemented pre/core/post ordering in both the server pipeline and programmatic
+`Ferrite::transform_request`. `Enforce::Pre` defaults to BeforeLowering;
+Normal/Post default to AfterLowering, and adapters can explicitly select their
+phase. Pre transforms can override the resulting module type. The legacy
+container API still runs all transforms in order for callers that need it.
+
+LoadResult now retains maps and side-effect declarations. Plugin map chains are
+composed rather than replaced. Import rewriting, HMR injection, and the React
+registration footer produce generated-to-input maps with UTF-16 positions;
+inserted code stays unmapped. Composition respects unmapped boundaries instead
+of attributing generated text to a previous source token. Plugins changing code
+without maps produce a diagnostic and remove invalid prior mappings.
+
+Compiler dependencies and request-local add_watch_file registrations survive
+through pipeline/cache/graph. Cache hits validate dependency content hashes,
+including deletion; compiler identity hooks, loaded metadata, React configuration,
+production mode and map settings participate in cache identity. Resolved and
+loader-provided side-effect information survive. Cached syntax flags are retained.
+Final analysis runs after plugin transforms. Declared component module types
+prevent imports from being replaced with asset URL shims.
+
+API migration for native adapters: LoadResult literals need `map` and
+`side_effects` (or `..Default::default()`); plugin TransformResult literals need
+`module_type: None` unless changing type. `dependencies` are watched filesystem
+paths, absolute or project-root-relative, never browser URLs. Plugin cache_key
+must include compiler/version/options that affect output.
+
+Validation executed:
+
+- `cargo test -p ferrite-server -p ferrite-plugin -p ferrite-transform -p ferrite-frameworks -p ferrite -p ferrite-cli --locked`: 118 unit tests passed,
+  3 facade doc tests passed; 1 existing real-Node plugin test remained ignored.
+  This ignored test establishes no Node compatibility.
+- `cargo test -p ferrite-server -p ferrite pipeline_tests --locked`: 3 new
+  pipeline/parity regressions passed after the final watch/map changes.
+- `cargo test -p ferrite-server --features swc pipeline_tests --locked`: 2 tests
+  passed, exercising both Oxc/SWC and development/production profiles.
+- `cargo test -p ferrite-test --test plugins_virtual --test vite_parity --locked`:
+  8 integration tests passed (plugin order, virtual modules, build lifecycle,
+  configuration, and preview HTTP hooks/proxy).
+- `cargo clippy -p ferrite-server -p ferrite-plugin -p ferrite-transform -p ferrite-frameworks -p ferrite -p ferrite-cli --all-targets --locked -- -D warnings`:
+  passed.
+- Changed files formatted with rustfmt; `git diff --check` passed.
+
+This does not complete pipeline support: complete compiler resource/diagnostic
+contracts, CJS wrapper maps/interoperability, production asset/chunk map handling,
+CSS extraction parity, configuration/peer ownership, and concurrent input-change
+handling still require implementation and acceptance tests. No official Vue or
+Svelte compiler has executed yet. No new framework support claim is made.
+
+The concurrent documentation reorganization was committed separately as 4ae1d13
+and preserved. Framework safety changes were committed as ccbc64d.

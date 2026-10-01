@@ -23,7 +23,7 @@ pub use types::{
     HtmlTransformContext, HtmlTransformResult, LoadRequest, LoadResult, ModuleParsed, OutputBundle,
     OutputOptions, PluginContext, PreviewControl, PreviewMount, ProxyRule, RenderChunk,
     RenderChunkResult, RenderStart, ResolveFileUrlRequest, ResolveHookRequest, ServerControl,
-    ServerUrls, TransformRequest, TransformResult, WatchEvent, WatchKind,
+    ServerUrls, TransformPhase, TransformRequest, TransformResult, WatchEvent, WatchKind,
 };
 
 #[cfg(test)]
@@ -168,23 +168,43 @@ mod tests {
             &ferrite_config::ResolveConfig::default(),
             &ferrite_core::EnvironmentKind::Client,
         );
-        let environment = ferrite_core::Environment::new("client", ferrite_core::EnvironmentKind::Client);
+        let environment =
+            ferrite_core::Environment::new("client", ferrite_core::EnvironmentKind::Client);
         let emitted = std::sync::Mutex::new(std::collections::HashMap::new());
         let watch_files = std::sync::Mutex::new(Vec::new());
         let warnings = std::sync::Mutex::new(Vec::new());
-        let ctx = test_context(&graph, &resolver, &environment, &emitted, &watch_files, &warnings);
+        let ctx = test_context(
+            &graph,
+            &resolver,
+            &environment,
+            &emitted,
+            &watch_files,
+            &warnings,
+        );
         let event = HotUpdateEvent {
             file: "/src/a.js".to_string(),
             modules: Vec::new(),
             timestamp: 1,
         };
         // Modern hook wins.
-        let container = PluginContainer::new(vec![Arc::new(HotUpdatePlugin { modern: true })], Apply::All);
-        let result = container.hook_hot_update(&ctx, event.clone()).await.unwrap().unwrap();
+        let container =
+            PluginContainer::new(vec![Arc::new(HotUpdatePlugin { modern: true })], Apply::All);
+        let result = container
+            .hook_hot_update(&ctx, event.clone())
+            .await
+            .unwrap()
+            .unwrap();
         assert!(result.full_reload);
         // Legacy fallback when the modern hook abstains.
-        let container = PluginContainer::new(vec![Arc::new(HotUpdatePlugin { modern: false })], Apply::All);
-        let result = container.hook_hot_update(&ctx, event).await.unwrap().unwrap();
+        let container = PluginContainer::new(
+            vec![Arc::new(HotUpdatePlugin { modern: false })],
+            Apply::All,
+        );
+        let result = container
+            .hook_hot_update(&ctx, event)
+            .await
+            .unwrap()
+            .unwrap();
         assert!(!result.full_reload);
     }
 
@@ -206,7 +226,10 @@ mod tests {
         let control = PreviewControl::new(resolved);
         // Longest prefix wins.
         assert_eq!(control.match_proxy("/api/x").unwrap().target, "http://api");
-        assert_eq!(control.match_proxy("/other").unwrap().target, "http://fallback");
+        assert_eq!(
+            control.match_proxy("/other").unwrap().target,
+            "http://fallback"
+        );
         assert!(control.headers.is_empty());
     }
 }

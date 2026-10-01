@@ -94,7 +94,14 @@ impl DevServer {
         env: &str,
         defines: &HashMap<String, String>,
     ) -> Hash {
-        let pipeline = self.inner.plugins.names().join(",");
+        let pipeline = format!(
+            "pipeline-v3:{}:{:?}:{}:{}:{:?}",
+            self.inner.plugins.cache_key(),
+            self.inner.config.react,
+            self.inner.config.is_production,
+            self.inner.config.build.sourcemap.enabled(),
+            self.inner.config.npm
+        );
         let mut pairs: Vec<(&str, &str)> = defines
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_str()))
@@ -143,7 +150,7 @@ impl DevServer {
         }
         node.hmr.self_accepting = module.uses_import_meta_hot;
         self.inner.graph.upsert(node);
-        let edges: Vec<ImportEdge> = module
+        let mut edges: Vec<ImportEdge> = module
             .imports
             .iter()
             .map(|(specifier, resolved, kind)| ImportEdge {
@@ -152,6 +159,29 @@ impl DevServer {
                 kind: kind.clone(),
             })
             .collect();
+        for dependency in &module.dependencies {
+            let file = PathBuf::from(dependency);
+            let id = ModuleId::new(ferrite_core::file_to_url(&self.inner.config.root, &file));
+            if id == module.id {
+                continue;
+            }
+            if !self.inner.graph.contains(&id) {
+                let mut node = ModuleNode::new(
+                    id.clone(),
+                    id.0.clone(),
+                    ferrite_core::ModuleType::from_path(dependency),
+                );
+                node.file = Some(file);
+                self.inner.graph.upsert(node);
+            }
+            if !edges.iter().any(|edge| edge.resolved == id) {
+                edges.push(ImportEdge {
+                    specifier: dependency.clone(),
+                    resolved: id,
+                    kind: ferrite_graph::ImportKind::Static,
+                });
+            }
+        }
         self.inner.graph.set_imports(&module.id, edges);
         self.inner.graph.set_transformed(
             &module.id,

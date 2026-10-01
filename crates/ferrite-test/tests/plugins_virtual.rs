@@ -46,6 +46,8 @@ impl Plugin for OrderPlugin {
             code: format!("{}// {}\n", request.code, self.name),
             map: None,
             dependencies: Vec::new(),
+
+            module_type: None,
         }))
     }
 }

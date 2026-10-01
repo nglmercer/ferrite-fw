@@ -186,6 +186,9 @@ impl Plugin for ReactPlugin {
                 code: preamble_code(),
                 module_type: ModuleType::Js,
                 dependencies: Vec::new(),
+
+                map: None,
+                side_effects: None,
             }));
         }
         Ok(None)
@@ -208,14 +211,18 @@ impl Plugin for ReactPlugin {
         if registrations.is_empty() {
             return Ok(None);
         }
+        let footer = refresh_footer(&request.id, &registrations);
+        let (code, map) = ferrite_transform::apply_text_edits(
+            &request.id,
+            &request.code,
+            &[(request.code.len(), request.code.len(), footer)],
+            true,
+        )?;
         Ok(Some(TransformResult {
-            code: format!(
-                "{}{}",
-                request.code,
-                refresh_footer(&request.id, &registrations)
-            ),
-            map: None,
+            code,
+            map: map.map(ferrite_core::SourceMap::external),
             dependencies: Vec::new(),
+            module_type: None,
         }))
     }
 

@@ -15,7 +15,7 @@ use ferrite_graph::ImportKind;
 use ferrite_plugin::PluginContext;
 use ferrite_resolver::ResolveKind;
 use ferrite_resolver::ResolveRequest;
-use ferrite_transform::rewrite_specifiers;
+use ferrite_transform::rewrite_specifiers_mapped;
 use ferrite_transform::TransformRequest;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -77,6 +77,7 @@ impl DevServer {
                         has_module_syntax: false,
                         uses_import_meta_hot: false,
                         is_raw_bytes: false,
+                        dependencies: Vec::new(),
                         shake: Some(ferrite_transform::ShakeInfo::default()),
                     });
                 }
@@ -128,6 +129,7 @@ impl DevServer {
                     has_module_syntax: parsed.has_module_syntax,
                     uses_import_meta_hot: parsed.uses_import_meta_hot,
                     is_raw_bytes: false,
+                    dependencies: Vec::new(),
                     shake: None, // filled during rewriting
                 })
             }
@@ -161,8 +163,7 @@ impl DevServer {
             if import.is_type {
                 continue;
             }
-            let dynamic =
-                import.kind == ferrite_transform::ParsedImportKind::Dynamic;
+            let dynamic = import.kind == ferrite_transform::ParsedImportKind::Dynamic;
             // Dynamic imports consult `resolveDynamicImport` first.
             let hooked = if dynamic {
                 self.inner
@@ -191,7 +192,14 @@ impl DevServer {
                     let mut url = resolved.id.0.clone();
                     if url.starts_with('\0') {
                         url = virtual_url(&url);
-                    } else if should_shim_asset(&url) {
+                    } else if should_shim_asset(&url)
+                        && resolved.module_type.as_ref().is_none_or(|kind| {
+                            matches!(
+                                kind,
+                                ModuleType::Asset | ModuleType::Wasm | ModuleType::Data
+                            )
+                        })
+                    {
                         url = format!("{url}?asset-shim");
                     }
                     let kind = match import.kind {
@@ -236,7 +244,14 @@ impl DevServer {
             }
         }
         if !mapping.is_empty() {
-            let (code, _) = rewrite_specifiers(&module.code, &ModuleType::Js, &mapping)?;
+            let (code, _, map) = rewrite_specifiers_mapped(
+                &module.id.0,
+                &module.code,
+                &ModuleType::Js,
+                &mapping,
+                module.map.is_some(),
+            )?;
+            module.map = crate::loader::merge_maps(map, module.map, code == module.code)?;
             module.code = code;
         }
         // Resolve re-export sources to module ids (specifier matching would
@@ -250,6 +265,8 @@ impl DevServer {
                 }
             }
         }
+        module.has_module_syntax = parsed.has_module_syntax;
+        module.uses_import_meta_hot = parsed.uses_import_meta_hot;
         module.imports = imports;
         module.shake = Some(ferrite_transform::ShakeInfo {
             import_bindings,

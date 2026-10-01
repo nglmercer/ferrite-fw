@@ -10,6 +10,7 @@ ferrite-config = { workspace = true }
 ferrite-graph = { workspace = true }
 ferrite-resolver = { workspace = true }
 ferrite-runtime = { workspace = true }
+ferrite-transform = { workspace = true }
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

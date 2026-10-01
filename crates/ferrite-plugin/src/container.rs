@@ -197,10 +197,42 @@ impl PluginContainer {
         ctx: &PluginContext<'_>,
         request: TransformRequest,
     ) -> Result<TransformResult> {
+        self.transform_chain(ctx, request, None).await
+    }
+
+    /// Run only transforms belonging to a compiler phase.
+    pub async fn hook_transform_phase(
+        &self,
+        ctx: &PluginContext<'_>,
+        request: TransformRequest,
+        phase: TransformPhase,
+    ) -> Result<TransformResult> {
+        self.transform_chain(ctx, request, Some(phase)).await
+    }
+
+    /// Compiler versions and options contribute to cache identity.
+    pub fn cache_key(&self) -> String {
+        self.plugins
+            .iter()
+            .map(|plugin| plugin.cache_key())
+            .collect::<Vec<_>>()
+            .join("\0")
+    }
+
+    async fn transform_chain(
+        &self,
+        ctx: &PluginContext<'_>,
+        request: TransformRequest,
+        phase: Option<TransformPhase>,
+    ) -> Result<TransformResult> {
         let mut code = request.code.clone();
-        let mut map = None;
+        let mut map: Option<ferrite_core::SourceMap> = None;
+        let mut module_type = request.module_type.clone();
         let mut dependencies = Vec::new();
         for plugin in &self.plugins {
+            if phase.is_some_and(|phase| plugin.transform_phase() != phase) {
+                continue;
+            }
             if let Some(filter) = plugin.transform_filter() {
                 if !filter.matches(&request.id, Some(&code)) {
                     continue;
@@ -209,7 +241,7 @@ impl PluginContainer {
             let hook_request = TransformRequest {
                 id: request.id.clone(),
                 code: code.clone(),
-                module_type: request.module_type.clone(),
+                module_type: module_type.clone(),
                 environment: request.environment.clone(),
                 ssr: request.ssr,
             };
@@ -218,9 +250,20 @@ impl PluginContainer {
                 .await
                 .map_err(|error| wrap(plugin, "transform", error))?
             {
+                if result.map.is_none() && result.code != code {
+                    ctx.warn(&format!("plugin `{}` changed `{}` without a source map; original source locations are unavailable after this transform. Return a generated-to-input map to restore them", plugin.name(), request.id));
+                }
+                map = match (result.map, map) {
+                    (Some(outer), Some(inner)) => Some(ferrite_core::SourceMap::external(
+                        ferrite_transform::chain_source_maps(&outer.mappings, &inner.mappings)?,
+                    )),
+                    (Some(outer), None) => Some(outer),
+                    (None, inner) if result.code == code => inner,
+                    (None, _) => None,
+                };
                 code = result.code;
-                if result.map.is_some() {
-                    map = result.map;
+                if let Some(kind) = result.module_type {
+                    module_type = kind;
                 }
                 dependencies.extend(result.dependencies);
             }
@@ -229,6 +272,7 @@ impl PluginContainer {
             code,
             map,
             dependencies,
+            module_type: Some(module_type),
         })
     }
 

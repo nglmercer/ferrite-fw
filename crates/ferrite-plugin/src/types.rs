@@ -30,6 +30,13 @@ pub enum Enforce {
     Post,
 }
 
+/// Transform position relative to the JavaScript/TypeScript compiler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransformPhase {
+    BeforeLowering,
+    AfterLowering,
+}
+
 /// When a plugin applies (§11).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Apply {
@@ -238,8 +245,12 @@ pub struct LoadResult {
     pub code: String,
     /// Module type override.
     pub module_type: ModuleType,
-    /// Extra dependencies.
+    /// Extra watched filesystem paths (absolute or project-root-relative; never browser URLs).
     pub dependencies: Vec<String>,
+    /// Map back to the original source.
+    pub map: Option<SourceMap>,
+    /// Explicit side-effect information, when supplied by the loader.
+    pub side_effects: Option<bool>,
 }
 
 impl Default for LoadResult {
@@ -248,6 +259,8 @@ impl Default for LoadResult {
             code: String::new(),
             module_type: ModuleType::Js,
             dependencies: Vec::new(),
+            map: None,
+            side_effects: None,
         }
     }
 }
@@ -276,6 +289,8 @@ pub struct TransformResult {
     pub map: Option<SourceMap>,
     /// Extra dependencies.
     pub dependencies: Vec<String>,
+    /// Optional type override; pre transforms may return JavaScript from components.
+    pub module_type: Option<ModuleType>,
 }
 
 /// HTML transformation context (`transformIndexHtml`).
@@ -524,8 +539,7 @@ impl ProxyRule {
     /// True when `path` falls under this rule (segment-boundary match).
     #[must_use]
     pub fn matches(&self, path: &str) -> bool {
-        path == self.prefix
-            || path.starts_with(&format!("{}/", self.prefix.trim_end_matches('/')))
+        path == self.prefix || path.starts_with(&format!("{}/", self.prefix.trim_end_matches('/')))
     }
 
     /// Target URL for `path_and_query` (path preserved, Vite default).

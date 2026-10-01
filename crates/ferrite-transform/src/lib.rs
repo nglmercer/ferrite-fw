@@ -19,7 +19,10 @@ pub use compiler::{
     compiler_for_engine, CompilerEngine, JsCompiler, OxcCompiler, OxcOptions, SwcCompiler,
 };
 pub use minify::chain_source_maps;
-pub use rewrite::{apply_define, rewrite_import_meta_hot, rewrite_specifiers, with_hmr_client};
+pub use rewrite::{
+    apply_define, apply_text_edits, inject_hmr_mapped, rewrite_import_meta_hot, rewrite_specifiers,
+    rewrite_specifiers_mapped, with_hmr_client,
+};
 pub use transform::drop_unused_exports;
 pub use types::{
     ImportBinding, MinifyRequest, MinifyResult, ParseRequest, ParsedExport, ParsedImport,

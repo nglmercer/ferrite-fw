@@ -274,6 +274,8 @@ impl Plugin for MarkdownPlugin {
             code: render_module(&request.id, &source),
             module_type: ModuleType::Js,
             dependencies: Vec::new(),
+
+            ..Default::default()
         }))
     }
 }

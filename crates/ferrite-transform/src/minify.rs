@@ -100,12 +100,10 @@ pub fn chain_source_maps(outer_json: &str, inner_json: &str) -> Result<String> {
         if token.get_source_id().is_some() {
             let (line, col) = (token.get_src_line(), token.get_src_col());
             if let Some(candidates) = index.get(&line) {
-                if let Some(entry) = candidates
-                    .iter()
-                    .rev()
-                    .find(|entry| entry.0 <= col && entry.3.is_some())
-                {
-                    hit = Some((entry.1, entry.2, entry.3, entry.4));
+                if let Some(entry) = candidates.iter().rev().find(|entry| entry.0 <= col) {
+                    if entry.3.is_some() {
+                        hit = Some((entry.1, entry.2, entry.3, entry.4));
+                    }
                 }
             }
         }

@@ -360,6 +360,8 @@ impl Plugin for RustWasmPlugin {
                     code,
                     module_type: ModuleType::Js,
                     dependencies: vec![glue.to_string_lossy().into_owned()],
+
+                    ..Default::default()
                 }));
             }
         }
@@ -371,6 +373,8 @@ impl Plugin for RustWasmPlugin {
                 code,
                 module_type: ModuleType::Js,
                 dependencies: vec![glue.to_string_lossy().into_owned()],
+
+                ..Default::default()
             }));
         }
         Err(FerriteError::Other(format!(

@@ -35,6 +35,9 @@ impl Plugin for RawTextPlugin {
                     code: format!("export default {path:?};\n"),
                     module_type: ModuleType::Js,
                     dependencies: vec![path.to_string()],
+
+                    map: None,
+                    side_effects: None,
                 }));
             }
         }

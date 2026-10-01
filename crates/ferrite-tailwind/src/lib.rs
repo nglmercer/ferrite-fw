@@ -199,6 +199,8 @@ impl Plugin for TailwindPlugin {
             code: css,
             module_type: ModuleType::Css,
             dependencies: Vec::new(),
+
+            ..Default::default()
         }))
     }
 }

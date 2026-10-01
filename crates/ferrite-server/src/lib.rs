@@ -6,6 +6,8 @@
 mod env;
 mod loader;
 mod pipeline_context;
+#[cfg(test)]
+mod pipeline_tests;
 mod pipeline_transform;
 mod proxy;
 mod routes;
@@ -81,8 +83,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(".env"), "FERRITE_A=1\nSECRET=no\n").unwrap();
-        std::fs::write(dir.join(".env.production"), "FERRITE_A=2\nFERRITE_B=\"${FERRITE_A}/b\"\n")
-            .unwrap();
+        std::fs::write(
+            dir.join(".env.production"),
+            "FERRITE_A=2\nFERRITE_B=\"${FERRITE_A}/b\"\n",
+        )
+        .unwrap();
         let prefixes = vec!["FERRITE_".to_string()];
         let values = load_env("production", &dir, &prefixes);
         assert_eq!(values.get("FERRITE_A").unwrap(), "2");
@@ -542,6 +547,8 @@ mod tests {
                 code: format!("{}\n// touched\n", request.code),
                 map: None,
                 dependencies: Vec::new(),
+
+                module_type: None,
             }))
         }
 
@@ -680,7 +687,11 @@ mod tests {
             .pipeline_module(&ModuleId::new("/logo.png?url"), None, "client")
             .await
             .unwrap();
-        assert!(module.code.contains("https://cdn.example/x.png?v=1"), "{}", module.code);
+        assert!(
+            module.code.contains("https://cdn.example/x.png?v=1"),
+            "{}",
+            module.code
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -718,8 +729,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ferrite-ssr-fix-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::write(dir.join("src/a.js"), "export function boom() {\n  throw new Error(\"x\");\n}\n")
-            .unwrap();
+        std::fs::write(
+            dir.join("src/a.js"),
+            "export function boom() {\n  throw new Error(\"x\");\n}\n",
+        )
+        .unwrap();
         let config = ferrite_config::resolve_config(
             ferrite_config::UserConfig::default(),
             Some(dir.clone()),
@@ -734,7 +748,8 @@ mod tests {
             .pipeline_module(&ModuleId::new("/src/a.js"), None, "ssr")
             .await
             .unwrap();
-        let stack = "Error: x\n    at boom (http://127.0.0.1:5173/src/a.js:2:9)\n    at /src/a.js:1:1";
+        let stack =
+            "Error: x\n    at boom (http://127.0.0.1:5173/src/a.js:2:9)\n    at /src/a.js:1:1";
         let fixed = server.ssr_fix_stacktrace(stack).await;
         assert!(!fixed.contains("http://127.0.0.1:5173"), "{fixed}");
         assert!(fixed.contains("/src/a.js:"), "{fixed}");
@@ -785,11 +800,10 @@ mod tests {
             _ctx: &PluginContext,
             event: ferrite_plugin::WatchEvent,
         ) -> ferrite_core::Result<()> {
-            self.events.lock().unwrap().push(format!(
-                "{}:{:?}",
-                event.path.display(),
-                event.kind
-            ));
+            self.events
+                .lock()
+                .unwrap()
+                .push(format!("{}:{:?}", event.path.display(), event.kind));
             Ok(())
         }
     }
@@ -855,14 +869,12 @@ mod tests {
         server.print_urls();
         // Extra watch paths are recorded even without a running watcher.
         server.watch_extra(&dir.join("extra"));
-        assert!(
-            server
-                .inner()
-                .watch_files
-                .lock()
-                .map(|files| files.iter().any(|file| file.contains("extra")))
-                .unwrap_or(false)
-        );
+        assert!(server
+            .inner()
+            .watch_files
+            .lock()
+            .map(|files| files.iter().any(|file| file.contains("extra")))
+            .unwrap_or(false));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -896,7 +908,9 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(response.status(), axum::http::StatusCode::OK);
-        let bytes = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
         assert_eq!(&bytes[..], b"t1:hello");
 
         let rules = rules_from_config(&HashMap::from([(

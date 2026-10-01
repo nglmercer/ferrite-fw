@@ -17,6 +17,20 @@ pub trait Plugin: Send + Sync {
         Enforce::Normal
     }
 
+    /// Pre plugins see source syntax; normal/post plugins see lowered JavaScript.
+    fn transform_phase(&self) -> TransformPhase {
+        if self.enforce() == Enforce::Pre {
+            TransformPhase::BeforeLowering
+        } else {
+            TransformPhase::AfterLowering
+        }
+    }
+
+    /// Stable compiler/options identity used to isolate transform caches.
+    fn cache_key(&self) -> String {
+        self.name().to_string()
+    }
+
     /// Serve/build applicability.
     fn apply(&self) -> Apply {
         Apply::All
@@ -193,11 +207,7 @@ pub trait Plugin: Send + Sync {
     }
 
     /// Prepend a banner to a chunk (Rollup `banner`).
-    async fn banner(
-        &self,
-        _ctx: &PluginContext,
-        _chunk: RenderChunk,
-    ) -> Result<Option<String>> {
+    async fn banner(&self, _ctx: &PluginContext, _chunk: RenderChunk) -> Result<Option<String>> {
         Ok(None)
     }
 
@@ -212,11 +222,7 @@ pub trait Plugin: Send + Sync {
     }
 
     /// Append a footer to a chunk (Rollup `footer`).
-    async fn footer(
-        &self,
-        _ctx: &PluginContext,
-        _chunk: RenderChunk,
-    ) -> Result<Option<String>> {
+    async fn footer(&self, _ctx: &PluginContext, _chunk: RenderChunk) -> Result<Option<String>> {
         Ok(None)
     }
 
