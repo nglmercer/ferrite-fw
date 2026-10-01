@@ -1,7 +1,7 @@
 # Ferrite E2E implementation TODO
 
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
-Session plan refreshed: 2026-10-01, after verified C04 HAR implementation.
+Session plan refreshed: 2026-10-01, at queued-pause cleanup checkpoint `93ad6e4`.
 Expanded on request for a longer implementation session; B09/B10/B13/B14 and D01/D02 are verified.
 Uncommitted implementations are not counted complete.
 
@@ -9,8 +9,8 @@ The initial G/A foundations are complete except for the final G04 audit. Follow
 the remaining-work index below through B/D improvements and supported C extensions.
 This backlog contains **51 tasks (50 complete, 1 remaining)**: four foundations,
 16 core tasks, 19 follow-ups, six optional extensions and six practical additions.
-All A and B tasks and D01–D06 are verified; continue with
-practical additions and supported C extensions. The ordering
+All A, B, C and D tasks are verified; continue with the G04 lifecycle audit
+and complete replay. The ordering
 and effort assessments are recommendations based on the current source and
 parity audit.
 D01–D06 add bounded improvements found in the missing/partial member inventory;
@@ -138,10 +138,8 @@ there. G04 applies during every phase and closes after the final audit.
 
 | Order | Task | Implementation result | Dependency or capability gate |
 |---|---|---|---|
-| 1 | C05 | Supported media/device emulation options and resets | Chromium native capabilities |
-| 2 | C06 | Independently detachable CDP target sessions | Chromium transport and session ownership |
-| 3 | G04 | Final lifecycle, compatibility and resource-release audit | Evidence from every completed phase |
-Immediate delivery: **C05**. All A/B/D tasks and C01–C04 are complete.
+| 1 | G04 | Final lifecycle, compatibility and resource-release audit | Evidence from every completed phase |
+Immediate delivery: **G04**. All A/B/C/D tasks are complete.
 Supported C extensions remain available independently. G04 applies
 throughout and closes after the complete integration/lifecycle audit.
 
@@ -1307,7 +1305,7 @@ complete this section.
 
 ## D — Additional practical features for the longer session
 
-These are new recommendations, all unchecked. Extend existing APIs and reports;
+These six recommendations are implemented and checked below. They extend existing APIs and reports;
 do not duplicate already implemented JUnit, storage access, socket observation,
 focus protection, generic assertion polling or retry/flaky classification.
 Current official documentation supports the feature comparisons below; differential
@@ -1535,7 +1533,7 @@ waiting for every future feature before starting independent work.
 | 4a. CI and assertion reliability | D01/D02 — complete | Preserve policy/focus wiring in `a2fd29b` and polling controls/scoped final-only soft retries in `312090d`. |
 | 5. Captures and reports | B09/B10/B18/B11/D03/D04 — complete | Preserve verified capture/stability/path/update and owned diagnostics; preserve bounded ARIA output and searchable reports; preserve frozen metadata and bounded slow summaries. |
 | 5a. Practical storage and diagnostics | D03/D04/D05/D06 — complete | Preserve retention/storage helpers; preserve run metadata/slow summaries; preserve bounded Chromium socket diagnostics. |
-| 6. Supported backend extensions | C01–C04 — complete; C05, C06 | Preserve validated PDF options; extend captured bodies, coverage, HAR, emulation and scoped CDP sessions. Check capability before accepting each option; verify explicit errors on the other engine. |
+| 6. Supported backend extensions | C01–C06 — complete | Preserve validated PDF options; extend captured bodies, coverage, HAR, emulation and scoped CDP sessions. Check capability before accepting each option; verify explicit errors on the other engine. |
 | 7. Final lifecycle and compatibility audit | G04 | Verify cancellation, zero/enclosing deadlines, retries, disposal and released resources across the additions, then run the complete regression and documentation gates. |
 
 Within a phase, prefer correctness and lifecycle work over convenience methods.
@@ -1607,10 +1605,9 @@ also need formatting checks for the modified packages.
 
 Copyable request for the implementation session:
 
-> Implement all six open tasks (C02–C06 and G04) in E2E-PARITY-TODO.md using the recommended remaining
-> phases, dependencies and completion criteria. Preserve the already verified
-> features. Implement all practical
-> features supported by the existing Chromium/Firefox backends. Keep the deferred
-> substantial projects outside scope; document any blocked subset and continue
-> independent ready tasks. Verify native behavior, update the examples and parity
-> matrix, keep the TODO accurate, and commit verified changes at phase boundaries.
+> Finish G04 in E2E-PARITY-TODO.md using its completion criteria and final gates.
+> Preserve the implemented A/B/C/D features on the existing Chromium/Firefox
+> backends. Keep deferred substantial projects outside scope. Verify terminal
+> cleanup and resource release, complete the requirement audit and full regression
+> replay, update parity evidence and the matrix, keep the TODO accurate, and
+> commit verified changes at phase boundaries.

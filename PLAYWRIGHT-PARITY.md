@@ -3239,3 +3239,14 @@ Scoped verification: 302 unit tests, all eight mandatory Chromium/Firefox
 `route_lifecycle` groups and four doctests passed. Strict Clippy passed.
 The complete 51-target replay is running separately. Terminal pump cleanup and
 the final requirement audit remain open; this scoped gate does not close G04.
+
+## G04 final-gate checkpoint — CLI and configuration
+
+At implementation checkpoint `93ad6e4`, `cargo test -p ferrite-cli -p
+ferrite-config` passed 30 tests and one configuration doctest. Strict all-target
+Clippy and package formatting passed together for E2E, CLI and configuration.
+These are current gates, separate from historical phase counts. The complete
+51-target E2E replay is live with the matching Chrome Headless Shell, Firefox
+and mandatory both-browser setting; it has not yet produced a terminal result.
+The remaining-work index now lists G04 alone, matching the 50 checked tasks.
+Terminal interception cleanup and the final requirement audit remain open.
