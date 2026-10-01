@@ -259,9 +259,7 @@ where
                 match check().await {
                     Ok(None) => return Ok(()),
                     Ok(Some(mismatch)) => last = Some(mismatch),
-                    Err(error @ (E2eError::Cancelled(_) | E2eError::Disconnected(_))) => {
-                        return Err(error)
-                    }
+                    Err(error) if error.is_control_flow() => return Err(error),
                     Err(error) => last = Some(error.to_string()),
                 }
                 tokio::time::sleep(Duration::from_millis(50)).await;
@@ -496,7 +494,7 @@ impl PageExpect {
                         async move {
                             let title = match page.title().await {
                                 Ok(title) => title,
-                                Err(error) => return Ok(Some(error.to_string())),
+                                Err(error) => return Err(error),
                             };
                             if (title == expected) != negated {
                                 Ok(None)
@@ -530,7 +528,7 @@ impl PageExpect {
                             async move {
                                 let title = match page.title().await {
                                     Ok(title) => title,
-                                    Err(error) => return Ok(Some(error.to_string())),
+                                    Err(error) => return Err(error),
                                 };
                                 if title.contains(&fragment) != negated {
                                     Ok(None)
@@ -584,7 +582,7 @@ impl PageExpect {
                             async move {
                                 let url = match page.url().await {
                                     Ok(url) => url,
-                                    Err(error) => return Ok(Some(error.to_string())),
+                                    Err(error) => return Err(error),
                                 };
                                 if url.contains(&fragment) != negated {
                                     Ok(None)
@@ -689,7 +687,7 @@ impl PageExpect {
                                     None => page.aria_snapshot().await,
                                 } {
                                     Ok(actual) => actual,
-                                    Err(error) => return Ok(Some(error.to_string())),
+                                    Err(error) => return Err(error),
                                 };
                                 if (actual == expected) != negated {
                                     Ok(None)
@@ -950,7 +948,7 @@ impl LocatorExpect {
                             async move {
                                 let state = match locator.state().await {
                                     Ok(state) => state,
-                                    Err(error) => return Ok(Some(error.to_string())),
+                                    Err(error) => return Err(error),
                                 };
                                 if (state.count > 0 && state.visible) != negated {
                                     Ok(None)
@@ -986,7 +984,7 @@ impl LocatorExpect {
                             async move {
                                 let state = match locator.state().await {
                                     Ok(state) => state,
-                                    Err(error) => return Ok(Some(error.to_string())),
+                                    Err(error) => return Err(error),
                                 };
                                 if (state.count == 0 || !state.visible) != negated {
                                     Ok(None)
@@ -1025,7 +1023,7 @@ impl LocatorExpect {
                             async move {
                                 let state = match locator.state().await {
                                     Ok(state) => state,
-                                    Err(error) => return Ok(Some(error.to_string())),
+                                    Err(error) => return Err(error),
                                 };
                                 if (normalize_text(&state.text) == normalize_text(&expected))
                                     != negated
@@ -1066,7 +1064,7 @@ impl LocatorExpect {
                             async move {
                                 let state = match locator.state().await {
                                     Ok(state) => state,
-                                    Err(error) => return Ok(Some(error.to_string())),
+                                    Err(error) => return Err(error),
                                 };
                                 if normalize_text(&state.text).contains(&normalize_text(&fragment))
                                     != negated
@@ -1107,7 +1105,7 @@ impl LocatorExpect {
                             async move {
                                 let state = match locator.state().await {
                                     Ok(state) => state,
-                                    Err(error) => return Ok(Some(error.to_string())),
+                                    Err(error) => return Err(error),
                                 };
                                 if (state.value == expected) != negated {
                                     Ok(None)
@@ -1144,7 +1142,7 @@ impl LocatorExpect {
                             async move {
                                 let state = match locator.state().await {
                                     Ok(state) => state,
-                                    Err(error) => return Ok(Some(error.to_string())),
+                                    Err(error) => return Err(error),
                                 };
                                 if (state.count == expected) != negated {
                                     Ok(None)
@@ -1197,7 +1195,7 @@ impl LocatorExpect {
                 async move {
                     let state = match locator.state().await {
                         Ok(state) => state,
-                        Err(error) => return Ok(Some(error.to_string())),
+                        Err(error) => return Err(error),
                     };
                     if (state.checked == want) != negated {
                         Ok(None)
@@ -1227,7 +1225,7 @@ impl LocatorExpect {
                             async move {
                                 let state = match locator.state().await {
                                     Ok(state) => state,
-                                    Err(error) => return Ok(Some(error.to_string())),
+                                    Err(error) => return Err(error),
                                 };
                                 if (state.count > 0 && state.enabled) != negated {
                                     Ok(None)
@@ -1260,7 +1258,7 @@ impl LocatorExpect {
                             async move {
                                 let state = match locator.state().await {
                                     Ok(state) => state,
-                                    Err(error) => return Ok(Some(error.to_string())),
+                                    Err(error) => return Err(error),
                                 };
                                 if (state.count > 0 && !state.enabled) != negated {
                                     Ok(None)
@@ -1293,7 +1291,7 @@ impl LocatorExpect {
                             async move {
                                 let state = match locator.state().await {
                                     Ok(state) => state,
-                                    Err(error) => return Ok(Some(error.to_string())),
+                                    Err(error) => return Err(error),
                                 };
                                 if (state.count > 0 && state.editable) != negated {
                                     Ok(None)
@@ -1329,7 +1327,7 @@ impl LocatorExpect {
                             async move {
                                 let state = match locator.state().await {
                                     Ok(state) => state,
-                                    Err(error) => return Ok(Some(error.to_string())),
+                                    Err(error) => return Err(error),
                                 };
                                 let empty = state.count > 0
                                     && state.text.is_empty()
@@ -1368,7 +1366,7 @@ impl LocatorExpect {
                             async move {
                                 let state = match locator.state().await {
                                     Ok(state) => state,
-                                    Err(error) => return Ok(Some(error.to_string())),
+                                    Err(error) => return Err(error),
                                 };
                                 if (state.count > 0 && state.focused) != negated {
                                     Ok(None)
@@ -1401,7 +1399,7 @@ impl LocatorExpect {
                             async move {
                                 let state = match locator.state().await {
                                     Ok(state) => state,
-                                    Err(error) => return Ok(Some(error.to_string())),
+                                    Err(error) => return Err(error),
                                 };
                                 if (state.count > 0) != negated {
                                     Ok(None)
@@ -1442,7 +1440,7 @@ impl LocatorExpect {
                             async move {
                                 let actual = match locator.attribute(&name).await {
                                     Ok(actual) => actual,
-                                    Err(error) => return Ok(Some(error.to_string())),
+                                    Err(error) => return Err(error),
                                 };
                                 if (actual.as_deref() == Some(expected.as_str())) != negated {
                                     Ok(None)
@@ -1481,7 +1479,7 @@ impl LocatorExpect {
                             async move {
                                 let actual = match locator.attribute("class").await {
                                     Ok(actual) => actual,
-                                    Err(error) => return Ok(Some(error.to_string())),
+                                    Err(error) => return Err(error),
                                 };
                                 let has = actual
                                     .as_deref()
@@ -1538,7 +1536,7 @@ impl LocatorExpect {
                             async move {
                                 let actual = match locator.css_value(&property).await {
                                     Ok(actual) => actual,
-                                    Err(error) => return Ok(Some(error.to_string())),
+                                    Err(error) => return Err(error),
                                 };
                                 if (actual.as_deref() == Some(expected.as_str())) != negated {
                                     Ok(None)
@@ -1579,7 +1577,7 @@ impl LocatorExpect {
                             async move {
                                 let actual = match locator.js_property(&name).await {
                                     Ok(actual) => actual,
-                                    Err(error) => return Ok(Some(error.to_string())),
+                                    Err(error) => return Err(error),
                                 };
                                 if (actual.as_ref() == Some(&expected)) != negated {
                                     Ok(None)
@@ -1629,7 +1627,7 @@ impl LocatorExpect {
                             async move {
                                 let actual = match locator.accessible_name().await {
                                     Ok(actual) => actual,
-                                    Err(error) => return Ok(Some(error.to_string())),
+                                    Err(error) => return Err(error),
                                 };
                                 if (actual.as_deref() == Some(expected.as_str())) != negated {
                                     Ok(None)
@@ -1668,7 +1666,7 @@ impl LocatorExpect {
                             async move {
                                 let actual = match locator.accessible_description().await {
                                     Ok(actual) => actual,
-                                    Err(error) => return Ok(Some(error.to_string())),
+                                    Err(error) => return Err(error),
                                 };
                                 if (actual.as_deref() == Some(expected.as_str())) != negated {
                                     Ok(None)
@@ -2247,6 +2245,58 @@ mod polling_options_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn assertion_poll_preserves_control_errors_including_diagnostic_wrappers() {
+        for wrapped in [false, true] {
+            for error in [
+                E2eError::Cancelled("cancel".into()),
+                E2eError::Disconnected("disconnect".into()),
+                E2eError::Skipped("skip".into()),
+                E2eError::StepSkipped("step skip".into()),
+            ] {
+                let code = error.code();
+                let error = if wrapped {
+                    E2eError::Diagnostic {
+                        context: "labelled probe".into(),
+                        source: Box::new(error),
+                    }
+                } else {
+                    error
+                };
+                let mut once = Some(error);
+                let result = tokio::time::timeout(
+                    Duration::from_millis(100),
+                    poll_raw(Duration::ZERO, "control probe".into(), || {
+                        let error = once.take().expect("control errors must never retry");
+                        async { Err(error) }
+                    }),
+                )
+                .await
+                .expect("disabled assertion timeout must still preserve control flow");
+                assert_eq!(result.unwrap_err().code(), code);
+            }
+        }
+    }
+    #[tokio::test]
+    async fn assertion_poll_still_retries_ordinary_probe_errors() {
+        let mut checks = 0;
+        poll_raw(Duration::from_secs(1), "transient probe".into(), || {
+            checks += 1;
+            let result = if checks == 1 {
+                Err(E2eError::Locator {
+                    selector: "button".into(),
+                    message: "detached during probe".into(),
+                })
+            } else {
+                Ok(None)
+            };
+            async { result }
+        })
+        .await
+        .unwrap();
+        assert_eq!(checks, 2);
+    }
+
     #[tokio::test]
     async fn polling_bounds_a_hung_check_and_does_not_swallow_cancellation() {
         let result = expect_to_pass("hung", Duration::from_millis(20), || {

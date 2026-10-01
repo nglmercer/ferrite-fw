@@ -2965,3 +2965,37 @@ This settles stored/profile rollback, not reversal of native effects already
 performed by a request. G04 remains open for cleanup acknowledgement faults,
 other source/control-error cases, redirect correlation and the full integration
 /backlog replay.
+
+
+## G04 audit progress — Assertion and locator control errors
+
+Page and locator assertion probes now return their typed errors to the retry
+loop instead of converting them into mismatch strings. Cancellation, transport
+disconnection and skip control errors stop retrying, including diagnostic
+wrappers whose error code identifies the underlying cause. Ordinary probe
+errors retain the existing retry behavior. Locator wait-for-function likewise
+propagates control errors rather than treating them as a false predicate.
+The other locator boolean probes found by the audit are task-local diagnostic
+state checks and input-success checks; they do not discard operation errors.
+
+Returned cancellation/disconnection errors now set automatic and controlled
+steps to Interrupted, with the original TestError cause retained. Dropped-step
+reporting remains available independently. Three new unit cases cover wrapped
+control errors with a disabled timeout, ordinary-error retries, and both step
+forms' interruption/error metadata.
+
+A native regression covers page title/URL and locator visibility, text, count,
+negated attributes, CSS, JS property, accessible name and text-array assertions,
+plus locator function waits. It checks cancellation and actual transport loss
+on both engines, bounds zero-timeout probes, verifies retry through the original
+uncancelled Page, and requires Interrupted attempt/step reports to preserve the
+Cancelled code and locator description. URL probes use valid absolute input so
+validation cannot prevent the control-error path from being exercised.
+
+Scoped verification passed 304 checks: 287 units, 13 mandatory two-engine
+integration groups across `locator_descriptions`, `soft_assertions` and
+`step_controls_and_bundles`, and four doctests. Strict Clippy and formatting
+passed. The authoritative integration inventory still contains 51 targets; this
+focused gate does not replace their final complete replay. G04 remains open for
+network/frame source-loss paths, cleanup acknowledgement faults, redirect
+correlation and the full requirement-by-requirement audit.

@@ -1138,14 +1138,15 @@ impl Locator {
                             let scoped = self.with_timeout(timeout);
                             let deadline = crate::operation::Deadline::new(timeout);
                             loop {
-                                if scoped
+                                match scoped
                                     .evaluate::<bool>(&format!(
                                         "async el => Boolean(await ({function})(el))"
                                     ))
                                     .await
-                                    .unwrap_or(false)
                                 {
-                                    return Ok(());
+                                    Ok(true) => return Ok(()),
+                                    Err(error) if error.is_control_flow() => return Err(error),
+                                    Ok(false) | Err(_) => {}
                                 }
                                 if deadline.expired() {
                                     return Err(E2eError::Timeout(

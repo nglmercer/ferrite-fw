@@ -351,3 +351,134 @@ async fn native_retry_steps_live_events_traces_json_and_html_retain_owned_labels
         }
     }
 }
+
+async fn assert_probe_control(page: &Page, code: &str) {
+    let locator = page.locator("#audit").describe("control audit");
+    let finite = Duration::from_millis(60);
+    let title = tokio::time::timeout(
+        Duration::from_secs(1),
+        page.expect().timeout(Duration::ZERO).title("unused"),
+    )
+    .await
+    .expect("control error must settle with assertion timeout disabled");
+    assert_eq!(title.unwrap_err().code(), code);
+    let visible = tokio::time::timeout(
+        Duration::from_secs(1),
+        locator.expect().timeout(Duration::ZERO).visible(),
+    )
+    .await
+    .expect("locator control error must settle with assertion timeout disabled");
+    assert_eq!(visible.unwrap_err().code(), code);
+    for result in [
+        page.expect().timeout(finite).url("about:blank").await,
+        locator.expect().timeout(finite).text("unused").await,
+        locator.expect().timeout(finite).count(1).await,
+        locator
+            .expect()
+            .not()
+            .timeout(finite)
+            .attribute("id", "audit")
+            .await,
+        locator
+            .expect()
+            .timeout(finite)
+            .css("color", "unused")
+            .await,
+        locator
+            .expect()
+            .timeout(finite)
+            .js_property("disabled", &false)
+            .await,
+        locator
+            .expect()
+            .timeout(finite)
+            .accessible_name("unused")
+            .await,
+        locator.expect().timeout(finite).texts(&["unused"]).await,
+    ] {
+        assert_eq!(result.unwrap_err().code(), code);
+    }
+    let wait = tokio::time::timeout(
+        Duration::from_secs(1),
+        locator.wait_for_function("el => true", Duration::ZERO),
+    )
+    .await
+    .expect("locator function must preserve control errors");
+    assert_eq!(wait.unwrap_err().code(), code);
+}
+
+#[tokio::test]
+async fn native_assertion_probes_preserve_cancellation_disconnect_and_interrupted_reports() {
+    for browser in browsers().await {
+        let page = browser.new_page().await.unwrap();
+        page.set_content("<button id='audit'>Ready</button>")
+            .await
+            .unwrap();
+        let token = CancellationToken::new();
+        token.cancel_with_reason("audit caller cancelled");
+        assert_probe_control(&page.with_cancellation(token), "FERRITE_E2E_CANCELLED").await;
+        page.locator("#audit").expect().visible().await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let report = Runner::from_config(&E2eConfig {
+            screenshot: "off".into(),
+            ..Default::default()
+        })
+        .workers(1)
+        .test_timeout(BUDGET)
+        .cleanup_timeout(BUDGET)
+        .output_dir(dir.path().display().to_string())
+        .list_progress(false)
+        .run(
+            &browser,
+            vec![test_with_context(
+                "assertion control cause",
+                |ctx| async move {
+                    ctx.page
+                        .set_content("<button id='audit'>Ready</button>")
+                        .await?;
+                    let token = CancellationToken::new();
+                    token.cancel_with_reason("audit reported cancellation");
+                    ctx.page
+                        .locator("#audit")
+                        .describe("reported control audit")
+                        .with_cancellation(token)
+                        .expect()
+                        .timeout(Duration::ZERO)
+                        .visible()
+                        .await
+                },
+            )],
+        )
+        .await;
+        let attempt = &report.results[0].attempt_results[0];
+        assert_eq!(attempt.status, AttemptStatus::Interrupted);
+        assert_eq!(attempt.errors[0].code, "FERRITE_E2E_CANCELLED");
+        let interrupted: Vec<_> = flatten(&attempt.steps)
+            .into_iter()
+            .filter(|step| step.title.contains("reported control audit"))
+            .collect();
+        assert!(!interrupted.is_empty());
+        for step in interrupted {
+            assert_eq!(step.status, StepStatus::Interrupted);
+            assert!(step.interrupted);
+            assert_eq!(step.error.as_ref().unwrap().code, "FERRITE_E2E_CANCELLED");
+        }
+        if let Some(connection) = browser.cdp() {
+            connection.close();
+        } else {
+            browser.bidi().unwrap().close();
+        }
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while browser.cdp().map_or_else(
+                || browser.bidi().unwrap().is_open(),
+                |connection| connection.is_open(),
+            ) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("actual transport disconnection");
+        assert_probe_control(&page, "FERRITE_E2E_DISCONNECTED").await;
+        browser.close().await.unwrap();
+    }
+}

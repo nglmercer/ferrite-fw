@@ -637,6 +637,13 @@ impl StepSession {
         }
     }
     fn finish(&self, id: u64, error: Option<TestError>, interrupted: bool) {
+        let interrupted = interrupted
+            || error.as_ref().is_some_and(|error| {
+                matches!(
+                    error.code.as_str(),
+                    "FERRITE_E2E_CANCELLED" | "FERRITE_E2E_DISCONNECTED"
+                )
+            });
         let status = if interrupted {
             StepStatus::Interrupted
         } else if error
@@ -1577,6 +1584,51 @@ mod tests {
             file: "test.rs".into(),
             line: 12,
             column: 3,
+        }
+    }
+
+    #[tokio::test]
+    async fn returned_control_errors_keep_their_cause_and_interrupt_both_step_forms() {
+        for disconnected in [false, true] {
+            let session = session();
+            let cause = || {
+                if disconnected {
+                    crate::E2eError::Disconnected("reader gone".into())
+                } else {
+                    crate::E2eError::Cancelled("caller stopped".into())
+                }
+            };
+            let code = cause().code();
+            let result = session
+                .run(
+                    "automatic control",
+                    source(),
+                    async { Err::<(), _>(cause()) },
+                    |result| {
+                        result
+                            .as_ref()
+                            .err()
+                            .map(|error| TestError::new(error, "step", None))
+                    },
+                )
+                .await;
+            assert_eq!(result.unwrap_err().code(), code);
+            let result = session
+                .controlled(
+                    "controlled control",
+                    source(),
+                    StepOptions::default(),
+                    |_| async { Err::<(), _>(cause()) },
+                )
+                .await;
+            assert_eq!(result.unwrap_err().code(), code);
+            let steps = session.finish_all();
+            assert_eq!(steps.len(), 2);
+            for step in steps {
+                assert_eq!(step.status, StepStatus::Interrupted);
+                assert!(step.interrupted);
+                assert_eq!(step.error.unwrap().code, code);
+            }
         }
     }
 

@@ -109,6 +109,16 @@ impl E2eError {
         }
     }
 
+    pub(crate) fn is_control_flow(&self) -> bool {
+        matches!(
+            self.code(),
+            "FERRITE_E2E_CANCELLED"
+                | "FERRITE_E2E_DISCONNECTED"
+                | "FERRITE_E2E_SKIPPED"
+                | "FERRITE_E2E_STEP_SKIPPED"
+        )
+    }
+
     pub(crate) fn with_context(self, context: &str) -> Self {
         let annotate = |message: String| format!("{context}: {message}");
         match self {

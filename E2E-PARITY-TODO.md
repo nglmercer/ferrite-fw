@@ -614,6 +614,15 @@ Work in [the audit generator](scripts/playwright-parity/build_matrix.py),
   284 units, nine mandatory two-engine native groups and four doctests (297
   scoped checks), strict Clippy/formatting. The other audit cases and complete
   integration/backlog replay remain open.
+  Further progress: page/locator assertion probes preserve typed control errors
+  instead of retrying their strings as mismatches. Locator function waits also
+  preserve them; automatic and controlled steps retain cancellation/disconnection
+  causes with Interrupted status.
+  [Evidence](PLAYWRIGHT-PARITY.md#g04-audit-progress--assertion-and-locator-control-errors):
+  287 units, 13 mandatory two-engine integration groups and four doctests (304
+  scoped checks), strict Clippy/formatting. Network/frame source-loss paths,
+  cleanup acknowledgement faults, redirect correlation and full replay remain
+  under audit.
 
 
 
