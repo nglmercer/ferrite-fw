@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use futures::{SinkExt as _, StreamExt as _};
@@ -53,6 +53,7 @@ struct Inner {
     lifecycle_events: AtomicU8,
     tx: mpsc::UnboundedSender<Outbound>,
     pending: Mutex<HashMap<u64, oneshot::Sender<E2eResult<Value>>>>,
+    intercepts: Mutex<HashMap<u64, InterceptEntry>>,
     events: broadcast::Sender<BidiEvent>,
     popup_events: broadcast::Sender<BidiEvent>,
     popup_captures: Mutex<Option<Arc<crate::popup_capture::PopupCaptures>>>,
@@ -71,6 +72,135 @@ impl Drop for PendingCall {
             .lock()
             .map(|mut pending| pending.remove(&self.id))
             .ok();
+    }
+}
+
+// Response ownership must be established in the reader, before waking the caller.
+// Otherwise cancellation between response delivery and polling loses the native ID.
+enum InterceptEntry {
+    Pending {
+        lease: Weak<InterceptLease>,
+        context: String,
+        frames: Weak<Mutex<crate::lifecycle_events::FrameEvents>>,
+        blocked: Vec<String>,
+        overflow: crate::CancellationToken,
+    },
+    Removing {
+        intercept: String,
+        failed: bool,
+    },
+}
+struct InterceptLease {
+    inner: Weak<Inner>,
+    command: AtomicU64,
+    frames: Weak<Mutex<crate::lifecycle_events::FrameEvents>>,
+    overflow: crate::CancellationToken,
+    id: Mutex<Option<String>>,
+}
+impl Drop for InterceptLease {
+    fn drop(&mut self) {
+        let Some(inner) = self.inner.upgrade() else {
+            return;
+        };
+        let mut entries = inner.intercepts.lock().unwrap_or_else(|e| e.into_inner());
+        let command = self.command.load(Ordering::Acquire);
+        if let Some(InterceptEntry::Pending { blocked, .. }) = entries.get_mut(&command) {
+            for request in blocked.drain(..) {
+                continue_request_unobserved(&inner, &request);
+            }
+        }
+        if let Some(id) = self.id.get_mut().unwrap_or_else(|e| e.into_inner()).take() {
+            entries.remove(&command);
+            remove_intercept_unobserved(&inner, &mut entries, &id);
+        }
+    }
+}
+fn continue_request_unobserved(inner: &Inner, request: &str) {
+    if inner.closed.is_cancelled() {
+        return;
+    }
+    let id = inner.next_id.fetch_add(1, Ordering::SeqCst);
+    let frame = serde_json::json!({"id":id,"method":"network.continueRequest","params":{"request":request}});
+    let _ = inner.tx.send(Outbound::Text(frame.to_string()));
+}
+fn remove_intercept_unobserved(
+    inner: &Inner,
+    entries: &mut HashMap<u64, InterceptEntry>,
+    intercept: &str,
+) {
+    if inner.closed.is_cancelled() {
+        return;
+    }
+    let id = inner.next_id.fetch_add(1, Ordering::SeqCst);
+    let frame = serde_json::json!({"id":id,"method":"network.removeIntercept","params":{"intercept":intercept}});
+    entries.insert(
+        id,
+        InterceptEntry::Removing {
+            intercept: intercept.to_owned(),
+            failed: false,
+        },
+    );
+    if inner.tx.send(Outbound::Text(frame.to_string())).is_err() {
+        entries.remove(&id);
+    }
+}
+
+// removeIntercept does not release requests Firefox already paused. Continue
+// abandoned startup's requests in the reader, including the removal ACK window.
+fn recover_abandoned_interception(inner: &Inner, event: &BidiEvent) {
+    if event.method != "network.beforeRequestSent" || event.params["isBlocked"] != true {
+        return;
+    }
+    let Some(request) = event.params["request"]["request"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+    else {
+        return;
+    };
+    let mut entries = inner.intercepts.lock().unwrap_or_else(|e| e.into_inner());
+    let mut abandoned = false;
+    for entry in entries.values_mut() {
+        match entry {
+            InterceptEntry::Pending {
+                lease,
+                context,
+                frames,
+                blocked,
+                overflow,
+            } => {
+                if !event.context().is_some_and(|id| {
+                    id == context
+                        || frames.upgrade().is_some_and(|frames| {
+                            frames
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .contains(id)
+                        })
+                }) {
+                    continue;
+                }
+                if lease.strong_count() == 0 || overflow.is_cancelled() {
+                    abandoned = true;
+                } else if !blocked.iter().any(|id| id == request) {
+                    if blocked.len() >= 256 {
+                        overflow.cancel_with_reason(
+                            "256 blocked requests during BiDi intercept startup",
+                        );
+                        abandoned = true;
+                    } else {
+                        blocked.push(request.to_owned());
+                    }
+                }
+            }
+            InterceptEntry::Removing { intercept, .. } => {
+                abandoned |= event.params["intercepts"]
+                    .as_array()
+                    .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(intercept)));
+            }
+        }
+    }
+    if abandoned {
+        continue_request_unobserved(inner, request);
     }
 }
 
@@ -96,6 +226,7 @@ impl BidiConnection {
             tx,
             popup_captures: Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
+            intercepts: Mutex::new(HashMap::new()),
             events,
             popup_events: broadcast::channel(256).0,
             next_id: AtomicU64::new(1),
@@ -188,10 +319,107 @@ impl BidiConnection {
 
     /// Send a command and await its `result`.
     pub async fn call(&self, method: &str, params: Value, timeout: Duration) -> E2eResult<Value> {
+        self.call_owned(method, params, timeout, None).await
+    }
+
+    pub(crate) async fn add_intercept(
+        &self,
+        params: Value,
+        timeout: Duration,
+        frames: Weak<Mutex<crate::lifecycle_events::FrameEvents>>,
+    ) -> E2eResult<String> {
+        let lease = Arc::new(InterceptLease {
+            inner: Arc::downgrade(&self.inner),
+            command: AtomicU64::new(0),
+            frames,
+            overflow: crate::CancellationToken::new(),
+            id: Mutex::new(None),
+        });
+        lease
+            .overflow
+            .run(self.call_owned(
+                "network.addIntercept",
+                params,
+                timeout,
+                Some(Arc::downgrade(&lease)),
+            ))
+            .await
+            .map_err(|error| match error {
+                E2eError::Cancelled(reason) if lease.overflow.is_cancelled() => {
+                    E2eError::Config(reason)
+                }
+                other => other,
+            })?;
+        let id = {
+            let mut entries = self
+                .inner
+                .intercepts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            entries.remove(&lease.command.load(Ordering::Acquire));
+            lease.id.lock().unwrap_or_else(|e| e.into_inner()).take()
+        };
+        id.ok_or_else(|| {
+            E2eError::Config("BiDi addIntercept returned no nonempty intercept ID".into())
+        })
+    }
+
+    async fn call_owned(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+        intercept: Option<Weak<InterceptLease>>,
+    ) -> E2eResult<Value> {
         if let Some(reason) = self.inner.closed.reason() {
             return Err(E2eError::Disconnected(reason));
         }
         let id = self.inner.next_id.fetch_add(1, Ordering::SeqCst);
+        if let Some(intercept) = intercept {
+            let mut pending = self
+                .inner
+                .intercepts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if pending
+                .values()
+                .any(|entry| matches!(entry, InterceptEntry::Removing { failed: true, .. }))
+            {
+                return Err(E2eError::Config(
+                    "BiDi abandoned intercept cleanup failed; reconnect before reinstalling routes"
+                        .into(),
+                ));
+            }
+            let context = params["contexts"][0].as_str().unwrap_or_default();
+            if pending.values().any(|entry| matches!(entry, InterceptEntry::Pending { context: existing, .. } if existing == context)) {
+                return Err(E2eError::Config("BiDi intercept startup for this context is still awaiting its native response".into()));
+            }
+            if pending.len() >= 256 {
+                return Err(E2eError::Config(
+                    "256 pending BiDi intercept installations; await responses or reconnect".into(),
+                ));
+            }
+            let (frames, overflow) = if let Some(lease) = intercept.upgrade() {
+                lease.command.store(id, Ordering::Release);
+                (lease.frames.clone(), lease.overflow.clone())
+            } else {
+                Default::default()
+            };
+            let context = params["contexts"][0]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned();
+            pending.insert(
+                id,
+                InterceptEntry::Pending {
+                    lease: intercept,
+                    context,
+                    frames,
+                    blocked: Vec::new(),
+                    overflow,
+                },
+            );
+        }
         let frame = serde_json::json!({
             "id": id,
             "method": method,
@@ -208,10 +436,14 @@ impl BidiConnection {
             inner: self.inner.clone(),
             id,
         };
-        self.inner
-            .tx
-            .send(Outbound::Text(text))
-            .map_err(|_| E2eError::Disconnected("bidi writer gone".to_string()))?;
+        if self.inner.tx.send(Outbound::Text(text)).is_err() {
+            self.inner
+                .intercepts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&id);
+            return Err(E2eError::Disconnected("bidi writer gone".into()));
+        }
         let result=crate::operation::Deadline::new(timeout)
             .run(format!("bidi {method}"), async {
                 tokio::select! {biased;
@@ -268,6 +500,7 @@ fn handle_frame(inner: &Arc<Inner>, text: &str) {
                 method: method.to_string(),
                 params: frame.get("params").cloned().unwrap_or(Value::Null),
             };
+            recover_abandoned_interception(inner, &event);
             let captures = inner
                 .popup_captures
                 .lock()
@@ -287,6 +520,70 @@ fn handle_frame(inner: &Arc<Inner>, text: &str) {
         return;
     }
     if let Some(id) = frame.get("id").and_then(Value::as_u64) {
+        // Keep an upgraded lease alive until the table lock is released: its
+        // destructor also locks this table when the caller has just disappeared.
+        let mut live_lease = None;
+        {
+            let mut entries = inner.intercepts.lock().unwrap_or_else(|e| e.into_inner());
+            match entries.remove(&id) {
+                Some(InterceptEntry::Pending {
+                    lease,
+                    context,
+                    frames,
+                    blocked,
+                    overflow,
+                }) => {
+                    if kind == "error"
+                        || frame["result"]["intercept"]
+                            .as_str()
+                            .filter(|id| !id.is_empty())
+                            .is_none()
+                    {
+                        for request in &blocked {
+                            continue_request_unobserved(inner, request);
+                        }
+                    }
+                    if kind != "error" {
+                        if let Some(intercept) = frame["result"]["intercept"]
+                            .as_str()
+                            .filter(|id| !id.is_empty())
+                        {
+                            if let Some(owner) = lease.upgrade() {
+                                *owner.id.lock().unwrap_or_else(|e| e.into_inner()) =
+                                    Some(intercept.to_owned());
+                                entries.insert(
+                                    id,
+                                    InterceptEntry::Pending {
+                                        lease,
+                                        context,
+                                        frames,
+                                        blocked,
+                                        overflow,
+                                    },
+                                );
+                                live_lease = Some(owner);
+                            } else {
+                                for request in blocked {
+                                    continue_request_unobserved(inner, &request);
+                                }
+                                remove_intercept_unobserved(inner, &mut entries, intercept);
+                            }
+                        }
+                    }
+                }
+                Some(InterceptEntry::Removing { intercept, .. }) if kind == "error" => {
+                    entries.insert(
+                        id,
+                        InterceptEntry::Removing {
+                            intercept,
+                            failed: true,
+                        },
+                    );
+                }
+                _ => {}
+            }
+        }
+        drop(live_lease);
         let sender = inner
             .pending
             .lock()
@@ -321,6 +618,11 @@ fn fail_all(inner: &Arc<Inner>, reason: &str) {
         captures.disconnect(reason);
     }
     inner.closed.cancel_with_reason(reason);
+    inner
+        .intercepts
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clear();
     let senders = inner
         .pending
         .lock()
@@ -388,6 +690,295 @@ pub fn bytes_to_string(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn intercept_fixture() -> (BidiConnection, mpsc::UnboundedReceiver<Outbound>) {
+        let (tx, outgoing) = mpsc::unbounded_channel();
+        (
+            BidiConnection {
+                inner: Arc::new(Inner {
+                    closed: crate::CancellationToken::new(),
+                    user_context_preloads: AtomicBool::new(false),
+                    lifecycle_events: AtomicU8::new(0),
+                    tx,
+                    pending: Mutex::new(HashMap::new()),
+                    intercepts: Mutex::new(HashMap::new()),
+                    events: broadcast::channel(4).0,
+                    popup_events: broadcast::channel(4).0,
+                    popup_captures: Mutex::new(None),
+                    next_id: AtomicU64::new(1),
+                }),
+            },
+            outgoing,
+        )
+    }
+    fn outgoing_frame(outgoing: &mut mpsc::UnboundedReceiver<Outbound>) -> Value {
+        let Outbound::Text(text) = outgoing.try_recv().expect("queued native command") else {
+            panic!("unexpected close")
+        };
+        serde_json::from_str(&text).unwrap()
+    }
+    fn response(connection: &BidiConnection, command: &Value, result: Value) {
+        handle_frame(
+            &connection.inner,
+            &json!({"type":"success","id":command["id"],"result":result}).to_string(),
+        );
+    }
+    fn blocked(connection: &BidiConnection, context: &str, intercept: &str, request: &str) {
+        handle_frame(&connection.inner, &json!({"type":"event","method":"network.beforeRequestSent","params":{"context":context,"isBlocked":true,"intercepts":[intercept],"request":{"request":request}}}).to_string());
+    }
+
+    #[tokio::test]
+    async fn cancelled_intercept_releases_late_id_and_already_blocked_requests() {
+        let (connection, mut outgoing) = intercept_fixture();
+        let frames = Arc::new(Mutex::new(crate::lifecycle_events::FrameEvents::default()));
+        frames.lock().unwrap().seed_bidi_tree(
+            "page",
+            &json!([{"context":"page","children":[{"context":"child"}]}]),
+        );
+        let mut setup = Box::pin(connection.add_intercept(
+            json!({"contexts":["page"]}),
+            Duration::ZERO,
+            Arc::downgrade(&frames),
+        ));
+        assert!(futures::poll!(&mut setup).is_pending());
+        let command = outgoing_frame(&mut outgoing);
+        blocked(&connection, "child", "late", "already-observed");
+        assert!(outgoing.try_recv().is_err());
+        drop(setup);
+        assert_eq!(
+            outgoing_frame(&mut outgoing)["params"]["request"],
+            "already-observed"
+        );
+        assert!(connection.inner.pending.lock().unwrap().is_empty());
+        blocked(&connection, "other", "late", "unrelated");
+        assert!(outgoing.try_recv().is_err());
+        blocked(&connection, "page", "late", "before-reply");
+        let resumed = outgoing_frame(&mut outgoing);
+        assert_eq!(resumed["method"], "network.continueRequest");
+        assert_eq!(resumed["params"]["request"], "before-reply");
+        blocked(&connection, "child", "late", "child-before-reply");
+        assert_eq!(
+            outgoing_frame(&mut outgoing)["params"]["request"],
+            "child-before-reply"
+        );
+        response(&connection, &command, json!({"intercept":"late"}));
+        let removal = outgoing_frame(&mut outgoing);
+        assert_eq!(removal["method"], "network.removeIntercept");
+        assert_eq!(removal["params"]["intercept"], "late");
+        // Intercept IDs also correlate descendant-context requests after the ID arrives.
+        blocked(&connection, "child", "late", "after-reply");
+        assert_eq!(
+            outgoing_frame(&mut outgoing)["params"]["request"],
+            "after-reply"
+        );
+        response(&connection, &removal, json!({}));
+        assert!(connection.inner.intercepts.lock().unwrap().is_empty());
+        assert!(connection.is_open());
+    }
+
+    #[tokio::test]
+    async fn delivered_intercept_response_still_has_an_owner_until_consumed() {
+        let (connection, mut outgoing) = intercept_fixture();
+        let mut setup = Box::pin(connection.add_intercept(
+            json!({"contexts":["page"]}),
+            Duration::ZERO,
+            Default::default(),
+        ));
+        assert!(futures::poll!(&mut setup).is_pending());
+        let command = outgoing_frame(&mut outgoing);
+        response(&connection, &command, json!({"intercept":"delivered"}));
+        assert_eq!(connection.inner.intercepts.lock().unwrap().len(), 1);
+        drop(setup);
+        let removal = outgoing_frame(&mut outgoing);
+        assert_eq!(removal["params"]["intercept"], "delivered");
+        response(&connection, &removal, json!({}));
+        assert!(connection.inner.intercepts.lock().unwrap().is_empty());
+
+        let mut setup = Box::pin(connection.add_intercept(
+            json!({"contexts":["page"]}),
+            Duration::ZERO,
+            Default::default(),
+        ));
+        assert!(futures::poll!(&mut setup).is_pending());
+        let command = outgoing_frame(&mut outgoing);
+        response(&connection, &command, json!({"intercept":"committed"}));
+        assert_eq!(setup.await.unwrap(), "committed");
+        assert!(connection.inner.intercepts.lock().unwrap().is_empty());
+        assert!(outgoing.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn disconnect_after_intercept_delivery_does_not_recreate_cleanup_metadata() {
+        let (connection, mut outgoing) = intercept_fixture();
+        let mut setup = Box::pin(connection.add_intercept(
+            json!({"contexts":["page"]}),
+            Duration::ZERO,
+            Default::default(),
+        ));
+        assert!(futures::poll!(&mut setup).is_pending());
+        let command = outgoing_frame(&mut outgoing);
+        response(&connection, &command, json!({"intercept":"disconnected"}));
+        fail_all(&connection.inner, "fixture disconnected after delivery");
+        assert!(matches!(setup.await, Err(E2eError::Disconnected(_))));
+        assert!(connection.inner.intercepts.lock().unwrap().is_empty());
+        assert!(outgoing.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn intercept_admission_stays_bounded_until_native_removal_acknowledgement() {
+        let (connection, mut outgoing) = intercept_fixture();
+        let mut commands = Vec::new();
+        for index in 0..256 {
+            let mut setup = Box::pin(connection.add_intercept(
+                json!({"contexts":[format!("page-{index}")]}),
+                Duration::ZERO,
+                Default::default(),
+            ));
+            assert!(futures::poll!(&mut setup).is_pending());
+            commands.push(outgoing_frame(&mut outgoing));
+            drop(setup);
+        }
+        assert!(matches!(
+            connection
+                .add_intercept(
+                    json!({"contexts":["page"]}),
+                    Duration::ZERO,
+                    Default::default()
+                )
+                .await,
+            Err(E2eError::Config(_))
+        ));
+        assert!(outgoing.try_recv().is_err());
+        response(&connection, &commands[0], json!({"intercept":"retiring"}));
+        let removal = outgoing_frame(&mut outgoing);
+        assert_eq!(connection.inner.intercepts.lock().unwrap().len(), 256);
+        assert!(matches!(
+            connection
+                .add_intercept(
+                    json!({"contexts":["page"]}),
+                    Duration::ZERO,
+                    Default::default()
+                )
+                .await,
+            Err(E2eError::Config(_))
+        ));
+        response(&connection, &removal, json!({}));
+        assert_eq!(connection.inner.intercepts.lock().unwrap().len(), 255);
+        fail_all(&connection.inner, "fixture disconnected");
+        assert!(connection.inner.intercepts.lock().unwrap().is_empty());
+        for command in commands.iter().skip(1) {
+            response(&connection, command, json!({"intercept":"obsolete"}));
+        }
+        assert!(outgoing.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn blocked_startup_overflow_fails_loudly_and_releases_all_observed_requests() {
+        let (connection, mut outgoing) = intercept_fixture();
+        let mut setup = Box::pin(connection.add_intercept(
+            json!({"contexts":["page"]}),
+            Duration::ZERO,
+            Default::default(),
+        ));
+        assert!(futures::poll!(&mut setup).is_pending());
+        let command = outgoing_frame(&mut outgoing);
+        for index in 0..256 {
+            blocked(&connection, "page", "overflow", &format!("request-{index}"));
+        }
+        assert!(outgoing.try_recv().is_err());
+        blocked(&connection, "page", "overflow", "request-256");
+        assert!(
+            matches!(setup.await, Err(E2eError::Config(message)) if message.contains("256 blocked requests"))
+        );
+        let mut released = std::collections::HashSet::new();
+        for _ in 0..257 {
+            let continued = outgoing_frame(&mut outgoing);
+            assert_eq!(continued["method"], "network.continueRequest");
+            assert!(released.insert(continued["params"]["request"].as_str().unwrap().to_owned()));
+        }
+        assert!(outgoing.try_recv().is_err());
+        assert!(
+            matches!(connection.add_intercept(json!({"contexts":["page"]}), Duration::ZERO, Default::default()).await, Err(E2eError::Config(message)) if message.contains("still awaiting"))
+        );
+        response(&connection, &command, json!({"intercept":"overflow"}));
+        let removal = outgoing_frame(&mut outgoing);
+        response(&connection, &removal, json!({}));
+        assert!(connection.inner.intercepts.lock().unwrap().is_empty());
+        let mut retry = Box::pin(connection.add_intercept(
+            json!({"contexts":["page"]}),
+            Duration::ZERO,
+            Default::default(),
+        ));
+        assert!(futures::poll!(&mut retry).is_pending());
+        let command = outgoing_frame(&mut outgoing);
+        response(&connection, &command, json!({"intercept":"retried"}));
+        assert_eq!(retry.await.unwrap(), "retried");
+        assert!(outgoing.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn rejected_cleanup_stays_visible_and_releases_blocked_requests() {
+        let (connection, mut outgoing) = intercept_fixture();
+        let mut setup = Box::pin(connection.add_intercept(
+            json!({"contexts":["page"]}),
+            Duration::ZERO,
+            Default::default(),
+        ));
+        assert!(futures::poll!(&mut setup).is_pending());
+        let command = outgoing_frame(&mut outgoing);
+        drop(setup);
+        response(&connection, &command, json!({"intercept":"failed-removal"}));
+        let removal = outgoing_frame(&mut outgoing);
+        handle_frame(&connection.inner, &json!({"type":"error","id":removal["id"],"error":"unknown error","message":"fixture refused cleanup"}).to_string());
+        assert_eq!(connection.inner.intercepts.lock().unwrap().len(), 1);
+        assert!(
+            matches!(connection.add_intercept(json!({"contexts":["page"]}), Duration::ZERO, Default::default()).await, Err(E2eError::Config(message)) if message.contains("cleanup failed"))
+        );
+        blocked(
+            &connection,
+            "child",
+            "failed-removal",
+            "recover-after-error",
+        );
+        assert_eq!(
+            outgoing_frame(&mut outgoing)["params"]["request"],
+            "recover-after-error"
+        );
+        assert!(outgoing.try_recv().is_err());
+        fail_all(&connection.inner, "fixture disconnected");
+        assert!(connection.inner.intercepts.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn invalid_intercept_reply_and_timeout_preserve_explicit_outcomes() {
+        let (connection, mut outgoing) = intercept_fixture();
+        let mut setup = Box::pin(connection.add_intercept(
+            json!({"contexts":["page"]}),
+            Duration::ZERO,
+            Default::default(),
+        ));
+        assert!(futures::poll!(&mut setup).is_pending());
+        let command = outgoing_frame(&mut outgoing);
+        response(&connection, &command, json!({"intercept":""}));
+        assert!(matches!(setup.await, Err(E2eError::Config(_))));
+        assert!(connection.inner.intercepts.lock().unwrap().is_empty());
+        assert!(matches!(
+            connection
+                .add_intercept(
+                    json!({"contexts":["page"]}),
+                    Duration::from_millis(1),
+                    Default::default()
+                )
+                .await,
+            Err(E2eError::Timeout { .. })
+        ));
+        let command = outgoing_frame(&mut outgoing);
+        response(&connection, &command, json!({"intercept":"timed-out"}));
+        let removal = outgoing_frame(&mut outgoing);
+        assert_eq!(removal["params"]["intercept"], "timed-out");
+        response(&connection, &removal, json!({}));
+        assert!(connection.inner.intercepts.lock().unwrap().is_empty());
+    }
+
     #[tokio::test]
     async fn zero_timeout_waits_for_reply_and_cancellation_reclaims_pending_call() {
         let (events, _) = broadcast::channel(4);
@@ -399,6 +990,7 @@ mod tests {
             tx,
             popup_captures: Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
+            intercepts: Mutex::new(HashMap::new()),
             events,
             popup_events: broadcast::channel(256).0,
             next_id: AtomicU64::new(1),

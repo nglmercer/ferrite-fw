@@ -270,6 +270,18 @@ impl CdpConnection {
             .await
     }
 
+    // Cleanup commands use the existing ordered writer without creating pending
+    // response owners or a task that can outlive its page.
+    pub(crate) fn enqueue_cleanup(&self, session: &str, method: &str, params: Value) {
+        if self.inner.closed.is_cancelled() {
+            return;
+        }
+        let id = self.inner.next_id.fetch_add(1, Ordering::SeqCst);
+        let frame =
+            serde_json::json!({"id":id,"sessionId":session,"method":method,"params":params});
+        let _ = self.inner.tx.send(Outbound::Text(frame.to_string()));
+    }
+
     pub(crate) fn forget_session(&self, session: &str) {
         self.inner
             .sessions

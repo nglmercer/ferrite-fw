@@ -797,6 +797,35 @@ struct FetchAuthState {
     auth_task: Option<tokio::task::AbortHandle>,
 }
 
+// Construct before the first native await; failed or dropped startup must not
+// leave Fetch enabled without a request pump. The ordered writer runs cleanup
+// after the startup command, even if its response arrives after cancellation.
+struct FetchRoutingStartup {
+    driver: CdpDriver,
+    committed: bool,
+}
+impl Drop for FetchRoutingStartup {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        let mut state = self
+            .driver
+            .fetch_auth
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        state.routing_patterns = None;
+        self.driver
+            .cdp
+            .enqueue_cleanup(&self.driver.session, "Fetch.disable", Value::Null);
+        if let Some(params) = fetch_enable_params(None, state.creds.is_some()) {
+            self.driver
+                .cdp
+                .enqueue_cleanup(&self.driver.session, "Fetch.enable", params);
+        }
+    }
+}
+
 /// Merged `Fetch.enable` params (`None` = `Fetch.disable`).
 ///
 /// Auth-only mode intercepts requests as required by CDP; the auth pump
@@ -3097,6 +3126,10 @@ impl CdpDriver {
         slot: std::sync::Weak<crate::routing::PumpSlot>,
     ) -> E2eResult<crate::routing::RoutePump> {
         let mut events = self.cdp.subscribe();
+        let mut startup = FetchRoutingStartup {
+            driver: self.clone(),
+            committed: false,
+        };
         if let Ok(mut shared) = self.fetch_auth.lock() {
             shared.routing_patterns = Some(vec![
                 serde_json::json!({ "urlPattern": "*" }),
@@ -3377,6 +3410,7 @@ impl CdpDriver {
             runtime.clear();
             let _ = tokio::time::timeout(Duration::from_millis(750), driver.stop_routing()).await;
         });
+        startup.committed = true;
         Ok(crate::routing::RoutePump::new(
             handle.abort_handle(),
             stopped,
@@ -4882,21 +4916,19 @@ impl BidiDriver {
         slot: std::sync::Weak<crate::routing::PumpSlot>,
     ) -> E2eResult<crate::routing::RoutePump> {
         let mut events = self.bidi.subscribe();
-        let added = self
+        let intercept = self
             .bidi
-            .call(
-                "network.addIntercept",
+            .add_intercept(
                 serde_json::json!({
                     "phases": ["beforeRequestSent"],
                     "contexts": [self.context.clone()],
                     "urlPatterns": [{ "type": "pattern" }],
                 }),
                 self.timeout(),
+                Arc::downgrade(&self.sink.frame_events),
             )
             .await?;
-        if let Some(intercept) = added.get("intercept").and_then(Value::as_str) {
-            *self.intercept.lock().unwrap_or_else(|e| e.into_inner()) = Some(intercept.to_string());
-        }
+        *self.intercept.lock().unwrap_or_else(|e| e.into_inner()) = Some(intercept);
         let context = self.context.clone();
         let bidi = self.bidi.clone();
         let sink = self.sink.clone();
@@ -6445,6 +6477,139 @@ mod initialization_tests {
     use super::*;
     use futures::{SinkExt, StreamExt};
     use serde_json::json;
+
+    async fn interrupted_fetch_startup(auth: bool, reject: bool) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (observed, mut requests) = tokio::sync::mpsc::unbounded_channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let mut late = None;
+            while let Some(Ok(message)) = socket.next().await {
+                let tokio_tungstenite::tungstenite::Message::Text(text) = message else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                if request["method"]
+                    .as_str()
+                    .is_some_and(|method| method.starts_with("Fetch."))
+                {
+                    observed.send(request.clone()).unwrap();
+                }
+                let startup = request["method"] == "Fetch.enable"
+                    && request["params"]["patterns"]
+                        .as_array()
+                        .is_some_and(|patterns| patterns.len() == 2);
+                if startup && !reject {
+                    late = Some(request);
+                    continue;
+                }
+                if request["method"] == "Fetch.disable" {
+                    if let Some(original) = late.take() {
+                        // Deliver enable's ACK after cancellation; cleanup is still ordered after it.
+                        socket
+                            .send(tokio_tungstenite::tungstenite::Message::Text(
+                                json!({"id":original["id"],"result":{}}).to_string().into(),
+                            ))
+                            .await
+                            .unwrap();
+                    }
+                }
+                let reply = if startup {
+                    json!({"id":request["id"],"error":{"code":-1,"message":"setup refused"}})
+                } else {
+                    let result = if request["method"] == "Page.getFrameTree" {
+                        json!({"frameTree":{"frame":{"id":"root","url":"about:blank","loaderId":"document"}}})
+                    } else {
+                        json!({})
+                    };
+                    json!({"id":request["id"],"result":result})
+                };
+                socket
+                    .send(tokio_tungstenite::tungstenite::Message::Text(
+                        reply.to_string().into(),
+                    ))
+                    .await
+                    .unwrap();
+            }
+        });
+        let connection = CdpConnection::connect(&format!("ws://{address}"))
+            .await
+            .unwrap();
+        let driver = CdpDriver::spawn(
+            connection.clone(),
+            "session".into(),
+            "page".into(),
+            Duration::ZERO,
+            ConsoleSink::new(),
+            None,
+        )
+        .await
+        .unwrap();
+        if auth {
+            driver.fetch_auth.lock().unwrap().creds = Some(("user".into(), "password".into()));
+        }
+        let owned = driver.clone();
+        let setup = tokio::spawn(async move {
+            owned
+                .start_routing(
+                    Arc::new(crate::routing::RouteRuntime::default()),
+                    Default::default(),
+                )
+                .await
+        });
+        let enabled = tokio::time::timeout(Duration::from_secs(2), requests.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(enabled["method"], "Fetch.enable");
+        if reject {
+            assert!(matches!(setup.await.unwrap(), Err(E2eError::Cdp { .. })));
+        } else {
+            setup.abort();
+            assert!(matches!(setup.await, Err(error) if error.is_cancelled()));
+        }
+        let disabled = tokio::time::timeout(Duration::from_secs(2), requests.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(disabled["method"], "Fetch.disable");
+        assert_eq!(disabled["sessionId"], "session");
+        assert!(driver.fetch_auth.lock().unwrap().routing_patterns.is_none());
+        if auth {
+            let restored = tokio::time::timeout(Duration::from_secs(2), requests.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(restored["method"], "Fetch.enable");
+            assert_eq!(restored["params"], fetch_enable_params(None, true).unwrap());
+            assert!(driver.fetch_auth.lock().unwrap().creds.is_some());
+        }
+        connection
+            .call(
+                None,
+                "test.transportAlive",
+                json!({}),
+                Duration::from_secs(1),
+            )
+            .await
+            .unwrap();
+        assert!(requests.try_recv().is_err());
+        assert!(connection.is_open());
+        connection.close();
+        server.abort();
+    }
+    #[tokio::test]
+    async fn dropped_fetch_startup_disables_interception_and_preserves_auth_profile() {
+        interrupted_fetch_startup(false, false).await;
+        interrupted_fetch_startup(true, false).await;
+    }
+    #[tokio::test]
+    async fn rejected_fetch_startup_disables_interception_and_preserves_auth_profile() {
+        interrupted_fetch_startup(false, true).await;
+        interrupted_fetch_startup(true, true).await;
+    }
 
     #[tokio::test]
     async fn dropping_page_initialization_releases_its_listener_without_closing_transport() {

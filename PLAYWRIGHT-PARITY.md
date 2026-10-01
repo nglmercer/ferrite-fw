@@ -2887,3 +2887,43 @@ native groups (`route_lifecycle` and `har_options`), and four doctests. Strict
 Clippy and formatting passed. Native interception startup cancellation,
 declarative rule replacement rollback, and the complete integration replay
 remain G04 work; this does not promise atomic native installation.
+
+
+## G04 audit progress — Abandoned native interception startup
+
+Chromium startup now owns a Fetch guard before its native await. Failed or
+dropped startup clears its routing profile and queues Fetch disable through
+the existing ordered transport writer; an existing auth profile is restored
+afterwards. Cleanup adds no detached task or unanswered response owner.
+Protocol fixtures cover dropped and rejected startup, late enable responses,
+command order, auth preservation and continued transport use.
+
+Firefox intercept startup now gives the transport reader ownership of each
+returned ID before waking its caller. A weak lease handles cancellation before
+the reply or after response delivery, queues removal of abandoned IDs, and
+validates successful IDs. Up to 256 outstanding installations/removals remain
+tracked until a response or transport loss, including delivered but unconsumed
+responses. A new registration for the same context cannot overtake an
+unanswered startup. The lease and frame observer retain no Page/context owner.
+
+Startup records up to 256 blocked request IDs for its root and already observed
+descendants. Dropping startup continues those requests; ingress continues later
+abandoned requests, using native intercept IDs during the removal window.
+Overflow fails explicitly and releases observed requests, rather than retaining
+an unbounded buffer. Removal rejection remains visible, keeps request recovery
+active, and rejects new installation until reconnect. Disconnect clears pending
+metadata and cannot recreate cleanup entries from a delivered response. This
+request release is required because [BiDi intercept removal](https://www.w3.org/TR/webdriver-bidi/#command-network-removeIntercept)
+does not itself unblock requests already intercepted.
+
+The native regression drops page and context registration at the first pending
+response on both engines, checks callback ownership release, requires a real
+network request to finish, and then installs and exercises a new handler.
+Scoped verification passed 289 checks: 277 units (nine new regressions), eight
+mandatory two-engine native groups (`route_lifecycle` and `har_options`), and
+four doctests. Strict Clippy and formatting passed.
+
+G04 remains open. Cleanup acknowledgement failures and newly created descendant
+observation races still need the wider resource/source-loss audit; declarative
+rule replacement rollback and the complete integration replay are also pending.
+Queued Chromium cleanup is not a claim of confirmed native disposal.

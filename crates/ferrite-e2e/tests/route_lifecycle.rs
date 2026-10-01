@@ -651,3 +651,66 @@ async fn native_route_runner_retries_context_close_and_disconnect() {
     }
     stop.abort();
 }
+
+#[tokio::test]
+async fn native_dropped_route_startup_releases_callbacks_requests_and_allows_retry() {
+    let (base, stop) = fixture().await;
+    for kind in [BrowserKind::Chromium, BrowserKind::Firefox] {
+        let Some(browser) = launch(kind, &base).await else {
+            continue;
+        };
+        for context_registration in [false, true] {
+            let context = browser
+                .new_context(ContextOptions::default())
+                .await
+                .unwrap();
+            let mut page = context.new_page().await.unwrap();
+            page.goto("/").await.unwrap();
+            page.set_timeout(Duration::from_secs(3));
+            let witness = Arc::new(());
+            let weak = Arc::downgrade(&witness);
+            let callback = move |_| {
+                let owned = witness.clone();
+                async move {
+                    drop(owned);
+                    Ok(RouteAction::fulfill(
+                        200,
+                        b"abandoned".to_vec(),
+                        "text/plain",
+                    ))
+                }
+            };
+            let mut setup: std::pin::Pin<
+                Box<dyn std::future::Future<Output = E2eResult<()>> + '_>,
+            > = if context_registration {
+                Box::pin(context.route_with_handler("**/abandoned", callback))
+            } else {
+                Box::pin(page.route_with_handler("**/abandoned", callback))
+            };
+            // The uncontended registration reaches its first native response await.
+            // Drop it before polling that response, without cancelling the live page.
+            assert!(futures::poll!(&mut setup).is_pending());
+            drop(setup);
+            assert!(
+                weak.upgrade().is_none(),
+                "abandoned callback must be released"
+            );
+            start(&page, "/abandoned").await;
+            assert_eq!(
+                result(&page).await,
+                "network",
+                "abandoned interception must not leave the request paused"
+            );
+            page.route_with_handler("**/installed", |_| async {
+                Ok(RouteAction::fulfill(200, b"retried".to_vec(), "text/plain"))
+            })
+            .await
+            .unwrap();
+            start(&page, "/installed").await;
+            assert_eq!(result(&page).await, "retried");
+            context.close().await.unwrap();
+        }
+        browser.close().await.unwrap();
+    }
+    stop.abort();
+}

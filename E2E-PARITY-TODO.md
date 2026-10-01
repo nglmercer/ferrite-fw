@@ -596,6 +596,15 @@ Work in [the audit generator](scripts/playwright-parity/build_matrix.py),
   268 units, seven mandatory two-engine native groups and four doctests (279
   scoped checks), strict Clippy/formatting. Native startup cancellation and
   declarative replacement rollback remain open.
+  Further progress: abandoned Chromium startup queues ordered Fetch cleanup and
+  preserves auth; Firefox owns late intercept IDs at ingress, bounds pending
+  installation/removal metadata, and releases observed blocked requests on drop
+  or overflow. Page/context native retry and callback release are verified.
+  [Evidence](PLAYWRIGHT-PARITY.md#g04-audit-progress--abandoned-native-interception-startup):
+  277 units, eight mandatory two-engine native groups and four doctests (289
+  scoped checks), strict Clippy/formatting. Cleanup ACK faults, newly created
+  descendant observation races, declarative rollback and the full replay remain
+  under audit.
 
 
 
