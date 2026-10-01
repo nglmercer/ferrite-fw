@@ -3317,3 +3317,28 @@ The preceding complete replay also exited successfully: 302 units, 282
 integration tests across 51 targets and four doctests, 588 checks without failures,
 ignored or filtered cases. It predates this repair and cannot close G04. The new
 303-unit final-source complete build/replay and final audit remain required.
+
+## G04 complete — Final requirement audit and coherent replay
+
+Implementation checkpoint `8f9d6a4` passed the complete coherent-source replay:
+**303 units + 282 integrations across all 51 targets + four doctests = 589 E2E
+checks**. Terminal target counts reconcile exactly with Cargo metadata and the
+final-source test-list inventory. Nothing failed, was ignored or was filtered.
+Chrome Headless Shell 153.0.8010.12 and Firefox 157.0 were installed and mandatory
+for shared/capability cases. The final-source focused six-target gate separately
+passed 30 groups on full Chrome/Firefox; those groups are not counted twice.
+
+The final CLI/configuration command passed 30 tests and one doctest, yielding
+**620 combined checks**. Three-package all-target strict Clippy, formatting,
+pinned matrix generation and evidence links/source anchors passed. The matrix
+remains 73 classes/1,018 members, Partial650/Missing312/Equivalent15/Idiomatic41.
+The [completion audit](E2E-PARITY-AUDIT.md) maps all 51 requirements to current
+source and actual regression evidence, including public examples, compatibility,
+capability errors and the recorded visual checks.
+
+All 51 backlog tasks are now checked. The deferred substantial projects remain
+outside scope. Native cleanup failure is reported rather than treated as proven
+release; disposal is the recovery boundary for lost observation/unconfirmed
+cleanup. No universal force-cancellation of already-issued native commands,
+JavaScript side effects or opaque native/codec/OS work is claimed. Historical
+partial checkpoints above retain their original scopes and counts.

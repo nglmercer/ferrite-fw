@@ -1,16 +1,15 @@
 # Ferrite E2E implementation TODO
 
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
-Session plan refreshed: 2026-10-01, at queued-pause cleanup checkpoint `93ad6e4`.
+Session completed: 2026-10-01, implementation checkpoint `8f9d6a4`.
 Expanded on request for a longer implementation session; B09/B10/B13/B14 and D01/D02 are verified.
 Uncommitted implementations are not counted complete.
 
-The initial G/A foundations are complete except for the final G04 audit. Follow
-the remaining-work index below through B/D improvements and supported C extensions.
-This backlog contains **51 tasks (50 complete, 1 remaining)**: four foundations,
+All foundations, core tasks, follow-ups, supported extensions and practical
+additions are complete. Historical checkpoints below retain their original gate scopes.
+This backlog contains **51 tasks (51 complete, 0 remaining)**: four foundations,
 16 core tasks, 19 follow-ups, six optional extensions and six practical additions.
-All A, B, C and D tasks are verified; continue with the G04 lifecycle audit
-and complete replay. The ordering
+All G, A, B, C and D tasks are verified by the final audit and complete replay. The ordering
 and effort assessments are recommendations based on the current source and
 parity audit.
 D01–D06 add bounded improvements found in the missing/partial member inventory;
@@ -23,12 +22,17 @@ substantially larger undertaking. The complete member inventory remains in
 limits remain in [PLAYWRIGHT-PARITY.md](PLAYWRIGHT-PARITY.md).
 
 The [completion evidence index](E2E-PARITY-AUDIT.md) maps all 51 requirements
-to current source and regressions. Its pending replay status is explicit.
+to current source, regression results and final completion gates.
 
 ## Recommended next implementation
 
-Start **G04 — Final lifecycle audit and complete integration replay**. C05 and
-C06 are verified; their scoped evidence is recorded below.
+The 51-task implementation session is complete. G04 passed the final requirement
+audit and coherent implementation-source replay: **589 E2E checks and 31 CLI/
+configuration checks**, 620 combined, with both installed browsers mandatory.
+No failed, ignored or filtered cases remain. Strict three-package Clippy,
+formatting, generated matrix and local evidence links passed. Deferred substantial
+projects remain outside this completed scope. The notes below are historical
+checkpoints; their earlier next-task recommendations do not reopen completed tasks.
 B10 is verified through `2c042e1`, with owned process-output drainage in
 `ade139b`. The complete phase passed **457 E2E and 28 CLI/configuration checks**,
 485 combined: 211 units, 242 integrations across all 38 targets and four doctests.
@@ -54,7 +58,7 @@ and per-channel comparison remain documented subsets rather than full upstream
 semantics. The matrix remains 73 classes/1,018 members: Partial635/Missing327/
 Equivalent15/Idiomatic41.
 
-**Current handoff:** B18 is complete in `310f248`. Opt-in
+**B18 checkpoint:** B18 is complete in `310f248`. Opt-in
 `AriaSnapshotOptions` and page/locator capture/assertion companions preserve
 legacy entry points. Positive role depth, rounded frame-local boxes, optional
 state, explicit visit/node/name budgets and safety-depth truncation are verified
@@ -141,8 +145,8 @@ there. G04 applies during every phase and closes after the final audit.
 
 | Order | Task | Implementation result | Dependency or capability gate |
 |---|---|---|---|
-| 1 | G04 | Final lifecycle, compatibility and resource-release audit | Evidence from every completed phase |
-Immediate delivery: **G04**. All A/B/C/D tasks are complete.
+| — | None | All 51 tasks complete | Final audit and complete regression evidence |
+No implementation task remains in this backlog.
 Supported C extensions remain available independently. G04 applies
 throughout and closes after the complete integration/lifecycle audit.
 
@@ -537,7 +541,7 @@ Work in [the audit generator](scripts/playwright-parity/build_matrix.py),
   rerun against the pinned version.
   Evidence: `5c2c7aa`; [pinned corpus](scripts/e2e-conformance/README.md) records actual Playwright 1.63.0 Chromium results and compares shared native Chromium/Firefox behavior.
 
-- [ ] **G04 — Apply lifecycle checks to every new API (M).** Reuse existing
+- [x] **G04 — Apply lifecycle checks to every new API (M).** Reuse existing
   operation budgets and cancellation rather than adding independent timers.
   Done when representative new waits/callbacks/streams handle zero timeout,
   enclosing deadlines, caller cancellation, disposal and retries, with dropped
@@ -589,6 +593,14 @@ Work in [the audit generator](scripts/playwright-parity/build_matrix.py),
   303 units, 30 mandatory two-engine groups, four doctests and three-package
   strict Clippy/formatting. The preceding 588-check complete replay passed;
   the complete replay after this repair and final audit remain required.
+  **Final completion:** `8f9d6a4` passed the coherent complete replay: 303 units,
+  all 282 integrations/all 51 targets and four doctests (589 E2E), plus 31 current
+  CLI/configuration checks. No failures, ignored or filtered cases. Three-package
+  strict Clippy/formatting, regenerated matrix and evidence links passed.
+  [Final audit](E2E-PARITY-AUDIT.md) identifies every requirement, supported native
+  subset and completion gate. Native cleanup failures remain explicit; lost
+  observation and unconfirmed cleanup require page/context disposal rather than
+  a fabricated native-success claim. Previous partial notes above are historical.
   Further progress: native listener guards expose terminal source loss to Page
   event, typed request/response and legacy network predicate waits, including
   zero-timeout probes on both transports. [Evidence](PLAYWRIGHT-PARITY.md#g04-audit-progress--native-listener-source-loss):
@@ -1550,7 +1562,7 @@ waiting for every future feature before starting independent work.
 | 5. Captures and reports | B09/B10/B18/B11/D03/D04 — complete | Preserve verified capture/stability/path/update and owned diagnostics; preserve bounded ARIA output and searchable reports; preserve frozen metadata and bounded slow summaries. |
 | 5a. Practical storage and diagnostics | D03/D04/D05/D06 — complete | Preserve retention/storage helpers; preserve run metadata/slow summaries; preserve bounded Chromium socket diagnostics. |
 | 6. Supported backend extensions | C01–C06 — complete | Preserve validated PDF options; extend captured bodies, coverage, HAR, emulation and scoped CDP sessions. Check capability before accepting each option; verify explicit errors on the other engine. |
-| 7. Final lifecycle and compatibility audit | G04 | Verify cancellation, zero/enclosing deadlines, retries, disposal and released resources across the additions, then run the complete regression and documentation gates. |
+| 7. Final lifecycle and compatibility audit | G04 — complete | Verify cancellation, zero/enclosing deadlines, retries, disposal and released resources across the additions, then run the complete regression and documentation gates. |
 
 Within a phase, prefer correctness and lifecycle work over convenience methods.
 Independent tasks may move earlier when their prerequisites are verified. A
@@ -1619,7 +1631,7 @@ The generator needs its pinned upstream documents; use its documented `--fetch`
 or `--upstream` option when the cache is absent. Changes to CLI/configuration
 also need formatting checks for the modified packages.
 
-Copyable request for the implementation session:
+Completed-session request (historical):
 
 > Finish G04 in E2E-PARITY-TODO.md using its completion criteria and final gates.
 > Preserve the implemented A/B/C/D features on the existing Chromium/Firefox

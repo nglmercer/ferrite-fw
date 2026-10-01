@@ -1,29 +1,44 @@
 # E2E parity completion evidence index
 
-Implementation checkpoint: abandoned Fetch cleanup receipt repair following `6502ff7`. This indexes every requirement in
+Verified implementation checkpoint: `8f9d6a4`. Final audit completed on 2026-10-01. This indexes every requirement in
 [E2E-PARITY-TODO.md](E2E-PARITY-TODO.md); its acceptance criteria remain authoritative.
-All 51 task IDs are represented. Evidence locations are not completion claims.
+All 51 task IDs are represented. Their acceptance criteria, engine exclusions,
+public exports/examples, compatibility notes and current regression evidence
+were reconciled before checking G04. No required task remains open.
 
-Cargo metadata identifies all 51 integration targets. The preceding complete
-replay passed 302 units, all 282 integration tests and four doctests: **588 checks**,
-with no failures, ignored or filtered cases. Its process exited successfully.
-It predates the Fetch cleanup receipt repair and is retained as checkpoint evidence.
+## Verified final gates
 
-The new final-source complete build and replay are **pending**. Current scoped
-evidence is 303 unit tests, 30 mandatory Chromium/Firefox native groups across
-six targets and four doctests. E2E/CLI/configuration strict Clippy and formatting
-passed. The separately recorded CLI/configuration gate passed 30 tests and one
-doctest; all 32 recorded reference JSON files identify Playwright 1.63.0.
-The expected new E2E inventory is 589 checks (303 units, 282 integrations, four
-doctests), pending reconciliation and terminal verification. This expected total
-is not a report of the pending replay's result.
+The coherent implementation-source command exited successfully:
+
+```bash
+cargo test -p ferrite-e2e --no-fail-fast -- --test-threads=1
+```
+
+It passed **303 unit tests, 282 integration tests across every one of the 51 Cargo
+targets, and four doctests: 589 E2E checks**. Each target's terminal count matches
+its final-source `--list` inventory. There were zero failed, ignored or filtered
+cases. Shared/capability tests required Chrome Headless Shell 153.0.8010.12 and
+Firefox 157.0 on Linux. The focused final-source HTTP/routing/callback/ownership/
+header gate separately passed 30 groups with full Chrome and Firefox mandatory.
+
+`cargo test -p ferrite-cli -p ferrite-config` passed 30 tests and one configuration
+doctest. The combined final inventory is **620 checks**, without counting the
+focused native groups twice. Three-package all-target strict Clippy and formatting
+passed on the same implementation source. Public examples and exports compile.
+The pinned matrix regenerates to 73 classes/1,018 members: Partial650, Missing312,
+Equivalent15, Idiomatic41. All 32 recorded reference JSON files identify Playwright
+1.63.0. Local documentation evidence links and source anchors were validated.
+
+No renderer/report layout changed during the final lifecycle increments; the
+recorded native HTML/PDF/raster inspections remain applicable. The final complete
+suite additionally checks report escaping, relocation and artifact links.
 
 ## Requirement evidence locations
 
 Regression links lead to actual assertions and their native capability policy.
-Existence or compilation alone does not prove passing behavior. The final replay
-must execute every current integration target, including those outside this
-feature index that protect earlier behavior.
+Existence or compilation alone does not prove passing behavior. The completed
+final replay executed every current integration target, including those outside
+this feature index that protect earlier behavior.
 
 | Task | Required deliverable | Implementation or artifact | Regression or generated evidence |
 |---|---|---|---|
@@ -79,7 +94,7 @@ feature index that protect earlier behavior.
 | D05 | Typed Web Storage enumeration/bulk helpers (S–M, both engines). | [page.rs](crates/ferrite-e2e/src/page.rs) | [web_storage.rs](crates/ferrite-e2e/tests/web_storage.rs) |
 | D06 | Chromium WebSocket diagnostic lifecycle (M; capability gated). | [websocket.rs](crates/ferrite-e2e/src/websocket.rs) | [websocket_diagnostics.rs](crates/ferrite-e2e/tests/websocket_diagnostics.rs) |
 
-## Cross-cutting completion gates
+## Cross-cutting requirements verified
 
 - Reconcile Cargo metadata with every integration target and terminal result;
   report failures, filtered cases and native browser absence explicitly.
@@ -102,3 +117,19 @@ feature index that protect earlier behavior.
 Deferred substantial projects listed in the TODO remain outside this goal.
 Completing this backlog does not claim equivalence for all 1,018 upstream members
 or add a WebKit backend.
+
+## Lifecycle audit conclusion
+
+The current tests and source establish caller/enclosing/zero deadlines, typed
+control errors, abandoned registration and native-command ownership, source-loss
+notifications, bounded histories/queues, callback release, confirmed native
+page/context disposal and retry isolation. The G04 checkpoint notes identify the
+specific regressions for popup lag/eviction, cached worlds, detached requests,
+redirect/pause identity, cleanup receipts and shared close budgets.
+
+A rejected or unconfirmed native cleanup remains an explicit error. Lost
+observation can require disposal of the affected page/context; failed cleanup
+is not recorded as proven native release. Already-issued protocol commands,
+user-created JavaScript effects and opaque native/codec/OS phases are not
+force-cancelled. These documented limits preserve the backlog's supported scope;
+they are not unchecked implementation tasks.
