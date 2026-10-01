@@ -549,27 +549,37 @@ async fn detached_frame_inflight_response_settles_and_keeps_original_identity() 
         let id = request.id().to_owned();
         assert_eq!(request.frame_id(), Some(child.id()));
         assert_eq!(request.completion(), RequestCompletion::Pending);
-        let (finished, detached, removed) = tokio::time::timeout(WAIT, async {
-            tokio::join!(
+        let (finished, detached, removed) = tokio::join!(
+            tokio::time::timeout(
+                WAIT,
                 response.finished_with_options(OperationOptions {
                     timeout: Some(Duration::ZERO),
-                    cancellation: None
-                }),
-                page.wait_for_event(PageEventKind::FrameDetached, WAIT),
+                    cancellation: None,
+                })
+            ),
+            page.wait_for_event(PageEventKind::FrameDetached, WAIT),
+            tokio::time::timeout(
+                WAIT,
                 page.evaluate_value("document.querySelector('iframe').remove(); true")
             )
-        })
-        .await
-        .expect("detached-frame in-flight completion must settle with disabled timeout");
+        );
+        eprintln!("detached request {}: finished={finished:?}, detached={detached:?}, removed={removed:?}, completion={:?}", browser.kind().name(), request.completion());
+        let finished = finished
+            .expect("detached-frame in-flight completion must settle with disabled timeout");
+        let removed = removed.expect("native iframe removal must settle");
         removed.unwrap();
         assert!(
             matches!(detached.unwrap(), PageEvent::FrameDetached(frame) if frame.frame_id == child.id())
         );
         assert!(
-            matches!(finished, Err(E2eError::Network { .. })),
-            "native detached request must report its failure: {finished:?}"
+            matches!(&finished, Err(E2eError::Network { .. }))
+                || matches!(&finished, Err(E2eError::Config(reason)) if reason.contains("detached before request completion")),
+            "native detached request must report failure or explicit loss of frame observation: {finished:?}"
         );
-        assert!(matches!(request.completion(), RequestCompletion::Failed(_)));
+        assert!(matches!(
+            request.completion(),
+            RequestCompletion::Failed(_) | RequestCompletion::Unavailable(_)
+        ));
         assert_eq!(request.id(), id);
         assert_eq!(request.frame_id(), Some(child.id()));
         assert!(request.frame().await.unwrap().is_none());

@@ -461,6 +461,36 @@ impl ConsoleSink {
             }
         };
         for event in events {
+            if let PageEvent::FrameDetached(frame) = &event {
+                // A process swap is not native frame destruction.
+                if !cdp || params["reason"] == "remove" {
+                    let requests = self
+                        .network_log
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .detach_frame(&frame.frame_id);
+                    for id in requests {
+                        self.observed_network
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .remove(&id);
+                        self.active_requests
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .remove(&id);
+                        if self
+                            .idle_requests
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .remove(&id)
+                            .is_some()
+                        {
+                            self.inflight.fetch_sub(1, Ordering::SeqCst);
+                        }
+                        self.network_activity.fetch_add(1, Ordering::SeqCst);
+                    }
+                }
+            }
             self.emit(event);
         }
     }
@@ -1267,9 +1297,23 @@ impl BidiDriver {
                         .as_str()
                         .is_some_and(|parent| sink.contains_frame(parent))
                 } else {
-                    event
-                        .context()
-                        .is_some_and(|id| id == context || sink.contains_frame(id))
+                    event.context().is_some_and(|id| {
+                        id == context
+                            || sink.contains_frame(id)
+                            || (matches!(
+                                event.method.as_str(),
+                                "network.responseStarted"
+                                    | "network.responseCompleted"
+                                    | "network.fetchError"
+                            ) && event.params["request"]["request"].as_str().is_some_and(
+                                |request| {
+                                    sink.network_log
+                                        .lock()
+                                        .unwrap_or_else(|e| e.into_inner())
+                                        .owns_request_frame(request, id)
+                                },
+                            ))
+                    })
                 };
                 if !belongs {
                     continue;
@@ -6348,6 +6392,12 @@ fn handle_cdp_event(event: &CdpEvent, sink: &ConsoleSink) {
     sink.observe_lifecycle(&event.method, &event.params, true);
     match event.method.as_str() {
         "Fetch.requestPaused" => {
+            // Only request-stage pauses identify a fulfillment's request hop.
+            if event.params.get("responseStatusCode").is_some()
+                || event.params.get("responseErrorReason").is_some()
+            {
+                return;
+            }
             if let (Some(pause_id), Some(native_id), Some(url)) = (
                 event.params["requestId"].as_str(),
                 event.params["networkId"].as_str(),
@@ -6356,7 +6406,12 @@ fn handle_cdp_event(event: &CdpEvent, sink: &ConsoleSink) {
                 sink.network_log
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .paused(pause_id, native_id, url);
+                    .paused_redirect(
+                        pause_id,
+                        native_id,
+                        url,
+                        event.params["redirectedRequestId"].as_str(),
+                    );
             }
         }
         "Page.frameNavigated" => {
@@ -7207,6 +7262,92 @@ mod network_lifecycle_tests {
             params,
         }
     }
+    #[test]
+    fn frame_destruction_settles_pending_observations_without_fabricating_failure_or_swap_loss() {
+        for (bidi, swap) in [(true, false), (false, false), (false, true)] {
+            let sink = ConsoleSink::new();
+            *sink.page_id.lock().unwrap() = Some("root".into());
+            sink.frame_events.lock().unwrap().seed_bidi_tree(
+                "root",
+                &serde_json::json!([{"context":"root","children":[{"context":"child"}]}]),
+            );
+            let mut events = sink.subscribe();
+            handle_cdp_event(
+                &cdp(
+                    "Network.requestWillBeSent",
+                    serde_json::json!({"requestId":"pending","frameId":"child","request":{"method":"GET","url":"http://host/stream"}}),
+                ),
+                &sink,
+            );
+            handle_cdp_event(
+                &cdp(
+                    "Network.responseReceived",
+                    serde_json::json!({"requestId":"pending","response":{"url":"http://host/stream","status":200}}),
+                ),
+                &sink,
+            );
+            let state = sink.network_log.lock().unwrap().states().pop().unwrap();
+            assert_eq!(sink.inflight.load(Ordering::SeqCst), 1);
+            if bidi {
+                handle_bidi_event(
+                    &BidiEvent {
+                        method: "browsingContext.contextDestroyed".into(),
+                        params: serde_json::json!({"context":"child"}),
+                    },
+                    &sink,
+                );
+            } else {
+                handle_cdp_event(
+                    &cdp(
+                        "Page.frameDetached",
+                        serde_json::json!({"frameId":"child","reason":if swap {"swap"} else {"remove"}}),
+                    ),
+                    &sink,
+                );
+            }
+            let snapshot = state.snapshot();
+            if swap {
+                assert_eq!(snapshot.completion, crate::RequestCompletion::Pending);
+                assert_eq!(sink.inflight.load(Ordering::SeqCst), 1);
+            } else {
+                assert!(
+                    matches!(snapshot.completion, crate::RequestCompletion::Unavailable(reason) if reason.contains("detached before request completion"))
+                );
+                assert_eq!(snapshot.frame_id.as_deref(), Some("child"));
+                assert_eq!(sink.inflight.load(Ordering::SeqCst), 0);
+                assert!(sink.active_requests.lock().unwrap().is_empty());
+                assert!(
+                    !std::iter::from_fn(|| events.try_recv().ok()).any(|event| matches!(
+                        event,
+                        PageEvent::RequestFinished(_) | PageEvent::RequestFailed { .. }
+                    ))
+                );
+            }
+            assert!(sink
+                .network_log
+                .lock()
+                .unwrap()
+                .owns_request_frame("pending", "child"));
+            assert!(!sink
+                .network_log
+                .lock()
+                .unwrap()
+                .owns_request_frame("pending", "unrelated"));
+            // A later actual protocol failure refines cached metadata even after detachment.
+            handle_cdp_event(
+                &cdp(
+                    "Network.loadingFailed",
+                    serde_json::json!({"requestId":"pending","errorText":"native abort","canceled":true}),
+                ),
+                &sink,
+            );
+            assert!(
+                matches!(state.snapshot().completion, crate::RequestCompletion::Failed(failure) if failure.error_text == "native abort")
+            );
+            assert_eq!(sink.inflight.load(Ordering::SeqCst), 0);
+        }
+    }
+
     #[test]
     fn document_replacement_excludes_old_idle_work_without_faking_completion() {
         let sink = ConsoleSink::new();

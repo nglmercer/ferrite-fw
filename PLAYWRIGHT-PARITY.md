@@ -3115,3 +3115,49 @@ links passed. This test-only increment retains the previously verified 294-unit
 implementation baseline; it is not the complete integration replay. The remaining G04 audit
 covers terminal interception cleanup, queued pause-release acknowledgements,
 native context disposal, redirect correlation and the complete 51-target replay.
+
+## G04 audit progress — Early redirect pause correlation
+
+Request-stage pause metadata now waits for its base request event when no matching
+unanswered hop is available. CDP's `redirectedRequestId` additionally prevents a
+new same-URL pause from binding to the prior hop before its redirect response
+arrives. Pending pause rows are correlated in arrival order, bounded by the
+existing observation count and metadata byte limits, and cleared on disposal.
+Response-stage CDP pauses do not replace request-hop fulfillment associations.
+
+The supplied-header regression now includes the early pause event, rather than
+only staging headers before the next base event. A new unit covers the first
+pause preceding its base event, a redirected pause preceding the old response,
+accepted duplicate-header metadata belonging only to the new hop, count bounds
+and disposal. Existing raw-header FIFO and native-acknowledgement regressions
+remain part of the unit gate. This fixes a concrete misassociation ordering; the
+historical intermittent native failure was not independently reproduced in the
+initial native replay.
+
+G04 remains open for terminal interception cleanup, queued pause-release
+acknowledgements, native context disposal and the complete 51-target audit/replay.
+
+The replay also exposed a Firefox detached-frame completion race: native frame
+destruction can precede a terminal network observation, leaving a disabled-timeout
+completion wait Pending. Confirmed native frame removal now marks only that
+frame's pending request observations unavailable, settles their body observation,
+and releases their idle-accounting rows. It does not invent a native failure or
+completion event. Chromium process swaps preserve pending observations.
+
+A native failure observed before detachment remains the original failure. Later
+native response/completion events can refine retained metadata when their native
+request and frame IDs match an owned pending row, despite removal from the live
+frame registry. The native regression accepts only a real Network error or the
+explicit frame-detachment unavailability reason, records each waiter separately,
+checks preserved identity and usable parent, and retains the four-second watchdog.
+The deterministic lifecycle unit covers omitted terminal events, both native
+frame-removal paths, process swaps, idle accounting, no fabricated page event,
+unrelated frame rejection, and late actual failure updates.
+
+Scoped verification for these corrections passed 306 checks: 296 units, six
+mandatory two-engine native groups across `header_forwarding` and
+`network_metadata`, and four doctests. Strict Clippy, formatting and all 869 local
+documentation links passed. Native diagnostics were removed from the driver.
+The historical detached-request test failures remain recorded in the audit logs;
+the final native replay passes with explicit frame-lifecycle settlement. This is
+not the complete 51-target integration replay.

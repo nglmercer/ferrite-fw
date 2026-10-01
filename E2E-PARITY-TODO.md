@@ -655,6 +655,20 @@ Work in [the audit generator](scripts/playwright-parity/build_matrix.py),
   Chromium and Firefox with disabled completion timeout, preserved identity,
   unavailable live-frame lookup, repeated terminal lookup and usable parent.
   [Evidence](PLAYWRIGHT-PARITY.md#g04-audit-progress--detached-frame-in-flight-requests).
+  Further progress: early request-stage pause rows are staged until their base
+  event, and CDP redirectedRequestId prevents same-URL fulfillment metadata from
+  attaching to the older hop before its redirect response. FIFO staging retains
+  the existing count/byte bounds and clears on disposal.
+  [Evidence](PLAYWRIGHT-PARITY.md#g04-audit-progress--early-redirect-pause-correlation).
+  Further replay reproduced a Firefox frame-destruction/completion race. Native
+  frame removal now settles otherwise pending request/body observation as
+  unavailable and releases idle rows; native errors remain errors, later native
+  events can refine cached metadata, and Chromium process swaps retain waits.
+  No native request failure/completion event is fabricated by detachment.
+  Verified 296 units, six mandatory two-engine native groups and four doctests
+  (306 scoped checks), strict Clippy/formatting and documentation links. Terminal
+  interception cleanup, queued pause-release acknowledgements, native context
+  disposal and the complete requirement audit/replay remain open.
 
 
 

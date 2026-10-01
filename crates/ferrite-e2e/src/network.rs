@@ -310,6 +310,7 @@ pub(crate) struct NetworkLog {
     extra: HashMap<String, ExtraHeaders>,
     pending_route_headers: HashMap<String, PendingRouteHeaders>,
     paused: HashMap<String, Weak<RequestState>>,
+    pending_pauses: VecDeque<(String, String, String)>,
     raw_headers_enabled: bool,
     events: tokio::sync::broadcast::Sender<NetworkNotice>,
     body_generation: Option<u64>,
@@ -326,6 +327,7 @@ impl Default for NetworkLog {
             extra: HashMap::new(),
             pending_route_headers: HashMap::new(),
             paused: HashMap::new(),
+            pending_pauses: VecDeque::new(),
             raw_headers_enabled: true,
             events: tokio::sync::broadcast::channel(256).0,
         }
@@ -499,6 +501,14 @@ impl NetworkLog {
                 .request_headers_complete = Some(false);
         }
         self.current.insert(native_id.clone(), state.clone());
+        if let Some(index) = self
+            .pending_pauses
+            .iter()
+            .position(|(_, id, url)| id == &native_id && url == &state.url)
+        {
+            let (pause, _, _) = self.pending_pauses.remove(index).unwrap();
+            self.paused(&pause, &native_id, &state.url);
+        }
         self.latest.insert(native_id, Arc::downgrade(&state));
         self.recent.push_back(state.clone());
         self.report_state(&state, true);
@@ -642,13 +652,76 @@ impl NetworkLog {
             self.finish(id, None);
         }
     }
+    pub(crate) fn detach_frame(&mut self, frame: &str) -> Vec<String> {
+        let mut unavailable = Vec::new();
+        for (id, state) in &self.current {
+            if state.details.frame_id.as_deref() == Some(frame)
+                && matches!(*state.completion.borrow(), RequestCompletion::Pending)
+            {
+                let reason = format!("native frame {frame} detached before request completion");
+                state
+                    .completion
+                    .send_replace(RequestCompletion::Unavailable(reason.clone()));
+                state.body.unavailable(&reason);
+                unavailable.push(id.clone());
+            }
+        }
+        unavailable
+    }
+    pub(crate) fn owns_request_frame(&self, id: &str, frame: &str) -> bool {
+        self.current
+            .get(id)
+            .is_some_and(|state| state.details.frame_id.as_deref() == Some(frame))
+    }
     pub(crate) fn paused(&mut self, pause_id: &str, native_id: &str, url: &str) {
-        let Some(state) = self
+        self.paused_redirect(pause_id, native_id, url, None);
+    }
+    pub(crate) fn paused_redirect(
+        &mut self,
+        pause_id: &str,
+        native_id: &str,
+        url: &str,
+        previous_pause: Option<&str>,
+    ) {
+        let previous = previous_pause
+            .and_then(|pause| self.paused.get(pause))
+            .and_then(Weak::upgrade);
+        let state = self
             .current
             .get(native_id)
-            .filter(|state| state.url == url)
-            .cloned()
-        else {
+            .filter(|state| {
+                state.url == url
+                    && previous
+                        .as_ref()
+                        .is_none_or(|previous| !Arc::ptr_eq(previous, state))
+                    && !state
+                        .data
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .received
+                    && matches!(*state.completion.borrow(), RequestCompletion::Pending)
+            })
+            .cloned();
+        let Some(state) = state else {
+            if !self
+                .pending_pauses
+                .iter()
+                .any(|(pause, _, _)| pause == pause_id)
+                && self.pending_pauses.len() < MAX_OBSERVATIONS
+                && pause_id.len() + native_id.len() + url.len() <= MAX_METADATA_TEXT
+                && self
+                    .pending_pauses
+                    .iter()
+                    .map(|(pause, id, url)| pause.len() + id.len() + url.len())
+                    .sum::<usize>()
+                    + pause_id.len()
+                    + native_id.len()
+                    + url.len()
+                    <= MAX_METADATA_HISTORY
+            {
+                self.pending_pauses
+                    .push_back((pause_id.into(), native_id.into(), url.into()));
+            }
             return;
         };
         if let Some(pending) = self.pending_route_headers.remove(pause_id) {
@@ -762,6 +835,7 @@ impl NetworkLog {
         }
         self.extra.clear();
         self.pending_route_headers.clear();
+        self.pending_pauses.clear();
         self.paused.clear();
     }
     pub(crate) fn states(&self) -> Vec<Arc<RequestState>> {
@@ -1531,6 +1605,59 @@ mod tests {
     }
 
     #[test]
+    fn early_redirect_pause_does_not_bind_to_pending_old_hop_and_clears_on_close() {
+        let mut log = NetworkLog::default();
+        log.paused("first-pause", "native", "http://host/same");
+        let first = log.start(
+            record("native", "http://host/same"),
+            RequestDetails::default(),
+            None,
+        );
+        assert!(log.pending_pauses.is_empty());
+        log.paused_redirect(
+            "next-pause",
+            "native",
+            "http://host/same",
+            Some("first-pause"),
+        );
+        assert!(!log.paused.contains_key("next-pause"));
+        let headers = log
+            .routed_headers(
+                "next-pause",
+                "native",
+                "http://host/same",
+                vec![("Set-Cookie".into(), "next=1".into())],
+            )
+            .unwrap();
+        headers.accept();
+        assert!(first.data.lock().unwrap().route_headers.is_none());
+        let next = log.start(
+            record("native", "http://host/same"),
+            RequestDetails {
+                redirect: true,
+                ..Default::default()
+            },
+            None,
+        );
+        log.response("native", record("native", "http://host/same"), Some(false));
+        assert_eq!(
+            next.snapshot().recorded.response_headers,
+            vec![("Set-Cookie".into(), "next=1".into())]
+        );
+        assert!(first.data.lock().unwrap().route_headers.is_none());
+        for index in 0..MAX_OBSERVATIONS + 1 {
+            log.paused(
+                &format!("unmatched-{index}"),
+                "unknown",
+                "http://host/unknown",
+            );
+        }
+        assert_eq!(log.pending_pauses.len(), MAX_OBSERVATIONS);
+        log.close("test disposal");
+        assert!(log.pending_pauses.is_empty());
+    }
+
+    #[test]
     fn routed_headers_require_native_ack_and_response_and_survive_event_ordering() {
         let mut log = NetworkLog::default();
         let headers = vec![
@@ -1560,6 +1687,12 @@ mod tests {
         assert_eq!(state.snapshot().response_headers_complete, Some(false));
         // A same-URL redirect's early routing event must not edit the older
         // hop or be discarded when that older native ID finishes.
+        log.paused_redirect(
+            "pause-next",
+            "native",
+            "http://host/first",
+            Some("pause-first"),
+        );
         let pending = log
             .routed_headers(
                 "pause-next",
@@ -1577,7 +1710,11 @@ mod tests {
             },
             None,
         );
-        log.paused("pause-next", "native", "http://host/first");
+        assert!(log.pending_pauses.is_empty());
+        assert!(Arc::ptr_eq(
+            &log.paused["pause-next"].upgrade().unwrap(),
+            &next
+        ));
         log.response("native", record("native", "http://host/first"), Some(true));
         assert!(!next.snapshot().response_headers_from_route);
         let mut ack = pending.0.accepted.subscribe();
