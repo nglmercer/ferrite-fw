@@ -22,6 +22,9 @@ substantially larger undertaking. The complete member inventory remains in
 [PLAYWRIGHT-API-MATRIX.md](PLAYWRIGHT-API-MATRIX.md); current behavior and engine
 limits remain in [PLAYWRIGHT-PARITY.md](PLAYWRIGHT-PARITY.md).
 
+The [completion evidence index](E2E-PARITY-AUDIT.md) maps all 51 requirements
+to current source and regressions. Its pending replay status is explicit.
+
 ## Recommended next implementation
 
 Start **G04 — Final lifecycle audit and complete integration replay**. C05 and
