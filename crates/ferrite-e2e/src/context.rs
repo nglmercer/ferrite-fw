@@ -1771,13 +1771,20 @@ impl BrowserContext {
     /// Close the context and all its pages. Once started, native cleanup
     /// continues if this wait is dropped; repeated calls await the same cleanup.
     pub async fn close(self) -> E2eResult<()> {
+        self.close_with_budget(crate::operation::Deadline::cleanup(Duration::from_secs(5)))
+            .await
+    }
+    pub(crate) async fn close_with_budget(
+        self,
+        budget: crate::operation::Deadline,
+    ) -> E2eResult<()> {
         let close_task = self.close_task.clone();
         close_task
-            .run(async move { self.finish_close().await })
+            .run(async move { self.finish_close(budget).await })
             .await
     }
 
-    async fn finish_close(self) -> E2eResult<()> {
+    async fn finish_close(self, budget: crate::operation::Deadline) -> E2eResult<()> {
         let mut errors = Vec::new();
         // Preserve idempotent local cleanup after an already-lost transport.
         // There is no native command to await in that state. Losing a live
@@ -1803,7 +1810,18 @@ impl BrowserContext {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clear();
-        let _callback_gate = self.callbacks.gate.lock().await;
+        let _callback_gate = match budget
+            .run("context callback registration cleanup", async {
+                Ok(self.callbacks.gate.lock().await)
+            })
+            .await
+        {
+            Ok(guard) => Some(guard),
+            Err(error) => {
+                errors.push(format!("callback registration gate: {error}"));
+                None
+            }
+        };
         let preloads: Vec<_> = self
             .callbacks
             .registrations
@@ -1814,7 +1832,13 @@ impl BrowserContext {
             .collect();
         self.callbacks.stop();
         for id in preloads.into_iter().filter(|_| native_open) {
-            if let Err(error) = self.remove_callback_preload(&id).await {
+            if let Err(error) = budget
+                .run(
+                    "context callback preload cleanup",
+                    self.remove_callback_preload(&id),
+                )
+                .await
+            {
                 errors.push(format!("callback preload {id}: {error}"));
             }
         }
@@ -1826,7 +1850,13 @@ impl BrowserContext {
                 .retain(|context| context.id != self.id);
         }
         for page in self.pages() {
-            if let Err(error) = page.close_target().await {
+            if let Err(error) = budget
+                .run(
+                    "context page cleanup",
+                    page.close_target_with_budget(budget),
+                )
+                .await
+            {
                 errors.push(format!("page {}: {error}", page.target_id()));
             }
         }
@@ -1861,7 +1891,7 @@ impl BrowserContext {
                             .await?;
                         crate::native_disposal::context_absent(&inventory, &id, false)
                     },
-                    Duration::from_secs(5),
+                    budget,
                 )
                 .await
             }
@@ -1892,7 +1922,7 @@ impl BrowserContext {
                             .await?;
                         crate::native_disposal::context_absent(&inventory, &id, true)
                     },
-                    Duration::from_secs(5),
+                    budget,
                 )
                 .await
             }
@@ -1915,6 +1945,171 @@ impl BrowserContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn context_close_shares_budget_across_blocked_gate_preloads_and_native_disposal() {
+        use futures::{SinkExt, StreamExt};
+        use serde_json::json;
+        for (preloads, delayed_page) in [(false, false), (true, false), (false, true)] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let (observed, mut commands) = tokio::sync::mpsc::unbounded_channel();
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                let mut page_removed = false;
+                while let Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) =
+                    socket.next().await
+                {
+                    let request: Value = serde_json::from_str(&text).unwrap();
+                    let method = request["method"].as_str().unwrap();
+                    let result = match method {
+                        "script.addPreloadScript" => {
+                            json!({"script":format!("preload-{}",request["id"])})
+                        }
+                        "script.removePreloadScript" => {
+                            observed.send(method.to_owned()).unwrap();
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                            json!({})
+                        }
+                        "browser.removeUserContext" => {
+                            observed.send(method.to_owned()).unwrap();
+                            json!({})
+                        }
+                        "browser.getUserContexts" => json!({"userContexts":[]}),
+                        "browsingContext.getTree" => {
+                            if page_removed {
+                                json!({"contexts":[]})
+                            } else {
+                                json!({"contexts":[{"context":"native-page","children":[]}]})
+                            }
+                        }
+                        "browsingContext.close" => {
+                            observed.send(method.to_owned()).unwrap();
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                            page_removed = true;
+                            json!({})
+                        }
+                        _ => panic!("unexpected native cleanup command: {method}"),
+                    };
+                    socket
+                        .send(tokio_tungstenite::tungstenite::Message::Text(
+                            json!({"type":"success","id":request["id"],"result":result})
+                                .to_string()
+                                .into(),
+                        ))
+                        .await
+                        .unwrap();
+                }
+            });
+            let connection = crate::bidi::BidiConnection::connect(&format!("ws://{address}"))
+                .await
+                .unwrap();
+            connection.set_browser_version("157.0");
+            let context = BrowserContext::new(
+                Backend::Bidi {
+                    conn: connection.clone(),
+                    insecure_certs: false,
+                },
+                Some("owned".into()),
+                ContextOptions::default(),
+                Duration::ZERO,
+                Duration::ZERO,
+                None,
+                Weak::new(),
+                None,
+            );
+            if preloads {
+                for index in 0..3 {
+                    context
+                        .expose_function(&format!("callback{index}"), |_| Value::Null)
+                        .await
+                        .unwrap();
+                }
+            }
+            let page = if delayed_page {
+                let sink = ConsoleSink::new();
+                let driver = BidiDriver::spawn(
+                    connection.clone(),
+                    "native-page".into(),
+                    Duration::ZERO,
+                    false,
+                    sink.clone(),
+                    Some("owned".into()),
+                )
+                .await
+                .unwrap();
+                let page = Page::new(
+                    Driver::Bidi(driver),
+                    sink,
+                    Duration::ZERO,
+                    None,
+                    Arc::downgrade(&context.pages),
+                    context.routes.clone(),
+                    context.handlers.clone(),
+                    context.tracing.clone(),
+                );
+                context.pages.lock().unwrap().push(page.clone());
+                Some(page)
+            } else {
+                None
+            };
+            let gate = context.callbacks.gate.clone();
+            let held = if preloads || delayed_page {
+                None
+            } else {
+                Some(gate.lock().await)
+            };
+            let result = tokio::time::timeout(
+                Duration::from_millis(250),
+                context
+                    .clone()
+                    .close_with_budget(crate::operation::Deadline::cleanup(Duration::from_millis(
+                        20,
+                    ))),
+            )
+            .await
+            .expect("context cleanup must use one clock across all phases");
+            assert!(
+                matches!(&result, Err(E2eError::Config(message)) if message.contains(if preloads {"callback preload"} else if delayed_page {"page native-page"} else {"callback registration gate"}))
+            );
+            assert!(
+                matches!(&result, Err(E2eError::Config(message)) if message.contains("native context disposal"))
+            );
+            assert!(context.is_closed());
+            assert!(context.callbacks.registrations.lock().unwrap().is_empty());
+            drop(held);
+            if let Some(page) = page {
+                let error = tokio::time::timeout(Duration::from_millis(250), page.close())
+                    .await
+                    .unwrap()
+                    .unwrap_err();
+                assert!(
+                    matches!(error, E2eError::Timeout(20, _)),
+                    "page disposal must preserve the context deadline: {error:?}"
+                );
+                assert!(page.is_closed());
+            }
+            let removed = tokio::time::timeout(Duration::from_secs(1), async {
+                let mut preloads_removed = 0;
+                while let Some(method) = commands.recv().await {
+                    if method == "script.removePreloadScript" {
+                        preloads_removed += 1;
+                    }
+                    if method == "browser.removeUserContext" {
+                        return preloads_removed;
+                    }
+                }
+                panic!("native context disposal was skipped after deadline exhaustion");
+            })
+            .await
+            .unwrap();
+            assert_eq!(removed, if preloads { 3 } else { 0 });
+            let repeated = context.close().await.unwrap_err();
+            assert_eq!(repeated.to_string(), result.unwrap_err().to_string());
+            server.abort();
+        }
+    }
 
     #[tokio::test]
     async fn native_context_close_survives_dropped_wait_and_requires_valid_absence() {

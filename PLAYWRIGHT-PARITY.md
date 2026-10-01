@@ -3188,3 +3188,34 @@ Scoped verification passed 312 checks: 298 units, ten mandatory two-engine nativ
 groups across `fixture_budgets` and `browser_ownership`, and four doctests. Strict
 Clippy, formatting and all 870 local documentation links passed. This is not the
 complete 51-target regression replay.
+
+## G04 audit progress — Shared page/context disposal clocks
+
+Context close now uses one five-second cleanup clock across the callback
+registration gate, stored preload removal, owned page cleanup, native context
+removal and disappearance queries. That absolute deadline is passed explicitly
+into spawned shared page-close work and both native drivers; it is not renewed
+by each page or confirmation phase. Convenience Page close shares its clock with
+the owned-context cleanup that follows target closure.
+
+Local cancellation, deregistration and ready cleanup still run after exhaustion.
+Pending phases report their own errors, and remaining native removal commands
+receive their cleanup poll rather than being skipped. A late native side effect
+does not turn an unconfirmed, timed-out close into success. Repeated waiters
+retain the original shared result. Chromium/BiDi page confirmation retains its
+strict native inventory validation and error priority.
+
+The new protocol regression covers a held callback-registration gate, three
+slow preload removals with protocol timeouts disabled, and an owned page with a
+slow native close. A twenty-millisecond shared clock settles every case without
+renewal, queues remaining preload/context removal, clears local state and
+replays the same outcome. The page case separately verifies that its shared
+native-close result preserves the context's twenty-millisecond deadline.
+
+Terminal interception cleanup, queued pause-release acknowledgements and the
+complete 51-target requirement audit/replay remain G04 work.
+
+Scoped verification passed 317 checks: 299 units, fourteen mandatory two-engine
+native groups across `fixture_budgets`, `browser_ownership` and
+`callback_lifecycle`, and four doctests. Strict Clippy, formatting and all 871
+local documentation links passed. This is not the complete 51-target replay.

@@ -1,18 +1,17 @@
 //! Confirm native disappearance rather than treating close acknowledgment as disposal.
 use crate::{operation::Deadline, E2eResult};
-use std::{future::Future, time::Duration};
+use std::future::Future;
 
 pub(crate) async fn confirmed_close<C, Q, F>(
     close: C,
     mut absent: Q,
-    timeout: Duration,
+    budget: Deadline,
 ) -> E2eResult<()>
 where
     C: Future<Output = E2eResult<()>>,
     Q: FnMut() -> F,
     F: Future<Output = E2eResult<bool>>,
 {
-    let budget = Deadline::cleanup(timeout);
     let mut close_error = budget.run("native close command", close).await.err();
     loop {
         match budget
@@ -29,7 +28,7 @@ where
         }
         budget
             .run("wait for native target disappearance", async {
-                tokio::time::sleep(Duration::from_millis(20)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
                 Ok(())
             })
             .await?;
@@ -67,6 +66,7 @@ pub(crate) fn context_absent(value: &serde_json::Value, id: &str, bidi: bool) ->
 mod tests {
     use super::*;
     use crate::E2eError;
+    use std::time::Duration;
     #[test]
     fn context_inventory_requires_valid_native_ids_and_distinguishes_present_from_absent() {
         for bidi in [false, true] {
@@ -108,7 +108,7 @@ mod tests {
         confirmed_close(
             async { Ok(()) },
             || std::future::ready(Ok(observations.pop_front().unwrap())),
-            Duration::from_secs(1),
+            Deadline::cleanup(Duration::from_secs(1)),
         )
         .await
         .unwrap();
@@ -118,13 +118,13 @@ mod tests {
             message: "rejected".into(),
         };
         assert!(
-            matches!(confirmed_close(async { Err(rejected()) }, || std::future::ready(Ok(false)), Duration::from_secs(1)).await, Err(E2eError::Cdp { message, .. }) if message == "rejected")
+            matches!(confirmed_close(async { Err(rejected()) }, || std::future::ready(Ok(false)), Deadline::cleanup(Duration::from_secs(1))).await, Err(E2eError::Cdp { message, .. }) if message == "rejected")
         );
         // An authoritative absence also resolves a concurrent external close.
         confirmed_close(
             async { Err(rejected()) },
             || std::future::ready(Ok(true)),
-            Duration::from_secs(1),
+            Deadline::cleanup(Duration::from_secs(1)),
         )
         .await
         .unwrap();
@@ -132,7 +132,7 @@ mod tests {
             confirmed_close(
                 async { Ok(()) },
                 || std::future::ready(Err(E2eError::Disconnected("lost query".into()))),
-                Duration::from_secs(1)
+                Deadline::cleanup(Duration::from_secs(1))
             )
             .await,
             Err(E2eError::Disconnected(_))
@@ -149,7 +149,7 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 Ok(false)
             },
-            Duration::from_millis(20),
+            Deadline::cleanup(Duration::from_millis(20)),
         )
         .await;
         assert!(matches!(result, Err(E2eError::Timeout(20, _))));

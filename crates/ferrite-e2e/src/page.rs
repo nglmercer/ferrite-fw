@@ -5590,9 +5590,10 @@ impl Page {
                 } else {
                     None
                 };
-                let result = page.close_target().await;
+                let budget = crate::operation::Deadline::cleanup(Duration::from_secs(5));
+                let result = page.close_target_with_budget(budget).await;
                 if let Some(context) = context {
-                    if let Err(error) = context.close().await {
+                    if let Err(error) = context.close_with_budget(budget).await {
                         return match result {
                             Ok(()) => Err(error),
                             Err(target) => Err(target
@@ -5605,14 +5606,17 @@ impl Page {
             .await
     }
 
-    pub(crate) async fn close_target(&self) -> E2eResult<()> {
+    pub(crate) async fn close_target_with_budget(
+        &self,
+        budget: crate::operation::Deadline,
+    ) -> E2eResult<()> {
         let page = self.clone();
         self.close_task
-            .run(async move { page.finish_close_target().await })
+            .run(async move { page.finish_close_target(budget).await })
             .await
     }
 
-    async fn finish_close_target(&self) -> E2eResult<()> {
+    async fn finish_close_target(&self, budget: crate::operation::Deadline) -> E2eResult<()> {
         if self.is_closed() {
             return Ok(());
         }
@@ -5626,13 +5630,43 @@ impl Page {
         // Explicit closes emit directly (deregistration already happened, so
         // the browser-side destroy watcher stays quiet: exactly one event).
         self.mark_closed();
-        self.coverage_state.lock().await.cancel();
-        self.stop_routing().await;
-        self.stop_dialog_handling().await;
+        let mut errors = Vec::new();
+        macro_rules! cleanup {
+            ($name:literal, $work:expr) => {
+                if let Err(error) = budget
+                    .run($name, async {
+                        $work;
+                        Ok(())
+                    })
+                    .await
+                {
+                    errors.push(format!("{}: {error}", $name));
+                }
+            };
+        }
+        cleanup!(
+            "page coverage cleanup",
+            self.coverage_state.lock().await.cancel()
+        );
+        cleanup!("page routing cleanup", self.stop_routing().await);
+        cleanup!("page dialog cleanup", self.stop_dialog_handling().await);
         self.stop_request_capture();
-        self.stop_frames().await;
-        self.cancel_video().await;
-        self.driver.close().await
+        cleanup!("page frame-stream cleanup", self.stop_frames().await);
+        cleanup!("page video cleanup", self.cancel_video().await);
+        if let Err(error) = self.driver.close(budget).await {
+            if errors.is_empty() {
+                return Err(error);
+            }
+            errors.push(format!("native page disposal: {error}"));
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(E2eError::Config(format!(
+                "page cleanup failures: {}",
+                errors.join("; ")
+            )))
+        }
     }
 }
 

@@ -676,6 +676,13 @@ Work in [the audit generator](scripts/playwright-parity/build_matrix.py),
   [Evidence](PLAYWRIGHT-PARITY.md#g04-audit-progress--confirmed-native-context-disposal).
   Context-wide phase budgets, terminal interception cleanup, queued pause-release
   acknowledgements and the complete requirement audit/replay remain open.
+  Further progress: one absolute cleanup clock now covers callback gates,
+  preloads, pages and native context disappearance; spawned page close and
+  convenience-page owned-context cleanup share it explicitly. Expired phases
+  report errors while remaining ready/native removal work is still attempted.
+  [Evidence](PLAYWRIGHT-PARITY.md#g04-audit-progress--shared-pagecontext-disposal-clocks).
+  Terminal interception cleanup, queued pause-release acknowledgements and the
+  complete requirement audit/replay remain open.
 
 
 

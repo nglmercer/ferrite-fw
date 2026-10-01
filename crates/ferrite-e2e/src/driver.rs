@@ -2231,10 +2231,10 @@ impl Driver {
     }
 
     /// Close the page target.
-    pub async fn close(&self) -> E2eResult<()> {
+    pub async fn close(&self, budget: crate::operation::Deadline) -> E2eResult<()> {
         match self {
-            Self::Cdp(driver) => driver.close().await,
-            Self::Bidi(driver) => driver.close().await,
+            Self::Cdp(driver) => driver.close(budget).await,
+            Self::Bidi(driver) => driver.close(budget).await,
         }
     }
 
@@ -3877,7 +3877,7 @@ impl CdpDriver {
         }
     }
 
-    async fn close(&self) -> E2eResult<()> {
+    async fn close(&self, budget: crate::operation::Deadline) -> E2eResult<()> {
         let timeout = Duration::from_secs(5);
         crate::native_disposal::confirmed_close(
             async {
@@ -3915,7 +3915,7 @@ impl CdpDriver {
                     .iter()
                     .any(|target| target["targetId"].as_str() == Some(self.target.as_str())))
             },
-            timeout,
+            budget,
         )
         .await
     }
@@ -5436,7 +5436,7 @@ impl BidiDriver {
         }
     }
 
-    async fn close(&self) -> E2eResult<()> {
+    async fn close(&self, budget: crate::operation::Deadline) -> E2eResult<()> {
         let timeout = Duration::from_secs(5);
         crate::native_disposal::confirmed_close(
             async {
@@ -5470,7 +5470,7 @@ impl BidiDriver {
                     .iter()
                     .any(|context| context["context"].as_str() == Some(self.context.as_str())))
             },
-            timeout,
+            budget,
         )
         .await
     }
