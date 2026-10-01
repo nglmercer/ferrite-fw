@@ -389,11 +389,39 @@ impl Default for RuntimeConfig {
     }
 }
 
+/// JSON-safe metadata with deterministic key serialization.
+pub type E2eMetadata = std::collections::BTreeMap<String, serde_json::Value>;
+
+/// Bounded slow-result reporting. Zero maximum disables reporting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct SlowTestOptions {
+    pub threshold_ms: u64,
+    pub max: usize,
+}
+impl Default for SlowTestOptions {
+    fn default() -> Self {
+        Self {
+            threshold_ms: 300_000,
+            max: 5,
+        }
+    }
+}
+impl SlowTestOptions {
+    pub fn validate(self) -> std::result::Result<(), String> {
+        if self.max > 1_000 {
+            return Err("slow-test maximum cannot exceed 1000".into());
+        }
+        Ok(())
+    }
+}
+
 /// Serializable project settings for the E2E CLI/library bridge.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct E2eProjectConfig {
     pub name: String,
+    pub metadata: Option<E2eMetadata>,
     pub browser: Option<String>,
     pub headless: Option<bool>,
     pub executable_path: Option<String>,
@@ -414,6 +442,10 @@ pub struct E2eProjectConfig {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct E2eConfig {
+    pub run_name: Option<String>,
+    pub metadata: Option<E2eMetadata>,
+    /// None preserves the legacy disabled summary; Some(max=0) disables explicitly.
+    pub report_slow_tests: Option<SlowTestOptions>,
     /// Browser engine (`chromium` or `firefox`).
     pub browser: String,
     /// Launch the browser headless.
@@ -492,6 +524,9 @@ pub struct E2eConfig {
 impl Default for E2eConfig {
     fn default() -> Self {
         Self {
+            run_name: None,
+            metadata: None,
+            report_slow_tests: None,
             browser: "chromium".to_string(),
             headless: true,
             executable_path: None,
@@ -766,6 +801,15 @@ pub fn merge_user_config(mut base: UserConfig, over: UserConfig) -> UserConfig {
 }
 
 fn merge_e2e(mut base: E2eConfig, over: E2eConfig) -> E2eConfig {
+    if over.run_name.is_some() {
+        base.run_name = over.run_name;
+    }
+    if over.metadata.is_some() {
+        base.metadata = over.metadata;
+    }
+    if over.report_slow_tests.is_some() {
+        base.report_slow_tests = over.report_slow_tests;
+    }
     let defaults = E2eConfig::default();
     if over.browser != defaults.browser {
         base.browser = over.browser;
@@ -1322,5 +1366,34 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(merge_e2e(base, over).preserve_output, "failures-only");
+    }
+    #[test]
+    fn e2e_metadata_layers_preserve_explicit_empty_and_disabled_values() {
+        let base = E2eConfig {
+            run_name: Some("base".into()),
+            metadata: Some([("key".into(), serde_json::json!(1))].into_iter().collect()),
+            report_slow_tests: Some(Default::default()),
+            ..Default::default()
+        };
+        let retained = merge_e2e(base.clone(), E2eConfig::default());
+        assert_eq!(retained.metadata, base.metadata);
+        assert_eq!(retained.run_name, base.run_name);
+        let overridden = merge_e2e(
+            base,
+            E2eConfig {
+                run_name: Some(String::new()),
+                metadata: Some(Default::default()),
+                report_slow_tests: Some(SlowTestOptions {
+                    threshold_ms: 0,
+                    max: 0,
+                }),
+                ..Default::default()
+            },
+        );
+        assert_eq!(overridden.run_name.as_deref(), Some(""));
+        assert!(overridden.metadata.unwrap().is_empty());
+        assert_eq!(overridden.report_slow_tests.unwrap().max, 0);
+        assert!(serde_json::from_str::<E2eConfig>(r#"{"metadata": "invalid"}"#).is_err());
+        assert!(serde_json::from_str::<E2eConfig>(r#"{"report_slow_tests":{"max":-1}}"#).is_err());
     }
 }

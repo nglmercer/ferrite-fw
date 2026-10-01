@@ -1,15 +1,15 @@
 # Ferrite E2E implementation TODO
 
 Created: 2026-09-29, after `cbcfc8e`. Reference: Playwright **v1.63.0**.
-Session plan refreshed: 2026-09-30, after verified D03 output-retention implementation.
+Session plan refreshed: 2026-09-30, after verified D04 metadata/slow-report implementation.
 Expanded on request for a longer implementation session; B09/B10/B13/B14 and D01/D02 are verified.
 Uncommitted implementations are not counted complete.
 
 The initial G/A foundations are complete except for the final G04 audit. Follow
 the remaining-work index below through B/D improvements and supported C extensions.
-This backlog contains **51 tasks (42 complete, 9 remaining)**: four foundations,
+This backlog contains **51 tasks (43 complete, 8 remaining)**: four foundations,
 16 core tasks, 19 follow-ups, six optional extensions and six practical additions.
-All A and B tasks and D01/D02/D03/D05 are verified; continue with
+All A and B tasks and D01/D02/D03/D04/D05 are verified; continue with
 practical additions and supported C extensions. The ordering
 and effort assessments are recommendations based on the current source and
 parity audit.
@@ -24,7 +24,7 @@ limits remain in [PLAYWRIGHT-PARITY.md](PLAYWRIGHT-PARITY.md).
 
 ## Recommended next implementation
 
-Start **D04 — run metadata and slow-test reporting**, then D06 and the supported C extensions.
+Start **D06 — Chromium WebSocket diagnostic lifecycle**, then the supported C extensions.
 B10 is verified through `2c042e1`, with owned process-output drainage in
 `ade139b`. The complete phase passed **457 E2E and 28 CLI/configuration checks**,
 485 combined: 211 units, 242 integrations across all 38 targets and four doctests.
@@ -95,7 +95,7 @@ snapshot run missed the required capture pair in its existing 650 ms window;
 the unchanged eight-case snapshot target passed serially. Final native gates
 use `--test-threads=1`. No assertion clock or expected evidence was relaxed.
 The current integration inventory has 43 targets; this phase does not claim
-its complete replay. **Next: D04**, then D06 and supported C extensions.
+its complete replay. **Next: D06**, then supported C extensions.
 G04 remains open for the wider lifecycle, lag/eviction and cross-feature audit.
 The initial broad audit's reproducible large-console timeout was fixed by draining
 owned child stdout/stderr, retaining a bounded 4-KiB stderr tail and keeping
@@ -124,7 +124,7 @@ outer label/error/step/trace and Diagnostic typed causes, and B16's shared owner
 weak context graph and owned base_url getter. G04 remains open for channel lag,
 partial setup, detached in-flight requests and the final cross-feature audit.
 
-The scope of the longer session is **all 11 open tasks below**. Completed tasks
+The scope of the longer session is **all eight open tasks below**. Completed tasks
 remain regression requirements. The deferred projects are future work; completing
 this checklist means practical parity within the stated engine capabilities,
 not complete Playwright compatibility.
@@ -137,16 +137,15 @@ there. G04 applies during every phase and closes after the final audit.
 
 | Order | Task | Implementation result | Dependency or capability gate |
 |---|---|---|---|
-| 1 | D04 | Run/project metadata and configurable slow-test summaries | B14/B11; existing live/JSON/JUnit/HTML reporters |
-| 2 | D06 | Socket identity, errors, closed state and bounded typed waits | Existing Chromium socket events; Firefox unsupported |
-| 3 | C01 | Validated PDF options | Chromium; explicit Firefox unsupported result |
-| 4 | C02 | Bounded captured-body bytes, text and JSON helpers | B02/B03 complete; Chromium body capture |
-| 5 | C03 | Coverage navigation/source options and restart lifecycle | Chromium JS/CSS coverage |
-| 6 | C04 | HAR matching, not-found and supported content options | A14/B06 complete; engine body/rewrite capabilities |
-| 7 | C05 | Supported media/device emulation options and resets | Chromium native capabilities |
-| 8 | C06 | Independently detachable CDP target sessions | Chromium transport and session ownership |
-| 9 | G04 | Final lifecycle, compatibility and resource-release audit | Evidence from every completed phase |
-Immediate delivery: **D04**. All B tasks and D01/D02/D03/D05 are complete.
+| 1 | D06 | Socket identity, errors, closed state and bounded typed waits | Existing Chromium socket events; Firefox unsupported |
+| 2 | C01 | Validated PDF options | Chromium; explicit Firefox unsupported result |
+| 3 | C02 | Bounded captured-body bytes, text and JSON helpers | B02/B03 complete; Chromium body capture |
+| 4 | C03 | Coverage navigation/source options and restart lifecycle | Chromium JS/CSS coverage |
+| 5 | C04 | HAR matching, not-found and supported content options | A14/B06 complete; engine body/rewrite capabilities |
+| 6 | C05 | Supported media/device emulation options and resets | Chromium native capabilities |
+| 7 | C06 | Independently detachable CDP target sessions | Chromium transport and session ownership |
+| 8 | G04 | Final lifecycle, compatibility and resource-release audit | Evidence from every completed phase |
+Immediate delivery: **D06**. All B tasks and D01–D05 are complete.
 D06 and supported C extensions remain available independently. G04 applies
 throughout and closes after the complete integration/lifecycle audit.
 
@@ -1201,7 +1200,7 @@ behavior claims must still use the repository's pinned Playwright v1.63.0 corpus
   Full current 43-target inventory and other-platform verification are not claimed.
   Reference: [preserveOutput](https://playwright.dev/docs/api/class-testconfig#test-config-preserve-output).
 
-- [ ] **D04 — Run metadata and slow-test reporting (M; needs B14/B11).** Add
+- [x] **D04 — Run metadata and slow-test reporting (M; needs B14/B11).** Add
   optional JSON-safe user metadata/run name and project metadata, propagated
   into resolved configuration, worker/test read-only access and existing
   reports. Keep report schemas backward-readable with serde defaults. Add
@@ -1212,6 +1211,20 @@ behavior claims must still use the repository's pinned Playwright v1.63.0 corpus
   distinct tests accidentally. Done when configuration/CLI precedence, empty
   metadata, old JSON, custom/live reporters and relocated HTML agree. Automatic
   Git diff capture and process-wide stdout/stderr attribution remain deferred.
+  Evidence: frozen config/TestInfo and owned WorkerInfo maps, whole-map project
+  inheritance/explicit empty replacement, CLI/env/builder precedence, old JSON,
+  live callbacks and list/JSON/JUnit/HTML parity are verified. Slow summaries use
+  strict thresholds, stable result-index identity and at most 1,000 entries;
+  zero disables and retries count once through total result duration. No upstream
+  source-file aggregation or runtime metadata-key injection is claimed.
+  The four pinned runs verify 24 upstream observations. Native escaped reports
+  and all artifact HTTP downloads survive relocation and source removal on both
+  engines; both views were inspected.
+  Verification: **290 scoped checks** (231 E2E units, 24 native integrations
+  across six targets, four E2E doctests, 31 CLI/config checks), strict all-target
+  Clippy, package formatting, generated matrix and 779 local links passed.
+  Both browsers were mandatory on Linux. The current inventory has 44 targets;
+  its complete replay and other-platform verification remain G04 work.
   Reference: [metadata and reportSlowTests](https://playwright.dev/docs/api/class-testconfig).
 
 - [x] **D05 — Typed Web Storage enumeration/bulk helpers (S–M, both engines).**
@@ -1299,8 +1312,8 @@ waiting for every future feature before starting independent work.
 | 3. Native event diagnostics | B01/B04/B19 — complete | Preserve frame/load/dialog observations (`f8c12de`), earliest popup traffic (`1ec7e3e`) and structured console/error data (`34890cc`) through ownership and runner changes. |
 | 4. Runner and developer APIs | B16/B17/B12/B13/B14 — complete | Preserve shared ownership (`1e4d3bb`), labeled diagnostics (`8ae438c`), soft collection (`0ee8245`) and effective configuration (`a7f1e45`) and shared fixture/cleanup budgets with safe disposal (`e2e3ecc`). D01/D02 are complete; preserve the broader runner and polling regressions through capture/report work. |
 | 4a. CI and assertion reliability | D01/D02 — complete | Preserve policy/focus wiring in `a2fd29b` and polling controls/scoped final-only soft retries in `312090d`. |
-| 5. Captures and reports | B09/B10/B18/B11/D03 — complete; D04 | Preserve verified capture/stability/path/update and owned diagnostics; preserve bounded ARIA output and searchable reports; implement run metadata and slow-test reporting. |
-| 5a. Practical storage and diagnostics | D03/D05 — complete; D04, D06 | Preserve retention/storage helpers; complete run metadata/slow summaries and bounded Chromium socket diagnostics. |
+| 5. Captures and reports | B09/B10/B18/B11/D03/D04 — complete | Preserve verified capture/stability/path/update and owned diagnostics; preserve bounded ARIA output and searchable reports; preserve frozen metadata and bounded slow summaries. |
+| 5a. Practical storage and diagnostics | D03/D04/D05 — complete; D06 | Preserve retention/storage helpers; preserve run metadata/slow summaries; complete bounded Chromium socket diagnostics. |
 | 6. Supported backend extensions | C01, C02, C03, C04, C05, C06 | Extend PDF, captured bodies, coverage, HAR, emulation and scoped CDP sessions. Check capability before accepting each option; verify explicit errors on the other engine. |
 | 7. Final lifecycle and compatibility audit | G04 | Verify cancellation, zero/enclosing deadlines, retries, disposal and released resources across the additions, then run the complete regression and documentation gates. |
 
@@ -1373,7 +1386,7 @@ also need formatting checks for the modified packages.
 
 Copyable request for the implementation session:
 
-> Implement all nine open tasks (D04, D06,
+> Implement all eight open tasks (D06,
 > C01–C06 and G04) in E2E-PARITY-TODO.md using the recommended remaining
 > phases, dependencies and completion criteria. Preserve the already verified
 > features. Implement all practical

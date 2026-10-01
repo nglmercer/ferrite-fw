@@ -99,6 +99,14 @@ fn child_command(
         .env("FERRITE_E2E_REPEAT_EACH", config.repeat_each.to_string())
         .env("FERRITE_E2E_OUTPUT_DIR", &config.output_dir)
         .env("FERRITE_E2E_PRESERVE_OUTPUT", &config.preserve_output)
+        .env(
+            "FERRITE_E2E_METADATA",
+            serde_json::to_string(&config.metadata)?,
+        )
+        .env(
+            "FERRITE_E2E_SLOW_TESTS",
+            serde_json::to_string(&config.report_slow_tests)?,
+        )
         .env("FERRITE_UPDATE_SNAPSHOTS", &config.update_snapshots)
         .stdin(std::process::Stdio::inherit())
         .stdout(std::process::Stdio::inherit())
@@ -127,6 +135,11 @@ fn child_command(
         if let Some(value) = value {
             child.env(name, value);
         }
+    }
+    if let Some(name) = &config.run_name {
+        child.env("FERRITE_E2E_RUN_NAME", name);
+    } else {
+        child.env_remove("FERRITE_E2E_RUN_NAME");
     }
     if let Some((index, total)) = config.shard {
         child.env("FERRITE_E2E_SHARD", format!("{index}/{total}"));
@@ -534,11 +547,13 @@ mod tests {
             child_command(Path::new("."), &config, &["cargo".into(), "test".into()]).unwrap();
         let env = child
             .get_envs()
-            .map(|(name, value)| {
-                (
-                    name.to_string_lossy().into_owned(),
-                    value.unwrap().to_string_lossy().into_owned(),
-                )
+            .filter_map(|(name, value)| {
+                value.map(|value| {
+                    (
+                        name.to_string_lossy().into_owned(),
+                        value.to_string_lossy().into_owned(),
+                    )
+                })
             })
             .collect::<std::collections::HashMap<_, _>>();
         assert_eq!(
@@ -648,5 +663,42 @@ mod tests {
         let error = test_command(&dir, &[]).unwrap_err();
         assert!(error.to_string().contains("tests/e2e.rs"), "{error}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+    #[test]
+    fn metadata_child_bridge_preserves_absent_empty_and_configured_values() {
+        let command = vec!["cargo".into(), "test".into()];
+        let config = ferrite::config::E2eConfig::default();
+        let child = child_command(Path::new("."), &config, &command).unwrap();
+        assert!(child
+            .get_envs()
+            .find(|(name, _)| *name == "FERRITE_E2E_RUN_NAME")
+            .unwrap()
+            .1
+            .is_none());
+        let config = ferrite::config::E2eConfig {
+            run_name: Some(String::new()),
+            metadata: Some(Default::default()),
+            report_slow_tests: Some(ferrite::config::SlowTestOptions {
+                threshold_ms: 0,
+                max: 0,
+            }),
+            ..Default::default()
+        };
+        let child = child_command(Path::new("."), &config, &command).unwrap();
+        let environment: std::collections::HashMap<_, _> = child
+            .get_envs()
+            .filter_map(|(name, value)| {
+                value.map(|value| (name.to_str().unwrap(), value.to_str().unwrap()))
+            })
+            .collect();
+        assert_eq!(environment["FERRITE_E2E_RUN_NAME"], "");
+        assert_eq!(environment["FERRITE_E2E_METADATA"], "{}");
+        let slow: ferrite::config::SlowTestOptions =
+            serde_json::from_str(environment["FERRITE_E2E_SLOW_TESTS"]).unwrap();
+        assert_eq!(slow.max, 0);
+        let copied: ferrite::config::E2eConfig =
+            serde_json::from_str(environment["FERRITE_E2E_CONFIG"]).unwrap();
+        assert!(copied.metadata.unwrap().is_empty());
+        assert_eq!(copied.run_name.as_deref(), Some(""));
     }
 }

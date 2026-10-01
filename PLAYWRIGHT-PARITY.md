@@ -12,15 +12,15 @@ The initial inventory and existing changes were committed in `d93365a`; this
 report describes the subsequent practical parity implementation. The original
 findings remain available in that commit's history.
 
-Latest completed phase: **D03**, with 284 scoped checks: 225 E2E units,
-26 native integrations across six targets, four E2E doctests and 29 CLI/config
+Latest completed phase: **D04**, with 290 scoped checks: 231 E2E units,
+24 native integrations across six targets, four E2E doctests and 31 CLI/config
 checks. Native cases required Chromium and Firefox on Linux. Strict Clippy,
-package formatting, generated matrix and local links passed. Real video and
-artifact downloads survived source removal and bundle relocation; both report
-views were inspected. D04 is next. The current integration inventory has 43
-targets; this phase does not claim its complete replay. Earlier increment
-sections retain historical checkpoint evidence, including B10's complete audit
-of its then-existing 38 targets.
+package formatting, generated matrix and 779 local links passed. Metadata and
+slow summaries survived source removal and bundle relocation; both report views
+were inspected. Four pinned Playwright runs verified 24 reference observations.
+D06 is next. The current integration inventory has 44 targets; this phase does
+not claim its complete replay. Earlier increment sections retain historical
+checkpoint evidence, including B10's complete audit of its then-existing 38 targets.
 
 The [complete API matrix](PLAYWRIGHT-API-MATRIX.md) covers **73 classes and
 1,018 documented JavaScript-applicable members**, including browser, test,
@@ -29,9 +29,9 @@ reporter, Android and Electron APIs:
 | Classification | Members | Meaning |
 |---|---:|---|
 | Equivalent | 15 | Counterpart for the basic operation/value, without full options or engine compatibility |
-| Partial | 638 | Related exposed operation with material semantic, option or engine differences |
+| Partial | 645 | Related exposed operation with material semantic, option or engine differences |
 | Idiomatic | 41 | Comparable operation through Rust language/library facilities |
-| Missing | 324 | No dedicated public counterpart |
+| Missing | 317 | No dedicated public counterpart |
 
 These counts describe an inventory, **not a behavioral compatibility
 percentage**. The earlier inventory had 458 Partial and 503 Missing members.
@@ -2310,3 +2310,56 @@ all-target Clippy, formatting, matrix and links. The initial concurrent
 snapshot-artifact checks passed serially. Final native gates use one test thread;
 no assertion clock or evidence requirements changed. Other-platform execution
 and the complete current 43-target replay remain outside this phase's evidence.
+
+## D04 — User metadata and bounded slow-test summaries
+
+`E2eConfig` and Runner builders accept optional `run_name`, JSON-safe
+`E2eMetadata` and `report_slow_tests: Option<SlowTestOptions>`. Project metadata
+inherits the whole run map when absent; an explicit project map, including `{}`,
+replaces it. Resolution freezes values before hooks. `TestInfo::config` /
+`project_config` expose shared read-only snapshots; WorkerInfo contains owned
+run/project copies. No runtime `actualWorkers` or Git/process-output data is
+injected into user metadata. Full CLI JSON, legacy environment overrides and
+explicit builders retain their existing precedence, including empty strings,
+empty maps and `null` slow-summary disablement.
+
+Old report JSON deserializes absent configuration fields as defaults. New JSON
+contains the frozen configuration and derived `slow_tests`. List output, live
+reporters and portable HTML use the same data; HTML escapes names/values and
+keeps the B11 result filters separate from the summary table. JUnit properties
+`ferrite.run.name`, `ferrite.run.metadata`, `ferrite.project.metadata` and
+`ferrite.slow_tests` contain JSON-encoded values before XML escaping, preserving
+control characters and nested Unicode values safely. Bundles preserve summaries
+and user metadata after relocation and original-source removal.
+
+Slow reporting is opt-in to preserve existing output. `SlowTestOptions::default`
+selects five results above 300,000 ms; `max: 0` disables and `max > 1000` is
+rejected before report publication. Selection retains at most `max` summaries,
+sorts descending duration and preserves report order on ties. Each scheduled
+Rust test/project/repetition remains separate by result index; duplicate names
+never merge and retry duration contributes once via `TestResult::duration_ms`.
+These are whole-run summaries, unaffected by HTML result filters. Playwright's
+pinned reference enables reporting by default, aggregates source files/projects
+and treats zero as unlimited. Those scheduling semantics are not claimed.
+
+New public fields require updating exhaustive `E2eConfig`, `E2eProjectConfig`,
+`Project`, `WorkerInfo`, `ResolvedRunConfig` and `ResolvedProjectConfig` literals;
+use existing defaults/constructors where available. `SlowTestSummary` is a new
+data-only type. Reporter trait signatures remain compatible.
+
+Evidence: [run_metadata.rs](crates/ferrite-e2e/tests/run_metadata.rs), bounded
+selection/legacy-schema tests in [report_slow.rs](crates/ferrite-e2e/src/report_slow.rs),
+CLI/config tests, the four-run/24-observation
+[pinned reference](scripts/e2e-conformance/metadata-slow-reference.json), and the
+[usage example](examples/e2e/README.md). The upstream corpus uses actual
+Playwright 1.63 runner metadata and list-reporter source-file summaries.
+
+D04 verification passed 290 scoped checks: 231 E2E units, 24 native integrations
+across `effective_configuration`, `output_retention`, `report_diagnostics`,
+`run_metadata`, `runtime_and_reporters` and `step_controls_and_bundles`, four
+E2E doctests and 31 CLI/configuration checks. Both engines were mandatory on
+Linux; strict all-target Clippy, package formatting, generated matrix and 779
+local file links passed. Both relocated metadata report views were inspected.
+The full 44-target integration replay and other-platform verification remain
+G04 work. Matrix inventory: 73 classes/1,018 members, Partial645/Missing317/
+Equivalent15/Idiomatic41.

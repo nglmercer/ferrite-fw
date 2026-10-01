@@ -1,0 +1,733 @@
+{
+  "playwright": "1.63.0",
+  "observations": [
+    {
+      "mode": "default",
+      "config": {
+        "metadata": {
+          "origin": "global",
+          "nested": [
+            true,
+            null,
+            {
+              "snow": "雪<&"
+            }
+          ],
+          "actualWorkers": 1
+        },
+        "reportSlowTests": {
+          "max": 5,
+          "threshold": 300000
+        },
+        "projects": [
+          {
+            "name": "inherited",
+            "metadata": {
+              "origin": "global",
+              "nested": [
+                true,
+                null,
+                {
+                  "snow": "雪<&"
+                }
+              ],
+              "actualWorkers": 1
+            }
+          },
+          {
+            "name": "explicit",
+            "metadata": {
+              "origin": "project"
+            }
+          }
+        ]
+      },
+      "status": "passed",
+      "tests": [
+        {
+          "title": "shared title",
+          "project": "inherited",
+          "projectMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ]
+          },
+          "configMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ],
+            "actualWorkers": 1
+          },
+          "retry": 0
+        },
+        {
+          "title": "other title",
+          "project": "inherited",
+          "projectMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ]
+          },
+          "configMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ],
+            "actualWorkers": 1
+          },
+          "retry": 0
+        },
+        {
+          "title": "shared title",
+          "project": "inherited",
+          "projectMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ]
+          },
+          "configMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ],
+            "actualWorkers": 1
+          },
+          "retry": 0
+        },
+        {
+          "title": "shared title",
+          "project": "explicit",
+          "projectMetadata": {
+            "origin": "project"
+          },
+          "configMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ],
+            "actualWorkers": 1
+          },
+          "retry": 0
+        },
+        {
+          "title": "other title",
+          "project": "explicit",
+          "projectMetadata": {
+            "origin": "project"
+          },
+          "configMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ],
+            "actualWorkers": 1
+          },
+          "retry": 0
+        },
+        {
+          "title": "shared title",
+          "project": "explicit",
+          "projectMetadata": {
+            "origin": "project"
+          },
+          "configMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ],
+            "actualWorkers": 1
+          },
+          "retry": 0
+        }
+      ],
+      "slowFiles": []
+    },
+    {
+      "mode": "disabled",
+      "config": {
+        "metadata": {
+          "origin": "global",
+          "nested": [
+            true,
+            null,
+            {
+              "snow": "雪<&"
+            }
+          ],
+          "actualWorkers": 1
+        },
+        "reportSlowTests": null,
+        "projects": [
+          {
+            "name": "inherited",
+            "metadata": {
+              "origin": "global",
+              "nested": [
+                true,
+                null,
+                {
+                  "snow": "雪<&"
+                }
+              ],
+              "actualWorkers": 1
+            }
+          },
+          {
+            "name": "explicit",
+            "metadata": {
+              "origin": "project"
+            }
+          }
+        ]
+      },
+      "status": "passed",
+      "tests": [
+        {
+          "title": "shared title",
+          "project": "inherited",
+          "projectMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ]
+          },
+          "configMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ],
+            "actualWorkers": 1
+          },
+          "retry": 0
+        },
+        {
+          "title": "other title",
+          "project": "inherited",
+          "projectMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ]
+          },
+          "configMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ],
+            "actualWorkers": 1
+          },
+          "retry": 0
+        },
+        {
+          "title": "shared title",
+          "project": "inherited",
+          "projectMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ]
+          },
+          "configMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ],
+            "actualWorkers": 1
+          },
+          "retry": 0
+        },
+        {
+          "title": "shared title",
+          "project": "explicit",
+          "projectMetadata": {
+            "origin": "project"
+          },
+          "configMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ],
+            "actualWorkers": 1
+          },
+          "retry": 0
+        },
+        {
+          "title": "other title",
+          "project": "explicit",
+          "projectMetadata": {
+            "origin": "project"
+          },
+          "configMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ],
+            "actualWorkers": 1
+          },
+          "retry": 0
+        },
+        {
+          "title": "shared title",
+          "project": "explicit",
+          "projectMetadata": {
+            "origin": "project"
+          },
+          "configMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ],
+            "actualWorkers": 1
+          },
+          "retry": 0
+        }
+      ],
+      "slowFiles": []
+    },
+    {
+      "mode": "top-one",
+      "config": {
+        "metadata": {
+          "origin": "global",
+          "nested": [
+            true,
+            null,
+            {
+              "snow": "雪<&"
+            }
+          ],
+          "actualWorkers": 1
+        },
+        "reportSlowTests": {
+          "threshold": 0,
+          "max": 1
+        },
+        "projects": [
+          {
+            "name": "inherited",
+            "metadata": {
+              "origin": "global",
+              "nested": [
+                true,
+                null,
+                {
+                  "snow": "雪<&"
+                }
+              ],
+              "actualWorkers": 1
+            }
+          },
+          {
+            "name": "explicit",
+            "metadata": {
+              "origin": "project"
+            }
+          }
+        ]
+      },
+      "status": "passed",
+      "tests": [
+        {
+          "title": "shared title",
+          "project": "inherited",
+          "projectMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ]
+          },
+          "configMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ],
+            "actualWorkers": 1
+          },
+          "retry": 0
+        },
+        {
+          "title": "other title",
+          "project": "inherited",
+          "projectMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ]
+          },
+          "configMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ],
+            "actualWorkers": 1
+          },
+          "retry": 0
+        },
+        {
+          "title": "shared title",
+          "project": "inherited",
+          "projectMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ]
+          },
+          "configMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ],
+            "actualWorkers": 1
+          },
+          "retry": 0
+        },
+        {
+          "title": "shared title",
+          "project": "explicit",
+          "projectMetadata": {
+            "origin": "project"
+          },
+          "configMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ],
+            "actualWorkers": 1
+          },
+          "retry": 0
+        },
+        {
+          "title": "other title",
+          "project": "explicit",
+          "projectMetadata": {
+            "origin": "project"
+          },
+          "configMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ],
+            "actualWorkers": 1
+          },
+          "retry": 0
+        },
+        {
+          "title": "shared title",
+          "project": "explicit",
+          "projectMetadata": {
+            "origin": "project"
+          },
+          "configMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ],
+            "actualWorkers": 1
+          },
+          "retry": 0
+        }
+      ],
+      "slowFiles": [
+        "Slow test file: [explicit] › first.spec.cjs (90ms)"
+      ]
+    },
+    {
+      "mode": "zero-unlimited",
+      "config": {
+        "metadata": {
+          "origin": "global",
+          "nested": [
+            true,
+            null,
+            {
+              "snow": "雪<&"
+            }
+          ],
+          "actualWorkers": 1
+        },
+        "reportSlowTests": {
+          "threshold": 0,
+          "max": 0
+        },
+        "projects": [
+          {
+            "name": "inherited",
+            "metadata": {
+              "origin": "global",
+              "nested": [
+                true,
+                null,
+                {
+                  "snow": "雪<&"
+                }
+              ],
+              "actualWorkers": 1
+            }
+          },
+          {
+            "name": "explicit",
+            "metadata": {
+              "origin": "project"
+            }
+          }
+        ]
+      },
+      "status": "passed",
+      "tests": [
+        {
+          "title": "shared title",
+          "project": "inherited",
+          "projectMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ]
+          },
+          "configMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ],
+            "actualWorkers": 1
+          },
+          "retry": 0
+        },
+        {
+          "title": "other title",
+          "project": "inherited",
+          "projectMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ]
+          },
+          "configMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ],
+            "actualWorkers": 1
+          },
+          "retry": 0
+        },
+        {
+          "title": "shared title",
+          "project": "inherited",
+          "projectMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ]
+          },
+          "configMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ],
+            "actualWorkers": 1
+          },
+          "retry": 0
+        },
+        {
+          "title": "shared title",
+          "project": "explicit",
+          "projectMetadata": {
+            "origin": "project"
+          },
+          "configMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ],
+            "actualWorkers": 1
+          },
+          "retry": 0
+        },
+        {
+          "title": "other title",
+          "project": "explicit",
+          "projectMetadata": {
+            "origin": "project"
+          },
+          "configMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ],
+            "actualWorkers": 1
+          },
+          "retry": 0
+        },
+        {
+          "title": "shared title",
+          "project": "explicit",
+          "projectMetadata": {
+            "origin": "project"
+          },
+          "configMetadata": {
+            "origin": "global",
+            "nested": [
+              true,
+              null,
+              {
+                "snow": "雪<&"
+              }
+            ],
+            "actualWorkers": 1
+          },
+          "retry": 0
+        }
+      ],
+      "slowFiles": [
+        "Slow test file: [inherited] › first.spec.cjs (92ms)",
+        "Slow test file: [explicit] › first.spec.cjs (87ms)",
+        "Slow test file: [inherited] › second.spec.cjs (43ms)",
+        "Slow test file: [explicit] › second.spec.cjs (43ms)"
+      ]
+    }
+  ]
+}

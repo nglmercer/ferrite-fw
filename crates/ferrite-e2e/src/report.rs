@@ -851,10 +851,14 @@ pub struct TestReport {
 impl Serialize for TestReport {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut report = serializer.serialize_struct("TestReport", 6)?;
+        let mut report = serializer.serialize_struct("TestReport", 7)?;
         report.serialize_field("configuration", &self.configuration)?;
         report.serialize_field("run_steps", &self.run_steps)?;
         report.serialize_field("results", &self.results)?;
+        report.serialize_field(
+            "slow_tests",
+            &self.slow_tests().map_err(serde::ser::Error::custom)?,
+        )?;
         report.serialize_field("status", if self.ok() { "passed" } else { "failed" })?;
         report.serialize_field("exit_code", &self.exit_code())?;
         report.serialize_field("flaky_policy_failed", &self.flaky_policy_failed())?;
@@ -1011,6 +1015,7 @@ impl TestReport {
                 out.push_str(&format!("       attachment: {}\n", attachment.path));
             }
         }
+        out.push_str(&self.report_context_text());
         out.push_str(&self.summary());
         out.push('\n');
         out
@@ -1040,12 +1045,14 @@ impl TestReport {
         ));
         out.push_str(&format!(
             "  <properties><property name=\"ferrite.run.status\" value=\"{}\"/>\
-             <property name=\"ferrite.fail_on_flaky_tests\" value=\"{}\"/></properties>\n",
+             <property name=\"ferrite.fail_on_flaky_tests\" value=\"{}\"/>",
             if self.ok() { "passed" } else { "failed" },
             self.configuration
                 .as_ref()
                 .is_some_and(|config| config.fail_on_flaky_tests)
         ));
+        out.push_str(&self.metadata_xml_properties());
+        out.push_str("</properties>\n");
         for result in &self.results {
             out.push_str(&format!(
                 "  <testcase name=\"{}\" classname=\"{}\" time=\"{:.3}\">\n",
@@ -1078,6 +1085,17 @@ impl TestReport {
                 result.flaky,
                 result.attempts
             ));
+            if let Some(metadata) = self
+                .configuration
+                .as_ref()
+                .and_then(|config| config.project(result.project.as_deref()))
+                .and_then(|project| project.metadata.as_ref())
+            {
+                out.push_str(&format!(
+                    "<property name=\"ferrite.project.metadata\" value=\"{}\"/>",
+                    xml_escape(&serde_json::to_string(metadata).unwrap())
+                ));
+            }
             if let Some(video) = &result.video {
                 out.push_str(&format!(
                     "<property name=\"video\" value=\"{}\"/>",
@@ -1117,6 +1135,7 @@ impl TestReport {
             if self.ok() { "passed" } else { "failed" },
             xml_escape(&self.summary())
         ));
+        out.push_str(&self.run_context_html());
         out.push_str(r#"<div class="controls" aria-label="Report filters">
 <label>Test name<input id="test-search" type="search" placeholder="Search tests"></label>
 <label>Status<select id="status-filter"><option value="">All statuses</option><option value="passed">Passed (including flaky)</option><option value="failed">Failed</option><option value="flaky">Flaky</option><option value="skipped">Skipped</option><option value="expected-failed">Expected failure</option></select></label>
@@ -1251,6 +1270,7 @@ impl TestReport {
             out.push_str("</td></tr>");
         }
         out.push_str("</tbody></table>");
+        out.push_str(&self.slow_tests_html());
         if let Some(config) = &self.configuration {
             out.push_str("<details><summary>Effective configuration</summary><pre>");
             out.push_str(&xml_escape(
@@ -1526,7 +1546,7 @@ fn one_line(text: &str) -> String {
     text.lines().next().unwrap_or_default().to_string()
 }
 
-fn xml_escape(text: &str) -> String {
+pub(crate) fn xml_escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")

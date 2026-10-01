@@ -1084,3 +1084,34 @@ SnapshotOptions gained `capture` and `wait_for_fonts`: migrate exhaustive struct
 literals with these fields or `..Default::default()`. This is an input-only type.
 Path templates and expected/actual/diff report attachments remain B10 work; the
 whole task is still unchecked.
+
+### Run metadata and slow results
+
+Configure these values through `E2eConfig` / `Runner::from_env()` or explicitly
+on a library runner:
+
+```rust
+use ferrite_e2e::{Runner, SlowTestOptions};
+
+let runner = Runner::default()
+    .run_name("checkout smoke")
+    .metadata([("build".into(), "local".into())].into_iter().collect())
+    .report_slow_tests(Some(SlowTestOptions { threshold_ms: 2_000, max: 5 }));
+```
+
+Inside `test_with_context`, `ctx.info.config()` and
+`ctx.info.project_config()` expose the frozen run/project metadata. Projects
+inherit the whole run map unless `Project::metadata` or project configuration
+replaces it; an explicit empty map clears inherited metadata. WorkerInfo provides
+owned copies. JSON, list, JUnit and portable HTML carry the same values. JUnit
+`ferrite.run.name`, `ferrite.run.metadata`, `ferrite.project.metadata` and
+`ferrite.slow_tests` property values use JSON encoding.
+
+Slow summaries are opt-in. Durations must be strictly above `threshold_ms`;
+`max` is capped at 1,000 and zero disables the summary. Each scheduled Rust
+result remains distinct by result index/project/repetition, including duplicate
+names; retries count once in total result duration. This differs from Playwright's
+source-file aggregation and unlimited zero setting. Old report JSON remains
+readable. Legacy environment overrides are `FERRITE_E2E_RUN_NAME`,
+`FERRITE_E2E_METADATA` (JSON object or `null`) and `FERRITE_E2E_SLOW_TESTS`
+(JSON options or `null`); explicit builders take precedence.

@@ -578,3 +578,20 @@ report-link reconciliation. It tests real video and artifact HTTP downloads from
 relocated HTML after original output removal on Chromium and Firefox. Ferrite
 prunes deleted source links in JSON; the pinned upstream recording preserves
 upstream's stale attachment paths for comparison.
+
+### Run metadata and slow-summary reference
+
+`npm run reference:metadata-slow` executes four pinned Playwright 1.63 runs
+(default, disabled, top-one and zero-unlimited) and writes
+[metadata-slow-reference.json](metadata-slow-reference.json). The
+[reference script](metadata-slow-reference.mjs) checks 24 test observations,
+project inheritance/replacement, reporter configuration and source-file slow
+summaries. Upstream adds `actualWorkers` to reporter run metadata, defaults to
+five files above 300,000 ms, and treats `max: 0` as unlimited.
+
+Ferrite preserves user metadata without injecting runtime keys. Its slow summary
+is opt-in and groups individual scheduled Rust test/project/repeat results;
+`max: 0` disables and `max > 1000` is rejected. Retries contribute once through
+result wall duration. Native live reporters, CLI precedence, empty values,
+legacy JSON, escaped XML/HTML and relocated artifact downloads are checked in
+[run_metadata.rs](../../crates/ferrite-e2e/tests/run_metadata.rs).

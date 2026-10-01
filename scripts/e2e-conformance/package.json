@@ -25,7 +25,8 @@
     "reference:snapshot-polls": "node snapshot-poll-reference.mjs",
     "reference:aria-options": "node aria-options-reference.mjs",
     "reference:output-retention": "node output-retention-reference.mjs",
-    "reference:web-storage": "node web-storage-reference.mjs"
+    "reference:web-storage": "node web-storage-reference.mjs",
+    "reference:metadata-slow": "node metadata-slow-reference.mjs"
   },
   "devDependencies": {
     "playwright": "1.63.0"

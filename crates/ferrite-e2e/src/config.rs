@@ -30,6 +30,15 @@ fn config_from_variables(read: impl Fn(&str) -> Option<String>) -> E2eResult<E2e
             *field = value;
         }
     }
+    if let Some(value) = read("FERRITE_E2E_RUN_NAME") {
+        config.run_name = Some(value);
+    }
+    if let Some(value) = read("FERRITE_E2E_METADATA") {
+        config.metadata = serde_json::from_str(&value)?;
+    }
+    if let Some(value) = read("FERRITE_E2E_SLOW_TESTS") {
+        config.report_slow_tests = serde_json::from_str(&value)?;
+    }
     if let Some(base) = read("FERRITE_E2E_BASE_URL") {
         config.base_url = Some(base);
     }
@@ -139,6 +148,9 @@ fn config_from_variables(read: impl Fn(&str) -> Option<String>) -> E2eResult<E2e
 
 pub(crate) fn validate_config(config: &E2eConfig) -> E2eResult<()> {
     crate::BrowserKind::parse(&config.browser)?;
+    if let Some(options) = config.report_slow_tests {
+        options.validate().map_err(E2eError::Config)?;
+    }
     crate::OutputRetention::parse(&config.preserve_output)?;
     crate::VideoMode::parse(&config.video)?;
     crate::SnapshotUpdate::parse(&config.update_snapshots)?;
@@ -191,6 +203,42 @@ pub(crate) fn validate_config(config: &E2eConfig) -> E2eResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metadata_environment_preserves_null_empty_and_validates_limits() {
+        let config = config_from_variables(|name| match name {
+            "FERRITE_E2E_CONFIG" => Some(
+                r#"{"run_name":"base","metadata":{"origin":"base"},"report_slow_tests":{"max":5}}"#
+                    .into(),
+            ),
+            "FERRITE_E2E_RUN_NAME" => Some("".into()),
+            "FERRITE_E2E_METADATA" => Some("{}".into()),
+            "FERRITE_E2E_SLOW_TESTS" => Some("null".into()),
+            _ => None,
+        })
+        .unwrap();
+        assert_eq!(config.run_name.as_deref(), Some(""));
+        assert!(config.metadata.unwrap().is_empty());
+        assert!(config.report_slow_tests.is_none());
+        let cleared =
+            config_from_variables(|name| (name == "FERRITE_E2E_METADATA").then(|| "null".into()))
+                .unwrap();
+        assert!(cleared.metadata.is_none());
+        for (key, value) in [
+            ("FERRITE_E2E_METADATA", "[]"),
+            ("FERRITE_E2E_SLOW_TESTS", r#"{"max":1001}"#),
+            ("FERRITE_E2E_SLOW_TESTS", r#"{"threshold_ms":-1}"#),
+            (
+                "FERRITE_E2E_CONFIG",
+                r#"{"report_slow_tests":{"max":1001}}"#,
+            ),
+        ] {
+            assert!(
+                config_from_variables(|name| (name == key).then(|| value.into())).is_err(),
+                "{key}: {value}"
+            );
+        }
+    }
 
     #[test]
     fn snapshot_templates_survive_json_environment_and_validate_all_projects() {

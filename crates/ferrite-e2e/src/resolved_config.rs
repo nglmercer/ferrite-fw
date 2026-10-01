@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 #[serde(default)]
 pub struct ResolvedProjectConfig {
     pub name: Option<String>,
+    pub metadata: Option<crate::E2eMetadata>,
     pub browser: BrowserKind,
     /// Native version; None when a dedicated browser has not launched.
     pub browser_version: Option<String>,
@@ -28,6 +29,9 @@ pub struct ResolvedProjectConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ResolvedRunConfig {
+    pub run_name: Option<String>,
+    pub metadata: Option<crate::E2eMetadata>,
+    pub report_slow_tests: Option<crate::SlowTestOptions>,
     pub workers: usize,
     pub retries: u32,
     pub timeout_ms: u64,

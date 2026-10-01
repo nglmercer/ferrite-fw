@@ -301,10 +301,13 @@ enum EachHook {
 }
 
 /// Metadata available before any test resources exist on a worker.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct WorkerInfo {
     pub worker_index: usize,
     pub project: Option<String>,
+    pub run_name: Option<String>,
+    pub metadata: Option<crate::E2eMetadata>,
+    pub project_metadata: Option<crate::E2eMetadata>,
 }
 
 /// Suite-wide hooks can use the browser and worker fixtures, but no test page.
@@ -1500,10 +1503,10 @@ impl SuiteState {
                     hook.run(
                         runner,
                         fixtures,
-                        &self.worker.clone().unwrap_or(WorkerInfo {
-                            worker_index: 0,
-                            project: project.map(str::to_string),
-                        }),
+                        &self
+                            .worker
+                            .clone()
+                            .unwrap_or(runner.worker_info(0, project.map(str::to_string))),
                     )
                     .await
                 })
@@ -1701,6 +1704,7 @@ pub struct Project {
     pub context_options: Option<ContextOptions>,
     /// Project name (prefixes result names as `"name > test"`).
     pub name: String,
+    pub metadata: Option<crate::E2eMetadata>,
     /// Extra name-or-tag filter applied within this project.
     pub grep: Option<String>,
     /// Retry override for this project.
@@ -1715,6 +1719,10 @@ pub struct Project {
 }
 
 impl Project {
+    pub fn metadata(mut self, metadata: crate::E2eMetadata) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
     /// Select the engine for this project.
     pub fn browser(mut self, browser: BrowserKind) -> Self {
         self.browser = Some(browser);
@@ -1739,6 +1747,7 @@ impl Project {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
+            metadata: None,
             ..Default::default()
         }
     }
@@ -1793,6 +1802,7 @@ fn projects_from_config(config: &crate::E2eConfig) -> E2eResult<Vec<Project>> {
         .iter()
         .map(|input| {
             let mut project = Project::new(input.name.clone());
+            project.metadata = input.metadata.clone();
             project.grep = input.grep.clone();
             project.grep_invert = input.grep_invert.clone();
             project.retries = input.retries;
@@ -2262,6 +2272,9 @@ pub struct Runner {
     active_config: Option<Arc<crate::ResolvedRunConfig>>,
     owned_outputs: Option<Arc<crate::owned_output::OwnedOutputs>>,
     output_retention: crate::OutputRetention,
+    run_name: Option<String>,
+    metadata: Option<crate::E2eMetadata>,
+    report_slow_tests: Option<crate::SlowTestOptions>,
     configuration_emitted: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
@@ -2333,6 +2346,9 @@ impl Runner {
             global_setup: Vec::new(),
             global_teardown: Vec::new(),
             output_dir: config.output_dir.clone(),
+            run_name: config.run_name.clone(),
+            metadata: config.metadata.clone(),
+            report_slow_tests: config.report_slow_tests,
             output_retention: crate::OutputRetention::parse(&config.preserve_output)
                 .unwrap_or_default(),
             screenshot_on_failure: config.screenshot_on_failure(),
@@ -2397,6 +2413,9 @@ impl Runner {
     pub async fn resolve_config(&self, browser: &Browser) -> E2eResult<crate::ResolvedRunConfig> {
         if let Some(error) = &self.configuration_error {
             return Err(E2eError::Config(error.clone()));
+        }
+        if let Some(options) = self.report_slow_tests {
+            options.validate().map_err(E2eError::Config)?;
         }
         let mut names = std::collections::HashSet::new();
         for project in &self.projects {
@@ -2514,6 +2533,10 @@ impl Runner {
             }
             projects.push(crate::ResolvedProjectConfig {
                 name: project.as_ref().map(|project| project.name.clone()),
+                metadata: project
+                    .as_ref()
+                    .and_then(|project| project.metadata.clone())
+                    .or_else(|| self.metadata.clone()),
                 browser: kind,
                 browser_version: launch.is_none().then(|| browser_version.clone()),
                 launch_options: launch,
@@ -2543,6 +2566,9 @@ impl Runner {
             });
         }
         Ok(crate::ResolvedRunConfig {
+            run_name: self.run_name.clone(),
+            metadata: self.metadata.clone(),
+            report_slow_tests: self.report_slow_tests,
             workers: self.workers,
             retries: self.retries,
             timeout_ms: duration_ms(self.test_timeout),
@@ -2587,6 +2613,35 @@ impl Runner {
         self
     }
 
+    #[must_use]
+    pub fn run_name(mut self, name: impl Into<String>) -> Self {
+        self.run_name = Some(name.into());
+        self
+    }
+    #[must_use]
+    pub fn metadata(mut self, metadata: crate::E2eMetadata) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+    /// None disables summaries; defaults are opt-in for compatible reports.
+    #[must_use]
+    pub fn report_slow_tests(mut self, options: Option<crate::SlowTestOptions>) -> Self {
+        self.report_slow_tests = options;
+        self
+    }
+    fn worker_info(&self, worker_index: usize, project: Option<String>) -> WorkerInfo {
+        WorkerInfo {
+            worker_index,
+            run_name: self.run_name.clone(),
+            metadata: self.metadata.clone(),
+            project_metadata: self
+                .active_config
+                .as_ref()
+                .and_then(|config| config.project(project.as_deref()))
+                .and_then(|project| project.metadata.clone()),
+            project,
+        }
+    }
     /// Parallel workers.
     #[must_use]
     pub fn workers(mut self, workers: usize) -> Self {
@@ -4068,10 +4123,7 @@ async fn run_one(
             AttemptGuard::new(runner.reporters.clone(), info.clone(), Arc::clone(&history));
         worker_fixtures.values.inner.insert(
             TypeId::of::<WorkerInfo>(),
-            Arc::new(WorkerInfo {
-                worker_index,
-                project: item.project.clone(),
-            }),
+            Arc::new(runner.worker_info(worker_index, item.project.clone())),
         );
         worker_fixtures
             .values
@@ -4135,10 +4187,7 @@ async fn run_one(
                 test,
                 runner,
                 worker_fixtures,
-                WorkerInfo {
-                    worker_index,
-                    project: item.project.clone(),
-                },
+                runner.worker_info(worker_index, item.project.clone()),
                 deadline,
                 control,
             ))
@@ -5557,6 +5606,7 @@ mod suite_lifecycle_tests {
                 WorkerInfo {
                     worker_index: 0,
                     project: None,
+                    ..Default::default()
                 },
                 crate::operation::Deadline::new(Duration::ZERO),
                 &crate::CancellationToken::new(),
@@ -5606,7 +5656,8 @@ mod suite_lifecycle_tests {
                 &mut FixtureState::default(),
                 WorkerInfo {
                     worker_index: 0,
-                    project: None
+                    project: None,
+                    ..Default::default()
                 },
                 crate::operation::Deadline::new(Duration::from_millis(20)),
                 &token

@@ -29,6 +29,7 @@ impl TestReport {
         &self,
         directory: &Path,
     ) -> E2eResult<(ReportBundle, TestReport)> {
+        self.slow_tests()?;
         fs::create_dir_all(directory.join("artifacts"))?;
         let mut copier = Copier {
             directory: directory.to_path_buf(),
