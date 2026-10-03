@@ -942,3 +942,37 @@ relative dependency normalization, concurrent update ordering, prune/custom-even
 cleanup, syntax-error recovery or browser framework state preservation. Those
 remain assigned alongside complete Refresh, framework HMR, SSR/checkers and the
 full mission. No new template/support profile is advertised.
+
+### Serialize incoming HMR message execution
+
+Incoming WebSocket messages now enter one promise queue, so asynchronous module
+imports/disposal/accept callbacks finish before the next message runs. This
+prevents a slower earlier module evaluation calling stale boundary callbacks
+after a newer update. A rejected message handler is reported and the queue
+recovers instead of blocking every later update. Reconnects share the queue.
+
+Extended the actual-client ESM fixture: two messages arrive simultaneously, the
+older module deliberately waits before evaluation, and strict callback/disposer
+history must remain ordered. A deliberate custom-handler failure rejects that
+message; the following sixth module edit still advances the current boundary.
+The expected failure is logged by the actual client, not suppressed as success.
+
+Validation:
+
+- `cargo test -p ferrite-frameworks --test hmr_client --locked -- --ignored --nocapture`:
+  actual client fixture passed (0.11 seconds), with ordered six-edit transitions,
+  retained data and post-error continuation.
+- `cargo test -p ferrite-hmr --locked`: two tests passed.
+- `cargo clippy -p ferrite-hmr -p ferrite-frameworks --all-targets --locked -- -D warnings`
+  and final framework Clippy rerun: passed. Formatting/diff checks passed.
+- Fresh CLI build then
+  `FERRITE_CLI_PATH=/home/meme/Documentos/challenges/ferrite-fw/target/debug/ferrite FERRITE_CHROMIUM_PATH=/home/meme/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome cargo test -p ferrite-test --test generated_apps --locked -- --ignored --nocapture`:
+  four tests passed (70.68 seconds), exercising all six client profiles in
+  Chromium/Firefox through create/frozen install/dev interaction/edit/CSS/build/
+  preview. Custom compiler locks and Node-free native profiles remain covered.
+  Output: `/tmp/ferrite-ordered-hmr-acceptance.log`.
+
+This establishes ordered client message handling and preserves exercised generated
+profiles; it does not establish complete React hook/state conformance, dependency
+acceptance, syntax-error recovery or bounded/cancellable update queues. Remaining
+framework HMR, SSR/checkers, adapters and the complete mission stay active.

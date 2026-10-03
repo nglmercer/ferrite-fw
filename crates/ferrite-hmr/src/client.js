@@ -94,6 +94,7 @@ async function fetchUpdate(path, timestamp) {
 
 let socket = null;
 let retries = 0;
+let messageQueue = Promise.resolve();
 
 function connect() {
   socket = new WebSocket(socketHost);
@@ -101,64 +102,70 @@ function connect() {
     retries = 0;
     console.log("[ferrite] connected");
   });
-  socket.addEventListener("message", async (event) => {
-    let payload;
-    try {
-      payload = JSON.parse(event.data);
-    } catch {
-      return;
-    }
-    switch (payload.type) {
-      case "connected":
-        clearError();
-        break;
-      case "update": {
-        clearError();
-        for (const update of payload.updates) {
-          if (update.type === "css-update") {
-            try {
-              await fetchUpdate(update.path, update.timestamp);
-            } catch (err) {
-              console.error("[ferrite] css update failed, reloading", err);
-              location.reload();
-            }
-          } else {
-            console.log(`[ferrite] hmr update ${update.path}`);
-            try {
-              const boundary = hotModules.get(update.acceptedPath);
-              const callbacks = boundary?.callbacks.slice() ?? [];
-              const disposers = boundary?.disposeCallbacks.slice() ?? [];
-              for (const dispose of disposers) await dispose(boundary.data);
-              const next = await fetchUpdate(update.acceptedPath, update.timestamp);
-              for (const { deps, cb } of callbacks) {
-                if (typeof cb === "function" && deps.includes(update.acceptedPath)) await cb(next);
+  socket.addEventListener("message", (event) => {
+    const pending = messageQueue.then(async () => {
+      let payload;
+      try {
+        payload = JSON.parse(event.data);
+      } catch {
+        return;
+      }
+      switch (payload.type) {
+        case "connected":
+          clearError();
+          break;
+        case "update": {
+          clearError();
+          for (const update of payload.updates) {
+            if (update.type === "css-update") {
+              try {
+                await fetchUpdate(update.path, update.timestamp);
+              } catch (err) {
+                console.error("[ferrite] css update failed, reloading", err);
+                location.reload();
               }
-            } catch (err) {
-              console.error("[ferrite] js update failed, reloading", err);
-              location.reload();
+            } else {
+              console.log(`[ferrite] hmr update ${update.path}`);
+              try {
+                const boundary = hotModules.get(update.acceptedPath);
+                const callbacks = boundary?.callbacks.slice() ?? [];
+                const disposers = boundary?.disposeCallbacks.slice() ?? [];
+                for (const dispose of disposers) await dispose(boundary.data);
+                const next = await fetchUpdate(update.acceptedPath, update.timestamp);
+                for (const { deps, cb } of callbacks) {
+                  if (typeof cb === "function" && deps.includes(update.acceptedPath)) await cb(next);
+                }
+              } catch (err) {
+                console.error("[ferrite] js update failed, reloading", err);
+                location.reload();
+              }
             }
           }
+          break;
         }
-        break;
-      }
-      case "full-reload":
-        location.reload();
-        break;
-      case "custom": {
-        const handlers = customHandlers.get(payload.event);
-        handlers?.forEach((cb) => cb(payload.data));
-        break;
-      }
-      case "error":
-        showError(payload.err);
-        break;
-      case "prune": {
-        for (const path of payload.paths ?? []) {
-          hotModules.delete(path);
+        case "full-reload":
+          location.reload();
+          break;
+        case "custom": {
+          const handlers = customHandlers.get(payload.event);
+          handlers?.forEach((cb) => cb(payload.data));
+          break;
         }
-        break;
+        case "error":
+          showError(payload.err);
+          break;
+        case "prune": {
+          for (const path of payload.paths ?? []) {
+            hotModules.delete(path);
+          }
+          break;
+        }
       }
-    }
+    });
+    messageQueue = pending.catch((error) => {
+      console.error("[ferrite] message handler failed", error);
+    });
+    return pending;
   });
   socket.addEventListener("close", () => {
     const delay = Math.min(1000 * 2 ** retries, 30000);

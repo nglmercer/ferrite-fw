@@ -28,7 +28,22 @@ export async function probe({client, app}) {
     writeFileSync(new URL(app), source(version));
     await handlers.message({data: JSON.stringify({type: 'update', updates: [{type: 'js-update', path: app, acceptedPath: app, timestamp: version}]})});
   }
-  return {history: globalThis.history, disposals: globalThis.disposals};
+  // Both messages arrive before either dynamic import completes. Without
+  // serialization the slower update calls the stale callback after the newer one.
+  writeFileSync(new URL(app), `export const version = Number(new URL(import.meta.url).searchParams.get('t'));
+    if (version === 4) await new Promise(resolve => setTimeout(resolve, 30));
+    const hot = globalThis.__ferrite_create_hot__(${JSON.stringify(app)});
+    hot.data.executions = (hot.data.executions || 0) + 1;
+    hot.dispose(data => globalThis.disposals.push(data.executions));
+    hot.accept(next => globalThis.history.push([version, next.version]));
+    if (version === 5) hot.on('fixture:failure', () => { throw new Error('expected handler failure'); });`);
+  const event = (timestamp) => ({data: JSON.stringify({type: 'update', updates: [{type: 'js-update', path: app, acceptedPath: app, timestamp}]})});
+  await Promise.all([handlers.message(event(4)), handlers.message(event(5))]);
+  let rejected = false;
+  try { await handlers.message({data: JSON.stringify({type: 'custom', event: 'fixture:failure', data: null})}); }
+  catch (error) { rejected = error.message === 'expected handler failure'; }
+  await handlers.message(event(6));
+  return {history: globalThis.history, disposals: globalThis.disposals, rejected};
 }
 "#).unwrap();
     let host = ferrite_plugin::node_adapter::NodeAdapterHost::spawn_with_timeout(
@@ -44,8 +59,9 @@ export async function probe({client, app}) {
     let result = host.call_export("hmr-probe", "probe", serde_json::json!({"client": url::Url::from_file_path(client).unwrap().as_str(), "app": url::Url::from_file_path(dir.path().join("App.mjs")).unwrap().as_str()})).await.unwrap();
     assert_eq!(
         result["history"],
-        serde_json::json!([[0, 1], [1, 2], [2, 3]])
+        serde_json::json!([[0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 6]])
     );
-    assert_eq!(result["disposals"], serde_json::json!([1, 2, 3]));
+    assert_eq!(result["disposals"], serde_json::json!([1, 2, 3, 4, 5, 6]));
+    assert_eq!(result["rejected"], true);
     host.shutdown();
 }
