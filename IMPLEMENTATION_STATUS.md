@@ -1575,3 +1575,50 @@ reload, ordered/context/lifecycle hooks, broader plugin conformance and
 cross-platform checks remain assigned. No framework support status is promoted;
 SSR, complete Refresh, framework HMR/checkers, additional frameworks and the full
 remaining mission stay active.
+
+### Include running Node host identity in compilation caches
+
+The Node worker captures its actual version, canonical executable, platform,
+architecture and underlying ABI/library versions before evaluating guests.
+`NodeAdapterHost::profile` queries and caches that typed snapshot; incomplete,
+inconsistent or unsupported responses fail without substituting a host.
+`cache_identity` combines the snapshot with the bridge implementation.
+
+Foreign-hook identities now include that running-host identity alongside source
+and factory options, and advance their namespace to `foreign-hooks-v2`.
+The official Vue/Svelte host now combines its lock graph, running-host identity
+and compiler-wrapper implementation. Its public `host_profile` describes the
+already-started compiler worker separately from SSR runtime selection. Worker
+PIDs and temporary wrapper paths do not influence stable cache identities.
+Doctor remains read-only and does not invoke these execution APIs.
+
+Validation on Linux/Node 26.10.0:
+
+- `cargo test -p ferrite-config -p ferrite -p ferrite-frameworks -p ferrite-plugin --locked`:
+  27 config, 14 facade, 27 framework and 19 plugin unit tests passed, plus four
+  doc tests. New regressions separate version/executable/platform/architecture/
+  ABI keys and require malformed worker profiles to fail. Synthetic profiles
+  prove key isolation only, not compatibility on those other hosts. Output:
+  `/tmp/ferrite-host-identity-all-unit.log`.
+- All five explicitly executed `real_node` transport tests passed. The new test
+  compares reported metadata with an actual guest's process metadata and requires
+  the same identity across distinct workers using the same executable. Output:
+  `/tmp/ferrite-host-identity-node.log`.
+- The actual project-matched Vue/Svelte client/server/runes compiler fixture
+  passed, including equal cache identities across fresh compiler workers, with
+  distinct PIDs and the same running-host profile. The shared foreign-hook
+  dev/production pipeline fixture also passed. Outputs:
+  `/tmp/ferrite-host-identity-compilers.log` and `/tmp/ferrite-host-identity-pipeline.log`.
+- Rebuilt CLI; all 12 explicit Chromium/Firefox generated-app acceptance tests
+  passed with `--test-threads=2` (93.87 seconds), including six existing templates
+  and foreign-hook/dependency/startup flows. Output:
+  `/tmp/ferrite-host-identity-browsers.log`.
+- Workspace compilation, plugin/framework/server all-target Clippy with
+  `--locked -- -D warnings`, formatting and diff checks passed.
+
+Existing Node-compiled cache entries are rebuilt because their plugin identity
+changes. No Ferrite lock/config/global pipeline schema migration. Executable
+binary integrity, execution flags/environment inputs, transitive plugin imports,
+additional Node versions/platforms and the wider cache matrix remain unverified.
+No framework support status is promoted. SSR/renderers, complete Refresh,
+framework HMR/checkers and the full remaining mission stay assigned and active.

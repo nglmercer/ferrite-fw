@@ -34,8 +34,9 @@ impl ForeignHookPlugin {
     ) -> Result<Self> {
         let entry = entry.canonicalize()?;
         let source = std::fs::read(&entry)?;
+        let host_identity = host.cache_identity()?;
         let identity = Hash::of_str(
-            &serde_json::json!({"entry": entry, "source": source, "options": options}).to_string(),
+            &serde_json::json!({"entry": entry, "source": source, "options": options, "host":host_identity}).to_string(),
         )
         .0;
         let source_hash = Hash::of_bytes(&source);
@@ -136,7 +137,7 @@ impl Plugin for ForeignHookPlugin {
             .map(|source| Hash::of_bytes(&source).0)
             .unwrap_or_else(|_| "missing-entry".into());
         format!(
-            "foreign-hooks-v1:{}:{}:{entry_state}",
+            "foreign-hooks-v2:{}:{}:{entry_state}",
             self.handle.name, self.identity
         )
     }

@@ -84,6 +84,7 @@ pub struct NodeCompilerHost {
     root: PathBuf,
     lock: Lockfile,
     lock_path: PathBuf,
+    cache_identity: String,
     _wrapper: tempfile::TempPath,
 }
 impl NodeCompilerHost {
@@ -111,6 +112,7 @@ impl NodeCompilerHost {
             wrapper.as_file().sync_all()?;
             let wrapper = wrapper.into_temp_path();
             let host = NodeAdapterHost::spawn_with_timeout(node_path, timeout)?;
+            let cache_identity = ferrite_core::Hash::of_str(&serde_json::json!({"lock":lock, "host":host.cache_identity()?, "compilerWrapper":include_str!("compiler_worker.mjs")}).to_string()).0;
             let entry = url::Url::from_file_path(&wrapper).map_err(|()| {
                 FerriteError::Build(
                     "compiler worker path cannot be represented as a file URL".into(),
@@ -122,6 +124,7 @@ impl NodeCompilerHost {
                 root,
                 lock,
                 lock_path,
+                cache_identity,
                 _wrapper: wrapper,
             })
         })
@@ -132,13 +135,14 @@ impl NodeCompilerHost {
     }
     /// Stable compiler graph identity used by shared pipeline caches.
     pub fn cache_identity(&self) -> String {
-        ferrite_core::Hash::of_str(
-            &serde_json::to_string(&self.lock).expect("lock graph serializes"),
-        )
-        .0
+        self.cache_identity.clone()
     }
     pub fn process_id(&self) -> Result<u32> {
         self.host.process_id()
+    }
+    /// Identity of the explicitly started compiler worker, not the SSR runtime.
+    pub fn host_profile(&self) -> Result<ferrite_plugin::node_adapter::NodeHostProfile> {
+        self.host.profile()
     }
     pub fn cancel(&self) {
         self.host.shutdown();

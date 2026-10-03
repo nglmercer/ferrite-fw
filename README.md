@@ -254,6 +254,11 @@ imports — plus the items below.
   the entry module, and dynamic profile configuration fails. Doctor only locates
   entries/executables and reports execution as unverified; dev/build validate
   the required hook contract. Inspect omits factory options from its report.
+  Running Node hosts expose `profile()` with their actual executable, Node/V8
+  and ABI versions, platform and architecture. Foreign-hook and official
+  Vue/Svelte compiler cache identities include this profile and the bridge/
+  compiler-wrapper implementation. This is cache identity, not a compatibility
+  claim for untested Node versions; doctor still does not start a host.
 - **Markdown docs + vendored utility CSS.** `ferrite-docs` turns `.md`
   files into JS modules exporting rendered HTML; `ferrite-tailwind`
   compiles `ferrite:tailwind.css` from project content using the

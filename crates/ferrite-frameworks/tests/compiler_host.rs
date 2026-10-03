@@ -42,6 +42,29 @@ async fn actual_project_matched_compilers_client_server_and_runes() {
     .await
     .unwrap();
     let process = host.process_id().unwrap();
+    let profile = host.host_profile().unwrap();
+    assert!(profile.executable.is_absolute());
+    assert_eq!(
+        profile.node_version,
+        format!("v{}", profile.versions["node"])
+    );
+    let cache_identity = host.cache_identity();
+    let second = NodeCompilerHost::new(
+        root.clone(),
+        root.join("ferrite.lock"),
+        None,
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap();
+    assert_ne!(process, second.process_id().unwrap());
+    assert_eq!(profile, second.host_profile().unwrap());
+    assert_eq!(
+        cache_identity,
+        second.cache_identity(),
+        "host identity must not depend on worker PID/temp wrapper path"
+    );
+    second.cancel();
     let compiler = OxcCompiler::new(Default::default());
     let vue = "<script setup lang='ts'>import { ref } from 'vue'; const count = ref<number>(0); const color = ref('red');</script><template><section><template v-if='true'><button @click='count++'>{{ count }}</button></template></section></template><style scoped>button { color: v-bind(color); }</style><style module>.label { font-weight: bold; }</style>";
     for (target, development) in [

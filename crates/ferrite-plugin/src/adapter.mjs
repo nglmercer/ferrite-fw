@@ -17,6 +17,15 @@ const plugins = new Map();
 const hookPlugins = new Map();
 const registeredEntries = new Set();
 const supportedHooks = new Set(['resolveId', 'load', 'transform']);
+// Capture the running host before any guest is evaluated. This is capability
+// identity, not a promise of compatibility for every Node version.
+const hostProfile = {
+  nodeVersion: process.version,
+  executable: realpathSync(process.execPath),
+  platform: process.platform,
+  arch: process.arch,
+  versions: {...process.versions},
+};
 function hookHandler(value, name) {
   if (value == null) return null;
   if (typeof value === 'function') return value;
@@ -118,7 +127,9 @@ rl.on("line", (line) => {
   }
   tail = tail
     .then(async () => {
-      if (message.cmd === "register") {
+      if (message.cmd === "profile") {
+        respond(message.id, true, hostProfile);
+      } else if (message.cmd === "register") {
         await register(message.id, message.name, message.entry, message.profile, message.options);
       } else if (message.cmd === "call") {
         const module = plugins.get(message.name);

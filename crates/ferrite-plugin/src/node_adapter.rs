@@ -40,11 +40,23 @@ struct NodeAdapterInner {
     next_id: AtomicU64,
     pending: Mutex<HashMap<u64, mpsc::Sender<AdapterResponse>>>,
     registered: Mutex<HashMap<String, String>>,
+    profile: Mutex<Option<NodeHostProfile>>,
     timeout: Duration,
     stopped: AtomicBool,
     _script: tempfile::TempPath,
     /// Reader thread handle (joined on drop after killing the child).
     reader: Mutex<Option<std::thread::JoinHandle<()>>>,
+}
+
+/// Actual persistent worker identity, captured before guest evaluation.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct NodeHostProfile {
+    pub node_version: String,
+    pub executable: PathBuf,
+    pub platform: String,
+    pub arch: String,
+    pub versions: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -101,6 +113,7 @@ impl NodeAdapterHost {
             next_id: AtomicU64::new(1),
             pending: Mutex::new(HashMap::new()),
             registered: Mutex::new(HashMap::new()),
+            profile: Mutex::new(None),
             timeout,
             stopped: AtomicBool::new(false),
             _script: script_file,
@@ -139,6 +152,47 @@ impl NodeAdapterHost {
     /// Register `entry` (file path or `file://` URL) under `name`.
     pub fn register_plugin(&self, name: &str, entry: &str) -> Result<()> {
         self.register(name, entry, None)
+    }
+
+    /// Query/cache the actual worker profile; unknown/malformed profiles fail.
+    /// This method starts no worker and never substitutes another executable.
+    pub fn profile(&self) -> Result<NodeHostProfile> {
+        let mut cached = self.inner.profile.lock().map_err(|_| poison("profile"))?;
+        if let Some(profile) = cached.as_ref() {
+            return Ok(profile.clone());
+        }
+        let response = self.inner.request(serde_json::json!({"cmd":"profile"}))?;
+        if !response.ok {
+            return Err(FerriteError::Build(
+                response
+                    .error
+                    .unwrap_or_else(|| "Node host profile unavailable".into()),
+            ));
+        }
+        let profile: NodeHostProfile =
+            serde_json::from_value(response.result).map_err(|error| {
+                FerriteError::Build(format!("Node host profile protocol mismatch: {error}"))
+            })?;
+        if profile.node_version.is_empty()
+            || !profile.executable.is_absolute()
+            || profile.platform.is_empty()
+            || profile.arch.is_empty()
+            || profile
+                .versions
+                .get("node")
+                .is_none_or(|version| format!("v{version}") != profile.node_version)
+        {
+            return Err(FerriteError::Build(
+                "Node host profile is incomplete or inconsistent".into(),
+            ));
+        }
+        *cached = Some(profile.clone());
+        Ok(profile)
+    }
+
+    /// Stable identity of the running host ABI and protocol implementation.
+    pub fn cache_identity(&self) -> Result<String> {
+        Ok(profile_cache_identity(&self.profile()?))
     }
 
     /// Register one default factory/object or named-hook module in the validated
@@ -230,6 +284,13 @@ impl NodeAdapterHost {
             .map(|registered| registered.contains_key(name))
             .unwrap_or(false)
     }
+}
+
+fn profile_cache_identity(profile: &NodeHostProfile) -> String {
+    ferrite_core::Hash::of_str(
+        &serde_json::json!({"profile":profile, "bridge":ADAPTER_SCRIPT}).to_string(),
+    )
+    .0
 }
 
 #[async_trait::async_trait]
@@ -491,6 +552,90 @@ fn find_on_path(name: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_cache_identity_separates_runtime_and_abi_profiles() {
+        let profile = NodeHostProfile {
+            node_version: "v26.10.0".into(),
+            executable: "/node".into(),
+            platform: "linux".into(),
+            arch: "x64".into(),
+            versions: [
+                ("node".into(), "26.10.0".into()),
+                ("v8".into(), "tested".into()),
+            ]
+            .into(),
+        };
+        let expected = profile_cache_identity(&profile);
+        assert_eq!(expected, profile_cache_identity(&profile.clone()));
+        for field in ["version", "executable", "platform", "arch", "abi"] {
+            let mut changed = profile.clone();
+            match field {
+                "version" => {
+                    changed.node_version = "v27.0.0".into();
+                    changed.versions.insert("node".into(), "27.0.0".into());
+                }
+                "executable" => changed.executable = "/different-node".into(),
+                "platform" => changed.platform = "darwin".into(),
+                "arch" => changed.arch = "arm64".into(),
+                _ => {
+                    changed.versions.insert("v8".into(), "different".into());
+                }
+            }
+            assert_ne!(expected, profile_cache_identity(&changed), "{field}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn malformed_worker_profiles_fail_without_fallback() {
+        for profile in [
+            serde_json::Value::Null,
+            serde_json::json!({"nodeVersion":"v26.10.0"}),
+            serde_json::json!({"nodeVersion":"v26.10.0", "executable":"/node", "platform":"linux", "arch":"x64", "versions":{"node":"27.0.0"}}),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            fake_node_script(
+                dir.path(),
+                &format!("{EXTRACT_ID} echo '{{\"id\":'$id',\"ok\":true,\"result\":{profile}}}';"),
+            );
+            let host = spawn_fake(dir.path());
+            let error = host.cache_identity().unwrap_err();
+            assert!(error.to_string().contains("profile"), "{error}");
+            host.shutdown();
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires real Node; executed explicitly"]
+    async fn real_node_reports_stable_running_host_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = dir.path().join("probe.mjs");
+        std::fs::write(&entry, "export function probe() { return {nodeVersion:process.version, executable:process.execPath, platform:process.platform, arch:process.arch, versions:process.versions}; }").unwrap();
+        let host = NodeAdapterHost::spawn(None).unwrap();
+        let profile = host.profile().unwrap();
+        let identity = host.cache_identity().unwrap();
+        host.register_plugin("probe", &entry.to_string_lossy())
+            .unwrap();
+        let observed: NodeHostProfile = serde_json::from_value(
+            host.call_export("probe", "probe", serde_json::Value::Null)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(profile.node_version, observed.node_version);
+        assert_eq!(profile.versions, observed.versions);
+        assert_eq!(
+            profile.executable,
+            observed.executable.canonicalize().unwrap()
+        );
+        assert_eq!(identity, host.cache_identity().unwrap());
+        let other = NodeAdapterHost::spawn(None).unwrap();
+        assert_ne!(host.process_id().unwrap(), other.process_id().unwrap());
+        assert_eq!(identity, other.cache_identity().unwrap());
+        host.shutdown();
+        other.shutdown();
+    }
 
     /// Fake `node`: replays canned responses for `register`/`hook`.
     fn fake_node_script(dir: &std::path::Path, behavior: &str) {
