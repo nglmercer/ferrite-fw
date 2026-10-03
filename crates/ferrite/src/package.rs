@@ -211,7 +211,7 @@ fn render_main_rs(embed: bool) -> String {
              \n\
              mod assets;\n\
              \n\
-             use axum::http::{StatusCode, Uri};\n\
+             use axum::http::{Method, StatusCode, Uri};\n\
              use axum::response::{IntoResponse, Response};\n\
              \n\
              #[tokio::main]\n\
@@ -229,24 +229,28 @@ fn render_main_rs(embed: bool) -> String {
              axum::serve(listener, app).await.unwrap();\n\
              }\n\
              \n\
-             async fn handler(uri: Uri) -> Response {\n\
+             async fn handler(method: Method, uri: Uri) -> Response {\n\
+             if method != Method::GET && method != Method::HEAD {\n\
+             return (StatusCode::METHOD_NOT_ALLOWED, [(axum::http::header::ALLOW, \"GET, HEAD\")]).into_response();\n\
+             }\n\
              let mut path = uri.path().to_string();\n\
              if path.ends_with('/') {\n\
              path.push_str(\"index.html\");\n\
              }\n\
              if let Some(found) = assets::get(&path) {\n\
-             return respond(found);\n\
+             return respond(found, method == Method::HEAD);\n\
              }\n\
              StatusCode::NOT_FOUND.into_response()\n\
              }\n\
              \n\
-             fn respond((mime, bytes): (&str, Vec<u8>)) -> Response {\n\
+             fn respond((mime, bytes): (&str, Vec<u8>), head: bool) -> Response {\n\
              let mut headers = axum::http::HeaderMap::new();\n\
              headers.insert(\n\
              axum::http::header::CONTENT_TYPE,\n\
              mime.parse().expect(\"valid mime\"),\n\
              );\n\
-             (headers, bytes).into_response()\n\
+             headers.insert(axum::http::header::CONTENT_LENGTH, bytes.len().to_string().parse().expect(\"valid asset size\"));\n\
+             (headers, if head { Vec::new() } else { bytes }).into_response()\n\
              }\n",
         )
     } else {

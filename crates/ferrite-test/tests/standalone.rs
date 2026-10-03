@@ -95,6 +95,19 @@ async fn standalone_build_compiles_and_serves() {
     let body = http_get(port, "/index.html");
     assert!(body.contains("200"), "{body}");
     assert!(body.contains("<script"), "{body}");
+    let head = http_request(port, "/index.html", "HEAD");
+    assert!(head.starts_with("HTTP/1.0 200"), "{head}");
+    assert_eq!(head.split_once("\r\n\r\n").unwrap().1, "");
+    let get_size = body.split_once("\r\n\r\n").unwrap().1.len();
+    assert!(
+        head.to_lowercase()
+            .contains(&format!("content-length: {get_size}\r\n")),
+        "{head}"
+    );
+
+    let post = http_request(port, "/index.html", "POST");
+    assert!(post.starts_with("HTTP/1.0 405"), "{post}");
+    assert!(post.to_lowercase().contains("allow: get, head"), "{post}");
     let missing = http_get(port, "/does-not-exist");
     assert!(missing.contains("404"), "{missing}");
 }

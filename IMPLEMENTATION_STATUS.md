@@ -1,5 +1,18 @@
 # Framework support implementation status
 
+## Embedded static standalone HTTP methods
+
+The generated embedded static server now permits GET/HEAD and rejects other
+methods with 405 and `Allow: GET, HEAD`. HEAD preserves the asset content type
+and byte length while returning no body. The existing real Cargo build/boot test
+was extended, not weakened, to check HEAD body/content length and POST rejection
+beside the prior GET and missing-route checks. The final generated binary test
+was explicitly executed and passed. Facade library tests passed 29 with one
+ignored; final facade/test all-target Clippy with warnings denied, formatting and
+diff checks passed. No configuration migration is needed; POST to static assets
+now fails explicitly. SSR assets need the same HEAD length check, and framework
+SSR/hydration, release matrices and the broader mission remain unfinished.
+
 ## Executed generated-binary acceptance for staged packaging
 
 The Rust standalone test suite now exposes a napi-vm feature and a real SSR
