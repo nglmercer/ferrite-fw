@@ -209,22 +209,71 @@ impl SsrAdapter for JsSsrAdapter {
             }
         };
         let handle = namespace.get_function(&self.export)?.clone();
+        // Keep the legacy URL argument, adding a lossless request payload.
+        // Bytes are an array rather than a lossy UTF-8 body conversion.
+        let request_value = JsValue::from(serde_json::json!({
+            "method": request.method,
+            "uri": request.uri,
+            "headers": request.headers,
+            "body": request.body,
+        }));
         let result = self
             .runtime
-            .call(&handle, vec![JsValue::String(url)])
+            .call(&handle, vec![JsValue::String(url), request_value])
             .await?;
-        let JsValue::String(html) = result else {
-            return Err(FerriteError::Ssr(format!(
-                "`{}` export must return an HTML string",
-                self.export
-            )));
-        };
-        let body = match &self.shell {
-            Some(shell) => inject_shell(shell, &html, &context.preload),
-            None => html,
-        };
-        Ok(SsrResponse::html(body))
+        let mut response = js_render_response(result, &self.export)?;
+        if let (Some(shell), crate::RenderBody::Full(html)) = (&self.shell, &mut response.body) {
+            *html = inject_shell(shell, html, &context.preload);
+        }
+        Ok(response)
     }
+}
+
+/// Structured JavaScript rendering result. Streaming requires a separate
+/// runtime contract and is deliberately not accepted as a JSON result.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct JsRenderResponse {
+    html: String,
+    #[serde(default = "default_render_status")]
+    status: f64,
+    #[serde(default)]
+    headers: Vec<(String, String)>,
+}
+
+fn default_render_status() -> f64 {
+    200.0
+}
+
+fn js_render_response(value: JsValue, export: &str) -> Result<SsrResponse> {
+    if let JsValue::String(html) = value {
+        return Ok(SsrResponse::html(html));
+    }
+    let json = ferrite_runtime::js_value_to_json(&value)?;
+    let rendered: JsRenderResponse = serde_json::from_value(json).map_err(|error| FerriteError::Ssr(format!(
+        "`{export}` must return an HTML string or {{ html, status?, headers?: [[name, value], ...] }}: {error}"
+    )))?;
+    if !rendered.status.is_finite()
+        || rendered.status.fract() != 0.0
+        || !(200.0..=599.0).contains(&rendered.status)
+    {
+        return Err(FerriteError::Ssr(format!(
+            "`{export}` returned invalid final HTTP status {} (expected 200..599)",
+            rendered.status
+        )));
+    }
+    let mut response = SsrResponse::html(rendered.html);
+    response.status = rendered.status as u16;
+    // Explicit Content-Type takes precedence over the HTML default.
+    if rendered
+        .headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+    {
+        response.headers.clear();
+    }
+    response.headers.extend(rendered.headers);
+    Ok(response)
 }
 
 /// A loaded SSR module (`ssrLoadModule`, §22).

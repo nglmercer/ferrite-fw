@@ -177,7 +177,7 @@ mod ssr_tests {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir(root.path().join("src")).unwrap();
         std::fs::write(root.path().join("src/entry-server.ts"),
-            "import { label } from './label.ts'; export function render(url: string): string { return `<h1>${label} ${url}</h1>`; }").unwrap();
+            "import { label } from './label.ts'; export function render(url: string, request: { method: string; body: number[] }) { if (request.method === 'POST') return { html: `<h1>${label} byte=${request.body[0]}</h1>`, status: 202, headers: [['x-renderer', 'compiled']] }; return `<h1>${label} ${url}</h1>`; }").unwrap();
         let dependency = root.path().join("src/label.ts");
         std::fs::write(&dependency, "export const label: string = 'compiled';").unwrap();
         let mut resolved = ferrite::config::resolve_config(
@@ -228,6 +228,17 @@ mod ssr_tests {
         let response = server.inner().http_client.get(&url).send().await.unwrap();
         assert_eq!(response.status().as_u16(), 200);
         assert_eq!(response.text().await.unwrap(), "<h1>compiled /</h1>");
+        let response = server
+            .inner()
+            .http_client
+            .post(&url)
+            .body(vec![255, 0, 128])
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 202);
+        assert_eq!(response.headers()["x-renderer"], "compiled");
+        assert_eq!(response.text().await.unwrap(), "<h1>compiled byte=255</h1>");
         std::fs::write(&dependency, "export const label: string = ;").unwrap();
         let response = server.inner().http_client.get(&url).send().await.unwrap();
         assert_eq!(response.status().as_u16(), 500);

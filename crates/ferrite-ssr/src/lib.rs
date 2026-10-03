@@ -217,6 +217,86 @@ mod tests {
         assert!(error.to_string().contains("missing.node"), "{error}");
     }
 
+    #[cfg(feature = "napi-vm")]
+    #[tokio::test]
+    async fn javascript_renderer_receives_request_and_returns_http_metadata() {
+        let mut resolved = test_resolved();
+        resolved.runtime.backend = "napi-vm".into();
+        let adapter = JsSsrAdapter::from_resolved(&resolved, CompiledModule {
+            id: "request-renderer".into(),
+            code: "export function render(url, request) { return { html: `<h1>${request.method} ${url} ${request.uri} ${request.headers[0][1]} ${request.body[0]}</h1>`, status: 202, headers: [['x-renderer', 'js'], ['set-cookie', 'a=1'], ['set-cookie', 'b=2']] }; }".into(),
+            url: None,
+        }).with_shell("<main><!--ssr-outlet--></main>");
+        let response = adapter
+            .render(
+                SsrHttpRequest {
+                    method: "POST".into(),
+                    uri: "/submit?query=1".into(),
+                    headers: vec![("x-request".into(), "present".into())],
+                    body: vec![255, 0, 128],
+                },
+                SsrContext {
+                    url: "/context".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status, 202);
+        assert!(response
+            .headers
+            .contains(&("x-renderer".into(), "js".into())));
+        assert_eq!(
+            response
+                .headers
+                .iter()
+                .filter(|(name, _)| name == "set-cookie")
+                .count(),
+            2
+        );
+        assert_eq!(
+            response.into_string().await.unwrap(),
+            "<main><h1>POST /context /submit?query=1 present 255</h1></main>"
+        );
+    }
+
+    #[cfg(feature = "napi-vm")]
+    #[tokio::test]
+    async fn javascript_renderer_rejects_invalid_or_unsupported_response_shapes() {
+        let mut resolved = test_resolved();
+        resolved.runtime.backend = "napi-vm".into();
+        for (result, expected) in [
+            ("{html: 'ok', status: 100}", "invalid final HTTP status"),
+            ("{html: 'ok', status: 200.5}", "invalid final HTTP status"),
+            ("{html: 'ok', headers: {'x-test': 'value'}}", "must return"),
+            ("{html: 'ok', stream: true}", "unknown field"),
+            ("{status: 200}", "missing field"),
+            ("42", "must return"),
+        ] {
+            let adapter = JsSsrAdapter::from_resolved(
+                &resolved,
+                CompiledModule {
+                    id: "invalid-renderer".into(),
+                    code: format!("export function render() {{ return {result}; }}"),
+                    url: None,
+                },
+            );
+            let error = adapter
+                .render(
+                    SsrHttpRequest {
+                        method: "GET".into(),
+                        uri: "/".into(),
+                        headers: Vec::new(),
+                        body: Vec::new(),
+                    },
+                    Default::default(),
+                )
+                .await
+                .expect_err("unsupported result must fail");
+            assert!(error.to_string().contains(expected), "{result}: {error}");
+        }
+    }
+
     #[test]
     fn rpc_encodings_roundtrip() {
         let value = serde_json::json!({"id": 1, "tags": ["a", "b"], "nested": {"ok": true}});
