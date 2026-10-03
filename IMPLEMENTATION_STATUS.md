@@ -1,5 +1,35 @@
 # Framework support implementation status
 
+## Explicit JavaScript server entries override conventional discovery
+
+Production server-module builds now honor `[ssr].entry` for JavaScript/TypeScript
+files instead of always choosing a conventional filename. Configured entries
+must be project-relative files without parent traversal. Missing paths,
+directories, and unsupported entry types produce actionable errors. App builds
+validate the selected server entry before writing client output; direct SSR
+builds validate it before creating the pipeline server. Conventional discovery
+uses files rather than arbitrary existing paths and also recognizes
+`src/server.js`. The historical default `src/server.rs` remains the legacy
+sentinel for conventional JS discovery; this change does not introduce Rust
+server compilation.
+
+The regression creates a valid configured TypeScript server entry alongside an
+invalid conventional JS entry, then verifies the app build selects the configured
+module. Negative cases cover missing files, directories, parent/absolute paths,
+and a custom Rust entry, with no client output on rejection.
+
+Validation: seven build integration tests, 17 facade unit tests, and ten
+manifest/shaking/plugin lifecycle/preview integration tests passed; one unrelated
+explicit-host unit test ignored. Facade/test all-target Clippy with `-D warnings`,
+changed-file formatting, and diff checks passed. Migration: explicitly configured
+entries that were previously ignored now control server-module compilation and
+fail clearly when invalid. No lockfile migration is needed.
+
+This is compilation and entry-selection evidence, not SSR renderer execution,
+hydration, server preview, or standalone SSR support. Browser acceptance, full
+workspace, feature matrices, and cross-platform releases were not rerun.
+Framework rendering and the full mission remain incomplete.
+
 ## Build environment validation and server hook resolver
 
 `Builder::build` now rejects environment names other than `client` and `ssr`

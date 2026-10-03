@@ -37,8 +37,9 @@ impl Builder {
 
     /// Build every configured environment (client + SSR when present).
     pub async fn build_app(&self) -> Result<Vec<BuildReport>> {
+        let has_server_entry = self.ssr_entry()?.is_some();
         let mut reports = vec![self.build("client").await?];
-        if self.ssr_entry().is_some() {
+        if has_server_entry {
             reports.push(self.build("ssr").await?);
         } else {
             tracing::info!("no SSR entry found; skipping ssr build");
@@ -59,6 +60,7 @@ impl Builder {
                 "unsupported build environment `{env}`; select `client` or `ssr`. Use mode to select environment files"
             )));
         }
+        let entries = self.default_entries(env)?;
         let mut config = self.config.clone();
         config.is_production = true;
         let server = DevServer::new_without_watcher(config.clone(), self.plugins.clone()).await?;
@@ -82,7 +84,7 @@ impl Builder {
         let container = PluginContainer::new(self.plugins.clone(), Apply::Build);
         // Input/output options (Rollup `options` / `outputOptions`).
         let mut options = ferrite_plugin::BundleOptions {
-            entries: self.default_entries(env),
+            entries,
             treeshake: config.build.minify,
             minify: config.build.minify,
             sourcemap: config.build.sourcemap.enabled(),
@@ -142,11 +144,11 @@ impl Builder {
 
     /// Default `options.entries` seed for `env` (HTML entries for client,
     /// SSR entry candidate for SSR).
-    fn default_entries(&self, env: &str) -> Vec<String> {
+    fn default_entries(&self, env: &str) -> Result<Vec<String>> {
         if env == "ssr" {
-            self.ssr_entry().into_iter().collect()
+            Ok(self.ssr_entry()?.into_iter().collect())
         } else {
-            self.config.build.entries.clone()
+            Ok(self.config.build.entries.clone())
         }
     }
 
@@ -348,18 +350,42 @@ impl Builder {
     }
 
     /// JS SSR entry candidate, when present.
-    fn ssr_entry(&self) -> Option<String> {
+    fn ssr_entry(&self) -> Result<Option<String>> {
+        if let Some(entry) = self
+            .config
+            .ssr
+            .entry
+            .as_deref()
+            .filter(|entry| *entry != "src/server.rs")
+        {
+            let path = std::path::Path::new(entry);
+            if path.is_absolute()
+                || path
+                    .components()
+                    .any(|part| matches!(part, std::path::Component::ParentDir))
+            {
+                return Err(FerriteError::Build(format!("SSR entry `{entry}` must be a project-relative module path without parent traversal")));
+            }
+            if !self.config.root.join(path).is_file() {
+                return Err(FerriteError::Build(format!("configured SSR entry `{entry}` is not a file; create it or correct [ssr].entry")));
+            }
+            if !ferrite_core::ModuleType::from_path(entry).is_js_like() {
+                return Err(FerriteError::Build(format!("configured SSR entry `{entry}` requires a JavaScript/TypeScript module; Rust and framework renderer execution are unavailable in this build path")));
+            }
+            return Ok(Some(entry.to_string()));
+        }
         for candidate in [
             "src/entry-server.ts",
             "src/entry-server.tsx",
             "src/entry-server.js",
             "src/server.ts",
+            "src/server.js",
         ] {
-            if self.config.root.join(candidate).exists() {
-                return Some(candidate.to_string());
+            if self.config.root.join(candidate).is_file() {
+                return Ok(Some(candidate.to_string()));
             }
         }
-        None
+        Ok(None)
     }
 
     /// Rewrite HTML entries to hashed outputs and copy them to `out_dir`.

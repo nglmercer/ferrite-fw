@@ -3,6 +3,49 @@
 use ferrite_test::TempProject;
 
 #[tokio::test]
+async fn configured_server_entry_overrides_discovery_and_fails_before_client_output() {
+    let project = TempProject::new(&[
+        (
+            "index.html",
+            "<script type='module' src='/main.js'></script>",
+        ),
+        ("main.js", "console.log('client');"),
+        (
+            "src/entry-server.js",
+            "this is deliberately invalid JavaScript",
+        ),
+        (
+            "src/renderer.ts",
+            "export const server: boolean = import.meta.env.SSR;",
+        ),
+        ("src/custom.rs", "fn main() {}"),
+    ]);
+    let builder = |entry: &str| {
+        let mut config = project.resolve_config_mode("production");
+        config.ssr.entry = Some(entry.into());
+        ferrite::Builder::new(config, Vec::new())
+    };
+    for entry in [
+        "missing.js",
+        "src",
+        "../outside.js",
+        "/absolute.js",
+        "src/custom.rs",
+    ] {
+        let error = builder(entry).build_app().await.unwrap_err().to_string();
+        assert!(
+            error.contains("SSR entry") && error.contains(entry),
+            "{error}"
+        );
+        assert!(!project.root.join("dist").exists());
+    }
+    let reports = builder("src/renderer.ts").build_app().await.unwrap();
+    assert_eq!(reports.len(), 2);
+    assert_eq!(reports[1].env, "ssr");
+    assert_eq!(reports[1].entries, ["/src/renderer.ts"]);
+}
+
+#[tokio::test]
 async fn ssr_build_hooks_receive_server_resolver_conditions() {
     struct ResolverProbe;
     #[async_trait::async_trait]
