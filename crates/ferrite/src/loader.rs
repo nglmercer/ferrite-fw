@@ -213,6 +213,23 @@ impl ModuleLoader for BuildLoader {
         if query.is_none() && ModuleType::from_path(path) == ModuleType::Css {
             return self.load_css(id, env).await;
         }
+        // Component compilers own CSS query resources whose physical owner has
+        // a component extension. Honor their resolved type for extraction too.
+        if let Some(query) = query {
+            let inline = query
+                .split('&')
+                .any(|part| matches!(part, "inline" | "raw" | "url" | "direct"));
+            if !inline
+                && self
+                    .server
+                    .resolve_module(&id.0, None, env)
+                    .await?
+                    .module_type
+                    == Some(ModuleType::Css)
+            {
+                return self.load_css(id, env).await;
+            }
+        }
         let module = self.server.pipeline_module(id, None, env).await?;
         // Raw assets become hashed files + URL shims.
         if module.is_raw_bytes {
@@ -283,7 +300,7 @@ impl ModuleLoader for BuildLoader {
         }
         // Alignment is all-or-nothing: a partial binding list would
         // misattribute names, so a short list voids the shake facts.
-        let shake = module.shake.as_ref().and_then(|shake| {
+        let mut shake = module.shake.as_ref().and_then(|shake| {
             (import_bindings.len() == imports.len()).then(|| ferrite_transform::ShakeInfo {
                 import_bindings,
                 exports: shake.exports.clone(),
@@ -304,6 +321,21 @@ impl ModuleLoader for BuildLoader {
                     })?;
             code = minified.code;
             map = minified.map.map(|chained| chained.mappings);
+            // Minification can turn re-exports into imports plus local exports.
+            // Analyze the emitted syntax: old positional bindings no longer
+            // describe the names which the browser must link.
+            let parsed = self
+                .server
+                .inner()
+                .compiler
+                .parse(ferrite_transform::ParseRequest {
+                    id: id.0.clone(),
+                    code: code.clone(),
+                    module_type: ModuleType::Js,
+                })?;
+            let (final_imports, final_shake) = final_build_analysis(parsed, &imports)?;
+            imports = final_imports;
+            shake = Some(final_shake);
         }
         Ok(LoadedModule {
             id: id.clone(),
@@ -316,6 +348,48 @@ impl ModuleLoader for BuildLoader {
             shake,
         })
     }
+}
+
+type BuildImport = (String, ModuleId, ferrite_graph::ImportKind);
+
+fn final_build_analysis(
+    parsed: ferrite_transform::ParsedModule,
+    edges: &[BuildImport],
+) -> Result<(Vec<BuildImport>, ferrite_transform::ShakeInfo)> {
+    let mut imports = Vec::new();
+    let mut import_bindings = Vec::new();
+    for import in parsed.imports {
+        if import.is_type {
+            continue;
+        }
+        let edge = edges
+            .iter()
+            .find(|(specifier, _, _)| specifier == &import.specifier)
+            .ok_or_else(|| {
+                FerriteError::Other(format!(
+                    "minifier introduced unresolved import `{}` in `{}`",
+                    import.specifier, parsed.id
+                ))
+            })?;
+        imports.push(edge.clone());
+        import_bindings.push(import.bindings);
+    }
+    let mut exports = parsed.export_details;
+    for export in &mut exports {
+        if let Some(from) = &export.from {
+            export.target = imports
+                .iter()
+                .find(|(specifier, _, _)| specifier == from)
+                .map(|(_, id, _)| id.clone());
+        }
+    }
+    Ok((
+        imports,
+        ferrite_transform::ShakeInfo {
+            import_bindings,
+            exports,
+        },
+    ))
 }
 
 // --- preview -------------------------------------------------------------------
@@ -533,4 +607,46 @@ pub(crate) fn copy_dir(from: &std::path::Path, to: &std::path::Path) -> Result<(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod build_analysis_tests {
+    use super::*;
+    use ferrite_transform::{JsCompiler, OxcCompiler, OxcOptions, ParseRequest};
+
+    #[test]
+    fn minified_reexport_imports_retain_linked_names() {
+        let compiler = OxcCompiler::new(OxcOptions::default());
+        let result = compiler.minify(ferrite_transform::MinifyRequest {
+            id: "/barrel.js".into(),
+            code: "import {ref} from './reactivity.js'; export {TrackOpTypes} from './reactivity.js'; export const value = ref(0);".into(),
+            sourcemap: false,
+            input_map: None,
+        }).unwrap();
+        let parsed = compiler
+            .parse(ParseRequest {
+                id: "/barrel.js".into(),
+                code: result.code,
+                module_type: ModuleType::Js,
+            })
+            .unwrap();
+        let edges = vec![(
+            "./reactivity.js".into(),
+            ModuleId::new("/reactivity.js"),
+            ferrite_graph::ImportKind::Static,
+        )];
+        let expected: Vec<_> = parsed
+            .imports
+            .iter()
+            .map(|import| import.bindings.clone())
+            .collect();
+        let (imports, shake) = final_build_analysis(parsed, &edges).unwrap();
+        assert_eq!(imports.len(), shake.import_bindings.len());
+        assert_eq!(shake.import_bindings, expected);
+        assert!(shake
+            .exports
+            .iter()
+            .any(|export| export.exported == "TrackOpTypes"
+                && export.target == Some(ModuleId::new("/reactivity.js"))));
+    }
 }

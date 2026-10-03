@@ -139,7 +139,7 @@ pub struct DevServerInner {
 impl DevServer {
     /// Create a dev server (runs `config_resolved`, starts the watcher).
     pub async fn new(config: ResolvedConfig, plugins: Vec<Arc<dyn Plugin>>) -> Result<Self> {
-        Self::new_inner(config, plugins, true).await
+        Self::new_inner(config, plugins, true, None).await
     }
 
     /// Create a server without the file watcher (builds, one-shot transforms).
@@ -147,7 +147,16 @@ impl DevServer {
         config: ResolvedConfig,
         plugins: Vec<Arc<dyn Plugin>>,
     ) -> Result<Self> {
-        Self::new_inner(config, plugins, false).await
+        Self::new_inner(config, plugins, false, None).await
+    }
+
+    /// One-shot shared pipeline with an explicit lowering compiler.
+    pub async fn new_without_watcher_with_compiler(
+        config: ResolvedConfig,
+        plugins: Vec<Arc<dyn Plugin>>,
+        compiler: Arc<dyn JsCompiler>,
+    ) -> Result<Self> {
+        Self::new_inner(config, plugins, false, Some(compiler)).await
     }
 
     /// Inner constructor.
@@ -155,6 +164,7 @@ impl DevServer {
         config: ResolvedConfig,
         plugins: Vec<Arc<dyn Plugin>>,
         watch: bool,
+        compiler_override: Option<Arc<dyn JsCompiler>>,
     ) -> Result<Self> {
         let mode = if config.is_production {
             Apply::Build
@@ -163,7 +173,10 @@ impl DevServer {
         };
         let container = PluginContainer::new(plugins, mode);
         container.hook_config_resolved(&config).await?;
-        let compiler = compiler_for_engine(&config.compiler.engine)?;
+        let compiler = match compiler_override {
+            Some(compiler) => compiler,
+            None => compiler_for_engine(&config.compiler.engine)?,
+        };
         let mut client_resolver = Resolver::for_environment(
             config.root.clone(),
             &config.resolve,
@@ -229,11 +242,7 @@ impl DevServer {
         plugins: Vec<Arc<dyn Plugin>>,
         compiler: Arc<dyn JsCompiler>,
     ) -> Result<Self> {
-        let mut server = Self::new(config, plugins).await?;
-        // Replace the compiler selected from config.
-        let inner = Arc::get_mut(&mut server.inner).expect("fresh server");
-        inner.compiler = compiler;
-        Ok(server)
+        Self::new_inner(config, plugins, true, Some(compiler)).await
     }
 
     /// Set the SSR adapter.
@@ -265,5 +274,39 @@ impl DevServer {
     #[must_use]
     pub fn inner(&self) -> &Arc<DevServerInner> {
         &self.inner
+    }
+}
+
+#[cfg(test)]
+mod compiler_embedding_tests {
+    use super::*;
+    #[tokio::test]
+    async fn explicit_compiler_is_installed_before_watcher_and_transforms() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("main.ts"),
+            "export const answer: number = 42;",
+        )
+        .unwrap();
+        let mut config = ferrite_config::resolve_config(
+            Default::default(),
+            Some(root.path().to_path_buf()),
+            Default::default(),
+        )
+        .unwrap();
+        config.compiler.engine = "custom-embedding".into();
+        let compiler: Arc<dyn JsCompiler> =
+            Arc::new(ferrite_transform::OxcCompiler::new(Default::default()));
+        let server = DevServer::with_compiler(config, vec![], compiler.clone())
+            .await
+            .unwrap();
+        assert!(Arc::ptr_eq(&server.inner().compiler, &compiler));
+        let module = server
+            .pipeline_module(&ferrite_core::ModuleId::new("/main.ts"), None, "client")
+            .await
+            .unwrap();
+        assert!(module.code.contains("42"));
+        assert!(!module.code.contains(": number"));
+        server.close();
     }
 }

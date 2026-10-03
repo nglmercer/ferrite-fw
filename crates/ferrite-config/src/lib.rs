@@ -675,23 +675,45 @@ impl ResolvedConfig {
     /// Default client environment.
     #[must_use]
     pub fn client_env(&self) -> Environment {
-        self.environments.get("client").cloned().unwrap_or_else(|| {
+        let mut environment = self.environments.get("client").cloned().unwrap_or_else(|| {
             let mut env = Environment::new("client", EnvironmentKind::Client);
             env.target = self.target();
             env.define.clone_from(&self.define);
             env
-        })
+        });
+        environment
+            .define
+            .entry("process.env.NODE_ENV".into())
+            .or_insert_with(|| {
+                if self.is_production {
+                    "\"production\"".into()
+                } else {
+                    "\"development\"".into()
+                }
+            });
+        environment
     }
 
     /// Default SSR environment.
     #[must_use]
     pub fn ssr_env(&self) -> Environment {
-        self.environments.get("ssr").cloned().unwrap_or_else(|| {
+        let mut environment = self.environments.get("ssr").cloned().unwrap_or_else(|| {
             let mut env = Environment::new("ssr", EnvironmentKind::Ssr);
             env.target = self.target();
             env.define.clone_from(&self.define);
             env
-        })
+        });
+        environment
+            .define
+            .entry("process.env.NODE_ENV".into())
+            .or_insert_with(|| {
+                if self.is_production {
+                    "\"production\"".into()
+                } else {
+                    "\"development\"".into()
+                }
+            });
+        environment
     }
 
     /// Parsed build target.
@@ -1395,5 +1417,40 @@ mod tests {
         assert_eq!(overridden.report_slow_tests.unwrap().max, 0);
         assert!(serde_json::from_str::<E2eConfig>(r#"{"metadata": "invalid"}"#).is_err());
         assert!(serde_json::from_str::<E2eConfig>(r#"{"report_slow_tests":{"max":-1}}"#).is_err());
+    }
+    #[test]
+    fn runtime_mode_define_is_defaulted_and_explicit_values_win() {
+        let development =
+            resolve_config(UserConfig::default(), None, CliOverrides::default()).unwrap();
+        for environment in [development.client_env(), development.ssr_env()] {
+            assert_eq!(
+                environment.define["process.env.NODE_ENV"],
+                "\"development\""
+            );
+        }
+        let production = resolve_config(
+            UserConfig::default(),
+            None,
+            CliOverrides {
+                mode: Some("production".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        for environment in [production.client_env(), production.ssr_env()] {
+            assert_eq!(environment.define["process.env.NODE_ENV"], "\"production\"");
+        }
+        let mut user = UserConfig::default();
+        user.define
+            .insert("process.env.NODE_ENV".into(), "\"custom\"".into());
+        let configured = resolve_config(user, None, CliOverrides::default()).unwrap();
+        assert_eq!(
+            configured.client_env().define["process.env.NODE_ENV"],
+            "\"custom\""
+        );
+        assert_eq!(
+            configured.ssr_env().define["process.env.NODE_ENV"],
+            "\"custom\""
+        );
     }
 }

@@ -29,7 +29,7 @@ pub struct Ferrite {
     emitted: Mutex<HashMap<String, ferrite_plugin::EmittedFile>>,
     /// Watch files (plugin context backing).
     watch_files: Mutex<Vec<String>>,
-    commonjs_server: tokio::sync::OnceCell<ferrite_server::DevServer>,
+    pipeline_server: tokio::sync::OnceCell<ferrite_server::DevServer>,
     /// Warnings (plugin context backing).
     warnings: Mutex<Vec<String>>,
 }
@@ -73,7 +73,7 @@ impl Ferrite {
             emitted: Mutex::new(HashMap::new()),
             watch_files: Mutex::new(Vec::new()),
             warnings: Mutex::new(Vec::new()),
-            commonjs_server: tokio::sync::OnceCell::new(),
+            pipeline_server: tokio::sync::OnceCell::new(),
         }
     }
 
@@ -130,6 +130,58 @@ impl Ferrite {
                 kind: ferrite_resolver::ResolveKind::Import,
             })?,
         };
+        // Component and generated-CSS resources use the same pipeline as dev
+        // and build: preserve lowering, query semantics, imports and graph state.
+        if matches!(
+            resolved.module_type,
+            Some(ModuleType::Custom(_) | ModuleType::Css)
+        ) {
+            let server = self
+                .pipeline_server
+                .get_or_try_init(|| {
+                    ferrite_server::DevServer::new_without_watcher_with_compiler(
+                        self.config.clone(),
+                        self.plugins.instances(),
+                        self.compiler.clone(),
+                    )
+                })
+                .await?;
+            let env = if request.environment.is_ssr() {
+                "ssr"
+            } else {
+                "client"
+            };
+            let module = server
+                .pipeline_module(&resolved.id, request.importer.as_ref(), env)
+                .await?;
+            let parsed = self.compiler.parse(ferrite_transform::ParseRequest {
+                id: module.id.0.clone(),
+                code: module.code.clone(),
+                module_type: ModuleType::Js,
+            })?;
+            for id in server.inner().graph.module_ids() {
+                if let Some(node) = server.inner().graph.get(&id) {
+                    self.graph.upsert(node);
+                }
+            }
+            if let (Ok(mut output), Ok(emitted)) =
+                (self.emitted.lock(), server.inner().emitted.lock())
+            {
+                output.extend(emitted.clone());
+            }
+            if let Ok(mut watches) = self.watch_files.lock() {
+                watches.extend(module.dependencies.clone());
+                watches.sort();
+                watches.dedup();
+            }
+            return Ok(ferrite_transform::TransformResult {
+                code: module.code,
+                map: module.map.map(ferrite_core::SourceMap::external),
+                dependencies: module.dependencies,
+                imports: parsed.imports,
+                exports: parsed.exports,
+            });
+        }
         // Load (plugin first, then fs).
         let loaded = match self
             .plugins
@@ -173,6 +225,8 @@ impl Ferrite {
             )
             .await?;
         let pre_map = merge_maps(pre.map.clone(), loaded.map, pre.code == loaded.code)?;
+        let mut defines = self.plugins.compiler_defines(&environment);
+        defines.extend(environment.define.clone());
         let compiled = self
             .compiler
             .transform(ferrite_transform::TransformRequest {
@@ -184,7 +238,7 @@ impl Ferrite {
                 target: self.config.target(),
                 minify: false,
                 sourcemap: self.config.build.sourcemap.enabled(),
-                define: HashMap::new(),
+                define: defines,
                 jsx_runtime: self.config.react.runtime.clone(),
                 development: !self.config.is_production,
             })?;
@@ -233,11 +287,12 @@ impl Ferrite {
             || factory
         {
             let server = self
-                .commonjs_server
+                .pipeline_server
                 .get_or_try_init(|| {
-                    ferrite_server::DevServer::new_without_watcher(
+                    ferrite_server::DevServer::new_without_watcher_with_compiler(
                         self.config.clone(),
                         self.plugins.instances(),
+                        self.compiler.clone(),
                     )
                 })
                 .await?;

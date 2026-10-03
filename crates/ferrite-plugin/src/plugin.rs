@@ -31,6 +31,14 @@ pub trait Plugin: Send + Sync {
         self.name().to_string()
     }
 
+    /// Framework compile-time defaults. Explicit environment/user defines win.
+    fn compiler_defines(
+        &self,
+        _environment: &ferrite_core::Environment,
+    ) -> std::collections::HashMap<String, String> {
+        std::collections::HashMap::new()
+    }
+
     /// Serve/build applicability.
     fn apply(&self) -> Apply {
         Apply::All

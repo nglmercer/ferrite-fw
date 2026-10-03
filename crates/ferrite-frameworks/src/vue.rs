@@ -1,4 +1,4 @@
-//! Vue adapter: official compilation currently unavailable.
+//! Vue adapter: official compilation requires an explicitly enabled host.
 //! Legacy block utilities are retained for API compatibility, not compilation.
 
 use ferrite_core::Result;
@@ -149,6 +149,14 @@ pub fn main_module_code(
 pub struct VuePlugin;
 
 impl VuePlugin {
+    /// Explicitly enable the official compiler pipeline with a validated Node host.
+    pub fn with_host(
+        host: std::sync::Arc<crate::compiler_host::NodeCompilerHost>,
+        development: bool,
+    ) -> crate::HostedFrameworkPlugin {
+        crate::HostedFrameworkPlugin::new(crate::compiler_host::Framework::Vue, host, development)
+    }
+
     /// Create the plugin. Compilation remains unavailable until a validated host exists.
     #[must_use]
     pub fn new(_root: std::path::PathBuf) -> Self {

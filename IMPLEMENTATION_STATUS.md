@@ -326,3 +326,51 @@ Official compiler integration into dev/build resources, watcher ownership, HMR,
 scaffolds, checkers and real SSR renderers/hydration remains assigned. Native and
 embedded compiler hosts, additional framework adapters and release/upstream
 acceptance remain unfinished. The complete mission remains active.
+
+## Official hosted components in the shared pipeline (2026-10-02)
+
+Implemented explicit library opt-in through `VuePlugin::with_host` and
+`SveltePlugin::with_host`, sharing the persistent NodeCompilerHost. Production
+requires a production plugin instance; no implicit Node startup or SSR runtime
+substitution is introduced. Official compiled components, runes modules and
+owner-indexed CSS resources pass through dev and library pipelines with maps,
+watched dependencies, diagnostics and side effects. Raw source requests retain
+original component text. Removed styles fail explicitly instead of returning
+stale resources. BuildLoader extracts generated CSS into production assets.
+Compiler-default Vue flags and NODE_ENV are overridden by explicit user defines.
+
+Fixed three production regressions uncovered by real framework acceptance:
+canonical npm identities now collapse relative-path cycles; scope-aware AST
+constant replacement preserves strings, comments and local bindings; named
+re-export pruning and analysis after minification keep ESM links and chunk
+metadata consistent. Source-map composition now uses binary lookup on dense
+lines. Explicit compiler injection occurs before watcher startup.
+
+Validation executed:
+
+- `cargo test -p ferrite-resolver --locked`: all 15 tests passed, including
+  cyclic relative imports under both preserve-symlink settings.
+- `cargo test -p ferrite-transform -p ferrite-bundler -p ferrite --lib --locked`:
+  45 transform, 18 bundler and 11 library tests passed.
+- `cargo test -p ferrite-transform --features swc defines::tests --locked`:
+  three shared define regressions passed; this is not a full SWC framework matrix.
+- `FERRITE_CHROMIUM_PATH=/home/meme/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome cargo test -p ferrite-test --test framework_compilers --locked -- --ignored --nocapture`:
+  all three tests passed (51.40 seconds), using actual pinned Vue 3.5.22 and
+  Svelte 5.39.6 installed through Ferrite in clean fixture directories.
+  Chromium 153 and Firefox 157 verified rendering, clicks, source edits,
+  watcher invalidation, updated scoped CSS, production CSS extraction,
+  builds with tree shaking/scope hoisting enabled, and preview interaction
+  without page/console errors. The third test verified maps, cache refresh,
+  generated-style ownership, removed-style errors, raw source and exact
+  library/dev output parity. Server compilation was checked, not SSR rendering.
+- `cargo clippy -p ferrite -p ferrite-bundler -p ferrite-test --all-targets --locked -- -D warnings`:
+  passed after the final analysis changes.
+
+These are opt-in library integration fixtures, not advertised `create` profiles.
+Source updates currently use full reloads with intentional state resets; no
+framework-specific HMR/state-preservation claim is made. CLI host configuration,
+generated templates, checkers, real SSR/hydration, preprocessors, complete asset
+coverage, React Refresh, additional adapters and all remaining mission work
+remain assigned. Rendering support in the public registry is not promoted by
+these narrower tests. No lockfile migration beyond the earlier v2 change is
+required by this integration. The complete mission remains active.

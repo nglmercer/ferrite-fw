@@ -130,6 +130,13 @@ impl NodeCompilerHost {
             FerriteError::Build(format!("compiler host initialization failed: {error}"))
         })?
     }
+    /// Stable compiler graph identity used by shared pipeline caches.
+    pub fn cache_identity(&self) -> String {
+        ferrite_core::Hash::of_str(
+            &serde_json::to_string(&self.lock).expect("lock graph serializes"),
+        )
+        .0
+    }
     pub fn process_id(&self) -> Result<u32> {
         self.host.process_id()
     }

@@ -3,11 +3,13 @@
 //! React Refresh remains experimental.
 
 pub mod compiler_host;
+pub mod hosted;
 pub mod react;
 pub mod registry;
 pub mod svelte;
 pub mod vue;
 
+pub use hosted::HostedFrameworkPlugin;
 pub use react::ReactPlugin;
 pub use svelte::SveltePlugin;
 pub use vue::VuePlugin;

@@ -132,7 +132,8 @@ impl DevServer {
         &self,
         environment: &ferrite_core::Environment,
     ) -> HashMap<String, String> {
-        let mut define = environment.define.clone();
+        let mut define = self.inner.plugins.compiler_defines(environment);
+        define.extend(environment.define.clone());
         define.extend(self.env_defines(environment.kind.is_ssr()));
         define
     }

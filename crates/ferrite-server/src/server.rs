@@ -268,12 +268,20 @@ impl DevServer {
 
     /// Resolve an entry specifier to a module id (build entry discovery).
     pub async fn resolve_entry(&self, specifier: &str, env: &str) -> Result<ModuleId> {
+        Ok(self.resolve_module(specifier, None, env).await?.id)
+    }
+
+    /// Resolve a module while preserving its type, ownership and side effects.
+    pub async fn resolve_module(
+        &self,
+        specifier: &str,
+        importer: Option<&ModuleId>,
+        env: &str,
+    ) -> Result<ferrite_resolver::ResolvedId> {
         let environment = self.environment_for(env);
         let ctx = self.plugin_context(&environment);
-        Ok(self
-            .resolve_id(&ctx, specifier, None, &environment)
-            .await?
-            .id)
+        self.resolve_id(&ctx, specifier, importer, &environment)
+            .await
     }
 
     /// Force-reload a module (invalidate + full reload).

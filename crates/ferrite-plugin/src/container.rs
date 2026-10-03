@@ -41,6 +41,19 @@ impl PluginContainer {
         self.plugins.clone()
     }
 
+    /// Collect compile-time defaults in plugin order; user configuration is
+    /// applied by the pipeline afterwards.
+    pub fn compiler_defines(
+        &self,
+        environment: &ferrite_core::Environment,
+    ) -> std::collections::HashMap<String, String> {
+        let mut defines = std::collections::HashMap::new();
+        for plugin in &self.plugins {
+            defines.extend(plugin.compiler_defines(environment));
+        }
+        defines
+    }
+
     /// Plugin names in hook order.
     #[must_use]
     pub fn names(&self) -> Vec<&'static str> {
