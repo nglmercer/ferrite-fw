@@ -889,6 +889,172 @@ async fn concurrent_validation_cannot_roll_back_a_later_successful_edit() {
 }
 
 #[tokio::test]
+async fn failed_pipeline_stages_recover_from_declared_inputs() {
+    struct DeclaredInput;
+    #[async_trait::async_trait]
+    impl Plugin for DeclaredInput {
+        fn name(&self) -> &'static str {
+            "declared-input"
+        }
+        fn enforce(&self) -> Enforce {
+            Enforce::Pre
+        }
+        async fn transform(
+            &self,
+            _: &PluginContext,
+            request: TransformRequest,
+        ) -> Result<Option<TransformResult>> {
+            if request.id != "/entry.js" {
+                return Ok(None);
+            }
+            Ok(Some(TransformResult {
+                map: ferrite_transform::apply_text_edits(&request.id, &request.code, &[], true)?
+                    .1
+                    .map(SourceMap::external),
+                code: request.code,
+                dependencies: vec!["compile-input.js".into()],
+                module_type: None,
+            }))
+        }
+    }
+    struct FailingStage {
+        input: PathBuf,
+        stage: &'static str,
+    }
+    impl FailingStage {
+        fn broken(&self) -> bool {
+            std::fs::read_to_string(&self.input).unwrap() == "broken"
+        }
+        fn error(&self) -> ferrite_core::FerriteError {
+            ferrite_core::FerriteError::Other(format!("{} fixture failure", self.stage))
+        }
+    }
+    #[async_trait::async_trait]
+    impl Plugin for FailingStage {
+        fn name(&self) -> &'static str {
+            "failing-stage"
+        }
+        fn enforce(&self) -> Enforce {
+            if self.stage == "pre" || self.stage == "map" {
+                Enforce::Pre
+            } else {
+                Enforce::Post
+            }
+        }
+        async fn load(
+            &self,
+            ctx: &PluginContext,
+            request: LoadRequest,
+        ) -> Result<Option<LoadResult>> {
+            if request.id == "/entry.js" && self.stage == "load" {
+                ctx.add_watch_file("compile-input.js");
+                if self.broken() {
+                    return Err(self.error());
+                }
+            }
+            Ok(None)
+        }
+        async fn transform(
+            &self,
+            _: &PluginContext,
+            request: TransformRequest,
+        ) -> Result<Option<TransformResult>> {
+            if request.id != "/entry.js" || !self.broken() || self.stage == "load" {
+                return Ok(None);
+            }
+            if self.stage == "pre" || self.stage == "post" {
+                return Err(self.error());
+            }
+            Ok(Some(TransformResult {
+                code: if self.stage == "analysis" {
+                    "const = ;".into()
+                } else {
+                    request.code
+                },
+                map: (self.stage == "map").then(|| SourceMap::external("not a source map")),
+                dependencies: vec![],
+                module_type: None,
+            }))
+        }
+    }
+    for stage in ["load", "pre", "post", "map", "analysis"] {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("entry.js"), "export const answer = 42;").unwrap();
+        let input = root.path().join("compile-input.js");
+        std::fs::write(&input, "broken").unwrap();
+        let config = ferrite_config::resolve_config(
+            Default::default(),
+            Some(root.path().into()),
+            Default::default(),
+        )
+        .unwrap();
+        let server = DevServer::new(
+            config,
+            vec![
+                Arc::new(DeclaredInput),
+                Arc::new(FailingStage {
+                    input: input.clone(),
+                    stage,
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let router = server.router();
+        let serving = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        let url = format!("http://{address}/entry.js");
+        assert_eq!(
+            reqwest::get(&url).await.unwrap().status(),
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            "{stage}"
+        );
+        let entry = server.inner.graph.get(&ModuleId::new("/entry.js")).unwrap();
+        assert!(
+            entry
+                .imports
+                .iter()
+                .any(|edge| edge.resolved.0 == "/compile-input.js"),
+            "{stage}"
+        );
+        let mut messages = server.inner.hmr.subscribe();
+        std::fs::write(&input, "export const ready = true;").unwrap();
+        let message = tokio::time::timeout(std::time::Duration::from_secs(10), messages.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(
+                serde_json::from_str::<ferrite_hmr::HmrMessage>(&message).unwrap(),
+                ferrite_hmr::HmrMessage::FullReload { .. }
+            ),
+            "{stage}: {message}"
+        );
+        assert!(server.inner.hmr_error.lock().unwrap().is_none(), "{stage}");
+        let response = reqwest::get(&url).await.unwrap();
+        assert!(response.status().is_success(), "{stage}");
+        assert!(
+            response.text().await.unwrap().contains("answer = 42"),
+            "{stage}"
+        );
+        assert!(
+            !server
+                .inner
+                .missing_imports
+                .lock()
+                .unwrap()
+                .contains_key(&ModuleId::new("/entry.js")),
+            "{stage}"
+        );
+        server.close();
+        serving.abort();
+    }
+}
+
+#[tokio::test]
 async fn correcting_jsx_owner_manifest_recovers_failed_first_http_load() {
     for manifest in [r#"{"dependencies":{"react":"19","solid-js":"1"}}"#, "{"] {
         let root = tempfile::tempdir().unwrap();

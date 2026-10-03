@@ -269,6 +269,11 @@ impl PluginContainer {
                 .await
                 .map_err(|error| wrap(plugin, "transform", error))?
             {
+                // Retain declared inputs even if map validation or a later
+                // compiler/plugin fails before the complete chain is returned.
+                for dependency in &result.dependencies {
+                    ctx.add_watch_file(dependency);
+                }
                 if result.map.is_none() && result.code != code {
                     ctx.warn(&format!("plugin `{}` changed `{}` without a source map; original source locations are unavailable after this transform. Return a generated-to-input map to restore them", plugin.name(), request.id));
                 }

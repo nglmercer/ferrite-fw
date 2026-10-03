@@ -2403,3 +2403,52 @@ Pre/post-hook failures and map-validation failures still need equivalent
 first-load input retention; concurrent transforms and multiple diagnostics
 remain incomplete. No browser acceptance or full-workspace rerun in this
 increment. The broader framework implementation mission remains active.
+
+
+### Retain inputs across resolved pipeline failures (2026-10-03)
+
+Extended first-load failure retention from core lowering to the resolved module
+pipeline: load hooks, cache hooks, pre/post transforms, map chaining and final
+analysis now share one error boundary. Loaded dependencies enter the per-request
+watch context immediately, and each transform result declares its dependencies
+before map chaining or another plugin can fail. Errors retain those inputs as
+graph edges using the existing recovery tracking. Relative inputs resolve from
+the project root, and external inputs register extra filesystem watches.
+Successful transforms retain the normal pipeline/cleanup/cache behavior. No
+compiler fallback, output substitution or capability promotion was added.
+
+A live HTTP/notify regression exercises five distinct failures (load, pre, post,
+invalid chained map, invalid final JavaScript), including a dependency returned
+by an earlier plugin and a relative load-hook watch. Every case checks the 500,
+retained input edge, correction of only that input, reload message, cleared
+diagnostic, valid compiled output and removal of temporary failure tracking.
+
+Validation: affected plugin/server/test units and config/framework/transform
+integration tests passed: 19 plugin units, 47 server units, 19 integration
+tests. Ten real-Node plugin tests were then explicitly executed and all passed;
+no remaining ignored tests establish support. The pinned real Vue 3.5.22 and
+Svelte 5.39.6 compiler fixture also passed its client/server compilation and
+runes checks; server compilation is not SSR rendering evidence. Two unrelated
+server external-tool tests remained ignored. Affected all-target Clippy with
+`--locked -- -D warnings`, changed-file formatting, fresh CLI build and diff
+checks passed. Logs:
+/tmp/ferrite-pipeline-failure-inputs-stages.log,
+/tmp/ferrite-pipeline-failure-inputs-tests.log,
+/tmp/ferrite-pipeline-failure-inputs-node.log,
+/tmp/ferrite-pipeline-failure-inputs-compilers.log,
+/tmp/ferrite-pipeline-failure-inputs-clippy.log,
+/tmp/ferrite-pipeline-failure-inputs-build.log.
+
+Resolution-hook failure retention, filesystem watch failures/missing external
+inputs, asynchronous/concurrent pipeline races, post-graph lifecycle hook
+failures and multiple diagnostics remain incomplete. The broader mission
+remains active.
+
+All six explicitly executed generated client browser tests passed in 155.69
+seconds: Vanilla/React/Vue/Svelte, JS/TS, Chromium/Firefox (16 profile flows).
+They execute create/install, dev interaction, edits/HMR or invalidation, syntax
+recovery, build and preview interaction; native profiles exclude Node from CLI
+PATH and Vue/Svelte use explicitly enabled Node compiler hosts. Output:
+/tmp/ferrite-pipeline-failure-inputs-browsers.log. No full-workspace or
+cross-platform rerun and no promotion from experimental support in this
+increment.

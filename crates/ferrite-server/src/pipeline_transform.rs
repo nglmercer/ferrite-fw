@@ -750,6 +750,19 @@ impl DevServer {
         importer: &ModuleId,
         inputs: Vec<PathBuf>,
     ) -> Result<()> {
+        let inputs: Vec<_> = inputs
+            .into_iter()
+            .map(|path| {
+                if path.is_absolute() {
+                    path
+                } else {
+                    self.inner.config.root.join(path)
+                }
+            })
+            .collect();
+        for input in &inputs {
+            self.watch_extra(input);
+        }
         self.track_missing_import(importer, "ferrite:failed-transform-input", inputs)
     }
 

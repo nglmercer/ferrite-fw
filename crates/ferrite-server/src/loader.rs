@@ -45,6 +45,30 @@ impl DevServer {
         let id = unvirtualize(&id);
         // 1. Resolve (plugin first, then resolver).
         let resolved = self.resolve_id(&ctx, &id.0, importer, &environment).await?;
+        let failed_id = resolved.id.clone();
+        let result = self
+            .pipeline_resolved_module(&ctx, resolved, env, &environment)
+            .await;
+        if result.is_err() {
+            let inputs = module_watches
+                .lock()
+                .map_err(|_| FerriteError::Other("module watch lock poisoned".into()))?
+                .iter()
+                .map(std::path::PathBuf::from)
+                .collect();
+            self.track_failed_transform_inputs(&failed_id, inputs)?;
+        }
+        result
+    }
+
+    async fn pipeline_resolved_module(
+        &self,
+        ctx: &PluginContext<'_>,
+        resolved: ResolvedId,
+        env: &str,
+        environment: &ferrite_core::Environment,
+    ) -> Result<PipelineModule> {
+        let ssr = env == "ssr";
         if resolved.external {
             return Err(FerriteError::Resolve(format!(
                 "cannot load external module `{}` in dev (mark it `noExternal` or add a shim)",
@@ -68,7 +92,7 @@ impl DevServer {
         let direct_css = query.is_some_and(|q| q.contains("direct")) && path_part.ends_with(".css");
         // 4. Load (plugin first, then built-ins / fs).
         let mut loaded = self
-            .load_source_full(&ctx, &resolved_id, &environment)
+            .load_source_full(ctx, &resolved_id, environment)
             .await?;
         let source = loaded.code;
         let mut module_type = loaded.module_type;
@@ -76,6 +100,9 @@ impl DevServer {
             loaded
                 .dependencies
                 .extend(self.jsx_manifest_candidates(&resolved_id));
+        }
+        for dependency in &loaded.dependencies {
+            ctx.add_watch_file(dependency);
         }
         if direct_css {
             module_type = ModuleType::Css;
@@ -87,12 +114,12 @@ impl DevServer {
         // 6. `?raw` / `?url` / `?inline` / `?worker` / `?wasm`.
         if let Some(q) = query {
             if let Some(mut shim) = self
-                .asset_query_shim(&ctx, &resolved_id, path_part, q, &source)
+                .asset_query_shim(ctx, &resolved_id, path_part, q, &source)
                 .await?
             {
                 shim.dependencies.extend(loaded.dependencies);
                 shim.dependencies.extend(
-                    module_watches
+                    ctx.watch_files
                         .lock()
                         .map_err(|_| FerriteError::Other("module watch lock poisoned".into()))?
                         .clone(),
@@ -102,7 +129,7 @@ impl DevServer {
         }
         // 7. Cache lookup (`shouldTransformCachedModule` may force a
         //    re-transform; by default the cached entry wins).
-        let defines = self.transform_defines(&environment);
+        let defines = self.transform_defines(environment);
         let source_identity = format!(
             "{source}\0{module_type:?}\0{:?}\0{:?}\0{:?}\0{:?}",
             loaded.dependencies, loaded.map, loaded.side_effects, resolved.side_effects
@@ -114,7 +141,7 @@ impl DevServer {
                     .inner
                     .plugins
                     .hook_should_transform_cached_module(
-                        &ctx,
+                        ctx,
                         ferrite_plugin::CachedModuleInfo {
                             id: resolved_id.clone(),
                             environment: environment.kind.clone(),
@@ -133,7 +160,7 @@ impl DevServer {
             .inner
             .plugins
             .hook_transform_phase(
-                &ctx,
+                ctx,
                 HookTransformRequest {
                     id: resolved_id.0.clone(),
                     code: source.clone(),
@@ -152,28 +179,9 @@ impl DevServer {
             loaded.map.map(|map| map.mappings),
             pre.code == source,
         )?;
-        let transformed = self
-            .core_transform(&ctx, &resolved_id, &pre.code, &module_type, &environment)
-            .await;
-        let mut module = match transformed {
-            Ok(module) => module,
-            Err(error) => {
-                let mut inputs = loaded.dependencies.clone();
-                inputs.extend(pre.dependencies.iter().cloned());
-                inputs.extend(
-                    module_watches
-                        .lock()
-                        .map_err(|_| FerriteError::Other("module watch lock poisoned".into()))?
-                        .iter()
-                        .cloned(),
-                );
-                self.track_failed_transform_inputs(
-                    &resolved_id,
-                    inputs.into_iter().map(std::path::PathBuf::from).collect(),
-                )?;
-                return Err(error);
-            }
-        };
+        let mut module = self
+            .core_transform(ctx, &resolved_id, &pre.code, &module_type, environment)
+            .await?;
         module.map = merge_maps(module.map, pre_map, module.code == pre.code)?;
         module.side_effects = loaded.side_effects.or(resolved.side_effects);
         module.dependencies = loaded.dependencies;
@@ -198,7 +206,7 @@ impl DevServer {
                 .inner
                 .plugins
                 .hook_transform_phase(
-                    &ctx,
+                    ctx,
                     HookTransformRequest {
                         id: resolved_id.0.clone(),
                         code: module.code.clone(),
@@ -221,7 +229,7 @@ impl DevServer {
             module.dependencies.extend(hooked.dependencies);
         }
         module.dependencies.extend(
-            module_watches
+            ctx.watch_files
                 .lock()
                 .map_err(|_| FerriteError::Other("module watch lock poisoned".into()))?
                 .clone(),
@@ -272,7 +280,7 @@ impl DevServer {
             || (module.module_type.is_js_like()
                 && ferrite_transform::analyze_commonjs(&module.id.0, &module.code)?.is_commonjs)
         {
-            module = self.convert_cjs(&ctx, module, &environment).await?;
+            module = self.convert_cjs(ctx, module, environment).await?;
         }
         // Legacy path is retained only for explicitly named .cjs/.cts bodies.
 
@@ -280,12 +288,12 @@ impl DevServer {
             && module.commonjs.is_none()
             && needs_cjs_conversion(&resolved_id, &module.code, module.has_module_syntax)
         {
-            module = self.convert_cjs(&ctx, module, &environment).await?;
+            module = self.convert_cjs(ctx, module, environment).await?;
         }
         // 11. Import rewriting (dev URLs, §26/§28).
         if module.module_type.is_js_like() {
             module = self
-                .rewrite_module_imports(&ctx, module, &environment)
+                .rewrite_module_imports(ctx, module, environment)
                 .await?;
         }
         // 12. HMR injection (dev client only; never in production builds).
@@ -303,7 +311,7 @@ impl DevServer {
         let parsed_id = module.id.clone();
         self.inner
             .plugins
-            .hook_module_parsed(&ctx, ferrite_plugin::ModuleParsed { id: parsed_id })
+            .hook_module_parsed(ctx, ferrite_plugin::ModuleParsed { id: parsed_id })
             .await?;
         self.inner.cache.insert(
             &cache_key.0,
