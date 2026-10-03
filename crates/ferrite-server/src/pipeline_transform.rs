@@ -140,7 +140,7 @@ impl DevServer {
                 // Production builds emit self-contained JS (no /@ferrite/client
                 // import); file extraction is the bundler roadmap (§29).
                 let production = self.inner.config.is_production;
-                let js = if extract_css {
+                let js = if extract_css || environment.kind.is_ssr() {
                     if css_id.contains(".module.css") {
                         let exports: std::collections::BTreeMap<_, _> =
                             result.exports.iter().collect();
@@ -160,7 +160,7 @@ impl DevServer {
                     is_modules: css_id.contains(".module.css"),
                     input_map: None,
                 });
-                if !production && !extract_css {
+                if !production && !extract_css && !environment.kind.is_ssr() {
                     module.imports = vec![(
                         "/@ferrite/client".to_string(),
                         ModuleId::new("/@ferrite/client"),

@@ -237,19 +237,17 @@ impl DevServer {
             if !seen.insert(id.clone()) {
                 continue;
             }
-            if id.is_virtual() {
-                continue;
-            }
-            match self.pipeline_module(&id, Some(&importer), "ssr").await {
-                Ok(module) => {
-                    dependencies.push(id.0.clone());
-                    for (_, dep, _) in &module.imports {
-                        queue.push_back((dep.clone(), id.clone()));
-                    }
-                }
-                Err(error) => {
-                    tracing::warn!("ssr: skipping `{id}`: {error}");
-                }
+            let module = self
+                .pipeline_module(&id, Some(&importer), "ssr")
+                .await
+                .map_err(|error| {
+                    ferrite_core::FerriteError::Build(format!(
+                        "SSR dependency `{id}` imported by `{importer}` failed: {error}"
+                    ))
+                })?;
+            dependencies.push(module.id.0.clone());
+            for (_, dep, _) in &module.imports {
+                queue.push_back((dep.clone(), module.id.clone()));
             }
         }
         Ok(SsrModule {

@@ -1,5 +1,33 @@
 # Framework support implementation status
 
+## SSR graph loading preserves virtual modules and required failures
+
+`ssr_load_module` now compiles plugin-owned virtual dependencies through the
+shared pipeline and reports dependency errors with importer context instead of
+logging and skipping them. Returned dependency IDs use compiled canonical IDs.
+The graph walk still deduplicates cycles. SSR CSS lowering now emits module
+exports without DOM style injection or dev-client/HMR imports, while retaining
+the compiled stylesheet payload. Cache namespace v14 prevents reuse of earlier
+SSR CSS wrappers containing browser behavior.
+
+Regressions cover transitive virtual dependencies and a virtual cycle, a required
+virtual syntax error, physical dependency compile failure and correction, and
+development/production CSS-module SSR graphs without browser code. These are
+graph compilation tests, not framework rendering, runtime cycle execution, or
+hydration evidence.
+
+Validation: 53 server and 17 facade unit tests passed, with three unrelated
+explicit-host tests ignored; ten build/manifest integration tests passed. Server
+all-target Clippy with `-D warnings`, changed-file formatting, and diff checks
+passed. A broader workspace gate launched before this increment completed with
+489 passed, zero failed, and 53 ignored across 87 targets; it does not replace a
+final full-workspace gate after these edits. Browser/host feature matrices and
+release checks were not rerun here. Migration: callers relying on incomplete SSR
+graphs after required dependency failure now receive an actionable error;
+virtual modules are no longer omitted. No lockfile/schema migration is needed.
+ModuleRunner cache coherence, real SSR renderers, hydration, additional adapters,
+and the full mission remain incomplete.
+
 ## Preview serves build output beneath the configured base
 
 Configured preview now strips the build base path before resolving static output

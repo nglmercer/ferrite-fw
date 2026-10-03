@@ -7,6 +7,171 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 #[tokio::test]
+async fn ssr_graph_loads_virtual_dependencies_and_rejects_required_compile_failures() {
+    struct VirtualSsr(bool);
+    #[async_trait::async_trait]
+    impl Plugin for VirtualSsr {
+        fn name(&self) -> &'static str {
+            "virtual-ssr-graph"
+        }
+        async fn resolve_id(
+            &self,
+            _: &PluginContext,
+            request: ferrite_plugin::ResolveHookRequest<'_>,
+        ) -> Result<Option<ferrite_resolver::ResolvedId>> {
+            let id = match request.specifier {
+                "virtual:first" | "\0ssr-first" => "\0ssr-first",
+                "virtual:second" | "\0ssr-second" => "\0ssr-second",
+                _ => return Ok(None),
+            };
+            assert!(request.ssr);
+            Ok(Some(ferrite_resolver::ResolvedId::new(id)))
+        }
+        async fn load(
+            &self,
+            _: &PluginContext,
+            request: LoadRequest,
+        ) -> Result<Option<LoadResult>> {
+            let code = match request.id.as_str() {
+                "\0ssr-first" => {
+                    "import { value } from 'virtual:second'; export const answer = value;"
+                }
+                "\0ssr-second" if self.0 => "export const value = ;",
+                "\0ssr-second" => "import 'virtual:first'; export const value = 42;",
+                _ => return Ok(None),
+            };
+            assert!(request.environment.is_ssr());
+            Ok(Some(LoadResult {
+                code: code.into(),
+                module_type: ModuleType::Js,
+                map: None,
+                dependencies: Vec::new(),
+                side_effects: None,
+            }))
+        }
+    }
+    for broken in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("server.js"),
+            "import { answer } from 'virtual:first'; export { answer };",
+        )
+        .unwrap();
+        let config = ferrite_config::resolve_config(
+            Default::default(),
+            Some(root.path().into()),
+            Default::default(),
+        )
+        .unwrap();
+        let server = DevServer::new_without_watcher(config, vec![Arc::new(VirtualSsr(broken))])
+            .await
+            .unwrap();
+        let result = server.ssr_load_module("/server.js").await;
+        if broken {
+            let error = result.unwrap_err().to_string();
+            assert!(
+                error.contains("SSR dependency")
+                    && error.contains("ssr-second")
+                    && error.contains("ssr-first"),
+                "{error}"
+            );
+        } else {
+            let module = result.unwrap();
+            assert_eq!(module.dependencies, ["\0ssr-first", "\0ssr-second"]);
+            let dependency = server
+                .inner
+                .graph
+                .get(&ModuleId::new("\0ssr-second"))
+                .unwrap();
+            assert!(dependency.ssr.code.unwrap().contains("42"));
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(
+        root.path().join("server.js"),
+        "import { value } from './dependency.js'; export { value };",
+    )
+    .unwrap();
+    std::fs::write(root.path().join("dependency.js"), "export const value = ;").unwrap();
+    let config = ferrite_config::resolve_config(
+        Default::default(),
+        Some(root.path().into()),
+        Default::default(),
+    )
+    .unwrap();
+    let server = DevServer::new_without_watcher(config, Vec::new())
+        .await
+        .unwrap();
+    let error = server
+        .ssr_load_module("/server.js")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("dependency.js") && error.contains("server.js"),
+        "{error}"
+    );
+    std::fs::write(
+        root.path().join("dependency.js"),
+        "export const value = 42;",
+    )
+    .unwrap();
+    assert_eq!(
+        server
+            .ssr_load_module("/server.js")
+            .await
+            .unwrap()
+            .dependencies,
+        ["/dependency.js"]
+    );
+}
+
+#[tokio::test]
+async fn ssr_stylesheet_graph_contains_exports_without_browser_hmr_or_dom_code() {
+    for production in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("server.js"),
+            "import classes from './style.module.css'; export const className = classes.button;",
+        )
+        .unwrap();
+        std::fs::write(
+            root.path().join("style.module.css"),
+            ".button { color: red; }",
+        )
+        .unwrap();
+        let config = ferrite_config::resolve_config(
+            Default::default(),
+            Some(root.path().into()),
+            ferrite_config::CliOverrides {
+                is_production: Some(production),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let server = DevServer::new_without_watcher(config, Vec::new())
+            .await
+            .unwrap();
+        let module = server.ssr_load_module("/server.js").await.unwrap();
+        assert_eq!(module.dependencies, ["/style.module.css"]);
+        let css = server
+            .pipeline_module(&ModuleId::new("/style.module.css"), None, "ssr")
+            .await
+            .unwrap();
+        assert!(css.code.contains("button") && css.code.contains("export default"));
+        assert!(
+            !css.code.contains("document")
+                && !css.code.contains("import.meta.hot")
+                && !css.code.contains("/@ferrite/client"),
+            "{}",
+            css.code
+        );
+        assert!(css.imports.is_empty());
+        assert!(css.stylesheet.unwrap().code.contains("red"));
+    }
+}
+
+#[tokio::test]
 async fn stylesheet_payload_survives_hooks_cache_and_dependency_changes() {
     struct StylesheetFixture {
         input: PathBuf,
