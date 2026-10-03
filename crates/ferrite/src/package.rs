@@ -114,8 +114,13 @@ pub fn collect_assets(out_dir: &Path) -> Result<BTreeMap<String, PathBuf>> {
                 if has_server && path == private_server {
                     continue;
                 }
-                if path.file_name().and_then(|name| name.to_str()) == Some(SCAFFOLD_DIR)
-                    && path.parent() == Some(out_dir)
+                if path.parent() == Some(out_dir)
+                    && path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| {
+                            name == SCAFFOLD_DIR || name.starts_with(".ferrite-scaffold-")
+                        })
                 {
                     continue;
                 }
@@ -553,8 +558,39 @@ fn write_standalone_scaffold(
     opts: &StandaloneOptions,
     ssr: Option<SsrScaffold>,
 ) -> Result<StandaloneReport> {
-    let dir = out_dir.join(SCAFFOLD_DIR);
-    reject_scaffold_symlinks(&dir)?;
+    let final_dir = out_dir.join(SCAFFOLD_DIR);
+    reject_scaffold_symlinks(&final_dir)?;
+    let staging = tempfile::Builder::new()
+        .prefix(".ferrite-scaffold-")
+        .tempdir_in(out_dir)?;
+    let mut report = write_standalone_staged(out_dir, staging.path(), opts, ssr)?;
+    let backup = tempfile::Builder::new()
+        .prefix(".ferrite-scaffold-backup-")
+        .tempdir_in(out_dir)?;
+    let old = backup.path().join("previous");
+    let had_previous = final_dir.exists();
+    if had_previous {
+        std::fs::rename(&final_dir, &old)?;
+    }
+    if let Err(error) = std::fs::rename(staging.path(), &final_dir) {
+        if had_previous {
+            if let Err(restore) = std::fs::rename(&old, &final_dir) {
+                let retained = backup.keep();
+                return Err(FerriteError::Build(format!("scaffold publication failed: {error}; restoring previous scaffold failed: {restore}; previous files retained at {}", retained.display())));
+            }
+        }
+        return Err(error.into());
+    }
+    report.dir = final_dir;
+    Ok(report)
+}
+
+fn write_standalone_staged(
+    out_dir: &Path,
+    dir: &Path,
+    opts: &StandaloneOptions,
+    ssr: Option<SsrScaffold>,
+) -> Result<StandaloneReport> {
     // Never embed a previous scaffold into the next one.
     let ssr_bytes = ssr.as_ref().map_or(0, |ssr| ssr.artifact.len() as u64);
     let ssr_files = usize::from(ssr.is_some());
@@ -617,7 +653,7 @@ fn write_standalone_scaffold(
     std::fs::write(dir.join("src/main.rs"), main)?;
     let binary = match opts.target.as_deref() {
         Some(target) => {
-            let built = cargo_build(&dir, target, opts.cargo.as_deref())?;
+            let built = cargo_build(dir, target, opts.cargo.as_deref())?;
             let file = built
                 .file_name()
                 .map(|name| format!("{APP_NAME}-{target}-{}", name.to_string_lossy()))
@@ -631,7 +667,7 @@ fn write_standalone_scaffold(
     std::fs::write(dir.join("STANDALONE.md"), render_readme(opts, &binary))?;
     std::fs::write(dir.join("Dockerfile"), render_dockerfile(opts))?;
     Ok(StandaloneReport {
-        dir,
+        dir: dir.to_path_buf(),
         files: assets.len() + ssr_files,
         bytes,
         embedded_bytes,
@@ -802,6 +838,24 @@ mod tests {
             error.to_string().contains("invalid target triple"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn failed_scaffold_build_preserves_previous_scaffold() {
+        let output = tempfile::tempdir().unwrap();
+        let previous = output.path().join(SCAFFOLD_DIR);
+        std::fs::create_dir(&previous).unwrap();
+        std::fs::write(previous.join("Cargo.toml"), "previous manifest").unwrap();
+        std::fs::write(output.path().join("index.html"), "shell").unwrap();
+        let mut opts = options();
+        opts.target = Some("not-a-valid-target".into());
+        assert!(write_standalone(output.path(), &opts).is_err());
+        assert_eq!(
+            std::fs::read_to_string(previous.join("Cargo.toml")).unwrap(),
+            "previous manifest"
+        );
+        assert!(!previous.join("src").exists());
+        assert_eq!(std::fs::read_dir(output.path()).unwrap().count(), 2);
     }
 
     #[cfg(unix)]

@@ -1,5 +1,24 @@
 # Framework support implementation status
 
+## Scaffold generation stages before publication
+
+Standalone generation now writes and optionally builds in a temporary sibling
+directory before replacing the existing scaffold. Publication retains the old
+tree until rename succeeds, attempts restoration on publication failure, and
+retains a named recovery directory if restoration fails. Internal staging and
+backup trees are excluded from public asset collection. The failure regression
+verifies a bad target preserves the old manifest and leaves no partial sources or
+temporary directories. tempfile is now a runtime facade dependency; its existing
+resolved version is unchanged. Default tests passed 29 with one ignored; final
+feature-enabled tests passed 32 with one ignored; feature-enabled all-target
+Clippy with warnings denied, formatting and diff checks passed. An initial Clippy
+needless-borrow failure was corrected and the final check passed.
+
+This stages scaffold publication, not the whole application build. Copied binary
+publication still occurs separately, concurrent writers/filesystem replacement
+are not isolated, and platform-specific rename behavior needs release tests.
+Framework SSR/hydration and the remainder of the full mission remain unfinished.
+
 ## Existing scaffold write paths reject symlinks
 
 Before any scaffold write, packaging now scans an existing generated tree with
