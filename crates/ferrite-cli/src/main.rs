@@ -24,6 +24,7 @@ async fn main() {
         Command::Remove(args) => cmds::npm::remove(args).await,
         Command::Update(args) => cmds::npm::update(args).await,
         Command::Install(args) => cmds::npm::install(args).await,
+        Command::Doctor(args) => cmds::inspect::doctor(args, cli.config, cli.mode).await,
         Command::Inspect(args) => cmds::inspect::inspect(args, cli.config, cli.mode).await,
         Command::Transform(args) => cmds::inspect::transform(args, cli.config, cli.mode).await,
         Command::Migrate(args) => cmds::migrate::migrate(args).await,

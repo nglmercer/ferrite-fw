@@ -590,3 +590,36 @@ or type-checker conformance. Checker execution, Doctor, framework HMR, syntax/ma
 matrices, generated test packaging, real SSR/hydration, React Refresh, remaining
 package/host capabilities, other adapters and release/upstream acceptance remain
 assigned. The complete mission remains active.
+
+### Read-only capability doctor
+
+Implemented shared `ferrite_frameworks::doctor::inspect` and `ferrite doctor
+[--root PATH] [--json]`. Reports the native compiler/version, explicit compiler
+host, separately selected SSR runtime, concrete root importer framework versions,
+experimental compilation profiles, unavailable SSR/checkers, and root editor view.
+Explicit framework configuration overrides manifest detection, including explicit
+disabling. No worker is started, executable is invoked, package view is projected,
+or project file is written. Located Node is explicitly `located-not-executed`;
+this does not establish compiler execution support. Missing dependencies, stored
+identity mismatch, disabled/missing hosts, and unmatched pinned compiler profiles
+produce actionable errors and CLI exit failure. React client conformance remains
+unavailable. Inactive/unavailable update profiles are not advertised as usable.
+Editor verification covers the root view only, not the full nested graph.
+
+Validation:
+
+- `cargo test -p ferrite-frameworks doctor::tests --locked`: three tests passed;
+  configuration precedence, dangling editor views, concurrent Vue versions with
+  concrete root selection, stored identity mismatch, and read-only host detection.
+- `cargo test -p ferrite-cli --locked`: thirteen tests passed.
+- `cargo clippy -p ferrite-cli -p ferrite-frameworks --all-targets --locked -- -D warnings`:
+  passed; formatting and diff checks passed.
+- Fresh CLI build and real installed Vue 3.5.22/Svelte 5.39.6 project: JSON reports
+  exact root versions and separate Node compiler/Boa runtime. Repeated with empty
+  PATH: structured missing-Node diagnostics and nonzero exit verified. These are
+  diagnostic tests, not additional framework browser or SSR acceptance evidence.
+
+Doctor executable ABI probes, full graph/editor/checker validation, inspect report
+unification, React Refresh, framework HMR, SSR/hydration/SSG, remaining package and
+host capabilities, adapters and release/upstream matrices remain assigned. No
+capability is promoted to tested by this diagnostic-only change.

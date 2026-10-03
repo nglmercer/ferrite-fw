@@ -3,6 +3,7 @@
 //! React Refresh remains experimental.
 
 pub mod compiler_host;
+pub mod doctor;
 pub mod hosted;
 pub mod react;
 pub mod registry;

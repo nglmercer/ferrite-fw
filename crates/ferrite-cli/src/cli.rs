@@ -46,6 +46,8 @@ pub(crate) enum Command {
     Install(InstallArgs),
     /// Inspect resolved config, plugins, and graph.
     Inspect(InspectArgs),
+    /// Diagnose selected framework versions, hosts and missing capabilities.
+    Doctor(InspectArgs),
     /// One-shot file transform.
     Transform(TransformArgs),
     /// Migrate a Vite config to ferrite.toml.

@@ -130,3 +130,58 @@ pub(crate) async fn transform(
     }
     Ok(())
 }
+
+pub(crate) async fn doctor(
+    args: InspectArgs,
+    config_arg: Option<PathBuf>,
+    mode: Option<String>,
+) -> ferrite::Result<()> {
+    let root = root_of(&config_arg, args.root);
+    let user = ferrite::load_user_config(&root)?;
+    let config = ferrite::resolve_config(
+        user,
+        Some(root),
+        ferrite::CliOverrides {
+            mode,
+            ..Default::default()
+        },
+    )?;
+    let report = ferrite::frameworks::doctor::inspect(&config)?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("framework registry schema {}", report.schema_version);
+        println!(
+            "compiler: {}; SSR runtime: {}",
+            report.compiler, report.ssr_runtime
+        );
+        println!(
+            "Node: {} (not a compiler execution test)",
+            report.node_probe
+        );
+        println!("editor packages: {}", report.editor_view);
+        for framework in &report.frameworks {
+            if framework.active {
+                println!(
+                    "{}@{}: host {}, client {}, SSR {}, checker {}, updates {}",
+                    framework.framework,
+                    framework.version.as_deref().unwrap_or("unresolved/builtin"),
+                    framework.compiler_host.as_deref().unwrap_or("disabled"),
+                    framework.client,
+                    framework.ssr,
+                    framework.checker,
+                    framework.updates
+                );
+            }
+        }
+        for issue in &report.issues {
+            println!("{}: {}; {}", issue.severity, issue.message, issue.action);
+        }
+    }
+    if report.issues.iter().any(|issue| issue.severity == "error") {
+        return Err(ferrite::FerriteError::Config(
+            "doctor found unavailable project capabilities; follow the reported actions".into(),
+        ));
+    }
+    Ok(())
+}
