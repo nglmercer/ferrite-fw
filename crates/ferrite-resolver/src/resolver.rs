@@ -39,6 +39,9 @@ impl Resolver {
     /// Build a resolver from config.
     #[must_use]
     pub fn new(root: PathBuf, config: &ResolveConfig) -> Self {
+        let root = root
+            .canonicalize()
+            .unwrap_or_else(|_| normalize_path(&root));
         Self {
             npm_store: root.join(".ferrite/npm/packages"),
             lockfile: root.join("ferrite.lock"),
@@ -481,6 +484,16 @@ impl Resolver {
     ) -> Result<ResolvedId> {
         let probed = probe_file(file, &self.extensions)
             .ok_or_else(|| FerriteError::Resolve(format!("cannot resolve `{url_hint}`")))?;
+        let probed = if self.preserve_symlinks {
+            normalize_path(&probed)
+        } else {
+            probed.canonicalize().map_err(|error| {
+                FerriteError::Resolve(format!("cannot canonicalize {url_hint}: {error}"))
+            })?
+        };
+        if !is_under(&probed, &self.npm_store) {
+            return self.finalize_file(&probed, query, package_side_effects(&probed));
+        }
         let url = self.npm_path_to_url(&probed);
         let module_type = ModuleType::from_path(&probed);
         let side_effects = package_side_effects(&probed);
@@ -504,6 +517,14 @@ impl Resolver {
         let side_effects = pkg.and_then(|pkg| side_effects_for(pkg, dir, &probed));
         let module_type = ModuleType::from_path(&probed);
         if in_store {
+            let probed = if self.preserve_symlinks {
+                normalize_path(&probed)
+            } else {
+                probed.canonicalize()?
+            };
+            if !is_under(&probed, &self.npm_store) {
+                return self.finalize_file(&probed, query, side_effects);
+            }
             let url = self.npm_path_to_url(&probed);
             let mut resolved = ResolvedId::new(attach_query(&url, query));
             resolved.module_type = Some(module_type);
@@ -536,7 +557,10 @@ impl Resolver {
 
     /// Convert a store path to its `/@npm/` URL.
     pub(crate) fn npm_path_to_url(&self, path: &Path) -> String {
-        let relative = path.strip_prefix(&self.npm_store).unwrap_or(path);
+        let normalized = normalize_path(path);
+        let relative = normalized
+            .strip_prefix(&self.npm_store)
+            .unwrap_or(&normalized);
         format!("/@npm/{}", relative.to_string_lossy().replace('\\', "/"))
     }
 

@@ -40,3 +40,27 @@ pub(crate) fn is_bare_node_builtin(specifier: &str) -> bool {
             | "zlib"
     )
 }
+
+/// Remove dot segments without resolving symlinks. Required even when the
+/// caller deliberately preserves symlink identity.
+pub(crate) fn normalize_path(path: &Path) -> std::path::PathBuf {
+    use std::path::Component;
+    let mut normalized = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => (),
+            Component::ParentDir => {
+                if matches!(
+                    normalized.components().next_back(),
+                    Some(Component::Normal(_))
+                ) {
+                    normalized.pop();
+                } else if !path.is_absolute() {
+                    normalized.push("..");
+                }
+            }
+            component => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
+}

@@ -218,3 +218,53 @@ fn conditional_null_and_pattern_priority_do_not_fall_back_silently() {
         Some("./cjs.js".into())
     );
 }
+
+#[test]
+fn npm_cycles_queries_and_dot_segments_share_concrete_module_identity() {
+    let root = tempfile::tempdir().unwrap();
+    let package = package("@scope/cycle", "1.0.0", &[]);
+    install_files(root.path(), &package);
+    let dir = root.path().join(".ferrite/npm/packages").join(package.id());
+    std::fs::create_dir_all(dir.join("src/nested")).unwrap();
+    std::fs::write(
+        dir.join("src/a.js"),
+        "import './nested/../b.js'; export const a = 1;",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/b.js"),
+        "import './nested/../a.js'; export const b = 1;",
+    )
+    .unwrap();
+    for preserve_symlinks in [false, true] {
+        let mut resolver = Resolver::new(root.path().into(), &Default::default());
+        resolver.preserve_symlinks = preserve_symlinks;
+        let initial = resolve(&resolver, "/@npm/@scope/cycle@1.0.0/src/./a.js", None)
+            .unwrap()
+            .id;
+        assert_eq!(initial.0, "/@npm/@scope/cycle@1.0.0/src/a.js");
+        let mut next = initial.clone();
+        for _ in 0..12 {
+            let b = resolve(&resolver, "./nested/../b.js", Some(&next))
+                .unwrap()
+                .id;
+            assert_eq!(b.0, "/@npm/@scope/cycle@1.0.0/src/b.js");
+            next = resolve(&resolver, "./nested/../a.js", Some(&b)).unwrap().id;
+            assert_eq!(
+                next, initial,
+                "cycles must not grow new dot-segment identities"
+            );
+        }
+        let query = resolve(
+            &resolver,
+            "./nested/../a.js?ferrite-cjs-factory",
+            Some(&initial),
+        )
+        .unwrap()
+        .id;
+        assert_eq!(
+            query.0,
+            "/@npm/@scope/cycle@1.0.0/src/a.js?ferrite-cjs-factory"
+        );
+    }
+}
