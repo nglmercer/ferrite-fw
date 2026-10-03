@@ -1,7 +1,7 @@
 //! Versioned, evidence-based framework capabilities shared by adapters.
 
 /// Registry schema version; independent of framework package versions.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// A capability is tested only after the entire acceptance profile executes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +45,7 @@ pub const SVELTE_NODE: CompilerProfile = CompilerProfile {
 pub struct FrameworkDescriptor {
     pub name: &'static str,
     pub extensions: &'static [&'static str],
+    pub template_variants: &'static [crate::scaffold::TemplateProfile],
     pub compiler_profiles: &'static [CompilerProfile],
     pub compiler_package: Option<&'static str>,
     pub client: Support,
@@ -55,8 +56,19 @@ pub struct FrameworkDescriptor {
 
 pub const FRAMEWORKS: &[FrameworkDescriptor] = &[
     FrameworkDescriptor {
+        name: "vanilla",
+        extensions: &[],
+        template_variants: crate::scaffold::TEMPLATES,
+        compiler_profiles: &[],
+        compiler_package: None,
+        client: Support::Experimental,
+        ssr: Support::Unavailable,
+        tested_versions: &[],
+    },
+    FrameworkDescriptor {
         name: "react",
         extensions: &["jsx", "tsx"],
+        template_variants: &[],
         compiler_profiles: &[],
         compiler_package: None,
         client: Support::Experimental,
@@ -66,6 +78,7 @@ pub const FRAMEWORKS: &[FrameworkDescriptor] = &[
     FrameworkDescriptor {
         name: "vue",
         extensions: &["vue"],
+        template_variants: &[],
         compiler_profiles: &[VUE_NODE],
         compiler_package: Some("vue/compiler-sfc"),
         client: Support::Unavailable,
@@ -75,6 +88,7 @@ pub const FRAMEWORKS: &[FrameworkDescriptor] = &[
     FrameworkDescriptor {
         name: "svelte",
         extensions: &["svelte", "svelte.js", "svelte.ts"],
+        template_variants: &[],
         compiler_profiles: &[SVELTE_NODE],
         compiler_package: Some("svelte/compiler"),
         client: Support::Unavailable,

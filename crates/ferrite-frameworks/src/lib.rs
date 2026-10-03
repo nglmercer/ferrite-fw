@@ -6,6 +6,7 @@ pub mod compiler_host;
 pub mod hosted;
 pub mod react;
 pub mod registry;
+pub mod scaffold;
 pub mod svelte;
 pub mod vue;
 

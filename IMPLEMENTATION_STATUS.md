@@ -422,3 +422,55 @@ Validation:
 No new advertised template or SSR rendering capability is established here.
 Doctor, full version/host diagnostics, arbitrary explicit config-file selection,
 scaffolds, framework HMR/checkers and the remaining mission remain unfinished.
+
+## Shared, transactional client generation (2026-10-02)
+
+Implemented `create --framework --language --rendering`, standalone
+`create --list-templates`, `--no-install` and `--dry-run`, preserving the vanilla
+legacy alias and global mode parsing. Unknown owners, languages and rendering
+combinations fail before writing. Current generation profiles are
+`vanilla/js/client` and `vanilla/ts/client`; Vue/Svelte scaffold acceptance and
+real SSR profiles remain assigned rather than silently substituting vanilla.
+
+Registry schema is now 3: framework descriptors include template variants,
+and CLI selection/listing and the public library scaffold API read those
+variants. Custom descriptor constructors must provide `template_variants`.
+Lockfile schema remains 2. No dependency versions were upgraded; existing
+rustix 1.1.5 is now a direct target dependency for no-overwrite publication,
+and CLI tests use the existing tempfile dependency.
+
+Generation creates real interactive source, HTML, CSS, package manifest,
+configuration, editor/environment types, public icon, ignore rules and README.
+It stages all output privately, installs through the existing Ferrite installer
+and writes a resolved lock before publishing. Dry runs write nothing; no-install
+retains the manifest and omits the lock. Linux publication uses an anchored
+parent directory and atomic no-replace rename, with no unsafe overwrite
+fallback. Traversal, symlink ancestors, dangling destinations, raced destination
+creation and changed parent directories are rejected. Abandoned staging is
+removed. Atomic publication also has a macOS implementation but is unexecuted;
+other platform publication/release validation remains unavailable/unfinished.
+
+Validation executed on Linux:
+
+- `cargo test -p ferrite-frameworks -p ferrite-cli --locked`: 18 framework and
+  12 CLI unit tests passed; the separately ignored actual compiler-host test
+  was not executed by this command. New tests cover no-write dry runs, invalid
+  profiles, preserved existing files, real installed locks, no-install manifests,
+  raced publication, symlink/traversal rejection, anchored writes after parent
+  replacement and staging cleanup.
+- Fresh CLI build followed by
+  `FERRITE_CLI_PATH=/home/meme/Documentos/challenges/ferrite-fw/target/debug/ferrite FERRITE_CHROMIUM_PATH=/home/meme/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome cargo test -p ferrite-test --test generated_apps --locked -- --ignored --nocapture`:
+  both tests passed (7.20 seconds), covering both languages in Chromium and
+  Firefox. Every Ferrite subprocess had an empty PATH: actual CLI create,
+  frozen install with unchanged lock bytes, dev interaction, source-edit
+  invalidation with an intentional reset, build with scope hoisting, and
+  preview interaction all passed without page or console errors.
+- Final targeted create tests and
+  `cargo clippy -p ferrite-cli -p ferrite-test --all-targets --locked -- -D warnings`:
+  passed; changed files formatted and diff check passed.
+
+The registry retains experimental client status: these tests do not establish
+all requested syntax-recovery, map, asset/base-path or platform matrices. Generated
+standalone interaction-test packaging, actual TypeScript checking, full framework
+templates, Doctor, SSR/hydration and all remaining mission work are unfinished.
+The complete mission remains active.

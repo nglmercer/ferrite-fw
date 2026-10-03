@@ -195,11 +195,29 @@ pub(crate) struct MigrateArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct CreateArgs {
-    /// App name / directory.
-    pub(crate) name: String,
-    /// Template (`vanilla`, `ssr`).
-    #[arg(long, default_value = "vanilla")]
-    pub(crate) template: String,
+    /// App directory (required unless listing templates).
+    pub(crate) name: Option<String>,
+    /// Legacy template alias (`vanilla`).
+    #[arg(long)]
+    pub(crate) template: Option<String>,
+    /// Framework owner (`vanilla`; other profiles require completed acceptance).
+    #[arg(long)]
+    pub(crate) framework: Option<String>,
+    /// Source language (`js` or `ts`).
+    #[arg(long, default_value = "ts")]
+    pub(crate) language: String,
+    /// Rendering mode (`client`; SSR requires a validated renderer).
+    #[arg(long, default_value = "client")]
+    pub(crate) rendering: String,
+    /// List available generation profiles.
+    #[arg(long)]
+    pub(crate) list_templates: bool,
+    /// Generate without installing packages or writing a lockfile.
+    #[arg(long)]
+    pub(crate) no_install: bool,
+    /// Validate and list generated files without writing anything.
+    #[arg(long)]
+    pub(crate) dry_run: bool,
 }
 
 /// Parse `--shard 1/3` into a 1-based (index, total).
