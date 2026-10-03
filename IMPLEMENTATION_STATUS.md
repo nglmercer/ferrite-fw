@@ -1,5 +1,17 @@
 # Framework support implementation status
 
+## Existing scaffold write paths reject symlinks
+
+Before any scaffold write, packaging now scans an existing generated tree with
+symlink metadata and rejects links, including links in source, compressed assets
+and Cargo output. This closes the separate overwrite path left by excluding the
+old scaffold from asset collection. Unix regressions verify external source and
+existing manifest contents remain unchanged for file/directory links. Default
+facade tests passed 28 with one ignored; all-target Clippy with warnings denied,
+formatting and diff checks passed. Concurrent filesystem replacement and atomic
+scaffold publication remain unfinished; this is not a filesystem sandbox. The
+complete framework mission remains unfinished.
+
 ## Standalone asset symlinks fail explicitly
 
 Asset collection now rejects symlink output roots and symlink entries instead of

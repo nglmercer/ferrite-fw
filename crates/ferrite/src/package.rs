@@ -527,12 +527,34 @@ pub(crate) fn validate_ssr_standalone_inputs(
     Ok(sdk)
 }
 
+/// Existing generated trees must not redirect any write or Cargo output.
+fn reject_scaffold_symlinks(root: &Path) -> Result<()> {
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(path) = stack.pop() {
+        let metadata = match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
+        if metadata.file_type().is_symlink() {
+            return Err(FerriteError::Build(format!("standalone scaffold must not contain symlinks: {}; select an ordinary output directory", path.display())));
+        }
+        if metadata.is_dir() {
+            for entry in std::fs::read_dir(&path)? {
+                stack.push(entry?.path());
+            }
+        }
+    }
+    Ok(())
+}
+
 fn write_standalone_scaffold(
     out_dir: &Path,
     opts: &StandaloneOptions,
     ssr: Option<SsrScaffold>,
 ) -> Result<StandaloneReport> {
     let dir = out_dir.join(SCAFFOLD_DIR);
+    reject_scaffold_symlinks(&dir)?;
     // Never embed a previous scaffold into the next one.
     let ssr_bytes = ssr.as_ref().map_or(0, |ssr| ssr.artifact.len() as u64);
     let ssr_files = usize::from(ssr.is_some());
@@ -780,6 +802,42 @@ mod tests {
             error.to_string().contains("invalid target triple"),
             "{error}"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scaffold_symlinks_preserve_external_and_existing_files() {
+        use std::os::unix::fs::symlink;
+        for directory in [false, true] {
+            let output = tempfile::tempdir().unwrap();
+            let outside = tempfile::tempdir().unwrap();
+            let scaffold = output.path().join(SCAFFOLD_DIR);
+            std::fs::create_dir_all(scaffold.join("src")).unwrap();
+            std::fs::write(output.path().join("index.html"), "shell").unwrap();
+            std::fs::write(scaffold.join("Cargo.toml"), "existing manifest").unwrap();
+            std::fs::write(outside.path().join("main.rs"), "private source").unwrap();
+            if directory {
+                symlink(outside.path(), scaffold.join(".embed")).unwrap();
+            } else {
+                symlink(outside.path().join("main.rs"), scaffold.join("src/main.rs")).unwrap();
+            }
+            let error = write_standalone(output.path(), &options()).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("scaffold must not contain symlinks"),
+                "{error}"
+            );
+            assert_eq!(
+                std::fs::read_to_string(outside.path().join("main.rs")).unwrap(),
+                "private source"
+            );
+            assert_eq!(
+                std::fs::read_to_string(scaffold.join("Cargo.toml")).unwrap(),
+                "existing manifest"
+            );
+            assert!(!scaffold.join("src/assets.rs").exists());
+        }
     }
 
     #[cfg(unix)]
