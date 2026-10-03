@@ -152,9 +152,28 @@ impl DevServer {
             loaded.map.map(|map| map.mappings),
             pre.code == source,
         )?;
-        let mut module = self
+        let transformed = self
             .core_transform(&ctx, &resolved_id, &pre.code, &module_type, &environment)
-            .await?;
+            .await;
+        let mut module = match transformed {
+            Ok(module) => module,
+            Err(error) => {
+                let mut inputs = loaded.dependencies.clone();
+                inputs.extend(pre.dependencies.iter().cloned());
+                inputs.extend(
+                    module_watches
+                        .lock()
+                        .map_err(|_| FerriteError::Other("module watch lock poisoned".into()))?
+                        .iter()
+                        .cloned(),
+                );
+                self.track_failed_transform_inputs(
+                    &resolved_id,
+                    inputs.into_iter().map(std::path::PathBuf::from).collect(),
+                )?;
+                return Err(error);
+            }
+        };
         module.map = merge_maps(module.map, pre_map, module.code == pre.code)?;
         module.side_effects = loaded.side_effects.or(resolved.side_effects);
         module.dependencies = loaded.dependencies;

@@ -2369,3 +2369,37 @@ framework mission remains active.
 The rebuilt final CLI also passed the explicitly executed create/install/
 inspect/transform selection regression (4.32 seconds), with Node absent from
 CLI PATH. Output: /tmp/ferrite-jsx-inference-cli.log.
+
+
+### Recover first-load ownership failures from compiler inputs (2026-10-03)
+
+Core-lowering failures now retain load/pre-transform dependencies and registered
+watch files as graph inputs, using the existing failed-import tracking and
+successful-transform cleanup. Previously a failed first JSX transform lost its
+package manifest before graph recording; correcting the manifest alone could
+leave the browser waiting indefinitely. Failed input edges now invalidate
+the owner and run the normal HMR preflight. Successful compilation removes
+the temporary tracking while retaining current declared dependencies. No
+fallback output, lockfile migration or capability promotion was introduced.
+
+A real HTTP/live-notify regression begins with a 500 for an ambiguous JSX
+owner and separately malformed package.json, confirms the retained manifest
+edge, corrects only that manifest, receives a full-reload message, checks the
+cleared diagnostic, fetches successfully compiled output, and verifies
+temporary tracking was removed. This tests compilation recovery, not framework
+rendering or SSR support.
+
+Validation: `cargo test -p ferrite-server --lib -p ferrite-test --test transforms
+--test config_resolver --test frameworks --locked` passed 46 server tests and
+19 integration tests (5 config, 6 structural framework, 8 transform). Two
+server external-tool tests were ignored and establish no support. Affected
+server/test all-target Clippy with `--locked -- -D warnings`, changed-file
+formatting and diff checks passed. Outputs:
+/tmp/ferrite-jsx-owner-recovery.log,
+/tmp/ferrite-jsx-owner-recovery-tests.log,
+/tmp/ferrite-jsx-owner-recovery-clippy.log.
+
+Pre/post-hook failures and map-validation failures still need equivalent
+first-load input retention; concurrent transforms and multiple diagnostics
+remain incomplete. No browser acceptance or full-workspace rerun in this
+increment. The broader framework implementation mission remains active.

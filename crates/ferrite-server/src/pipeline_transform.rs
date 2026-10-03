@@ -745,6 +745,14 @@ impl DevServer {
 }
 
 impl DevServer {
+    pub(crate) fn track_failed_transform_inputs(
+        &self,
+        importer: &ModuleId,
+        inputs: Vec<PathBuf>,
+    ) -> Result<()> {
+        self.track_missing_import(importer, "ferrite:failed-transform-input", inputs)
+    }
+
     fn track_missing_import(
         &self,
         importer: &ModuleId,
