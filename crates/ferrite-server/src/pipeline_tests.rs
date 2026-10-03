@@ -613,10 +613,14 @@ async fn css_resolves_the_real_dev_client_and_local_import_failures_are_loud() {
         .pipeline_module(&ModuleId::new("/style.css"), None, "client")
         .await
         .unwrap();
-    assert!(css
-        .imports
-        .iter()
-        .any(|(_, id, _)| id.0 == ferrite_hmr::CLIENT_ID), "imports={:?}; code={}", css.imports, css.code);
+    assert!(
+        css.imports
+            .iter()
+            .any(|(_, id, _)| id.0 == ferrite_hmr::CLIENT_ID),
+        "imports={:?}; code={}",
+        css.imports,
+        css.code
+    );
     let client = server
         .pipeline_module(&ModuleId::new(ferrite_hmr::CLIENT_ID), None, "client")
         .await
@@ -638,4 +642,134 @@ async fn css_resolves_the_real_dev_client_and_local_import_failures_are_loud() {
         .to_string()
         .contains("only in client development"));
     server.close();
+}
+
+struct FailingHmrHook {
+    hook: &'static str,
+    fail: std::sync::atomic::AtomicBool,
+    modern: std::sync::atomic::AtomicUsize,
+    legacy: std::sync::atomic::AtomicUsize,
+}
+#[async_trait::async_trait]
+impl Plugin for FailingHmrHook {
+    fn name(&self) -> &'static str {
+        "failing-hmr-fixture"
+    }
+    async fn watch_change(&self, _: &PluginContext, _: ferrite_plugin::WatchEvent) -> Result<()> {
+        if self.hook == "watch_change" && self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(ferrite_core::FerriteError::Other(
+                "required watch hook failed".into(),
+            ));
+        }
+        Ok(())
+    }
+    async fn hot_update(
+        &self,
+        _: &PluginContext,
+        _: ferrite_plugin::HotUpdateEvent,
+    ) -> Result<Option<ferrite_plugin::HotUpdateResult>> {
+        self.modern
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self.hook == "hot_update" && self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(ferrite_core::FerriteError::Other(
+                "required modern hook failed".into(),
+            ));
+        }
+        Ok(None)
+    }
+    async fn handle_hot_update(
+        &self,
+        _: &PluginContext,
+        _: ferrite_plugin::HotUpdateEvent,
+    ) -> Result<Option<ferrite_plugin::HotUpdateResult>> {
+        self.legacy
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self.hook == "handle_hot_update" && self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(ferrite_core::FerriteError::Other(
+                "required legacy hook failed".into(),
+            ));
+        }
+        Ok(None)
+    }
+}
+
+#[tokio::test]
+async fn watcher_reports_required_hook_failures_without_fallback_and_recovers() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    for hook in ["watch_change", "hot_update", "handle_hot_update"] {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("entry.js");
+        let source = |count| {
+            format!("export const count = {count}; if (import.meta.hot) import.meta.hot.accept();")
+        };
+        std::fs::write(&file, source(1)).unwrap();
+        let config = ferrite_config::resolve_config(
+            Default::default(),
+            Some(root.path().into()),
+            Default::default(),
+        )
+        .unwrap();
+        let plugin = Arc::new(FailingHmrHook {
+            hook,
+            fail: AtomicBool::new(true),
+            modern: AtomicUsize::new(0),
+            legacy: AtomicUsize::new(0),
+        });
+        let server = DevServer::new(config, vec![plugin.clone()]).await.unwrap();
+        let id = ModuleId::new("/entry.js");
+        server.pipeline_module(&id, None, "client").await.unwrap();
+        let mut messages = server.inner.hmr.subscribe();
+        std::fs::write(&file, source(2)).unwrap();
+        let next = tokio::time::timeout(std::time::Duration::from_secs(10), messages.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let ferrite_hmr::HmrMessage::Error { err } = serde_json::from_str(&next).unwrap() else {
+            panic!("hook failure must stop the update: {next}");
+        };
+        assert_eq!(err.id.as_deref(), Some("/entry.js"));
+        assert_eq!(err.plugin.as_deref(), Some("failing-hmr-fixture"));
+        assert!(err.message.contains(hook), "{}", err.message);
+        assert!(messages.try_recv().is_err(), "no fallback update or reload");
+        assert_eq!(
+            plugin.modern.load(Ordering::SeqCst),
+            usize::from(hook != "watch_change")
+        );
+        assert_eq!(
+            plugin.legacy.load(Ordering::SeqCst),
+            usize::from(hook == "handle_hot_update")
+        );
+        assert!(server
+            .inner
+            .graph
+            .get(&id)
+            .unwrap()
+            .client
+            .code
+            .unwrap()
+            .contains("= 1"));
+        plugin.fail.store(false, Ordering::SeqCst);
+        std::fs::write(&file, source(3)).unwrap();
+        let next = tokio::time::timeout(std::time::Duration::from_secs(10), messages.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(
+                serde_json::from_str::<ferrite_hmr::HmrMessage>(&next).unwrap(),
+                ferrite_hmr::HmrMessage::Update { .. }
+            ),
+            "{next}"
+        );
+        assert!(server
+            .inner
+            .graph
+            .get(&id)
+            .unwrap()
+            .client
+            .code
+            .unwrap()
+            .contains("= 3"));
+        server.close();
+    }
 }

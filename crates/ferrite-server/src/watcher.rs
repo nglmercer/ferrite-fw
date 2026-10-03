@@ -93,6 +93,10 @@ impl DevServer {
                             watch_files: &inner_clone.watch_files,
                             warnings: &inner_clone.warnings,
                         };
+                        let server = DevServer {
+                            inner: inner_clone.clone(),
+                            watcher: std::sync::Arc::new(std::sync::Mutex::new(None)),
+                        };
                         if let Err(error) = inner_clone
                             .plugins
                             .hook_watch_change(
@@ -104,7 +108,8 @@ impl DevServer {
                             )
                             .await
                         {
-                            tracing::warn!("watch_change hook failed: {error}");
+                            server.report_hmr_error(&id, &error);
+                            return;
                         }
                         if !tracked {
                             // Untracked file (e.g. new CSS referenced later):
@@ -117,13 +122,14 @@ impl DevServer {
                             modules,
                             timestamp,
                         };
-                        let server = DevServer {
-                            inner: inner_clone.clone(),
-                            watcher: std::sync::Arc::new(std::sync::Mutex::new(None)),
+                        let custom = match inner_clone.plugins.hook_hot_update(&ctx, event).await {
+                            Ok(custom) => custom,
+                            Err(error) => {
+                                server.report_hmr_error(&id, &error);
+                                return;
+                            }
                         };
-                        if let Ok(Some(custom)) =
-                            inner_clone.plugins.hook_hot_update(&ctx, event).await
-                        {
+                        if let Some(custom) = custom {
                             if custom.full_reload {
                                 server.publish_hmr_plan(&id, HmrPlan::FullReload).await;
                                 return;

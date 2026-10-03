@@ -283,17 +283,21 @@ impl DevServer {
                     self.inner.graph.upsert(node);
                 }
             }
-            let mut diagnostic = error.diagnostic();
-            if diagnostic.id.is_none() {
-                diagnostic.id = Some(changed.0.clone());
-            }
-            self.inner.hmr.send_error(diagnostic);
+            self.report_hmr_error(changed, &error);
             return;
         }
         match plan {
             HmrPlan::Update(updates) => self.inner.hmr.send_update(updates),
             HmrPlan::FullReload => self.inner.hmr.send_full_reload(Some(changed.0.clone())),
         }
+    }
+
+    pub(crate) fn report_hmr_error(&self, changed: &ModuleId, error: &FerriteError) {
+        let mut diagnostic = error.diagnostic();
+        if diagnostic.id.is_none() {
+            diagnostic.id = Some(changed.0.clone());
+        }
+        self.inner.hmr.send_error(diagnostic);
     }
 
     async fn validate_hmr_modules(&self, changed: &ModuleId) -> Result<()> {

@@ -1252,3 +1252,23 @@ and the wider recovery matrix remain unproven; this establishes the exercised
 edit/correction paths only. Complete Refresh, component-specific HMR, SSR/checkers,
 additional adapters and the remaining full mission stay assigned. No support
 profile is promoted.
+
+### Required watcher/plugin hook failures stop HMR
+
+The watcher now reports `watch_change`, modern `hot_update` and legacy
+`handle_hot_update` failures through the existing diagnostic protocol, including
+plugin/hook identity and source ID. It stops that event instead of logging and
+continuing or silently using ordinary HMR as a fallback. Shared diagnostic
+reporting also retains the source-ID behavior of compilation failures.
+
+Validation: `cargo test -p ferrite-server --locked` and the same command with
+`--features swc` each passed all 40 tests. The new real-notify regression exercises
+each hook, requires a diagnostic with no fallback update/reload, checks that later
+hooks and compilation did not run, and verifies recovery on a subsequent successful
+edit. Outputs: `/tmp/ferrite-hmr-hook-errors.log` and
+`/tmp/ferrite-hmr-hook-swc.log`. Server all-target Clippy with
+`--locked -- -D warnings`, formatting and diff checks passed.
+
+No lock/config/cache migration. This verifies the Rust plugin-container/watcher
+failure path, not complete foreign-plugin compatibility or a new browser profile.
+No support status is promoted; the full mission remains active.
