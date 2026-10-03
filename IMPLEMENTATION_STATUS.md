@@ -1,5 +1,31 @@
 # Framework support implementation status
 
+## Build environment validation and server hook resolver
+
+`Builder::build` now rejects environment names other than `client` and `ssr`
+before creating a pipeline server, invoking its hooks, or writing output.
+Previously unknown names silently selected client compilation. The CLI parser
+enforces the same supported names; named environment-file profiles continue to
+use global `--mode`, independently of `--env`.
+
+SSR build plugin contexts now reference the server resolver rather than the
+client resolver. A real server-module build regression checks exact SSR resolver
+conditions (including Ferrite's `node-compatible` condition, excluding browser)
+and server output location. This is module compilation evidence, not proof of
+SSR rendering or a Node runtime. The invalid-environment regression uses a
+panic-on-configResolved plugin to prove rejection precedes server hooks and
+checks that no output is created. CLI tests cover supported environments with a
+staging mode and rejection of unknown/case-mismatched names.
+
+Validation: 16 CLI tests and six build integration tests passed. Affected
+CLI/facade/test all-target Clippy with `-D warnings`, changed-file formatting,
+and diff checks passed. Migration: callers relying on arbitrary environment
+names silently selecting client now receive an actionable error; custom build
+environments are not implemented. No config or lockfile migration is needed.
+Browser acceptance, full workspace, feature matrices, and release checks were
+not rerun. Real SSR/hydration, additional adapters, and the full mission remain
+incomplete.
+
 ## Resolved stylesheet references participate in invalidation
 
 The shared CSS transform now registers filesystem inputs for resolved CSS

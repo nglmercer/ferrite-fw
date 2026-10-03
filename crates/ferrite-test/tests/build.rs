@@ -3,6 +3,84 @@
 use ferrite_test::TempProject;
 
 #[tokio::test]
+async fn ssr_build_hooks_receive_server_resolver_conditions() {
+    struct ResolverProbe;
+    #[async_trait::async_trait]
+    impl ferrite::plugin::Plugin for ResolverProbe {
+        fn name(&self) -> &'static str {
+            "ssr-resolver-probe"
+        }
+        async fn options(
+            &self,
+            ctx: &ferrite::plugin::PluginContext,
+            _: &mut ferrite::plugin::BundleOptions,
+        ) -> ferrite::Result<()> {
+            assert!(ctx.environment.kind.is_ssr());
+            assert_eq!(
+                ctx.resolver.conditions,
+                ctx.environment.kind.default_conditions()
+            );
+            assert!(ctx
+                .resolver
+                .conditions
+                .iter()
+                .any(|condition| condition == "node-compatible"));
+            assert!(!ctx
+                .resolver
+                .conditions
+                .iter()
+                .any(|condition| condition == "browser"));
+            Ok(())
+        }
+    }
+    let project = TempProject::new(&[(
+        "src/entry-server.js",
+        "export const isServer = import.meta.env.SSR;",
+    )]);
+    let builder = ferrite::Builder::new(
+        project.resolve_config_mode("production"),
+        vec![std::sync::Arc::new(ResolverProbe)],
+    );
+    let report = builder.build("ssr").await.unwrap();
+    assert_eq!(report.env, "ssr");
+    assert!(report.out_dir.ends_with("dist/server"));
+}
+
+#[tokio::test]
+async fn unknown_build_environments_fail_before_server_hooks_or_output() {
+    struct UnexpectedHook;
+    #[async_trait::async_trait]
+    impl ferrite::plugin::Plugin for UnexpectedHook {
+        fn name(&self) -> &'static str {
+            "unexpected-build-hook"
+        }
+        async fn config_resolved(&self, _: &ferrite::ResolvedConfig) -> ferrite::Result<()> {
+            panic!("invalid environment must fail before server hooks");
+        }
+    }
+    let project = TempProject::new(&[
+        (
+            "index.html",
+            "<script type='module' src='/main.js'></script>",
+        ),
+        ("main.js", "console.log('client');"),
+    ]);
+    let builder = ferrite::Builder::new(
+        project.resolve_config_mode("production"),
+        vec![std::sync::Arc::new(UnexpectedHook)],
+    );
+    for environment in ["staging", "worker", "SSR", ""] {
+        let error = builder.build(environment).await.unwrap_err().to_string();
+        assert!(error.contains("unsupported build environment"), "{error}");
+        assert!(
+            error.contains("client") && error.contains("ssr") && error.contains("mode"),
+            "{error}"
+        );
+        assert!(!project.root.join("dist").exists());
+    }
+}
+
+#[tokio::test]
 async fn production_css_uses_shared_pre_and_post_transforms() {
     struct CssPlugin(bool);
     #[async_trait::async_trait]

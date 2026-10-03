@@ -54,6 +54,11 @@ impl Builder {
     /// `buildEnd` runs with the error, then `closeBundle`, and the original
     /// error is returned.
     pub async fn build(&self, env: &str) -> Result<BuildReport> {
+        if !matches!(env, "client" | "ssr") {
+            return Err(FerriteError::Build(format!(
+                "unsupported build environment `{env}`; select `client` or `ssr`. Use mode to select environment files"
+            )));
+        }
         let mut config = self.config.clone();
         config.is_production = true;
         let server = DevServer::new_without_watcher(config.clone(), self.plugins.clone()).await?;
@@ -64,7 +69,11 @@ impl Builder {
         };
         let ctx = ferrite_plugin::PluginContext {
             graph: &server.inner().graph,
-            resolver: &server.inner().client_resolver,
+            resolver: if environment.kind.is_ssr() {
+                &server.inner().ssr_resolver
+            } else {
+                &server.inner().client_resolver
+            },
             environment: &environment,
             emitted: &server.inner().emitted,
             watch_files: &server.inner().watch_files,

@@ -102,7 +102,7 @@ pub(crate) struct BuildArgs {
     #[arg(long)]
     pub(crate) target: Option<String>,
     /// Only build one environment.
-    #[arg(long)]
+    #[arg(long, value_parser = ["client", "ssr"])]
     pub(crate) env: Option<String>,
     /// Scope-hoist each entry closure into one file.
     #[arg(long)]
@@ -337,6 +337,24 @@ pub(crate) struct E2eArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_environment_is_distinct_from_named_mode() {
+        for environment in ["client", "ssr"] {
+            assert!(Cli::try_parse_from([
+                "ferrite",
+                "--mode",
+                "staging",
+                "build",
+                "--env",
+                environment
+            ])
+            .is_ok());
+        }
+        for environment in ["staging", "worker", "SSR", ""] {
+            assert!(Cli::try_parse_from(["ferrite", "build", "--env", environment]).is_err());
+        }
+    }
 
     #[test]
     fn shard_parses_index_and_total() {
