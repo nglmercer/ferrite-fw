@@ -27,6 +27,9 @@ pub(crate) fn worker_loop(options: NapiVmOptions, rx: Receiver<Job>) {
         }
     };
     for job in rx {
+        if job.cancelled() {
+            continue;
+        }
         match job {
             Job::EvalModule {
                 id,
@@ -349,5 +352,37 @@ impl WorkerState {
             .require_commonjs(request, parent)
             .map_err(vmkind)?;
         napi_vm::value_to_json(&mut self.interp, &value).map_err(vmkind)
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn abandoned_queued_job_does_not_execute_guest_side_effects() {
+        let (jobs, receiver) = std::sync::mpsc::sync_channel(2);
+        let (reply, abandoned) = tokio::sync::oneshot::channel();
+        jobs.send(Job::EvalModule {
+            id: "abandoned".into(),
+            code: "globalThis.cancelledRequestExecuted = 42; export const value = 1;".into(),
+            ssr: false,
+            reply,
+        })
+        .unwrap();
+        drop(abandoned);
+        let (reply, observed) = tokio::sync::oneshot::channel();
+        jobs.send(Job::EvalModule {
+            id: "probe".into(),
+            code: "export const leaked = globalThis.cancelledRequestExecuted || 0;".into(),
+            ssr: false,
+            reply,
+        })
+        .unwrap();
+        let worker = std::thread::spawn(move || worker_loop(NapiVmOptions::default(), receiver));
+        let result = observed.await.unwrap().unwrap();
+        assert_eq!(result["leaked"]["value"].as_f64(), Some(0.0));
+        drop(jobs);
+        worker.join().unwrap();
     }
 }

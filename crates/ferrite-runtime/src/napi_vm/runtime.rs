@@ -27,7 +27,17 @@ impl NapiVmRuntime {
     /// Spawn the worker thread with `options`.
     #[must_use]
     pub fn new(options: NapiVmOptions) -> Self {
-        let (jobs, rx) = mpsc::channel::<Job>();
+        let capacity = if options.queue_capacity == 0 {
+            64
+        } else {
+            options.queue_capacity
+        };
+        let max_request_bytes = if options.max_request_bytes == 0 {
+            8 * 1024 * 1024
+        } else {
+            options.max_request_bytes
+        };
+        let (jobs, rx) = mpsc::sync_channel::<Job>(capacity);
         let thread = thread::Builder::new()
             .name("ferrite-napi-vm".to_string())
             .spawn(move || worker_loop(options, rx))
@@ -35,6 +45,7 @@ impl NapiVmRuntime {
         Self {
             worker: Arc::new(Worker {
                 jobs: Some(jobs),
+                max_request_bytes,
                 thread: Mutex::new(Some(thread)),
             }),
         }
@@ -62,12 +73,14 @@ impl NapiVmRuntime {
     }
 
     fn send(&self, job: Job) -> Result<()> {
-        self.worker
-            .jobs
-            .as_ref()
-            .ok_or_else(|| FerriteError::Runtime("napi-vm worker stopped".to_string()))?
-            .send(job)
-            .map_err(|_| FerriteError::Runtime("napi-vm worker stopped".to_string()))
+        if job.payload_bytes() > self.worker.max_request_bytes {
+            return Err(FerriteError::Runtime(format!("napi-vm request payload exceeds {} bytes; reduce the graph/arguments or explicitly configure max_request_bytes", self.worker.max_request_bytes)));
+        }
+        self.worker.jobs.as_ref().ok_or_else(|| FerriteError::Runtime("napi-vm worker stopped".into()))?
+            .try_send(job).map_err(|error| match error {
+                mpsc::TrySendError::Full(_) => FerriteError::Runtime("napi-vm worker queue is full; retry after active requests finish or explicitly configure queue_capacity".into()),
+                mpsc::TrySendError::Disconnected(_) => FerriteError::Runtime("napi-vm worker stopped".into()),
+            })
     }
 }
 
@@ -184,3 +197,38 @@ pub(crate) fn namespace_from_json(json: &serde_json::Value) -> Result<ModuleName
 }
 
 // --- worker ---------------------------------------------------------------
+
+#[cfg(test)]
+mod queue_tests {
+    use super::*;
+
+    fn module_job(code: &str) -> Job {
+        let (reply, _receive) = tokio::sync::oneshot::channel();
+        Job::EvalModule {
+            id: "entry".into(),
+            code: code.into(),
+            ssr: false,
+            reply,
+        }
+    }
+
+    #[test]
+    fn bounded_queue_reports_overload_and_payload_limits_without_blocking() {
+        let (jobs, receiver) = mpsc::sync_channel(1);
+        let runtime = NapiVmRuntime {
+            worker: Arc::new(Worker {
+                jobs: Some(jobs),
+                max_request_bytes: 32,
+                thread: Mutex::new(None),
+            }),
+        };
+        runtime.send(module_job("export const n = 1;")).unwrap();
+        let error = runtime.send(module_job("export const n = 2;")).unwrap_err();
+        assert!(error.to_string().contains("queue is full"), "{error}");
+        let error = runtime.send(module_job(&"x".repeat(64))).unwrap_err();
+        assert!(error.to_string().contains("payload exceeds 32"), "{error}");
+        drop(receiver);
+        let error = runtime.send(module_job("x")).unwrap_err();
+        assert!(error.to_string().contains("stopped"), "{error}");
+    }
+}

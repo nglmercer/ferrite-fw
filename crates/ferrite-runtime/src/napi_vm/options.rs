@@ -17,6 +17,10 @@ pub struct NativeAddonAllow {
 /// napi-vm backend options.
 #[derive(Debug, Clone, Default)]
 pub struct NapiVmOptions {
+    /// Maximum queued jobs (0 selects the bounded default of 64).
+    pub queue_capacity: usize,
+    /// Maximum encoded request payload bytes (0 selects 8 MiB).
+    pub max_request_bytes: usize,
     /// Filesystem roots for the CJS loader and addon resolution.
     pub roots: Vec<PathBuf>,
     /// CJS entry filename for top-level `require()` resolution.
