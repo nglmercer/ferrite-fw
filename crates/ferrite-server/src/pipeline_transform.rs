@@ -126,6 +126,7 @@ impl DevServer {
                         is_raw_bytes: false,
                         dependencies: Vec::new(),
                         shake: Some(ferrite_transform::ShakeInfo::default()),
+                        stylesheet: None,
                         commonjs: None,
                     });
                 }
@@ -138,6 +139,12 @@ impl DevServer {
                     ferrite_css::css_to_js(&id.0, &code, &result.exports)
                 };
                 let mut module = PipelineModule::code_only(id.clone(), js, ModuleType::Js);
+                module.stylesheet = Some(crate::PipelineStylesheet {
+                    code: result.code,
+                    exports: result.exports.into_iter().collect(),
+                    is_modules: css_id.contains(".module.css"),
+                    input_map: None,
+                });
                 if !production {
                     module.imports = vec![(
                         "/@ferrite/client".to_string(),
@@ -200,6 +207,7 @@ impl DevServer {
                     is_raw_bytes: false,
                     dependencies: Vec::new(),
                     shake: None, // filled during rewriting
+                    stylesheet: None,
                     commonjs: None,
                 })
             }

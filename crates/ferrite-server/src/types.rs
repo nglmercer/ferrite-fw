@@ -4,6 +4,19 @@ use ferrite_core::ModuleId;
 use ferrite_core::ModuleType;
 use ferrite_graph::ImportKind;
 
+/// Compiled stylesheet retained separately from its JavaScript wrapper.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PipelineStylesheet {
+    /// CSS before browser URL rewriting, ready for build asset emission.
+    pub code: String,
+    /// CSS module exports, in deterministic order.
+    pub exports: std::collections::BTreeMap<String, String>,
+    /// Whether the stylesheet uses CSS module scoping.
+    pub is_modules: bool,
+    /// Source map supplied by source/compiler transforms, before CSS lowering.
+    pub input_map: Option<String>,
+}
+
 /// A transformed module in the dev/build pipeline.
 #[derive(Debug, Clone)]
 pub struct PipelineModule {
@@ -19,6 +32,8 @@ pub struct PipelineModule {
     pub module_type: ModuleType,
     /// Source map JSON.
     pub map: Option<String>,
+    /// Compiled CSS independent of JavaScript wrapper transforms.
+    pub stylesheet: Option<PipelineStylesheet>,
     /// True when the code uses ESM syntax.
     pub has_module_syntax: bool,
     /// True when `import.meta.hot` is used.
@@ -44,6 +59,7 @@ impl PipelineModule {
             side_effects: None,
             module_type,
             map: None,
+            stylesheet: None,
             has_module_syntax: true,
             uses_import_meta_hot: false,
             is_raw_bytes: false,
@@ -63,6 +79,7 @@ impl PipelineModule {
             side_effects: None,
             module_type,
             map: None,
+            stylesheet: None,
             has_module_syntax: false,
             uses_import_meta_hot: false,
             is_raw_bytes: true,
@@ -86,6 +103,7 @@ impl PipelineModule {
             side_effects: cached.side_effects,
             module_type: cached.module_type,
             map: cached.map,
+            stylesheet: cached.stylesheet,
             has_module_syntax: cached.has_module_syntax,
             uses_import_meta_hot: cached.uses_import_meta_hot,
             is_raw_bytes: false,
@@ -109,6 +127,9 @@ pub struct CachedTransform {
     pub module_type: ModuleType,
     /// Map JSON.
     pub map: Option<String>,
+    /// Compiled stylesheet payload.
+    #[serde(default)]
+    pub stylesheet: Option<PipelineStylesheet>,
     /// Exact compiler input dependency state (missing files are represented explicitly).
     #[serde(default)]
     pub dependency_state: std::collections::BTreeMap<String, Option<String>>,
@@ -137,6 +158,7 @@ impl CachedTransform {
             side_effects: module.side_effects,
             module_type: module.module_type.clone(),
             map: module.map.clone(),
+            stylesheet: module.stylesheet.clone(),
             dependency_state: module
                 .dependencies
                 .iter()

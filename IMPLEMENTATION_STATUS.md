@@ -1,5 +1,35 @@
 # Framework support implementation status
 
+## Shared pipeline retains compiled stylesheet output
+
+`PipelineModule` now carries a typed `PipelineStylesheet` separately from the
+JavaScript wrapper. It preserves CSS before browser URL rewriting, deterministic
+CSS-module exports, the scoping flag, and the input source map supplied by
+load/pre-transform stages. JavaScript post transforms and CommonJS conversion
+retain this payload. Cache serialization and restoration preserve it too; the
+pipeline cache namespace advances from v11 to v12 to prevent reuse of output
+without stylesheet metadata.
+
+The regression runs in development and production with CSS pre/post plugins.
+It checks that preprocessing changes CSS, post hooks change the JS wrapper,
+relative asset references and module exports remain in the stylesheet payload,
+input maps survive independently of wrapper maps, cache round trips preserve
+metadata, and changes to a declared preprocessing input invalidate cached CSS.
+
+Validation: `cargo test -p ferrite-server -p ferrite --lib --locked` passed
+68 tests, with three unrelated explicit-host tests ignored. Server/facade
+all-target Clippy with `-D warnings`, changed-file rustfmt, and diff checks
+passed. No browser, full-workspace, feature-matrix, or release gate was rerun.
+
+Migration: public `PipelineModule` and `CachedTransform` struct literals gain a
+`stylesheet` field; the new payload is exported by ferrite-server. Old serialized
+payloads can deserialize without it, but the changed cache namespace rebuilds
+compiled output. This is an intermediate implementation: production extraction
+still uses its existing separate CSS loader and must be connected to the retained
+shared-pipeline payload. The input map is not a claimed final CSS source map.
+Direct CSS query responses currently do not carry this payload. Full CSS transform
+and extraction parity, SSR, and the larger framework mission remain incomplete.
+
 ## Production rejects missing relative CSS resources
 
 Production CSS extraction now fails on unresolved relative `url()` assets,

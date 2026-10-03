@@ -182,6 +182,9 @@ impl DevServer {
         let mut module = self
             .core_transform(ctx, &resolved_id, &pre.code, &module_type, environment)
             .await?;
+        if let Some(stylesheet) = &mut module.stylesheet {
+            stylesheet.input_map = pre_map.clone();
+        }
         module.map = merge_maps(module.map, pre_map, module.code == pre.code)?;
         module.side_effects = loaded.side_effects.or(resolved.side_effects);
         module.dependencies = loaded.dependencies;

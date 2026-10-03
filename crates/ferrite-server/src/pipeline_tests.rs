@@ -6,6 +6,129 @@ use ferrite_plugin::{
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+#[tokio::test]
+async fn stylesheet_payload_survives_hooks_cache_and_dependency_changes() {
+    struct StylesheetFixture {
+        input: PathBuf,
+        pre: bool,
+    }
+    #[async_trait::async_trait]
+    impl Plugin for StylesheetFixture {
+        fn name(&self) -> &'static str {
+            if self.pre {
+                "stylesheet-pre"
+            } else {
+                "stylesheet-post"
+            }
+        }
+        fn enforce(&self) -> Enforce {
+            if self.pre {
+                Enforce::Pre
+            } else {
+                Enforce::Post
+            }
+        }
+        async fn transform(
+            &self,
+            _: &PluginContext,
+            request: TransformRequest,
+        ) -> Result<Option<TransformResult>> {
+            if request.id != "/style.module.css" {
+                return Ok(None);
+            }
+            let (code, dependencies) = if self.pre {
+                assert_eq!(request.module_type, ModuleType::Css);
+                (
+                    request
+                        .code
+                        .replace("COLOR", &std::fs::read_to_string(&self.input)?),
+                    vec![self.input.to_string_lossy().into_owned()],
+                )
+            } else {
+                assert_eq!(request.module_type, ModuleType::Js);
+                (
+                    format!("{}\nglobalThis.stylesheetPost = true;", request.code),
+                    Vec::new(),
+                )
+            };
+            let map = self.pre.then(|| {
+                SourceMap::external(
+                    serde_json::json!({
+                        "version": 3, "sources": ["style.module.css"],
+                        "sourcesContent": [request.code], "names": [], "mappings": "AAAA"
+                    })
+                    .to_string(),
+                )
+            });
+            Ok(Some(TransformResult {
+                code,
+                map,
+                dependencies,
+                module_type: None,
+            }))
+        }
+    }
+    for production in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let input = root.path().join("color.txt");
+        std::fs::write(&input, "red").unwrap();
+        std::fs::write(
+            root.path().join("style.module.css"),
+            ".button { color: COLOR; background: url('./asset.svg'); }",
+        )
+        .unwrap();
+        std::fs::write(root.path().join("asset.svg"), "<svg/>").unwrap();
+        let config = ferrite_config::resolve_config(
+            Default::default(),
+            Some(root.path().into()),
+            ferrite_config::CliOverrides {
+                is_production: Some(production),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let server = DevServer::new_without_watcher(
+            config,
+            vec![
+                Arc::new(StylesheetFixture {
+                    input: input.clone(),
+                    pre: true,
+                }),
+                Arc::new(StylesheetFixture {
+                    input: input.clone(),
+                    pre: false,
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+        let id = ModuleId::new("/style.module.css");
+        let first = server.pipeline_module(&id, None, "client").await.unwrap();
+        assert!(first.code.contains("stylesheetPost"));
+        let stylesheet = first.stylesheet.as_ref().unwrap();
+        assert!(stylesheet.is_modules);
+        assert!(stylesheet.exports.contains_key("button"));
+        assert!(stylesheet
+            .input_map
+            .as_ref()
+            .unwrap()
+            .contains("style.module.css"));
+        assert!(stylesheet.code.contains("red") && stylesheet.code.contains("./asset.svg"));
+        assert!(!stylesheet.code.contains("stylesheetPost"));
+        let cached = server.pipeline_module(&id, None, "client").await.unwrap();
+        assert_eq!(
+            serde_json::to_value(&first.stylesheet).unwrap(),
+            serde_json::to_value(&cached.stylesheet).unwrap()
+        );
+        std::fs::write(&input, "blue").unwrap();
+        let changed = server.pipeline_module(&id, None, "client").await.unwrap();
+        assert!(changed.stylesheet.unwrap().code.contains("blue"));
+        assert!(changed
+            .dependencies
+            .contains(&input.to_string_lossy().into_owned()));
+    }
+}
+
 struct CompilerFixture {
     dependency: PathBuf,
     watch: PathBuf,
