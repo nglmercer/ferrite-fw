@@ -110,7 +110,7 @@ pub fn files(profile: &TemplateProfile, name: &str) -> Result<BTreeMap<String, S
     }))?));
     files.insert(
         ".gitignore".into(),
-        ".ferrite/\ndist/\nnode_modules/\n.env.local\n".into(),
+        ".ferrite/\ndist/\nnode_modules\n.env.local\n".into(),
     );
     files.insert(
         "src/ferrite-env.d.ts".into(),

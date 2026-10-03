@@ -543,3 +543,50 @@ packaging, complete checker/editor package resolution, Doctor, full source-map
 and syntax-recovery matrices, real SSR/hydration/streaming, React Refresh,
 remaining dependency/host capabilities, additional adapters and release/upstream
 acceptance. The complete mission remains active.
+
+## Portable package/editor projection during installation (2026-10-02)
+
+Implemented relative links for importer-specific package views and a reusable
+`project_editor_dependencies` service. Project-root `node_modules` points to
+`.ferrite/npm/node_modules`, exposing the same locked graph to ordinary package
+and editor resolution. Root and nested package edges retain their concrete
+versions/peer identities; no second resolver, lockfile or lifecycle scripts run.
+Generation projects the graph while staging, so views remain valid after atomic
+publication. Install/add/remove/update maintain the same view. Empty manifests
+also receive an owned empty projection, without requiring Node.
+
+Owned absolute links migrate to relative links even when dependency edges are
+unchanged. Existing unmanaged editor directories or mismatched links are rejected
+before package projection; installation preflights the root editor destination.
+No unrelated node_modules is deleted or replaced. Existing npm-managed views must
+be moved aside explicitly before enabling this projection. Upgrade legacy owned
+views before relocating a project; already-relocated absolute links are refused
+as modified rather than guessed or overwritten. Generated ignore rules now cover
+node_modules symlinks as well as directories. Lockfile/registry schemas are
+unchanged. Per-view updates retain the earlier atomic replacement/rollback
+behavior; graph-wide atomic projection and cross-platform validation remain
+unfinished.
+
+Validation:
+
+- `cargo test -p ferrite-npm -p ferrite-cli --locked`: 20 package and 13 CLI
+  tests passed. New projection tests cover relative scoped/concurrent versions,
+  legacy-link migration with unchanged edges, relocation of the entire project,
+  preserved importer-specific versions and unmanaged editor-view refusal before
+  any package projection is created. Create tests verify installed and no-install
+  output, including empty native manifests.
+- Fresh CLI build followed by
+  `FERRITE_CLI_PATH=/home/meme/Documentos/challenges/ferrite-fw/target/debug/ferrite FERRITE_CHROMIUM_PATH=/home/meme/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome cargo test -p ferrite-test --test generated_apps --locked -- --ignored --nocapture`:
+  all four tests passed (75.94 seconds), covering all six generated profiles in
+  both browsers. New assertions verify root editor links immediately after
+  creation and resolve Vue/Svelte to the exact concrete root importer edge before
+  dev starts. Frozen replay, dev/edit/CSS/build/preview checks remain intact.
+  Native profiles still run with Node absent from PATH.
+- `cargo clippy -p ferrite-npm -p ferrite-cli -p ferrite-test --all-targets --locked -- -D warnings`:
+  passed; changed files formatted and diff check passed.
+
+This establishes the filesystem package view, not complete editor-language-server
+or type-checker conformance. Checker execution, Doctor, framework HMR, syntax/map
+matrices, generated test packaging, real SSR/hydration, React Refresh, remaining
+package/host capabilities, other adapters and release/upstream acceptance remain
+assigned. The complete mission remains active.

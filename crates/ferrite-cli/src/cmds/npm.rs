@@ -12,6 +12,7 @@ pub(crate) fn npm_context(
     PathBuf,
     PathBuf,
 )> {
+    ferrite::npm::validate_editor_destination(root)?;
     let user = ferrite::load_user_config(root)?;
     let resolved = ferrite::resolve_config(
         user,
@@ -66,6 +67,7 @@ pub(crate) async fn add(args: AddArgs) -> ferrite::Result<()> {
     }
     lock.write(&lock_path)?;
     pkg.write(&pkg_path)?;
+    ferrite::npm::project_editor_dependencies(&args.root, &lock)?;
     Ok(())
 }
 
@@ -81,6 +83,7 @@ pub(crate) async fn remove(args: RemoveArgs) -> ferrite::Result<()> {
     installer.install_manifest(&pkg, &mut lock, false).await?;
     lock.write(&lock_path)?;
     pkg.write(&pkg_path)?;
+    ferrite::npm::project_editor_dependencies(&args.root, &lock)?;
     for name in &args.names {
         println!("removed root dependency {name}");
     }
@@ -121,6 +124,7 @@ pub(crate) async fn update(args: UpdateArgs) -> ferrite::Result<()> {
     installer.install_manifest(&pkg, &mut lock, false).await?;
     lock.write(&lock_path)?;
     pkg.write(&pkg_path)?;
+    ferrite::npm::project_editor_dependencies(&args.root, &lock)?;
     for (name, _) in targets {
         println!(
             "updated {name}@{}",
@@ -145,6 +149,7 @@ pub(crate) async fn install(args: InstallArgs) -> ferrite::Result<()> {
     if !args.frozen_lockfile {
         lock.write(&lock_path)?;
     }
+    ferrite::npm::project_editor_dependencies(&args.root, &lock)?;
     println!("installed {} concrete packages", lock.package.len());
     Ok(())
 }

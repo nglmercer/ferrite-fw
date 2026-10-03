@@ -103,6 +103,30 @@ async fn acceptance(kind: BrowserKind, frameworks: &[&str]) {
             )
             .await;
             let lock = std::fs::read(destination.join("ferrite.lock")).unwrap();
+            assert_eq!(
+                std::fs::read_link(destination.join("node_modules")).unwrap(),
+                PathBuf::from(".ferrite/npm/node_modules")
+            );
+            if node_enabled {
+                let graph =
+                    ferrite::npm::Lockfile::read(&destination.join("ferrite.lock")).unwrap();
+                let identity = &graph.importers["."].dependencies[*framework];
+                let actual = destination
+                    .join("node_modules")
+                    .join(framework)
+                    .canonicalize()
+                    .unwrap();
+                assert_eq!(
+                    actual,
+                    destination
+                        .join(".ferrite/npm/packages")
+                        .join(identity)
+                        .canonicalize()
+                        .unwrap(),
+                    "editor resolution must use the same concrete importer edge before dev starts"
+                );
+            }
+
             command(
                 &binary,
                 &destination,

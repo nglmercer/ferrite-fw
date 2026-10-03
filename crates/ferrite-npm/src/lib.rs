@@ -14,7 +14,9 @@ mod metadata;
 mod package;
 mod package_json;
 mod projection;
-pub use projection::project_node_modules;
+pub use projection::{
+    project_editor_dependencies, project_node_modules, validate_editor_destination,
+};
 mod spec;
 
 pub use client::RegistryClient;

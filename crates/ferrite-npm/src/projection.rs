@@ -52,13 +52,24 @@ pub fn project_node_modules(npm_root: &Path, lock: &Lockfile) -> Result<PathBuf>
         for (name, target) in &links {
             let link = stage.path().join(name);
             std::fs::create_dir_all(link.parent().expect("link parent"))?;
-            link_directory(&store.join(target), &link)?;
+            let relative = relative_target(
+                destination.join(name).parent().unwrap(),
+                &store.join(target),
+            )?;
+            link_directory(&relative, &link)?;
         }
         std::fs::write(stage.path().join(MARKER), serde_json::to_vec(&links)?)?;
         if destination.exists() {
             let existing: BTreeMap<String, String> =
                 serde_json::from_slice(&std::fs::read(destination.join(MARKER))?)?;
-            if existing == links {
+            if existing == links
+                && links.iter().all(|(name, target)| {
+                    let path = destination.join(name);
+                    relative_target(path.parent().unwrap(), &store.join(target)).is_ok_and(
+                        |expected| std::fs::read_link(path).is_ok_and(|actual| actual == expected),
+                    )
+                })
+            {
                 continue;
             }
             let backup = tempfile::tempdir_in(parent)?;
@@ -75,6 +86,76 @@ pub fn project_node_modules(npm_root: &Path, lock: &Lockfile) -> Result<PathBuf>
     }
     Ok(root_modules)
 }
+/// Expose the same concrete graph to editors and Node resolution at the project
+/// root. The only new link is relative and portable; no dependency resolution runs.
+pub fn project_editor_dependencies(project_root: &Path, lock: &Lockfile) -> Result<PathBuf> {
+    let absolute = if project_root.is_absolute() {
+        project_root.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(project_root)
+    };
+    validate_directory(&absolute)?;
+    let project = absolute.canonicalize()?;
+    let destination = project.join("node_modules");
+    let target = Path::new(".ferrite/npm/node_modules");
+    // Reject unmanaged editor views before mutating any package projections.
+    validate_editor_link(&destination, target)?;
+    lock.validate()?;
+    // Empty manifests still need an owned view; ensure each level separately
+    // and reject existing symlinks instead of following them through mkdir_all.
+    for directory in [project.join(".ferrite"), project.join(".ferrite/npm")] {
+        match std::fs::create_dir(&directory) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.into()),
+        }
+        validate_directory(&directory)?;
+    }
+    project_node_modules(&project.join(".ferrite/npm"), lock)?;
+    if !validate_editor_link(&destination, target)? {
+        // Symlink creation itself refuses an existing destination, including a
+        // destination introduced after validation.
+        link_directory(target, &destination)?;
+    }
+    Ok(destination)
+}
+
+/// Preflight installation's editor destination without creating any graph view.
+pub fn validate_editor_destination(project_root: &Path) -> Result<()> {
+    validate_editor_link(
+        &project_root.join("node_modules"),
+        Path::new(".ferrite/npm/node_modules"),
+    )?;
+    Ok(())
+}
+fn validate_editor_link(destination: &Path, target: &Path) -> Result<bool> {
+    match std::fs::symlink_metadata(destination) {
+        Ok(metadata) if metadata.file_type().is_symlink() && std::fs::read_link(destination)? == target => Ok(true),
+        Ok(_) => Err(FerriteError::Npm(format!("unmanaged editor node_modules at {}; Ferrite will not replace it; move it aside before projecting the locked graph", destination.display()))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn relative_target(from: &Path, target: &Path) -> Result<PathBuf> {
+    let from: Vec<_> = from.components().collect();
+    let target: Vec<_> = target.components().collect();
+    let common = from.iter().zip(&target).take_while(|(a, b)| a == b).count();
+    if common == 0 {
+        return Err(FerriteError::Npm(
+            "projection links require a shared filesystem root".into(),
+        ));
+    }
+    let mut result = PathBuf::new();
+    for _ in common..from.len() {
+        result.push("..");
+    }
+    for component in &target[common..] {
+        result.push(component.as_os_str());
+    }
+    Ok(result)
+}
+
 fn validate_directory(path: &Path) -> Result<()> {
     for ancestor in path.ancestors() {
         let metadata = std::fs::symlink_metadata(ancestor)?;
@@ -124,7 +205,9 @@ fn validate_existing(destination: &Path, store: &Path) -> Result<()> {
             ));
         }
         let path = destination.join(name);
-        if std::fs::read_link(&path)? != store.join(target) {
+        let actual = std::fs::read_link(&path)?;
+        let relative = relative_target(path.parent().unwrap(), &store.join(target))?;
+        if actual != store.join(target) && actual != relative {
             return Err(FerriteError::Npm(format!(
                 "modified compiler link {}; refusing to overwrite",
                 path.display()
@@ -231,11 +314,11 @@ mod tests {
         let store = root.path().join("packages");
         assert_eq!(
             std::fs::read_link(view.join("@scope/shared")).unwrap(),
-            store.join("@scope/shared@2.0.0")
+            PathBuf::from("../../packages/@scope/shared@2.0.0")
         );
         assert_eq!(
             std::fs::read_link(store.join("a@1.0.0/node_modules/@scope/shared")).unwrap(),
-            store.join("@scope/shared@1.0.0")
+            PathBuf::from("../../../@scope/shared@1.0.0")
         );
         project_node_modules(root.path(), &lock).unwrap();
         lock.importers
@@ -246,10 +329,73 @@ mod tests {
         project_node_modules(root.path(), &lock).unwrap();
         assert_eq!(
             std::fs::read_link(view.join("@scope/shared")).unwrap(),
-            store.join("@scope/shared@1.0.0")
+            PathBuf::from("../../packages/@scope/shared@1.0.0")
         );
         assert!(store.join("@scope/shared@2.0.0/package.json").is_file());
     }
+    #[test]
+    fn upgrades_owned_absolute_links_even_when_edges_are_unchanged() {
+        let (root, lock) = fixture();
+        let view = project_node_modules(root.path(), &lock).unwrap();
+        let path = view.join("a");
+        std::fs::remove_file(&path).unwrap();
+        link_directory(&root.path().join("packages/a@1.0.0"), &path).unwrap();
+        project_node_modules(root.path(), &lock).unwrap();
+        assert_eq!(
+            std::fs::read_link(path).unwrap(),
+            PathBuf::from("../packages/a@1.0.0")
+        );
+    }
+    #[test]
+    fn editor_view_survives_project_relocation_and_retains_importer_versions() {
+        let (store, lock) = fixture();
+        let project = tempfile::tempdir().unwrap();
+        std::fs::create_dir(project.path().join(".ferrite")).unwrap();
+        std::fs::rename(store.path(), project.path().join(".ferrite/npm")).unwrap();
+        project_editor_dependencies(project.path(), &lock).unwrap();
+        assert_eq!(
+            std::fs::read_link(project.path().join("node_modules")).unwrap(),
+            PathBuf::from(".ferrite/npm/node_modules")
+        );
+        let relocated = tempfile::tempdir().unwrap();
+        let root = relocated.path().join("app");
+        std::fs::rename(project.path(), &root).unwrap();
+        for (package, version) in [
+            ("@scope/shared", "2.0.0"),
+            ("a/node_modules/@scope/shared", "1.0.0"),
+        ] {
+            let manifest: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(root.join("node_modules").join(package).join("package.json"))
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(manifest["version"], version);
+        }
+        project_editor_dependencies(&root, &lock).unwrap();
+    }
+    #[test]
+    fn unmanaged_editor_views_fail_before_any_package_projection_is_created() {
+        let (store, lock) = fixture();
+        let project = tempfile::tempdir().unwrap();
+        std::fs::create_dir(project.path().join(".ferrite")).unwrap();
+        std::fs::rename(store.path(), project.path().join(".ferrite/npm")).unwrap();
+        let view = project.path().join("node_modules");
+        std::fs::create_dir(&view).unwrap();
+        std::fs::write(view.join("keep"), "unrelated").unwrap();
+        assert!(project_editor_dependencies(project.path(), &lock)
+            .unwrap_err()
+            .to_string()
+            .contains("unmanaged editor"));
+        assert_eq!(
+            std::fs::read_to_string(view.join("keep")).unwrap(),
+            "unrelated"
+        );
+        assert!(!project
+            .path()
+            .join(".ferrite/npm/packages/a@1.0.0/node_modules")
+            .exists());
+    }
+
     #[test]
     fn refuses_unmanaged_views_before_writing_any_links() {
         let (root, lock) = fixture();

@@ -101,6 +101,7 @@ pub(crate) async fn create(args: CreateArgs) -> ferrite::Result<()> {
             .install_manifest(&package, &mut lock, false)
             .await?;
         lock.write(&lock_path)?;
+        ferrite::npm::project_editor_dependencies(&stage.path().canonicalize()?, &lock)?;
     }
     target.publish(&stage)?;
     println!(
