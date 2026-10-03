@@ -278,7 +278,28 @@ impl DevServer {
     /// Internal virtual IDs remain distinct in the compilation graph; only this
     /// execution payload uses their resolved URLs.
     pub async fn ssr_runtime_graph(&self, url: &str) -> Result<ferrite_ssr::CompiledModuleGraph> {
+        Ok(self.ssr_runtime_graph_with_styles(url).await?.0)
+    }
+
+    /// Compile the runtime graph with stylesheet URLs in dependency order.
+    /// Styles use the existing direct-CSS endpoint, retaining CSS-module scope.
+    pub async fn ssr_runtime_graph_with_styles(
+        &self,
+        url: &str,
+    ) -> Result<(ferrite_ssr::CompiledModuleGraph, Vec<String>)> {
         let modules = self.ssr_compile_graph(url).await?;
+        let styles = modules
+            .iter()
+            .filter(|module| module.stylesheet.is_some())
+            .map(|module| {
+                let id = if module.id.0.starts_with('\0') {
+                    virtual_url(&module.id.0)
+                } else {
+                    module.id.0.clone()
+                };
+                format!("{id}{}direct", if id.contains('?') { "&" } else { "?" })
+            })
+            .collect();
         let modules: Vec<_> = modules
             .into_iter()
             .map(|module| {
@@ -299,7 +320,7 @@ impl DevServer {
             modules,
         };
         graph.validate()?;
-        Ok(graph)
+        Ok((graph, styles))
     }
 
     /// Invalidate a module and broadcast its HMR plan.

@@ -114,6 +114,32 @@ mod tests {
         assert!(!html.contains("<!--ssr-outlet-->"), "{html}");
     }
 
+    #[test]
+    fn preload_query_urls_are_classified_and_attribute_escaped() {
+        let html = inject_shell(
+            "<head></head>",
+            "",
+            &[
+                "/style.css?direct&version=1".into(),
+                "/module.js?version=1".into(),
+                "/unsafe\"onload=\"value.css?direct".into(),
+            ],
+        );
+        assert!(
+            html.contains("rel=\"stylesheet\" href=\"/style.css?direct&amp;version=1\""),
+            "{html}"
+        );
+        assert!(
+            html.contains("rel=\"modulepreload\" href=\"/module.js?version=1\""),
+            "{html}"
+        );
+        assert!(
+            html.contains("/unsafe&quot;onload=&quot;value.css?direct"),
+            "{html}"
+        );
+        assert!(!html.contains("href=\"/unsafe\"onload="), "{html}");
+    }
+
     #[tokio::test]
     async fn unknown_backend_errors_loudly() {
         let mut resolved = test_resolved();

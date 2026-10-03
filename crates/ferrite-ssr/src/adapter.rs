@@ -67,10 +67,19 @@ impl SsrAdapter for StaticShellAdapter {
 pub(crate) fn inject_shell(shell: &str, body: &str, preload_files: &[String]) -> String {
     let mut preload = String::new();
     for file in preload_files {
-        if file.ends_with(".css") {
-            preload.push_str(&format!("<link rel=\"stylesheet\" href=\"{file}\">\n"));
-        } else if file.ends_with(".js") {
-            preload.push_str(&format!("<link rel=\"modulepreload\" href=\"{file}\">\n"));
+        let path = file.split(['?', '#']).next().unwrap_or(file);
+        let escaped = file
+            .replace('&', "&amp;")
+            .replace('"', "&quot;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('\'', "&#39;");
+        if path.ends_with(".css") {
+            preload.push_str(&format!("<link rel=\"stylesheet\" href=\"{escaped}\">\n"));
+        } else if path.ends_with(".js") {
+            preload.push_str(&format!(
+                "<link rel=\"modulepreload\" href=\"{escaped}\">\n"
+            ));
         }
     }
     shell

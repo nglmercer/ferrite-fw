@@ -149,7 +149,7 @@ pub(crate) async fn js_ssr_adapter(
     let server = Arc::new(server.weak_handle());
     let entry_url = format!("/{}", entry.replace('\\', "/"));
     Ok(Arc::new(ferrite::ssr::FnAdapter::new(
-        move |request: ferrite::ssr::SsrHttpRequest, context: ferrite::ssr::SsrContext| {
+        move |request: ferrite::ssr::SsrHttpRequest, mut context: ferrite::ssr::SsrContext| {
             let server = server.clone();
             let adapter = adapter.clone();
             let entry_url = entry_url.clone();
@@ -160,7 +160,8 @@ pub(crate) async fn js_ssr_adapter(
                 // Keep graph replacement, evaluation, and invocation together: a
                 // persistent runtime must not interleave different request graphs.
                 let mut adapter = adapter.lock().await;
-                let graph = server.ssr_runtime_graph(&entry_url).await?;
+                let (graph, styles) = server.ssr_runtime_graph_with_styles(&entry_url).await?;
+                context.preload.extend(styles);
                 adapter.replace_graph(graph)?;
                 ferrite::ssr::SsrAdapter::render(&*adapter, request, context).await
             }
@@ -171,6 +172,97 @@ pub(crate) async fn js_ssr_adapter(
 #[cfg(all(test, feature = "napi-vm"))]
 mod ssr_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn development_ssr_delivers_scoped_styles_and_updates_css() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("src")).unwrap();
+        std::fs::write(root.path().join("src/entry-server.js"), "import classes from './style.module.css'; export function render() { return `<h1 class=\"${classes.title}\">styled</h1>`; }").unwrap();
+        let css_file = root.path().join("src/style.module.css");
+        std::fs::write(&css_file, ".title { color: red; }").unwrap();
+        let mut resolved = ferrite::config::resolve_config(
+            Default::default(),
+            Some(root.path().into()),
+            Default::default(),
+        )
+        .unwrap();
+        resolved.runtime.backend = "napi-vm".into();
+        resolved.server.host = "127.0.0.1".into();
+        resolved.server.port = 0;
+        let server = ferrite::DevServer::new_without_watcher(resolved.clone(), Vec::new())
+            .await
+            .unwrap();
+        let adapter = js_ssr_adapter(
+            &server,
+            &resolved,
+            "<html><head></head><body><!--ssr-outlet--></body></html>",
+        )
+        .await
+        .unwrap();
+        server.set_ssr_adapter(adapter).await;
+        let listening = server.clone();
+        let serving = tokio::spawn(async move { listening.listen().await });
+        let address = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if let Some(address) = *server.inner().bound_addr.lock().unwrap() {
+                    break address;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("server must bind");
+        let origin = format!("http://{address}");
+        for color in ["red", "blue"] {
+            std::fs::write(&css_file, format!(".title {{ color: {color}; }}")).unwrap();
+            let response = server
+                .inner()
+                .http_client
+                .get(&origin)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), 200);
+            let html = response.text().await.unwrap();
+            assert!(html.contains("rel=\"stylesheet\""), "{html}");
+            let href = html
+                .split("href=\"")
+                .nth(1)
+                .unwrap()
+                .split('"')
+                .next()
+                .unwrap();
+            assert_eq!(href, "/src/style.module.css?direct");
+            let class = html
+                .split("class=\"")
+                .nth(1)
+                .unwrap()
+                .split('"')
+                .next()
+                .unwrap();
+            let response = server
+                .inner()
+                .http_client
+                .get(format!("{origin}{href}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), 200);
+            assert!(response.headers()["content-type"]
+                .to_str()
+                .unwrap()
+                .contains("text/css"));
+            let css = response.text().await.unwrap();
+            assert!(css.contains(class) && css.contains(color), "{html} / {css}");
+            assert!(
+                !css.contains("document") && !css.contains("import.meta.hot"),
+                "{css}"
+            );
+        }
+        serving.abort();
+        let _ = serving.await;
+        server.close();
+    }
 
     #[tokio::test]
     async fn shared_ssr_compiles_typescript_dependencies_and_reports_errors() {
