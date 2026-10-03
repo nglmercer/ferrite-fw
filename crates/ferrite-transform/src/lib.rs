@@ -580,8 +580,11 @@ mod tests {
     fn hot_rewrite_replaces_real_usage() {
         let code = "if (import.meta.hot) { import.meta.hot.accept(); }\n";
         let out = rewrite_import_meta_hot(code, "/src/main.js");
-        assert!(!out.contains("import.meta.hot"), "{out}");
-        assert_eq!(out.matches("__ferrite_create_hot__").count(), 2, "{out}");
+        assert!(
+            out.starts_with("import.meta.hot = globalThis.__ferrite_create_hot__"),
+            "{out}"
+        );
+        assert_eq!(out.matches("__ferrite_create_hot__").count(), 1, "{out}");
         assert!(
             out.contains("globalThis.__ferrite_create_hot__(\"/src/main.js\")"),
             "{out}"
@@ -603,7 +606,7 @@ mod tests {
     fn hot_rewrite_handles_template_expressions_and_spacing() {
         let code = "const c = `${import.meta.hot ? 1 : 0}`;\nif (import . meta . hot) {}\n";
         let out = rewrite_import_meta_hot(code, "/x.js");
-        assert_eq!(out.matches("__ferrite_create_hot__").count(), 2, "{out}");
+        assert_eq!(out.matches("__ferrite_create_hot__").count(), 1, "{out}");
     }
 
     #[test]

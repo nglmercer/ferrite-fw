@@ -178,35 +178,20 @@ pub fn apply_define(code: &str, define: &HashMap<String, String>) -> String {
     output
 }
 
-/// Rewrite `import.meta.hot` to the Ferrite HMR registry (§33).
-///
-/// AST-accurate: only real member expressions are replaced — occurrences
-/// inside strings, comments, or template text are left alone, since the
-/// replacement carries quotes that would corrupt the enclosing literal
-/// (e.g. a Markdown module whose prose mentions `import.meta.hot`).
-/// Unparseable code is returned unchanged; the pipeline's own parse
-/// reports the loud error. The dev client provides
-/// `globalThis.__ferrite_create_hot__`.
+/// Initialize one shared `import.meta.hot` context for this module (§33).
+/// AST analysis excludes strings, comments and template text. Real accesses
+/// retain their original locations; one generated initializer precedes them.
+/// Unparseable code is unchanged here; the mapped pipeline reports parse errors.
 pub fn rewrite_import_meta_hot(code: &str, id: &str) -> String {
-    if !code.contains("import.meta.hot") {
-        return code.to_string();
-    }
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, code, SourceType::mjs()).parse();
     if parsed.fatal_error || !parsed.diagnostics.is_empty() {
         return code.to_string();
     }
-    let mut ranges = import_meta_hot_spans(&parsed.program);
-    if ranges.is_empty() {
+    if import_meta_hot_spans(&parsed.program).is_empty() {
         return code.to_string();
     }
-    ranges.sort_by_key(|range| std::cmp::Reverse(range.0));
-    let replacement = format!("globalThis.__ferrite_create_hot__({id:?})");
-    let mut output = code.to_string();
-    for (start, end) in ranges {
-        output.replace_range(start..end, &replacement);
-    }
-    output
+    format!("import.meta.hot = globalThis.__ferrite_create_hot__({id:?});\n{code}")
 }
 
 /// Prepend the HMR client import for dev transforms.
@@ -215,7 +200,7 @@ pub fn with_hmr_client(code: &str) -> String {
     format!("import \"/@ferrite/client\";\n{code}")
 }
 
-/// Rewrite HMR access and prepend the client import with a chained edit map.
+/// Initialize the hot context and prepend the client import with an edit map.
 pub fn inject_hmr_mapped(
     id: &str,
     code: &str,
@@ -230,14 +215,13 @@ pub fn inject_hmr_mapped(
             frame: None,
         });
     }
-    let mut edits = vec![(0, 0, "import \"/@ferrite/client\";\n".into())];
-    for (start, end) in import_meta_hot_spans(&parsed.program) {
-        edits.push((
-            start,
-            end,
-            format!("globalThis.__ferrite_create_hot__({id:?})"),
+    let mut prefix = String::from("import \"/@ferrite/client\";\n");
+    if !import_meta_hot_spans(&parsed.program).is_empty() {
+        prefix.push_str(&format!(
+            "import.meta.hot = globalThis.__ferrite_create_hot__({id:?});\n"
         ));
     }
+    let edits = vec![(0, 0, prefix)];
     apply_text_edits(id, code, &edits, sourcemap)
 }
 

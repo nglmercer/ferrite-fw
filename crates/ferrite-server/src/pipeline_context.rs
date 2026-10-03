@@ -98,7 +98,7 @@ impl DevServer {
             .ok()
             .map(|bytes| Hash::of_bytes(&bytes).0);
         let pipeline = format!(
-            "pipeline-v5:{}:{:?}:{}:{}:{:?}:{lock_state:?}",
+            "pipeline-v6:{}:{:?}:{}:{}:{:?}:{lock_state:?}",
             self.inner.plugins.cache_key(),
             self.inner.config.react,
             self.inner.config.is_production,

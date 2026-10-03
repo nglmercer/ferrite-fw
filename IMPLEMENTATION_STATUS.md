@@ -1069,3 +1069,35 @@ module evaluation. Singleton per-evaluation lowering remains assigned. Explicit
 dependency/alias acceptance metadata, unsupported-form diagnostics, browser
 state/recovery, complete Refresh, framework HMR, SSR/checkers and remaining
 mission work stay active. No support profile is promoted by this analysis change.
+
+### One hot context per lowered module evaluation
+
+Hot lowering now initializes `import.meta.hot` once at module evaluation and
+preserves original accesses instead of replacing every access with a fresh
+factory call. Data reads and later registrations cannot clear earlier accept,
+dispose or event handlers. No generated local binding is needed, and source-map
+edits leave original access locations intact after the generated prefix. Plain
+strings/comments remain untouched; AST detection also handles spaced accesses.
+The mapped pipeline still rejects invalid JavaScript. Pipeline cache identity is
+bumped to v6 to prevent persistent old lowering output from surviving upgrades.
+
+Validation:
+
+- `cargo test -p ferrite-transform -p ferrite-server --locked`: 46 transform and
+  33 server tests passed. Existing lowering assertions now require one factory
+  call instead of the prior incorrect per-access calls.
+  Output: `/tmp/ferrite-hot-singleton.log`.
+- `cargo test -p ferrite-frameworks --test hmr_client --locked -- --ignored --nocapture`:
+  both actual-client execution tests passed (0.09 seconds). New fixture runs real
+  mapped lowering output as ESM against the shipped HMR client, with repeated data
+  reads plus accept/dispose/event registration, and requires correct callbacks,
+  retained data and event ownership over three module updates.
+- `cargo clippy -p ferrite-transform -p ferrite-server -p ferrite-frameworks --all-targets --locked -- -D warnings`:
+  passed. After the cache-version change, the server cache-key test and server
+  Clippy rerun passed; formatting/diff checks passed.
+
+No lock/config schema migration. Cached transforms rebuild under the new pipeline
+identity. This resolves the recorded per-access context lifecycle bug in exercised
+lowering/client execution; actual framework browser state/syntax recovery,
+dependency acceptance, complete Refresh, SSR/checkers and remaining mission work
+are still assigned. No profile is promoted and the full goal remains active.
