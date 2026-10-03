@@ -117,6 +117,20 @@ impl JsSsrAdapter {
         }
     }
 
+    /// Wrap an explicit runtime and a validated compiled graph.
+    pub fn new_graph(runtime: Arc<dyn JsRuntime>, graph: CompiledModuleGraph) -> Result<Self> {
+        graph.validate()?;
+        let entry = graph
+            .modules
+            .iter()
+            .find(|module| module.id == graph.entry)
+            .expect("validated graph entry")
+            .clone();
+        let mut adapter = Self::new(runtime, entry);
+        adapter.graph = Some(graph);
+        Ok(adapter)
+    }
+
     /// Build from resolved config.
     ///
     /// The `napi-vm` backend maps fuel/loop budgets plus the native

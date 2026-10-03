@@ -62,6 +62,43 @@ impl SsrRendererArtifact {
         Ok(artifact)
     }
 
+    /// Construct a renderer from embedded data and an explicitly supplied
+    /// runtime. The caller serves published assets under `base/ssr-assets/`.
+    /// No project root, manifest, or filesystem compiler loader is required.
+    pub fn into_adapter(
+        self,
+        runtime: std::sync::Arc<dyn ferrite_runtime::JsRuntime>,
+        shell: String,
+        base: &str,
+    ) -> Result<std::sync::Arc<dyn ferrite_ssr::SsrAdapter>> {
+        self.validate()?;
+        let adapter = std::sync::Arc::new(
+            ferrite_ssr::JsSsrAdapter::new_graph(runtime, self.graph)?.with_shell(shell),
+        );
+        let mut seen = HashSet::new();
+        let styles: Vec<_> = self
+            .stylesheets
+            .into_iter()
+            .filter(|file| seen.insert(file.clone()))
+            .map(|file| {
+                format!(
+                    "{}ssr-assets/{file}",
+                    crate::loader::with_trailing_slash(base)
+                )
+            })
+            .collect();
+        Ok(std::sync::Arc::new(ferrite_ssr::FnAdapter::new(
+            move |request, mut context: ferrite_ssr::SsrContext| {
+                let adapter = adapter.clone();
+                let styles = styles.clone();
+                async move {
+                    context.preload.extend(styles);
+                    ferrite_ssr::SsrAdapter::render(&*adapter, request, context).await
+                }
+            },
+        )))
+    }
+
     pub fn read(server_dir: &Path) -> Result<Self> {
         Self::from_bytes(&std::fs::read(server_dir.join(Self::FILE_NAME))?)
     }
@@ -229,7 +266,46 @@ fn output_id(file: &str) -> Result<String> {
 #[cfg(all(test, feature = "napi-vm"))]
 mod tests {
     use super::*;
-    use ferrite_ssr::SsrAdapter;
+
+    #[tokio::test]
+    async fn embedded_bytes_render_with_explicit_rootless_runtime_and_styles() {
+        let bytes = br#"{"version":1,"graph":{"entry":"/entry.js","modules":[{"id":"/entry.js","code":"import { label } from '/label.js'; export function render(url, request) { return {html: `<h1>${label} ${request.method} ${url}</h1>`, status: 202, headers: [['x-renderer','embedded']]}; }","url":null},{"id":"/label.js","code":"export const label = 'embedded';","url":null}]},"stylesheets":["assets/style.css","assets/style.css"]}"#;
+        let artifact = SsrRendererArtifact::from_bytes(bytes).unwrap();
+        let runtime = std::sync::Arc::new(ferrite_runtime::napi_vm::NapiVmRuntime::with_defaults());
+        let adapter = artifact
+            .into_adapter(
+                runtime,
+                "<html><head></head><body><!--ssr-outlet--></body></html>".into(),
+                "/app/",
+            )
+            .unwrap();
+        let response = adapter
+            .render(
+                ferrite_ssr::SsrHttpRequest {
+                    method: "POST".into(),
+                    uri: "/app/submit".into(),
+                    headers: Vec::new(),
+                    body: vec![255],
+                },
+                Default::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status, 202);
+        assert!(response
+            .headers
+            .contains(&("x-renderer".into(), "embedded".into())));
+        let html = response.into_string().await.unwrap();
+        assert!(
+            html.contains("<h1>embedded POST /app/submit</h1>"),
+            "{html}"
+        );
+        assert_eq!(
+            html.matches("href=\"/app/ssr-assets/assets/style.css\"")
+                .count(),
+            1
+        );
+    }
 
     #[tokio::test]
     async fn emitted_server_graph_renders_without_source_files() {
@@ -272,7 +348,8 @@ mod tests {
             let report = builder.build("ssr").await.unwrap();
             let artifact = SsrRendererArtifact::read(&report.out_dir).unwrap();
             let embedded = serde_json::to_vec(&artifact).unwrap();
-            let graph = SsrRendererArtifact::from_bytes(&embedded).unwrap().graph;
+            let embedded_artifact = SsrRendererArtifact::from_bytes(&embedded).unwrap();
+            let graph = embedded_artifact.graph.clone();
             assert_eq!(
                 graph.entry,
                 load_built_ssr_graph(&report.out_dir).unwrap().entry
@@ -289,7 +366,11 @@ mod tests {
                 "throw new Error('source must not execute');",
             )
             .unwrap();
-            let adapter = ferrite_ssr::JsSsrAdapter::from_resolved_graph(&config, graph).unwrap();
+            let runtime =
+                std::sync::Arc::new(ferrite_runtime::napi_vm::NapiVmRuntime::with_defaults());
+            let adapter = embedded_artifact
+                .into_adapter(runtime, "<!--ssr-outlet-->".into(), &config.base)
+                .unwrap();
             let response = adapter
                 .render(
                     ferrite_ssr::SsrHttpRequest {
