@@ -31,6 +31,8 @@ pub struct Config {
     pub plugins: Vec<Arc<dyn Plugin>>,
     /// Project root hint.
     pub root: Option<PathBuf>,
+    /// Explicit config file/directory; replaces automatic file discovery.
+    pub config_path: Option<PathBuf>,
     /// CLI overrides (highest precedence).
     pub overrides: CliOverrides,
 }
@@ -72,8 +74,24 @@ impl Config {
         let container = PluginContainer::new(self.plugins.clone(), Apply::All);
         container.hook_config(&mut user).await?;
         // Merge file config under programmatic config.
-        let root_hint = self.root.clone().unwrap_or_else(|| PathBuf::from("."));
-        let file_config = load_user_config(&root_hint)?;
+        let root_hint = self.root.clone().unwrap_or_else(|| {
+            self.config_path.as_ref().map_or_else(
+                || PathBuf::from("."),
+                |path| {
+                    if path.is_dir() {
+                        path.clone()
+                    } else {
+                        path.parent()
+                            .unwrap_or_else(|| std::path::Path::new("."))
+                            .to_path_buf()
+                    }
+                },
+            )
+        });
+        let file_config = match self.config_path {
+            Some(path) => ferrite_config::load_user_config_path(&path)?,
+            None => load_user_config(&root_hint)?,
+        };
         let merged = merge_user_config(file_config, user);
         let resolved = resolve_config(merged, Some(root_hint), self.overrides)?;
         let mut plugins = self.plugins;

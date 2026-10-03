@@ -18,6 +18,7 @@ pub(crate) async fn e2e(
     let root = root_of(&config_arg, args.root.clone());
     let mut config = ferrite::Config {
         root: Some(root.clone()),
+        config_path: config_arg.clone(),
         overrides: ferrite::CliOverrides {
             mode,
             ..Default::default()

@@ -623,3 +623,40 @@ Doctor executable ABI probes, full graph/editor/checker validation, inspect repo
 unification, React Refresh, framework HMR, SSR/hydration/SSG, remaining package and
 host capabilities, adapters and release/upstream matrices remain assigned. No
 capability is promoted to tested by this diagnostic-only change.
+
+### Explicit configuration selection in compiler-driven commands
+
+Fixed `--config custom.toml` previously selecting only its parent directory and
+silently loading a different default file. Added shared
+`load_user_config_path` for exact TOML and statically parsed JS/TS files, and
+`Config.config_path` for library parity. Explicit files replace automatic
+configuration discovery (including implicit local overlays); explicit directories
+retain existing discovery/overlay behavior. Missing, malformed and unsupported
+selected files fail without fallback. Programmatic configuration and CLI
+per-field overrides retain their precedence. Without an explicit library root,
+the selected file's parent/directory becomes the project root hint.
+
+Dev, SSR dev, build, preview, transform, E2E, inspect and doctor pass the selected
+path. Package-management command dispatch still does not consume global config;
+that remains assigned rather than claiming all-command parity. JS configuration
+continues to use the existing static parser, not arbitrary execution or complete
+Vite configuration compatibility.
+
+Validation:
+
+- `cargo test -p ferrite-config -p ferrite-cli --locked`: 23 config tests and
+  initially 13 CLI tests passed, plus the config documentation test. Final CLI
+  rerun after the library-parity regression: 14 passed.
+- `cargo clippy -p ferrite-cli --all-targets --locked -- -D warnings`: passed
+  after final changes; changed files formatted and diff check passed.
+- Fresh CLI build and a temporary real project with malformed default TOML:
+  explicit selected config controlled inspect/doctor, transform substituted its
+  define, scope-hoisted production build used its output directory, and malformed
+  selected TOML produced failure naming that file. No additional browser or SSR
+  conformance is established by these checks.
+
+Migration: callers constructing every public `Config` field explicitly must add
+`config_path: None`; callers using `..Default::default()` remain compatible.
+Selecting a file now uses that exact file, so callers relying on unintended
+neighbor-file discovery must select the directory instead. Full framework work,
+SSR, checkers, host/package matrices and remaining acceptance gates stay active.

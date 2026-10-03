@@ -11,7 +11,10 @@ pub(crate) async fn inspect(
     mode: Option<String>,
 ) -> ferrite::Result<()> {
     let root = root_of(&config_arg, args.root);
-    let user = ferrite::load_user_config(&root)?;
+    let user = match &config_arg {
+        Some(path) => ferrite::load_user_config_path(path)?,
+        None => ferrite::load_user_config(&root)?,
+    };
     let resolved = ferrite::resolve_config(
         user,
         Some(root.clone()),
@@ -83,6 +86,7 @@ pub(crate) async fn transform(
     let root = root_of(&config_arg, args.root);
     let (resolved, plugins) = ferrite::Config {
         root: Some(root.clone()),
+        config_path: config_arg.clone(),
         plugins: default_plugins(&root),
         overrides: ferrite::CliOverrides {
             mode,
@@ -137,7 +141,10 @@ pub(crate) async fn doctor(
     mode: Option<String>,
 ) -> ferrite::Result<()> {
     let root = root_of(&config_arg, args.root);
-    let user = ferrite::load_user_config(&root)?;
+    let user = match &config_arg {
+        Some(path) => ferrite::load_user_config_path(path)?,
+        None => ferrite::load_user_config(&root)?,
+    };
     let config = ferrite::resolve_config(
         user,
         Some(root),
@@ -184,4 +191,38 @@ pub(crate) async fn doctor(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod config_tests {
+    #[tokio::test]
+    async fn selected_file_controls_library_pipeline_without_default_discovery() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("ferrite.toml"), "invalid TOML!").unwrap();
+        let selected = dir.path().join("selected.toml");
+        std::fs::write(
+            &selected,
+            "[server]\nport = 4321\n[framework]\nenabled = []\n[define]\nSELECTED = '42'\n",
+        )
+        .unwrap();
+        let (resolved, _) = ferrite::Config {
+            config_path: Some(selected.clone()),
+            ..Default::default()
+        }
+        .resolve()
+        .await
+        .unwrap();
+        assert_eq!(resolved.root, dir.path());
+        assert_eq!(resolved.server.port, 4321);
+        assert_eq!(resolved.define["SELECTED"], "42");
+        assert!(resolved.framework.unwrap().enabled.is_empty());
+        std::fs::write(&selected, "invalid selected TOML!").unwrap();
+        assert!(ferrite::Config {
+            config_path: Some(selected),
+            ..Default::default()
+        }
+        .resolve()
+        .await
+        .is_err());
+    }
 }

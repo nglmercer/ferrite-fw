@@ -56,7 +56,7 @@ pub fn load_config_from_file(dir: &Path) -> Result<Option<LoadedConfigFile>> {
 }
 
 /// Parse one config file.
-fn load_one(path: &Path) -> Result<LoadedConfigFile> {
+pub(crate) fn load_one(path: &Path) -> Result<LoadedConfigFile> {
     let text = std::fs::read_to_string(path)?;
     let source_type = SourceType::from_path(path)
         .map(|source_type| source_type.with_module(true))

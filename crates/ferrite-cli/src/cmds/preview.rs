@@ -9,6 +9,7 @@ pub(crate) async fn preview(args: PreviewArgs, config_arg: Option<PathBuf>) -> f
     let root = root_of(&config_arg, args.root);
     let mut config = ferrite::Config {
         root: Some(root.clone()),
+        config_path: config_arg.clone(),
         overrides: ferrite::CliOverrides {
             port: Some(args.port),
             ..Default::default()

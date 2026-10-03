@@ -49,8 +49,8 @@ pub mod package;
 
 // --- re-exported vocabulary --------------------------------------------------
 pub use ferrite_config::{
-    define_config, load_config_from_file, load_user_config, merge_config, merge_user_config,
-    resolve_config, CliOverrides, LoadedConfigFile, ResolvedConfig, UserConfig,
+    define_config, load_config_from_file, load_user_config, load_user_config_path, merge_config,
+    merge_user_config, resolve_config, CliOverrides, LoadedConfigFile, ResolvedConfig, UserConfig,
 };
 pub use ferrite_core::{
     normalize_path, search_for_workspace_root, Environment, EnvironmentKind, FerriteError, Hash,

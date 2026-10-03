@@ -842,6 +842,30 @@ pub fn load_user_config(dir: &Path) -> Result<UserConfig> {
     Ok(merged)
 }
 
+/// Load an explicitly selected directory or config file, without falling back
+/// to a different file. Explicit files do not merge implicit local overrides.
+pub fn load_user_config_path(path: &Path) -> Result<UserConfig> {
+    if path.is_dir() {
+        return load_user_config(path);
+    }
+    if !path.is_file() {
+        return Err(FerriteError::Config(format!(
+            "selected configuration `{}` is not a file or directory",
+            path.display()
+        )));
+    }
+    match path.extension().and_then(|ext| ext.to_str()) {
+        Some("toml") => {
+            let text = std::fs::read_to_string(path)?;
+            toml::from_str(&text).map_err(|error| FerriteError::Config(format!("{}: {error}", path.display())))
+        }
+        Some("mts" | "cts" | "ts" | "tsx" | "mjs" | "cjs" | "js" | "jsx") => {
+            Ok(js_config::load_one(path)?.config)
+        }
+        _ => Err(FerriteError::Config(format!("unsupported selected configuration `{}`; use TOML or a supported JavaScript/TypeScript configuration file", path.display()))),
+    }
+}
+
 /// Merge `over` on top of `base` (field-wise; `over` wins when set).
 #[must_use]
 pub fn merge_user_config(mut base: UserConfig, over: UserConfig) -> UserConfig {
@@ -1209,6 +1233,39 @@ pub fn resolve_config(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn explicit_config_selection_never_substitutes_discovered_files() {
+        let dir =
+            std::env::temp_dir().join(format!("ferrite-explicit-config-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("ferrite.toml"), "invalid TOML!").unwrap();
+        std::fs::write(dir.join("ferrite.local.toml"), "[server]\nport = 9000").unwrap();
+        let selected = dir.join("custom.toml");
+        std::fs::write(
+            &selected,
+            "[server]\nport = 4321\n[framework]\nenabled = []",
+        )
+        .unwrap();
+        assert_eq!(load_user_config_path(&selected).unwrap().server.port, 4321);
+        assert!(load_user_config_path(&selected)
+            .unwrap()
+            .framework
+            .unwrap()
+            .enabled
+            .is_empty());
+        assert!(load_user_config_path(&dir).is_err());
+        let js = dir.join("custom.ts");
+        std::fs::write(&js, "export default {server: {port: 7654}};").unwrap();
+        assert_eq!(load_user_config_path(&js).unwrap().server.port, 7654);
+        std::fs::write(&selected, "bad TOML!").unwrap();
+        assert!(load_user_config_path(&selected).is_err());
+        assert!(load_user_config_path(&dir.join("missing.toml")).is_err());
+        let unknown = dir.join("custom.txt");
+        std::fs::write(&unknown, "[server]\nport = 1234").unwrap();
+        assert!(load_user_config_path(&unknown).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     use super::*;
 
     #[test]

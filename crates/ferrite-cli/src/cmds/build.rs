@@ -13,6 +13,7 @@ pub(crate) async fn build(
     let root = root_of(&config_arg, args.root);
     let mut config = ferrite::Config {
         root: Some(root.clone()),
+        config_path: config_arg.clone(),
         overrides: ferrite::CliOverrides {
             mode,
             out_dir: args.out_dir,
