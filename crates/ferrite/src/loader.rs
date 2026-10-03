@@ -409,7 +409,23 @@ pub async fn preview_with_plugins(
 /// Plugin-less shorthand; use [`preview_with_plugins`] for hooks, proxy
 /// rules, mounts, and extra headers.
 pub async fn preview_dir(dir: &std::path::Path, port: u16) -> Result<()> {
-    preview_with_parts(dir, port, "/", &[], &[], &[]).await
+    preview_with_parts(
+        dir,
+        port,
+        PreviewRendering {
+            base: "/",
+            renderer: None,
+        },
+        &[],
+        &[],
+        &[],
+    )
+    .await
+}
+
+struct PreviewRendering<'a> {
+    base: &'a str,
+    renderer: Option<Arc<dyn ferrite_ssr::SsrAdapter>>,
 }
 
 /// Serve `dir` with an explicit preview control surface.
@@ -418,10 +434,42 @@ async fn preview_with_control(
     port: u16,
     control: &ferrite_plugin::PreviewControl,
 ) -> Result<()> {
+    let server_dir = dir.join("server");
+    let has_server = server_dir.join("manifest.json").is_file();
+    let explicit_entry = control
+        .config
+        .ssr
+        .entry
+        .as_deref()
+        .is_some_and(|entry| entry != "src/server.rs");
+    let renderer = if has_server || explicit_entry {
+        if control.config.runtime.backend != "napi-vm" || !cfg!(feature = "napi-vm") {
+            return Err(FerriteError::Ssr(format!("built SSR preview requires the explicitly selected napi-vm runtime and its compiled feature; selected `{}`. Configure [runtime].backend = 'napi-vm' and build Ferrite with --features napi-vm", control.config.runtime.backend)));
+        }
+        let graph = crate::load_built_ssr_graph(&server_dir)?;
+        let shell = std::fs::read_to_string(dir.join("index.html"))?;
+        let adapter = ferrite_ssr::JsSsrAdapter::from_resolved_graph(&control.config, graph)?
+            .with_shell(shell);
+        let adapter = Arc::new(tokio::sync::Mutex::new(adapter));
+        Some(
+            Arc::new(ferrite_ssr::FnAdapter::new(move |request, context| {
+                let adapter = adapter.clone();
+                async move {
+                    let adapter = adapter.lock().await;
+                    ferrite_ssr::SsrAdapter::render(&*adapter, request, context).await
+                }
+            })) as Arc<dyn ferrite_ssr::SsrAdapter>,
+        )
+    } else {
+        None
+    };
     preview_with_parts(
         dir,
         port,
-        &control.config.base,
+        PreviewRendering {
+            base: &control.config.base,
+            renderer,
+        },
         &control.headers,
         &control.mounts,
         &control.proxies,
@@ -433,11 +481,12 @@ async fn preview_with_control(
 async fn preview_with_parts(
     dir: &std::path::Path,
     port: u16,
-    base: &str,
+    application: PreviewRendering<'_>,
     headers: &[(String, String)],
     mounts: &[ferrite_plugin::PreviewMount],
     proxies: &[ferrite_plugin::ProxyRule],
 ) -> Result<()> {
+    let PreviewRendering { base, renderer } = application;
     use axum::extract::State;
     use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
     use axum::response::IntoResponse as _;
@@ -449,6 +498,7 @@ async fn preview_with_parts(
         mounts: Vec<ferrite_plugin::PreviewMount>,
         proxies: Vec<ferrite_plugin::ProxyRule>,
         http_client: reqwest::Client,
+        renderer: Option<Arc<dyn ferrite_ssr::SsrAdapter>>,
     }
 
     fn parsed_headers(headers: &[(String, String)]) -> Vec<(HeaderName, HeaderValue)> {
@@ -525,7 +575,7 @@ async fn preview_with_parts(
                     .into_response(),
             };
         }
-        if method != Method::GET && method != Method::HEAD {
+        if state.renderer.is_none() && method != Method::GET && method != Method::HEAD {
             return (
                 StatusCode::METHOD_NOT_ALLOWED,
                 [(axum::http::header::ALLOW, "GET, HEAD")],
@@ -542,6 +592,14 @@ async fn preview_with_parts(
                 path.strip_prefix(&format!("{prefix}/"))
             };
             if let Some(relative) = relative {
+                if method != Method::GET && method != Method::HEAD {
+                    return (
+                        StatusCode::METHOD_NOT_ALLOWED,
+                        [(axum::http::header::ALLOW, "GET, HEAD")],
+                        "mounted assets support GET and HEAD",
+                    )
+                        .into_response();
+                }
                 let file = mount.dir.join(relative);
                 if file.is_file() {
                     return file_response(&file, &state.headers);
@@ -569,6 +627,49 @@ async fn preview_with_parts(
             )
                 .into_response();
         };
+        if state.renderer.is_some() && (relative == "server" || relative.starts_with("server/")) {
+            return (StatusCode::NOT_FOUND, "server output is private").into_response();
+        }
+        if std::path::Path::new(relative).extension().is_none() {
+            if let Some(renderer) = &state.renderer {
+                let request_headers: Vec<_> = headers
+                    .iter()
+                    .filter_map(|(name, value)| {
+                        value
+                            .to_str()
+                            .ok()
+                            .map(|value| (name.to_string(), value.to_string()))
+                    })
+                    .collect();
+                let request = ferrite_ssr::SsrHttpRequest {
+                    method: method.to_string(),
+                    uri: url.clone(),
+                    headers: request_headers.clone(),
+                    body: body.to_vec(),
+                };
+                let context = ferrite_ssr::SsrContext {
+                    url,
+                    headers: request_headers.into_iter().collect(),
+                    ..Default::default()
+                };
+                return match renderer.render(request, context).await {
+                    Ok(response) => {
+                        ferrite_server::ssr_http_response(response, method == Method::HEAD)
+                    }
+                    Err(error) => {
+                        (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response()
+                    }
+                };
+            }
+        }
+        if method != Method::GET && method != Method::HEAD {
+            return (
+                StatusCode::METHOD_NOT_ALLOWED,
+                [(axum::http::header::ALLOW, "GET, HEAD")],
+                "assets support GET and HEAD",
+            )
+                .into_response();
+        }
         let file = state.dir.join(relative);
         let file = if file.is_file() {
             file
@@ -624,6 +725,7 @@ async fn preview_with_parts(
             headers: parsed_headers(headers),
             mounts: mounts.to_vec(),
             proxies: proxies.to_vec(),
+            renderer,
             http_client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
@@ -717,5 +819,26 @@ mod build_analysis_tests {
             .iter()
             .any(|export| export.exported == "TrackOpTypes"
                 && export.target == Some(ModuleId::new("/reactivity.js"))));
+    }
+}
+
+#[cfg(test)]
+mod ssr_preview_validation_tests {
+    #[tokio::test]
+    async fn explicit_ssr_preview_rejects_unavailable_runtime_before_listening() {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = ferrite_config::resolve_config(
+            Default::default(),
+            Some(root.path().into()),
+            Default::default(),
+        )
+        .unwrap();
+        config.ssr.entry = Some("src/entry-server.ts".into());
+        config.runtime.backend = "quickjs".into();
+        let error = super::preview_with_plugins(&config, &[]).await.unwrap_err();
+        assert!(
+            error.to_string().contains("quickjs") && error.to_string().contains("napi-vm"),
+            "{error}"
+        );
     }
 }

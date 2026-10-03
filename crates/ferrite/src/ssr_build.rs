@@ -113,7 +113,15 @@ mod tests {
             .unwrap();
             config.runtime.backend = "napi-vm".into();
             config.build.scope_hoist = scope_hoist;
+            config.base = "/app/".into();
+            std::fs::write(root.path().join("index.html"), "<html><body><main><!--ssr-outlet--></main><script type=\"module\" src=\"/src/main.js\"></script></body></html>").unwrap();
+            std::fs::write(
+                root.path().join("src/main.js"),
+                "globalThis.clientLoaded = true;",
+            )
+            .unwrap();
             let builder = crate::Builder::new(config.clone(), Vec::new());
+            builder.build("client").await.unwrap();
             let report = builder.build("ssr").await.unwrap();
             let graph = load_built_ssr_graph(&report.out_dir).unwrap();
             // Alter source after the build: only emitted code may be executed.
@@ -139,6 +147,55 @@ mod tests {
                 response.into_string().await.unwrap(),
                 "<h1>built /built</h1>"
             );
+            let reservation = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            config.server.port = reservation.local_addr().unwrap().port();
+            drop(reservation);
+            let url = format!("http://127.0.0.1:{}/app/", config.server.port);
+            let serving =
+                tokio::spawn(async move { crate::preview_with_plugins(&config, &[]).await });
+            let client = reqwest::Client::new();
+            let response = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    if let Ok(response) = client.get(&url).send().await {
+                        break response;
+                    }
+                    if serving.is_finished() {
+                        panic!("preview exited before responding");
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("preview must respond");
+            assert_eq!(response.status(), 200);
+            let html = response.text().await.unwrap();
+            assert!(html.contains("<main><h1>built /app/</h1></main>"), "{html}");
+            let response = client
+                .post(format!("{url}submit"))
+                .body("payload")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 200);
+            assert!(response
+                .text()
+                .await
+                .unwrap()
+                .contains("<h1>built /app/submit</h1>"));
+            let response = client
+                .get(format!("{url}server/manifest.json"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 404);
+            let response = client
+                .get(url.replace("/app/", "/outside/"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 404);
+            serving.abort();
+            let _ = serving.await;
         }
     }
 }

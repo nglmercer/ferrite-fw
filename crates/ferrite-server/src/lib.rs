@@ -20,6 +20,7 @@ mod watcher;
 
 pub use env::{expand_vars, load_env, load_env_files, parse_dotenv};
 pub use proxy::{forward as forward_proxy, match_proxy, rules_from_config};
+pub use routes::ssr_http_response;
 pub use ssr_tools::{ModuleRunner, SsrTransformResult};
 pub use state::{DevServer, DevServerInner};
 pub use types::{CachedTransform, PipelineModule, PipelineResponse, PipelineStylesheet};

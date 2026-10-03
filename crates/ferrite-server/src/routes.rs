@@ -272,7 +272,8 @@ pub(crate) async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
 }
 
-fn ssr_http_response(ssr: ferrite_ssr::SsrResponse, head: bool) -> Response {
+/// Convert a renderer response into validated HTTP metadata and body.
+pub fn ssr_http_response(ssr: ferrite_ssr::SsrResponse, head: bool) -> Response {
     let status = match StatusCode::from_u16(ssr.status) {
         Ok(status) => status,
         Err(error) => {
