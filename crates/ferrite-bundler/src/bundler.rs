@@ -282,7 +282,8 @@ impl<L: ModuleLoader + 'static> Bundler for FerriteBundler<L> {
                         is_entry: false,
                     });
                     if request.map_comment {
-                        code_with_map.push_str(&format!("\n//# sourceMappingURL={map_name}"));
+                        let map_url = relative_url(&file_name, &map_name);
+                        code_with_map.push_str(&format!("\n//# sourceMappingURL={map_url}"));
                     }
                 }
             }

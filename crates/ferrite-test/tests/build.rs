@@ -3,6 +3,86 @@
 use ferrite_test::TempProject;
 
 #[tokio::test]
+async fn emitted_source_map_urls_resolve_relative_to_each_chunk() {
+    struct NestedChunks;
+    #[async_trait::async_trait]
+    impl ferrite::plugin::Plugin for NestedChunks {
+        fn name(&self) -> &'static str {
+            "nested-map-chunks"
+        }
+        async fn output_options(
+            &self,
+            _: &ferrite::plugin::PluginContext,
+            options: &mut ferrite::plugin::OutputOptions,
+        ) -> ferrite::Result<()> {
+            options.chunk_pattern = "nested/chunks/[name]-[hash].js".into();
+            Ok(())
+        }
+    }
+    for (nested, hidden) in [(false, false), (true, false), (true, true)] {
+        let project = TempProject::new(&[
+            (
+                "index.html",
+                "<script type='module' src='/main.ts'></script>",
+            ),
+            (
+                "main.ts",
+                "const message: string = 'mapped-source';\nconsole.log(message);",
+            ),
+        ]);
+        let mut config = project.resolve_config_mode("production");
+        if hidden {
+            config.build.sourcemap = ferrite::config::SourceMapConfig::Mode("hidden".into());
+        }
+        let plugins: Vec<std::sync::Arc<dyn ferrite::plugin::Plugin>> = if nested {
+            vec![std::sync::Arc::new(NestedChunks)]
+        } else {
+            Vec::new()
+        };
+        let report = ferrite::Builder::new(config, plugins)
+            .build("client")
+            .await
+            .unwrap();
+        let directory = report
+            .out_dir
+            .join(if nested { "nested/chunks" } else { "assets" });
+        let mut checked = 0;
+        for entry in std::fs::read_dir(directory).unwrap() {
+            let chunk = entry.unwrap().path();
+            if !chunk.extension().is_some_and(|extension| extension == "js") {
+                continue;
+            }
+            checked += 1;
+            let code = std::fs::read_to_string(&chunk).unwrap();
+            let map = if hidden {
+                assert!(!code.contains("sourceMappingURL"));
+                chunk.with_extension("js.map")
+            } else {
+                let url = code
+                    .split("//# sourceMappingURL=")
+                    .nth(1)
+                    .expect("external maps need a URL")
+                    .trim();
+                assert!(
+                    !url.contains("nested/") && !url.contains("assets/"),
+                    "{url}"
+                );
+                chunk.parent().unwrap().join(url)
+            };
+            let map: serde_json::Value = serde_json::from_str(
+                &std::fs::read_to_string(map)
+                    .expect("map URL must resolve from the chunk directory"),
+            )
+            .unwrap();
+            assert_eq!(map["version"], 3);
+            assert!(!map["sources"].as_array().unwrap().is_empty());
+            assert!(!map["mappings"].as_str().unwrap().is_empty());
+        }
+        assert_eq!(checked, 1);
+    }
+}
+
+#[tokio::test]
 async fn configured_server_entry_overrides_discovery_and_fails_before_client_output() {
     let project = TempProject::new(&[
         (

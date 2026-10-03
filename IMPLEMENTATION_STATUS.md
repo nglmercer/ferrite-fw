@@ -1,5 +1,21 @@
 # Framework support implementation status
 
+## Production chunks reference maps relative to their own location
+
+External `sourceMappingURL` comments now use the existing relative URL helper.
+Previously `assets/main.js` referenced `assets/main.js.map`, resolving incorrectly
+under `assets/assets/`. Regression builds cover default assets, nested chunk
+patterns, and hidden maps; each referenced map exists relative to its chunk and
+contains valid v3 sources and nonempty mappings. Hidden maps remain uncommented.
+No configuration or lockfile migration is required.
+
+Validation: eight build regressions, 18 bundler unit tests, and ten
+manifest/shaking/plugin/preview tests passed. Bundler/test all-target Clippy with
+`-D warnings`, changed-file formatting, and diff checks passed. Browser source
+location accuracy, transform/wrapper map chaining, CSS maps, full workspace,
+feature matrices, and release checks were not established by this increment.
+SSR rendering, broader adapters, and the full mission remain incomplete.
+
 ## Explicit JavaScript server entries override conventional discovery
 
 Production server-module builds now honor `[ssr].entry` for JavaScript/TypeScript
