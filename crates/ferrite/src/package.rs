@@ -84,6 +84,12 @@ pub fn content_type_for(path: &str) -> &'static str {
 /// Walk `out_dir` into web-path → disk-path pairs, skipping the scaffold
 /// itself. Web paths are `/`-rooted with `/` separators, sorted.
 pub fn collect_assets(out_dir: &Path) -> Result<BTreeMap<String, PathBuf>> {
+    if std::fs::symlink_metadata(out_dir)?.file_type().is_symlink() {
+        return Err(FerriteError::Build(format!(
+            "standalone output directory must not be a symlink: {}",
+            out_dir.display()
+        )));
+    }
     let mut files = BTreeMap::new();
     let private_server = out_dir.join("server");
     let has_server = private_server.join("manifest.json").is_file()
@@ -100,7 +106,11 @@ pub fn collect_assets(out_dir: &Path) -> Result<BTreeMap<String, PathBuf>> {
                 FerriteError::Build(format!("cannot read {}: {error}", dir.display()))
             })?;
             let path = entry.path();
-            if path.is_dir() {
+            let kind = entry.file_type()?;
+            if kind.is_symlink() {
+                return Err(FerriteError::Build(format!("standalone assets must not contain symlinks: {}; copy the intended asset into the output directory", path.display())));
+            }
+            if kind.is_dir() {
                 if has_server && path == private_server {
                     continue;
                 }
@@ -110,7 +120,7 @@ pub fn collect_assets(out_dir: &Path) -> Result<BTreeMap<String, PathBuf>> {
                     continue;
                 }
                 stack.push(path);
-            } else if path.is_file() {
+            } else if kind.is_file() {
                 let rel = path.strip_prefix(out_dir).map_err(|error| {
                     FerriteError::Build(format!("cannot relativize {}: {error}", path.display()))
                 })?;
@@ -770,6 +780,33 @@ mod tests {
             error.to_string().contains("invalid target triple"),
             "{error}"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn asset_symlinks_fail_before_scaffold_writes() {
+        use std::os::unix::fs::symlink;
+        for directory in [false, true] {
+            let output = tempfile::tempdir().unwrap();
+            let outside = tempfile::tempdir().unwrap();
+            std::fs::write(outside.path().join("secret"), "private").unwrap();
+            let target = if directory {
+                outside.path().to_path_buf()
+            } else {
+                outside.path().join("secret")
+            };
+            symlink(target, output.path().join("escape")).unwrap();
+            let error = write_standalone(output.path(), &options()).unwrap_err();
+            assert!(
+                error.to_string().contains("must not contain symlinks"),
+                "{error}"
+            );
+            assert!(!output.path().join(SCAFFOLD_DIR).exists());
+            assert_eq!(
+                std::fs::read_to_string(outside.path().join("secret")).unwrap(),
+                "private"
+            );
+        }
     }
 
     #[test]

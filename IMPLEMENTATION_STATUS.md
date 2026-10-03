@@ -1,5 +1,15 @@
 # Framework support implementation status
 
+## Standalone asset symlinks fail explicitly
+
+Asset collection now rejects symlink output roots and symlink entries instead of
+following them into external files, directories, or cycles. The failure occurs
+before scaffold writes. Unix regressions cover external file and directory links
+and verify external contents remain untouched. Default facade tests passed 27
+with one ignored; all-target Clippy with warnings denied passed. Intentional asset
+links must be copied into output. Concurrent filesystem replacement and full
+transactional packaging remain unfinished, as does the broader framework mission.
+
 ## SSR SDK identity and exact-version requirements
 
 Standalone SSR preflight now parses the explicitly supplied SDK Cargo manifest and
