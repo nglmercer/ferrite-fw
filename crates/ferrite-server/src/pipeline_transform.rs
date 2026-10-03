@@ -211,9 +211,32 @@ impl DevServer {
                         ferrite_transform::ParsedImportKind::Static => ImportKind::Static,
                         ferrite_transform::ParsedImportKind::Dynamic => ImportKind::Dynamic,
                     };
+                    let timestamp = if !environment.kind.is_ssr()
+                        && !self.inner.config.is_production
+                        && !resolved.external
+                    {
+                        self.inner
+                            .graph
+                            .get(&ModuleId::new(&url))
+                            .and_then(|node| node.last_invalidated)
+                    } else {
+                        None
+                    };
+                    let browser_url = timestamp.map_or_else(
+                        || url.clone(),
+                        |timestamp| {
+                            format!(
+                                "{url}{}t={timestamp}",
+                                if url.contains('?') { "&" } else { "?" }
+                            )
+                        },
+                    );
                     // Bare specifiers stay for the browser; record the URL
                     // for the inline map instead of rewriting.
-                    if use_import_map && !resolved.external && is_bare_specifier(&import.specifier)
+                    if use_import_map
+                        && timestamp.is_none()
+                        && !resolved.external
+                        && is_bare_specifier(&import.specifier)
                     {
                         if let Ok(mut map) = self.inner.import_map.lock() {
                             map.insert(import.specifier.clone(), url.clone());
@@ -222,7 +245,7 @@ impl DevServer {
                         import_bindings.push(import.bindings.clone());
                         continue;
                     }
-                    mapping.insert(import.specifier.clone(), url.clone());
+                    mapping.insert(import.specifier.clone(), browser_url);
                     imports.push((import.specifier.clone(), ModuleId::new(url), kind));
                     import_bindings.push(import.bindings.clone());
                 }

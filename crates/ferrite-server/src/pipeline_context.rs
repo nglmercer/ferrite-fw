@@ -97,8 +97,18 @@ impl DevServer {
         let lock_state = std::fs::read(self.inner.config.lockfile())
             .ok()
             .map(|bytes| Hash::of_bytes(&bytes).0);
+        // Invalidated importer source may be unchanged, but its emitted
+        // dependency URLs must advance with the browser module graph.
+        let invalidation = if env != "ssr" && !self.inner.config.is_production {
+            self.inner
+                .graph
+                .get(id)
+                .and_then(|node| node.last_invalidated)
+        } else {
+            None
+        };
         let pipeline = format!(
-            "pipeline-v7:{}:{:?}:{}:{}:{:?}:{lock_state:?}",
+            "pipeline-v8:{invalidation:?}:{}:{:?}:{}:{}:{:?}:{lock_state:?}",
             self.inner.plugins.cache_key(),
             self.inner.config.react,
             self.inner.config.is_production,

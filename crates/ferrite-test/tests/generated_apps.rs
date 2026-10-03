@@ -388,3 +388,104 @@ async fn chromium_dependency_acceptance() {
 async fn firefox_dependency_acceptance() {
     dependency_acceptance(BrowserKind::Firefox).await;
 }
+
+async fn transitive_self_acceptance(kind: BrowserKind) {
+    let binary = cli();
+    let project = ferrite_test::TempProject::new(&[
+        ("ferrite.toml", "[npm]\ndev_strategy = 'import-map'\n[resolve.alias]\nleaf = './leaf.js'\n"),
+        ("index.html", "<html><head><link rel='icon' href='data:,'></head><body><button id='counter'>loading</button><span id='factor'></span><script type='module' src='/main.js'></script></body></html>"),
+        ("leaf.js", "import './mid.js'; export const step = 1; globalThis.leafRuns = (globalThis.leafRuns || 0) + 1;"),
+        ("mid.js", "export {step} from 'leaf'; globalThis.midRuns = (globalThis.midRuns || 0) + 1;"),
+        ("boundary.js", "import {step} from './mid.js'; export const factor = step; globalThis.factor = factor; document.querySelector('#factor').textContent = `step: ${factor}`; globalThis.boundaryRuns = (globalThis.boundaryRuns || 0) + 1; if (import.meta.hot) { import.meta.hot.accept(next => { globalThis.factor = next.factor; globalThis.callbacks = (globalThis.callbacks || 0) + 1; }); import.meta.hot.dispose(() => { globalThis.disposals = (globalThis.disposals || 0) + 1; }); }"),
+        ("main.js", "import './boundary.js'; globalThis.mainRuns = (globalThis.mainRuns || 0) + 1; globalThis.session = Math.random(); let count = 0; const button = document.querySelector('#counter'); button.textContent = `count: ${count}`; button.onclick = () => { count += globalThis.factor; button.textContent = `count: ${count}`; };"),
+    ]);
+    let executable = match kind {
+        BrowserKind::Chromium => ferrite_e2e::find_chromium(None),
+        BrowserKind::Firefox => ferrite_e2e::find_firefox(None),
+    }
+    .expect("transitive acceptance requires a real browser");
+    let browser = Browser::launch(
+        LaunchOptions::default()
+            .browser(kind)
+            .executable(executable),
+    )
+    .await
+    .unwrap();
+    let (mut dev, url) = server(&binary, &project.root, "dev", false).await;
+    let page = browser.new_page().await.unwrap();
+    page.goto(&url).await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'count: 0' && globalThis.factor === 1",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap();
+    let session: f64 = page.evaluate("globalThis.session").await.unwrap();
+    page.locator("#counter").click().await.unwrap();
+    let mut count = 1;
+    for step in [2, 3] {
+        std::fs::write(
+            project.root.join("leaf.js"),
+            format!(
+                "export const step = {step}; globalThis.leafRuns = (globalThis.leafRuns || 0) + 1;"
+            ),
+        )
+        .unwrap();
+        page.wait_for_function(&format!("globalThis.factor === {step} && globalThis.callbacks === {} && document.querySelector('#factor')?.textContent === 'step: {step}'", step - 1), Duration::from_secs(10)).await.unwrap_or_else(|error| panic!("{error}; errors={:?}; console={:?}", page.page_errors(), page.console_messages()));
+        assert_eq!(
+            page.evaluate::<f64>("globalThis.session").await.unwrap(),
+            session
+        );
+        assert_eq!(
+            page.evaluate::<u32>("globalThis.mainRuns").await.unwrap(),
+            1
+        );
+        for runs in ["leafRuns", "midRuns", "boundaryRuns"] {
+            assert_eq!(
+                page.evaluate::<u32>(&format!("globalThis.{runs}"))
+                    .await
+                    .unwrap(),
+                step
+            );
+        }
+        assert_eq!(
+            page.evaluate::<u32>("globalThis.disposals").await.unwrap(),
+            step - 1
+        );
+        assert_eq!(
+            page.evaluate::<String>("document.querySelector('#counter').textContent")
+                .await
+                .unwrap(),
+            format!("count: {count}")
+        );
+        page.locator("#counter").click().await.unwrap();
+        count += step;
+        page.wait_for_function(
+            &format!("document.querySelector('#counter')?.textContent === 'count: {count}'"),
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+    }
+    assert!(page.page_errors().is_empty(), "{:?}", page.page_errors());
+    assert!(
+        page.console_messages()
+            .iter()
+            .all(|message| message.kind != "error"),
+        "{:?}",
+        page.console_messages()
+    );
+    dev.kill().await.unwrap();
+    dev.wait().await.unwrap();
+    browser.close().await.unwrap();
+}
+#[tokio::test]
+#[ignore = "requires freshly built CLI and real Chromium"]
+async fn chromium_transitive_self_acceptance() {
+    transitive_self_acceptance(BrowserKind::Chromium).await;
+}
+#[tokio::test]
+#[ignore = "requires freshly built CLI and real Firefox"]
+async fn firefox_transitive_self_acceptance() {
+    transitive_self_acceptance(BrowserKind::Firefox).await;
+}

@@ -1166,3 +1166,42 @@ as the module to import; restart/reload dev clients when upgrading. Transitive
 self boundaries still require dependency cache-busting work; syntax recovery,
 complete Refresh, component-specific HMR, SSR/checkers and remaining mission
 requirements remain assigned. No framework profile is promoted.
+
+### Transitive HMR imports use fresh dependency URLs
+
+Dev import rewriting now adds the dependency's graph invalidation timestamp to
+its browser URL while preserving canonical, untimestamped dependency edges.
+Invalidated bare imports bypass the document's immutable import map and use the
+resolved timestamped URL directly. Unchanged bare imports retain normal import
+map behavior. SSR and production do not receive these dev URLs.
+
+Importer invalidation participates in dev transform cache identity, preventing
+unchanged importer source from replaying cached pre-edit dependency URLs. The
+planner uses the accepted module's recorded invalidation timestamp so its entry
+URL matches imports back to that module, including cycles. Repeated invalidation
+advances a module's timestamp even within one clock millisecond.
+
+Validation:
+
+- `cargo test -p ferrite-graph -p ferrite-hmr -p ferrite-server --locked`:
+  7 graph, 4 HMR and 36 server tests passed. The new pipeline regression covers
+  a two-level chain, rewrite/import-map strategies, cache replay, canonical graph
+  edges and timestamp-free SSR output. Output: `/tmp/ferrite-transitive-hmr-server.log`.
+- Explicitly executed `cargo test -p ferrite-test --test generated_apps --locked -- --ignored --nocapture`
+  with the freshly built CLI, Chromium 153 and Firefox 157: all 8 tests passed
+  (78.67 seconds). The two new Node-free tests exercise a cyclic two-level chain,
+  bare import map resolution and a self-accepting boundary. Both source edits
+  produce fresh exports; affected modules execute once per edit, callbacks and
+  disposal run once, and the outer interaction state/document survive without
+  page or console errors. All six existing generated profiles still complete
+  create/install/dev/edit/build/preview in both browsers.
+  Output: `/tmp/ferrite-transitive-all-browsers.log`.
+- `cargo test -p ferrite-server --features swc --locked`: 36 tests passed.
+- All-target Clippy for graph/HMR/server/test with `--locked -- -D warnings`,
+  formatting and diff checks passed.
+
+No lock/config schema change; cached transforms rebuild under pipeline v8.
+The exercised transitive self-boundary cache-busting gap is resolved. This does
+not establish every virtual-resource/cycle shape or syntax-error recovery.
+Complete Refresh, component-specific HMR, SSR/checkers, further adapters and the
+rest of the full mission remain assigned; no framework support status is promoted.

@@ -381,3 +381,68 @@ async fn final_graph_resolves_dependency_acceptance_and_clears_stale_metadata() 
         .contains("unsupported dynamic HMR"));
     server.close();
 }
+
+#[tokio::test]
+async fn invalidated_transitive_import_urls_survive_cache_hits_without_graph_variants() {
+    for use_import_map in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let mid_source = if use_import_map {
+            "export { step } from 'leaf';"
+        } else {
+            "export { step } from './leaf.js';"
+        };
+        for (file, source) in [
+        ("leaf.js", "export const step = 1;"),
+        ("mid.js", mid_source),
+        ("boundary.js", "import {step} from './mid.js'; export {step}; if (import.meta.hot) import.meta.hot.accept(next => console.log(next.step));"),
+    ] { std::fs::write(root.path().join(file), source).unwrap(); }
+        let mut user = ferrite_config::UserConfig::default();
+        user.resolve.alias.insert("leaf".into(), "./leaf.js".into());
+        if use_import_map {
+            user.npm.dev_strategy = "import-map".into();
+        }
+        let config =
+            ferrite_config::resolve_config(user, Some(root.path().into()), Default::default())
+                .unwrap();
+        let server = DevServer::new_without_watcher(config, vec![])
+            .await
+            .unwrap();
+        for file in ["/boundary.js", "/mid.js", "/leaf.js"] {
+            let module = server
+                .pipeline_module(&ModuleId::new(file), None, "client")
+                .await
+                .unwrap();
+            assert!(!module.code.contains("?t="));
+        }
+        let leaf = ModuleId::new("/leaf.js");
+        std::fs::write(root.path().join("leaf.js"), "export const step = 2;").unwrap();
+        server.invalidate_module(&leaf).await;
+        for (file, dependency) in [("/boundary.js", "/mid.js"), ("/mid.js", "/leaf.js")] {
+            let id = ModuleId::new(file);
+            let updated = server.pipeline_module(&id, None, "client").await.unwrap();
+            assert!(
+                updated.code.contains(&format!("{dependency}?t=")),
+                "{}",
+                updated.code
+            );
+            assert!(updated.imports.iter().any(|(_, id, _)| id.0 == dependency));
+            assert!(updated
+                .imports
+                .iter()
+                .all(|(_, id, _)| !id.0.contains("?t=")));
+            let cached = server.pipeline_module(&id, None, "client").await.unwrap();
+            assert_eq!(cached.code, updated.code);
+            let ssr = server.pipeline_module(&id, None, "ssr").await.unwrap();
+            assert!(!ssr.code.contains("?t="), "{}", ssr.code);
+        }
+        let changed = server.pipeline_module(&leaf, None, "client").await.unwrap();
+        assert!(changed.code.contains("= 2"));
+        assert!(server
+            .inner
+            .graph
+            .module_ids()
+            .iter()
+            .all(|id| !id.0.contains("?t=")));
+        server.close();
+    }
+}

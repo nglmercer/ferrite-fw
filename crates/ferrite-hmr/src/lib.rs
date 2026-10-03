@@ -94,16 +94,22 @@ pub fn plan_update(graph: &ModuleGraph, changed: &ModuleId, timestamp: u64) -> H
             HmrPlan::Update(
                 boundaries
                     .into_iter()
-                    .map(|(boundary, accepted)| HmrUpdate {
-                        kind: if is_css {
-                            "css-update".to_string()
-                        } else {
-                            "js-update".to_string()
-                        },
-                        path: boundary.0,
-                        accepted_path: accepted.0,
-                        timestamp,
-                        css_only: is_css,
+                    .map(|(boundary, accepted)| {
+                        let timestamp = graph
+                            .get(&accepted)
+                            .and_then(|node| node.last_invalidated)
+                            .unwrap_or(timestamp);
+                        HmrUpdate {
+                            kind: if is_css {
+                                "css-update".to_string()
+                            } else {
+                                "js-update".to_string()
+                            },
+                            path: boundary.0,
+                            accepted_path: accepted.0,
+                            timestamp,
+                            css_only: is_css,
+                        }
                     })
                     .collect(),
             )
@@ -202,6 +208,27 @@ interface ImportMeta {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn planned_import_timestamp_matches_canonical_dependency_urls() {
+        let graph = ModuleGraph::new();
+        let id = ModuleId::new("/boundary.js");
+        let mut node =
+            ferrite_graph::ModuleNode::new(id.clone(), id.0.clone(), ferrite_core::ModuleType::Js);
+        node.hmr.self_accepting = true;
+        node.last_invalidated = Some(123);
+        graph.upsert(node);
+        let HmrPlan::Update(updates) = plan_update(&graph, &id, 999) else {
+            panic!("self boundary");
+        };
+        assert_eq!(updates[0].timestamp, 123);
+        assert_eq!(updates[0].path, id.0);
+        assert_eq!(updates[0].accepted_path, id.0);
+        graph.invalidate(&id);
+        let first = graph.get(&id).unwrap().last_invalidated.unwrap();
+        graph.invalidate(&id);
+        assert!(graph.get(&id).unwrap().last_invalidated.unwrap() > first);
+    }
 
     #[test]
     fn protocol_serializes() {

@@ -257,7 +257,8 @@ impl ModuleGraph {
             for data in node.extra_envs.values_mut() {
                 data.invalidated = true;
             }
-            node.last_invalidated = Some(now_millis());
+            node.last_invalidated =
+                Some(now_millis().max(node.last_invalidated.map_or(0, |previous| previous + 1)));
         }
     }
 
