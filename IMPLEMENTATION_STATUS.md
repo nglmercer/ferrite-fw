@@ -2038,3 +2038,30 @@ The complete explicit Chromium/Firefox acceptance run passed all 20 tests with
 `--test-threads=2` (275.47 seconds), retaining the existing template/plugin/HMR/
 startup flows and all eight React collision variants. Output:
 `/tmp/ferrite-refresh-bindings-all-browsers.log`.
+
+### Verify named and anonymous-memo default exports in browsers
+
+The React conformance helper now uses named fixture variants rather than boolean
+combinations, retaining the previous plain, memo, imported-hook and barrel cases.
+Two additional variants mount a named default function and a default memo object
+wrapping an anonymous function. They exercise namespace-based default
+registration with the application's colliding runtime/namespace/global-helper
+bindings still present. Compatible edits retain counter/document state;
+hook-signature changes reset the component without reloading its document.
+Syntax-error recovery, subsequent clicks, scope-hoisted build/preview, absence
+of production Refresh instrumentation and no page/console errors remain asserted.
+Existing instrumentation handled these cases without a runtime workaround.
+
+Validation: explicitly executed all four new default-export Chromium/Firefox
+tests with `--test-threads=2`; all passed in 84.16 seconds. Output
+`/tmp/ferrite-default-refresh-browsers.log`. Test-target Clippy with
+`--locked -- -D warnings`, formatting and diff checks passed; output
+`/tmp/ferrite-default-refresh-clippy.log`. Fixtures keep pinned React/React DOM
+19.2.0 and react-refresh 0.17.0, installed by Ferrite; install/dev/build/preview
+CLI processes run without Node on PATH.
+
+This covers the stated default shapes, including the anonymous memo inner
+function, not arbitrary naked anonymous defaults or every HOC shape. No migration
+or full-profile support promotion. Mixed exports, additional anonymous/HOC
+matrices, ownership rules, React generation/checking and the entire remaining
+framework mission stay assigned and active.

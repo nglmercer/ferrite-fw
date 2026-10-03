@@ -214,6 +214,8 @@ imports — plus the items below.
   hook names select this instrumentation; hook modules add no component boundary.
   An alias/star re-export chain also checks hook edits and barrel retargeting to
   a newly loaded implementation without stale output or document reload.
+  Named default components and anonymous functions exported through `memo` also
+  have browser Refresh/reset/production-preview coverage.
   The full component/hook matrix and React generation profiles remain incomplete.
   Experimental Vue 3.5.22 and
   Svelte 5.39.6 compilation uses their official project-matched compilers on

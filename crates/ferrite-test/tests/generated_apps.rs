@@ -841,12 +841,29 @@ async fn firefox_configured_foreign_hooks() {
     configured_foreign_hook_acceptance(BrowserKind::Firefox).await;
 }
 
-async fn react_refresh_dom_acceptance(
-    kind: BrowserKind,
-    wrapped: bool,
-    imported_hook: bool,
-    barrel: bool,
-) {
+#[derive(Clone, Copy)]
+enum ReactFixture {
+    Plain,
+    Memo,
+    ImportedHook,
+    HookBarrel,
+    NamedDefault,
+    AnonymousMemoDefault,
+}
+
+async fn react_refresh_dom_acceptance(kind: BrowserKind, fixture: ReactFixture) {
+    let wrapped = matches!(
+        fixture,
+        ReactFixture::Memo
+            | ReactFixture::ImportedHook
+            | ReactFixture::HookBarrel
+            | ReactFixture::AnonymousMemoDefault
+    );
+    let imported_hook = matches!(
+        fixture,
+        ReactFixture::ImportedHook | ReactFixture::HookBarrel
+    );
+    let barrel = matches!(fixture, ReactFixture::HookBarrel);
     let binary = cli();
     let project = ferrite_test::TempProject::new(&[
         ("package.json", r#"{"private":true,"dependencies":{"react":"19.2.0","react-dom":"19.2.0","react-refresh":"0.17.0"}}"#),
@@ -879,6 +896,25 @@ async fn react_refresh_dom_acceptance(
     } else {
         source.to_string()
     };
+    let source_variant = match fixture {
+        ReactFixture::NamedDefault => {
+            source_variant.replace("export function App", "export default function App")
+        }
+        ReactFixture::AnonymousMemoDefault => source_variant.replace(
+            "export const App = memo(function Counter()",
+            "export default memo(function()",
+        ),
+        _ => source_variant,
+    };
+    if matches!(
+        fixture,
+        ReactFixture::NamedDefault | ReactFixture::AnonymousMemoDefault
+    ) {
+        let main = std::fs::read_to_string(project.root.join("main.jsx"))
+            .unwrap()
+            .replace("import {App}", "import App");
+        std::fs::write(project.root.join("main.jsx"), main).unwrap();
+    }
     let source_variant = format!("const RefreshRuntime = 'application'; const __ferrite_refresh_exports__ = 1; const $RefreshReg$ = () => {{throw new Error('application binding was called');}};\n{source_variant}");
     let source = source_variant.as_str();
     std::fs::write(project.root.join("App.jsx"), source).unwrap();
@@ -1159,43 +1195,64 @@ async fn react_refresh_dom_acceptance(
 #[tokio::test]
 #[ignore = "requires freshly built CLI, registry packages and Chromium"]
 async fn chromium_react_refresh_dom() {
-    react_refresh_dom_acceptance(BrowserKind::Chromium, false, false, false).await;
+    react_refresh_dom_acceptance(BrowserKind::Chromium, ReactFixture::Plain).await;
 }
 #[tokio::test]
 #[ignore = "requires freshly built CLI, registry packages and Firefox"]
 async fn firefox_react_refresh_dom() {
-    react_refresh_dom_acceptance(BrowserKind::Firefox, false, false, false).await;
+    react_refresh_dom_acceptance(BrowserKind::Firefox, ReactFixture::Plain).await;
 }
 
 #[tokio::test]
 #[ignore = "requires freshly built CLI, registry packages and Chromium"]
 async fn chromium_react_refresh_wrapped() {
-    react_refresh_dom_acceptance(BrowserKind::Chromium, true, false, false).await;
+    react_refresh_dom_acceptance(BrowserKind::Chromium, ReactFixture::Memo).await;
 }
 #[tokio::test]
 #[ignore = "requires freshly built CLI, registry packages and Firefox"]
 async fn firefox_react_refresh_wrapped() {
-    react_refresh_dom_acceptance(BrowserKind::Firefox, true, false, false).await;
+    react_refresh_dom_acceptance(BrowserKind::Firefox, ReactFixture::Memo).await;
 }
 
 #[tokio::test]
 #[ignore = "requires freshly built CLI, registry packages and Chromium"]
 async fn chromium_react_refresh_imported_hook() {
-    react_refresh_dom_acceptance(BrowserKind::Chromium, true, true, false).await;
+    react_refresh_dom_acceptance(BrowserKind::Chromium, ReactFixture::ImportedHook).await;
 }
 #[tokio::test]
 #[ignore = "requires freshly built CLI, registry packages and Firefox"]
 async fn firefox_react_refresh_imported_hook() {
-    react_refresh_dom_acceptance(BrowserKind::Firefox, true, true, false).await;
+    react_refresh_dom_acceptance(BrowserKind::Firefox, ReactFixture::ImportedHook).await;
 }
 
 #[tokio::test]
 #[ignore = "requires freshly built CLI, registry packages and Chromium"]
 async fn chromium_react_refresh_hook_barrel() {
-    react_refresh_dom_acceptance(BrowserKind::Chromium, true, true, true).await;
+    react_refresh_dom_acceptance(BrowserKind::Chromium, ReactFixture::HookBarrel).await;
 }
 #[tokio::test]
 #[ignore = "requires freshly built CLI, registry packages and Firefox"]
 async fn firefox_react_refresh_hook_barrel() {
-    react_refresh_dom_acceptance(BrowserKind::Firefox, true, true, true).await;
+    react_refresh_dom_acceptance(BrowserKind::Firefox, ReactFixture::HookBarrel).await;
+}
+
+#[tokio::test]
+#[ignore = "requires freshly built CLI, registry packages and Chromium"]
+async fn chromium_react_refresh_default_named() {
+    react_refresh_dom_acceptance(BrowserKind::Chromium, ReactFixture::NamedDefault).await;
+}
+#[tokio::test]
+#[ignore = "requires freshly built CLI, registry packages and Firefox"]
+async fn firefox_react_refresh_default_named() {
+    react_refresh_dom_acceptance(BrowserKind::Firefox, ReactFixture::NamedDefault).await;
+}
+#[tokio::test]
+#[ignore = "requires freshly built CLI, registry packages and Chromium"]
+async fn chromium_react_refresh_default_anonymous_memo() {
+    react_refresh_dom_acceptance(BrowserKind::Chromium, ReactFixture::AnonymousMemoDefault).await;
+}
+#[tokio::test]
+#[ignore = "requires freshly built CLI, registry packages and Firefox"]
+async fn firefox_react_refresh_default_anonymous_memo() {
+    react_refresh_dom_acceptance(BrowserKind::Firefox, ReactFixture::AnonymousMemoDefault).await;
 }
