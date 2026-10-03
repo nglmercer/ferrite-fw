@@ -273,6 +273,9 @@ impl Builder {
             output
                 .ssr_manifest
                 .write(&out_dir.join("ssr-manifest.json"))?;
+            if config.runtime.backend == "napi-vm" {
+                crate::write_built_ssr_artifact(&out_dir)?;
+            }
         } else {
             output.manifest.write(&out_dir.join("manifest.json"))?;
         }

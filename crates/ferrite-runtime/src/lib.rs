@@ -74,7 +74,8 @@ pub struct JsHandle {
 }
 
 /// A compiled module ready for evaluation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CompiledModule {
     /// Module id.
     pub id: String,
@@ -85,7 +86,8 @@ pub struct CompiledModule {
 }
 
 /// A complete compiled module graph supplied by the compilation pipeline.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CompiledModuleGraph {
     /// Canonical entry module ID.
     pub entry: String,

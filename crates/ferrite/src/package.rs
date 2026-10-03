@@ -86,7 +86,10 @@ pub fn content_type_for(path: &str) -> &'static str {
 pub fn collect_assets(out_dir: &Path) -> Result<BTreeMap<String, PathBuf>> {
     let mut files = BTreeMap::new();
     let private_server = out_dir.join("server");
-    let has_server = private_server.join("manifest.json").is_file();
+    let has_server = private_server.join("manifest.json").is_file()
+        || private_server
+            .join(crate::SsrRendererArtifact::FILE_NAME)
+            .is_file();
     let mut stack = vec![out_dir.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let entries = std::fs::read_dir(&dir).map_err(|error| {
@@ -387,7 +390,12 @@ fn cargo_build(dir: &Path, target: &str, cargo: Option<&Path>) -> Result<PathBuf
 /// Write the standalone scaffold into `out_dir`, embedding output files and
 /// optionally cross-compiling for `opts.target` (§51–§54).
 pub fn write_standalone(out_dir: &Path, opts: &StandaloneOptions) -> Result<StandaloneReport> {
-    if out_dir.join("server/manifest.json").is_file() {
+    if out_dir.join("server/manifest.json").is_file()
+        || out_dir
+            .join("server")
+            .join(crate::SsrRendererArtifact::FILE_NAME)
+            .is_file()
+    {
         return Err(unsupported_ssr_standalone());
     }
     let dir = out_dir.join(SCAFFOLD_DIR);

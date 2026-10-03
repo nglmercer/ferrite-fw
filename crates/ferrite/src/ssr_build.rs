@@ -6,10 +6,105 @@ use ferrite_transform::{JsCompiler, OxcCompiler, OxcOptions, ParseRequest};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Component, Path};
 
+/// Versioned renderer payload for embedding without a source compiler.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SsrRendererArtifact {
+    pub version: u32,
+    pub graph: CompiledModuleGraph,
+    /// Extracted stylesheet output paths in dependency order.
+    pub stylesheets: Vec<String>,
+}
+
+impl SsrRendererArtifact {
+    pub const VERSION: u32 = 1;
+    pub const FILE_NAME: &'static str = "renderer.json";
+
+    /// Validate before executing or embedding an artifact.
+    pub fn validate(&self) -> Result<()> {
+        if self.version != Self::VERSION {
+            return Err(FerriteError::Ssr(format!("unsupported SSR renderer artifact version {}; expected {}; rebuild with this Ferrite version", self.version, Self::VERSION)));
+        }
+        self.graph.validate()?;
+        let ids: HashSet<_> = self
+            .graph
+            .modules
+            .iter()
+            .map(|module| module.id.as_str())
+            .collect();
+        let compiler = OxcCompiler::new(OxcOptions::default());
+        for module in &self.graph.modules {
+            let parsed = compiler.parse(ParseRequest {
+                id: module.id.clone(),
+                code: module.code.clone(),
+                module_type: ModuleType::Js,
+            })?;
+            for import in parsed.imports {
+                if !ids.contains(import.specifier.as_str()) {
+                    return Err(FerriteError::Ssr(format!("SSR renderer artifact module `{}` requires missing compiled dependency `{}`; rebuild the complete renderer graph", module.id, import.specifier)));
+                }
+            }
+        }
+        for stylesheet in &self.stylesheets {
+            output_id(stylesheet)?;
+        }
+        Ok(())
+    }
+
+    /// Decode an embedded artifact without filesystem dependencies.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        let artifact: Self = serde_json::from_slice(bytes).map_err(|error| {
+            FerriteError::Ssr(format!(
+                "invalid SSR renderer artifact: {error}; rebuild the SSR output"
+            ))
+        })?;
+        artifact.validate()?;
+        Ok(artifact)
+    }
+
+    pub fn read(server_dir: &Path) -> Result<Self> {
+        Self::from_bytes(&std::fs::read(server_dir.join(Self::FILE_NAME))?)
+    }
+}
+
+/// Materialize a validated renderer payload from final emitted chunks.
+/// This uses build output, including final bundle hooks, rather than sources.
+pub fn write_built_ssr_artifact(server_dir: &Path) -> Result<SsrRendererArtifact> {
+    let mut graph = load_emitted_ssr_graph(server_dir)?;
+    // Portable chunk URLs replace build-machine absolute source paths.
+    for module in &mut graph.modules {
+        module.url = Some(module.id.clone());
+    }
+    let manifest = ferrite_manifest::BuildManifest::read(&server_dir.join("manifest.json"))?;
+    let entry = manifest
+        .entries
+        .values()
+        .find(|entry| entry.is_entry == Some(true))
+        .expect("validated single entry");
+    let artifact = SsrRendererArtifact {
+        version: SsrRendererArtifact::VERSION,
+        graph,
+        stylesheets: entry.css.clone(),
+    };
+    artifact.validate()?;
+    std::fs::write(
+        server_dir.join(SsrRendererArtifact::FILE_NAME),
+        serde_json::to_vec_pretty(&artifact).map_err(FerriteError::Json)?,
+    )?;
+    Ok(artifact)
+}
+
 /// Load the single emitted SSR entry and its static/dynamic chunk dependencies.
 /// External runtime imports require a separate host contract and fail explicitly.
 /// Files and symlinks must remain inside the built server directory.
 pub fn load_built_ssr_graph(server_dir: &Path) -> Result<CompiledModuleGraph> {
+    if server_dir.join(SsrRendererArtifact::FILE_NAME).exists() {
+        return Ok(SsrRendererArtifact::read(server_dir)?.graph);
+    }
+    load_emitted_ssr_graph(server_dir)
+}
+
+fn load_emitted_ssr_graph(server_dir: &Path) -> Result<CompiledModuleGraph> {
     let root = server_dir.canonicalize()?;
     let manifest = ferrite_manifest::BuildManifest::read(&root.join("manifest.json"))?;
     let entries: Vec<_> = manifest
@@ -77,20 +172,24 @@ pub fn load_built_ssr_graph(server_dir: &Path) -> Result<CompiledModuleGraph> {
 
 /// Ordered extracted styles for the single emitted renderer entry.
 pub(crate) fn built_ssr_styles(server_dir: &Path, base: &str) -> Result<Vec<String>> {
-    let manifest = ferrite_manifest::BuildManifest::read(&server_dir.join("manifest.json"))?;
-    let entries: Vec<_> = manifest
-        .entries
-        .values()
-        .filter(|entry| entry.is_entry == Some(true))
-        .collect();
-    if entries.len() != 1 {
-        return Err(FerriteError::Ssr(
-            "built SSR stylesheet selection requires one renderer entry".into(),
-        ));
-    }
+    let stylesheets = if server_dir.join(SsrRendererArtifact::FILE_NAME).exists() {
+        SsrRendererArtifact::read(server_dir)?.stylesheets
+    } else {
+        let manifest = ferrite_manifest::BuildManifest::read(&server_dir.join("manifest.json"))?;
+        let entries: Vec<_> = manifest
+            .entries
+            .values()
+            .filter(|entry| entry.is_entry == Some(true))
+            .collect();
+        if entries.len() != 1 {
+            return Err(FerriteError::Ssr(
+                "built SSR stylesheet selection requires one renderer entry".into(),
+            ));
+        }
+        entries[0].css.clone()
+    };
     let mut seen = HashSet::new();
-    entries[0]
-        .css
+    stylesheets
         .iter()
         .filter(|file| seen.insert((*file).clone()))
         .map(|file| {
@@ -171,7 +270,19 @@ mod tests {
             let builder = crate::Builder::new(config.clone(), Vec::new());
             builder.build("client").await.unwrap();
             let report = builder.build("ssr").await.unwrap();
-            let graph = load_built_ssr_graph(&report.out_dir).unwrap();
+            let artifact = SsrRendererArtifact::read(&report.out_dir).unwrap();
+            let embedded = serde_json::to_vec(&artifact).unwrap();
+            let graph = SsrRendererArtifact::from_bytes(&embedded).unwrap().graph;
+            assert_eq!(
+                graph.entry,
+                load_built_ssr_graph(&report.out_dir).unwrap().entry
+            );
+            // The versioned payload contains the final executable chunk graph.
+            for module in &graph.modules {
+                std::fs::remove_file(report.out_dir.join(module.id.trim_start_matches('/')))
+                    .unwrap();
+            }
+            std::fs::remove_file(report.out_dir.join("manifest.json")).unwrap();
             // Alter source after the build: only emitted code may be executed.
             std::fs::write(
                 root.path().join("src/greeting.ts"),
@@ -334,6 +445,46 @@ mod validation_tests {
         assert_eq!(
             built_ssr_styles(&server, "/app/").unwrap(),
             ["/app/ssr-assets/b.css", "/app/ssr-assets/a.css"]
+        );
+    }
+
+    #[test]
+    fn renderer_artifact_rejects_unknown_versions_and_incomplete_graphs() {
+        let artifact = SsrRendererArtifact {
+            version: 1,
+            graph: CompiledModuleGraph {
+                entry: "/server.js".into(),
+                modules: vec![CompiledModule {
+                    id: "/server.js".into(),
+                    code: "export function render() { return 'ok'; }".into(),
+                    url: None,
+                }],
+            },
+            stylesheets: vec!["assets/style.css".into()],
+        };
+        let bytes = serde_json::to_vec(&artifact).unwrap();
+        assert!(SsrRendererArtifact::from_bytes(&bytes).is_ok());
+        let mut invalid = artifact.clone();
+        invalid.version = 2;
+        assert!(invalid
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("version 2"));
+        invalid = artifact;
+        invalid.graph.modules[0].code =
+            "import '/missing.js'; export function render() { return 'ok'; }".into();
+        assert!(invalid
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("missing compiled dependency"));
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join(SsrRendererArtifact::FILE_NAME), b"{broken").unwrap();
+        let error = load_built_ssr_graph(root.path()).unwrap_err();
+        assert!(
+            !error.to_string().contains("manifest.json"),
+            "artifact failures must not fall back: {error}"
         );
     }
 

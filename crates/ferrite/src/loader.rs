@@ -435,7 +435,10 @@ async fn preview_with_control(
     control: &ferrite_plugin::PreviewControl,
 ) -> Result<()> {
     let server_dir = dir.join("server");
-    let has_server = server_dir.join("manifest.json").is_file();
+    let has_server = server_dir.join("manifest.json").is_file()
+        || server_dir
+            .join(crate::SsrRendererArtifact::FILE_NAME)
+            .is_file();
     let explicit_entry = control
         .config
         .ssr

@@ -190,6 +190,16 @@ fn existing_ssr_output_is_not_embedded_or_packaged_as_static() {
         assets.keys().map(String::as_str).collect::<Vec<_>>(),
         ["/index.html"]
     );
+    std::fs::rename(
+        root.path().join("server/manifest.json"),
+        root.path().join("server/renderer.json"),
+    )
+    .unwrap();
+    let assets = ferrite::package::collect_assets(root.path()).unwrap();
+    assert_eq!(
+        assets.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["/index.html"]
+    );
     let error = ferrite::package::write_standalone(
         root.path(),
         &ferrite::package::StandaloneOptions {
