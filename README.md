@@ -207,8 +207,9 @@ imports — plus the items below.
   with partial dev-only Refresh instrumentation, including pinned Oxc hook
   signatures checked against `react-refresh@0.17.0`. A focused React/React DOM
   19.2.0 fixture verifies state preservation, hook-change resets, syntax recovery
-  and production preview in Chromium/Firefox without a Node compiler. The full
-  component/hook matrix and React generation profiles remain incomplete.
+  and production preview in Chromium/Firefox without a Node compiler. A
+  memo/custom-hook variant also checks recursive signature invalidation.
+  The full component/hook matrix and React generation profiles remain incomplete.
   Experimental Vue 3.5.22 and
   Svelte 5.39.6 compilation uses their official project-matched compilers on
   the explicitly enabled Node compiler host. Client templates are exercised

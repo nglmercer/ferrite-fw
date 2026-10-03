@@ -1901,3 +1901,31 @@ The renderer API matches the official
 No lock/config migration or full-profile support promotion. Hook-only modules,
 HOCs, anonymous/default/mixed-export browser matrices, JSX ownership, generated
 React templates/checkers and real SSR remain assigned. The full mission stays active.
+
+### Verify memo/custom-hook browser Refresh behavior
+
+The real React DOM fixture now retains the plain-component case and adds a
+memo-wrapped named component calling a local custom hook. Each browser variant
+uses the existing pinned React/React DOM 19.2.0 and react-refresh 0.17.0 packages,
+Ferrite installation, native compilation and CLI processes without Node on PATH.
+The compatible edit preserves component/document state. The wrapped variant's
+incompatible edit changes hook order inside the custom hook itself, requiring
+recursive signature invalidation and a component reset without document reload.
+Both variants retain syntax-error recovery, subsequent interaction, production
+Refresh exclusion and scope-hoisted build/preview assertions. Existing compiler
+instrumentation handled these cases; no runtime workaround was introduced.
+
+Validation: explicitly executed all four `react_refresh_` Chromium/Firefox
+acceptance tests with `--test-threads=2`; all passed in 83.75 seconds. Output:
+`/tmp/ferrite-react-wrapped-final.log`. The initial wrapped/direct-hook-reset
+probe also passed but is superseded by the stronger recursive-hook test.
+`cargo clippy -p ferrite-test --test generated_apps --locked -- -D warnings`,
+formatting and diff checks passed. Output `/tmp/ferrite-react-wrapped-clippy.log`.
+The official [memo API](https://react.dev/reference/react/memo) and
+[custom-hook guidance](https://react.dev/learn/reusing-logic-with-custom-hooks)
+were checked; actual package/runtime execution establishes the stated fixture
+version evidence, not current-doc compatibility with untested releases.
+
+No migration or support promotion. These are hand-authored conformance fixtures;
+generated React templates, imported hook-only modules, other HOC shapes,
+anonymous/default/mixed-export matrices and the broader mission remain assigned.
