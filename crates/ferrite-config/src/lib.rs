@@ -522,6 +522,10 @@ pub struct RuntimeConfig {
     pub queue_capacity: usize,
     /// Maximum encoded embedded-worker request bytes (0 selects 8 MiB).
     pub max_request_bytes: usize,
+    /// Guest call-depth cap (0 selects the engine default).
+    pub max_call_depth: usize,
+    /// Guest jobs per drain cap (0 selects the engine default).
+    pub max_jobs_per_drain: usize,
     /// Guest fuel budget (0 = engine default).
     pub fuel_budget: u64,
     /// Guest loop budget (0 = engine default).
@@ -538,6 +542,8 @@ impl Default for RuntimeConfig {
             backend: "auto".to_string(),
             queue_capacity: 0,
             max_request_bytes: 0,
+            max_call_depth: 0,
+            max_jobs_per_drain: 0,
             fuel_budget: 0,
             loop_budget: 0,
             native_allow: Vec::new(),
@@ -1147,6 +1153,12 @@ fn merge_runtime(mut base: RuntimeConfig, over: RuntimeConfig) -> RuntimeConfig 
     if over.max_request_bytes != 0 {
         base.max_request_bytes = over.max_request_bytes;
     }
+    if over.max_call_depth != 0 {
+        base.max_call_depth = over.max_call_depth;
+    }
+    if over.max_jobs_per_drain != 0 {
+        base.max_jobs_per_drain = over.max_jobs_per_drain;
+    }
     if over.fuel_budget != 0 {
         base.fuel_budget = over.fuel_budget;
     }
@@ -1659,6 +1671,8 @@ mod tests {
         let user: UserConfig = toml::from_str(
             "[runtime]\n\
              backend = \"napi-vm\"\n\
+             max_call_depth = 16\n\
+             max_jobs_per_drain = 32\n\
              queue_capacity = 8\n\
              max_request_bytes = 1048576\n\
              fuel_budget = 10000000\n\
@@ -1668,6 +1682,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(user.runtime.backend, "napi-vm");
+        assert_eq!(user.runtime.max_call_depth, 16);
+        assert_eq!(user.runtime.max_jobs_per_drain, 32);
         assert_eq!(user.runtime.queue_capacity, 8);
         assert_eq!(user.runtime.max_request_bytes, 1_048_576);
         assert_eq!(user.runtime.fuel_budget, 10_000_000);

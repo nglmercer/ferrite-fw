@@ -245,6 +245,30 @@ mod tests {
 
     #[cfg(feature = "napi-vm")]
     #[tokio::test]
+    async fn configured_guest_depth_and_job_caps_fail_and_allow_recovery() {
+        for (code, expected) in [
+            ("function recurse() { return recurse(); } export function render() { return recurse(); }", "Maximum call stack"),
+            ("function spin() { queueMicrotask(spin); } export function render() { queueMicrotask(spin); return 'unbounded'; }", "Maximum job count"),
+        ] {
+            let mut resolved = test_resolved();
+            resolved.runtime.backend = "napi-vm".into();
+            resolved.runtime.max_call_depth = 16;
+            resolved.runtime.max_jobs_per_drain = 16;
+            let graph = ferrite_runtime::CompiledModuleGraph { entry: "limited".into(), modules: vec![CompiledModule { id: "limited".into(), code: code.into(), url: None }] };
+            let mut adapter = JsSsrAdapter::from_resolved_graph(&resolved, graph.clone()).unwrap();
+            let request = SsrHttpRequest { method: "GET".into(), uri: "/".into(), headers: Vec::new(), body: Vec::new() };
+            let error = adapter.render(request.clone(), Default::default()).await.unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+            let mut corrected = graph;
+            corrected.modules[0].code = "export function render() { return '<h1>recovered</h1>'; }".into();
+            adapter.replace_graph(corrected).unwrap();
+            let response = adapter.render(request, Default::default()).await.unwrap();
+            assert_eq!(response.into_string().await.unwrap(), "<h1>recovered</h1>");
+        }
+    }
+
+    #[cfg(feature = "napi-vm")]
+    #[tokio::test]
     async fn resolved_payload_limit_is_enforced_by_the_selected_runtime() {
         let user: ferrite_config::UserConfig = serde_json::from_value(serde_json::json!({
             "runtime": {"backend": "napi-vm", "queue_capacity": 2, "max_request_bytes": 16}

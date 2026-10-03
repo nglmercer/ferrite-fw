@@ -21,6 +21,10 @@ pub struct NapiVmOptions {
     pub queue_capacity: usize,
     /// Maximum encoded request payload bytes (0 selects 8 MiB).
     pub max_request_bytes: usize,
+    /// Guest call-depth cap (0 selects the pinned engine default).
+    pub max_call_depth: usize,
+    /// Guest jobs per drain cap (0 selects the pinned engine default).
+    pub max_jobs_per_drain: usize,
     /// Filesystem roots for the CJS loader and addon resolution.
     pub roots: Vec<PathBuf>,
     /// CJS entry filename for top-level `require()` resolution.

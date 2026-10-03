@@ -159,6 +159,14 @@ impl WorkerState {
         if options.loop_budget > 0 {
             interp.set_loop_budget(options.loop_budget);
         }
+        let mut budget = interp.execution_budget();
+        if options.max_call_depth > 0 {
+            budget.max_call_depth = options.max_call_depth;
+        }
+        if options.max_jobs_per_drain > 0 {
+            budget.max_jobs = options.max_jobs_per_drain;
+        }
+        interp.set_execution_budget(budget);
         // `enable_native_addons` installs the loader, host bridge, and entry
         // together; only install a plain loader when native is disabled.
         let runtime = if options.native_allow.is_empty() {
