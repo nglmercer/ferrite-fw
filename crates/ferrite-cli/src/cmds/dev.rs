@@ -45,9 +45,11 @@ pub(crate) async fn dev(
             )));
         }
         let shell = std::fs::read_to_string(root.join("index.html"))?;
-        let adapter = js_ssr_adapter(&server, &resolved, &shell).map_err(|note| {
-            ferrite::FerriteError::Other(format!("SSR initialization failed: {note}"))
-        })?;
+        let adapter = js_ssr_adapter(&server, &resolved, &shell)
+            .await
+            .map_err(|note| {
+                ferrite::FerriteError::Other(format!("SSR initialization failed: {note}"))
+            })?;
         server.set_ssr_adapter(adapter).await;
         ssr_mode = String::from("enabled (napi-vm entry-server)");
     }
@@ -127,7 +129,7 @@ pub(crate) fn spawn_key_handler(server: ferrite::DevServer, port: u16) {
 
 /// Build a napi-vm SSR adapter from the shared configured server-entry selection.
 /// The explicit SSR caller propagates selection/compilation failures.
-pub(crate) fn js_ssr_adapter(
+pub(crate) async fn js_ssr_adapter(
     server: &ferrite::DevServer,
     resolved: &ferrite::ResolvedConfig,
     shell: &str,
@@ -135,36 +137,84 @@ pub(crate) fn js_ssr_adapter(
     let entry = ferrite::config::resolve_js_server_entry(resolved)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "no JavaScript/TypeScript server entry found; configure [ssr].entry or create src/entry-server.js".to_string())?;
-    let path = resolved.root.join(entry);
-    let code = std::fs::read_to_string(&path)
-        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-    let ssr_env = resolved.ssr_env();
-    let result = server
-        .inner()
-        .compiler
-        .transform(ferrite::transform::TransformRequest {
-            id: path.to_string_lossy().into_owned(),
-            code,
-            module_type: ferrite::ModuleType::from_path(&path),
-            environment: ferrite::EnvironmentKind::Ssr,
-            ssr: true,
-            target: ssr_env.target.clone(),
-            minify: false,
-            sourcemap: false,
-            define: ssr_env.define.clone(),
-            jsx_runtime: resolved.react.runtime.clone(),
-            jsx_import_source: resolved.react.import_source.clone(),
-            jsx_factory: resolved.react.factory.clone(),
-            jsx_fragment: resolved.react.fragment.clone(),
-            development: !resolved.is_production,
-        })
-        .map_err(|error| format!("cannot transform {}: {error}", path.display()))?;
-    let module = ferrite::runtime::CompiledModule {
-        id: path.to_string_lossy().into_owned(),
-        code: result.code,
-        url: None,
-    };
+    let path = resolved.root.join(&entry);
+    let graph = server
+        .ssr_runtime_graph(&format!("/{}", entry.replace('\\', "/")))
+        .await
+        .map_err(|error| format!("cannot compile SSR graph {}: {error}", path.display()))?;
     Ok(Arc::new(
-        ferrite::ssr::JsSsrAdapter::from_resolved(resolved, module).with_shell(shell.to_string()),
+        ferrite::ssr::JsSsrAdapter::from_resolved_graph(resolved, graph)
+            .map_err(|error| error.to_string())?
+            .with_shell(shell.to_string()),
     ))
+}
+
+#[cfg(all(test, feature = "napi-vm"))]
+mod ssr_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn shared_ssr_compiles_typescript_dependencies_and_reports_errors() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("src")).unwrap();
+        std::fs::write(root.path().join("src/entry-server.ts"),
+            "import { label } from './label.ts'; export function render(url: string): string { return `<h1>${label} ${url}</h1>`; }").unwrap();
+        let dependency = root.path().join("src/label.ts");
+        std::fs::write(&dependency, "export const label: string = 'compiled';").unwrap();
+        let mut resolved = ferrite::config::resolve_config(
+            Default::default(),
+            Some(root.path().into()),
+            Default::default(),
+        )
+        .unwrap();
+        resolved.runtime.backend = "napi-vm".into();
+        let server = ferrite::DevServer::new_without_watcher(resolved.clone(), Vec::new())
+            .await
+            .unwrap();
+        let adapter = js_ssr_adapter(&server, &resolved, "<!--ssr-outlet-->")
+            .await
+            .unwrap();
+        let response = adapter
+            .render(
+                ferrite::ssr::SsrHttpRequest {
+                    method: "GET".into(),
+                    uri: "/about".into(),
+                    headers: Vec::new(),
+                    body: Vec::new(),
+                },
+                Default::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.into_string().await.unwrap(),
+            "<h1>compiled /about</h1>"
+        );
+        std::fs::write(&dependency, "export const label: string = ;").unwrap();
+        let error = js_ssr_adapter(&server, &resolved, "<!--ssr-outlet-->")
+            .await
+            .err()
+            .expect("broken dependency must fail");
+        assert!(error.contains("label.ts"), "{error}");
+        std::fs::write(&dependency, "export const label: string = 'recovered';").unwrap();
+        let adapter = js_ssr_adapter(&server, &resolved, "<!--ssr-outlet-->")
+            .await
+            .unwrap();
+        let response = adapter
+            .render(
+                ferrite::ssr::SsrHttpRequest {
+                    method: "GET".into(),
+                    uri: "/".into(),
+                    headers: Vec::new(),
+                    body: Vec::new(),
+                },
+                Default::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.into_string().await.unwrap(),
+            "<h1>recovered /</h1>"
+        );
+    }
 }

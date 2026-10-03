@@ -274,6 +274,34 @@ impl DevServer {
         Ok(modules)
     }
 
+    /// Compile a graph whose runtime IDs match the rewritten import specifiers.
+    /// Internal virtual IDs remain distinct in the compilation graph; only this
+    /// execution payload uses their resolved URLs.
+    pub async fn ssr_runtime_graph(&self, url: &str) -> Result<ferrite_ssr::CompiledModuleGraph> {
+        let modules = self.ssr_compile_graph(url).await?;
+        let modules: Vec<_> = modules
+            .into_iter()
+            .map(|module| {
+                let id = if module.id.0.starts_with('\0') {
+                    virtual_url(&module.id.0)
+                } else {
+                    module.id.0
+                };
+                ferrite_ssr::CompiledModule {
+                    id,
+                    code: module.code,
+                    url: None,
+                }
+            })
+            .collect();
+        let graph = ferrite_ssr::CompiledModuleGraph {
+            entry: modules[0].id.clone(),
+            modules,
+        };
+        graph.validate()?;
+        Ok(graph)
+    }
+
     /// Invalidate a module and broadcast its HMR plan.
     pub async fn invalidate_module(&self, id: &ModuleId) {
         self.inner.graph.invalidate_tree(id);

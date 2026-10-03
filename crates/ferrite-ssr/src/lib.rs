@@ -12,6 +12,8 @@ mod request;
 mod router;
 mod rpc;
 
+pub use ferrite_runtime::{CompiledModule, CompiledModuleGraph};
+
 pub use adapter::{FnAdapter, JsSsrAdapter, SsrAdapter, SsrModule, StaticShellAdapter};
 pub use external::{is_external, is_native_specifier, native_shim_module};
 pub use islands::{island_hydration_script, island_tag, Island};

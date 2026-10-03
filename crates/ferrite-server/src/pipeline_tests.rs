@@ -208,6 +208,19 @@ async fn ssr_graph_loads_virtual_dependencies_and_rejects_required_compile_failu
         } else {
             let module = result.unwrap();
             assert_eq!(module.dependencies, ["\0ssr-first", "\0ssr-second"]);
+            let runtime_graph = server.ssr_runtime_graph("/server.js").await.unwrap();
+            assert_eq!(runtime_graph.entry, "/server.js");
+            assert_eq!(
+                runtime_graph
+                    .modules
+                    .iter()
+                    .map(|module| module.id.as_str())
+                    .collect::<Vec<_>>(),
+                ["/server.js", "/@id/ssr-first", "/@id/ssr-second"]
+            );
+            assert!(runtime_graph.modules[0].code.contains("/@id/ssr-first"));
+            assert!(runtime_graph.modules[1].code.contains("/@id/ssr-second"));
+            assert!(runtime_graph.modules[2].code.contains("/@id/ssr-first"));
             let dependency = server
                 .inner
                 .graph
