@@ -37,6 +37,7 @@ pub struct DoctorReport {
     pub node_probe: &'static str,
     pub editor_view: &'static str,
     pub frameworks: Vec<FrameworkReport>,
+    pub foreign_plugins: Vec<serde_json::Value>,
     pub issues: Vec<Issue>,
 }
 
@@ -56,6 +57,15 @@ pub fn inspect(config: &ResolvedConfig) -> Result<DoctorReport> {
         explicit.and_then(|profile| profile.node.as_deref()),
     );
     let mut issues = Vec::new();
+    let mut foreign_plugins = Vec::new();
+    for profile in config.foreign_plugins.iter().flatten() {
+        let entry = config.root.join(&profile.entry);
+        let node = locate_node(&config.root, profile.node.as_deref());
+        if !entry.is_file() || node.is_none() {
+            issues.push(Issue { severity: "error", message: format!("foreign plugin {} entry or explicit Node executable is missing", profile.name), action: "check foreign_plugins.entry/node; run dev/build to validate the hook contract after locating both".into() });
+        }
+        foreign_plugins.push(serde_json::json!({"name":profile.name, "entry":entry, "entryExists":entry.is_file(), "host":profile.host, "nodeExecutable":node, "probe": if node.is_some() {"located-not-executed"} else {"not-located"}, "support":"experimental", "execution":"unverified"}));
+    }
     if !config.lockfile().exists() {
         issues.push(Issue {
             severity: "warning",
@@ -227,6 +237,7 @@ pub fn inspect(config: &ResolvedConfig) -> Result<DoctorReport> {
         node_executable,
         editor_view,
         frameworks,
+        foreign_plugins,
         issues,
     })
 }
@@ -424,5 +435,30 @@ mod tests {
                 "missing-or-mismatched"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod foreign_profile_tests {
+    #[test]
+    fn configured_foreign_plugins_are_reported_without_execution() {
+        let root = tempfile::tempdir().unwrap();
+        let entry = root.path().join("plugin.mjs");
+        std::fs::write(&entry, "throw new Error('doctor must not execute');").unwrap();
+        let user: ferrite_config::UserConfig = serde_json::from_value(serde_json::json!({"foreign_plugins":[{"name":"fixture", "entry":"plugin.mjs", "host":"node", "node":"missing-node"}]})).unwrap();
+        let config =
+            ferrite_config::resolve_config(user, Some(root.path().into()), Default::default())
+                .unwrap();
+        let report = super::inspect(&config).unwrap();
+        assert_eq!(report.foreign_plugins[0]["name"], "fixture");
+        assert_eq!(report.foreign_plugins[0]["entryExists"], true);
+        assert_eq!(report.foreign_plugins[0]["probe"], "not-located");
+        assert_eq!(report.foreign_plugins[0]["execution"], "unverified");
+        assert!(report
+            .issues
+            .iter()
+            .any(|issue| issue.severity == "error"
+                && issue.message.contains("foreign plugin fixture")));
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
     }
 }

@@ -734,3 +734,109 @@ async fn chromium_initial_load_recovery() {
 async fn firefox_initial_load_recovery() {
     initial_load_recovery(BrowserKind::Firefox).await;
 }
+
+async fn configured_foreign_hook_acceptance(kind: BrowserKind) {
+    let binary = cli();
+    let executable = match kind {
+        BrowserKind::Chromium => ferrite_e2e::find_chromium(None),
+        BrowserKind::Firefox => ferrite_e2e::find_firefox(None),
+    }
+    .expect("foreign-hook acceptance requires the selected real browser");
+    let browser = Browser::launch(
+        LaunchOptions::default()
+            .browser(kind)
+            .executable(executable),
+    )
+    .await
+    .unwrap();
+    let project = ferrite_test::TempProject::new(&[]);
+    std::fs::write(project.root.join("ferrite.toml"), "[[foreign_plugins]]\nname = 'configured'\nentry = 'plugin.mjs'\nhost = 'node'\n[foreign_plugins.options]\nvalue = 'compiled-label'\n").unwrap();
+    std::fs::write(project.root.join("plugin.mjs"), "export default options => ({transform(code, id, context) { if (!id.endsWith('/entry.js')) return null; if(context.ssr !== false) throw new Error('incorrect target'); return {code: code.replace('original-label', options.value)}; }});").unwrap();
+    std::fs::write(project.root.join("index.html"), "<html><head><link rel='icon' href='data:,'></head><body><button id='counter'>loading</button><script type='module' src='/entry.js'></script></body></html>").unwrap();
+    let source = "let count = 0; const button = document.querySelector('#counter'); const label = 'original-label'; const render = () => button.textContent = label + ': ' + count; button.onclick = () => { count += 1; render(); }; render();";
+    std::fs::write(project.root.join("entry.js"), source).unwrap();
+    let (mut dev, url) = server(&binary, &project.root, "dev", true).await;
+    let page = browser.new_page().await.unwrap();
+    page.goto(&url).await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'compiled-label: 0'",
+        Duration::from_secs(15),
+    )
+    .await
+    .unwrap();
+    page.locator("#counter").click().await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'compiled-label: 1'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap();
+    std::fs::write(
+        project.root.join("entry.js"),
+        source.replace("count += 1", "count += 2"),
+    )
+    .unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'compiled-label: 0'",
+        Duration::from_secs(15),
+    )
+    .await
+    .unwrap();
+    page.locator("#counter").click().await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'compiled-label: 2'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap();
+    assert!(page.page_errors().is_empty(), "{:?}", page.page_errors());
+    assert!(
+        page.console_messages()
+            .iter()
+            .all(|message| message.kind != "error"),
+        "{:?}",
+        page.console_messages()
+    );
+    dev.kill().await.unwrap();
+    dev.wait().await.unwrap();
+    command(&binary, &project.root, &["build", "--scope-hoist"], true).await;
+    let (mut preview, url) = server(&binary, &project.root, "preview", true).await;
+    let page = browser.new_page().await.unwrap();
+    page.goto(&url).await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'compiled-label: 0'",
+        Duration::from_secs(15),
+    )
+    .await
+    .unwrap();
+    page.locator("#counter").click().await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'compiled-label: 2'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap();
+    assert!(page.page_errors().is_empty(), "{:?}", page.page_errors());
+    assert!(
+        page.console_messages()
+            .iter()
+            .all(|message| message.kind != "error"),
+        "{:?}",
+        page.console_messages()
+    );
+    preview.kill().await.unwrap();
+    preview.wait().await.unwrap();
+    browser.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires real CLI, explicit Node hook profile and Chromium"]
+async fn chromium_configured_foreign_hooks() {
+    configured_foreign_hook_acceptance(BrowserKind::Chromium).await;
+}
+
+#[tokio::test]
+#[ignore = "requires real CLI, explicit Node hook profile and Firefox"]
+async fn firefox_configured_foreign_hooks() {
+    configured_foreign_hook_acceptance(BrowserKind::Firefox).await;
+}

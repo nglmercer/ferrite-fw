@@ -232,6 +232,28 @@ imports — plus the items below.
   Entry paths and file URLs resolve to the canonical local file, including
   symlink targets. File-URL queries/fragments and non-file URLs are rejected;
   alternate entry spellings cannot bypass hook re-registration checks.
+
+  CLI and library configuration select the same experimental hook profile:
+
+  ```toml
+  [[foreign_plugins]]
+  name = "my-transform"
+  entry = "plugins/transform.mjs"
+  host = "node"
+  timeout_ms = 10000
+  # node = "/path/to/node"  # optional explicit executable
+
+  [foreign_plugins.options]
+  prefix = "example"
+  ```
+
+  Entry/executable paths resolve from the project root. This selects only the
+  plugin host; framework compiler hosts and SSR runtimes remain separate.
+  `foreign_plugins = []` explicitly disables inherited profiles. Static JS
+  configs accept the same `foreign_plugins` data; dynamic factories belong in
+  the entry module, and dynamic profile configuration fails. Doctor only locates
+  entries/executables and reports execution as unverified; dev/build validate
+  the required hook contract. Inspect omits factory options from its report.
 - **Markdown docs + vendored utility CSS.** `ferrite-docs` turns `.md`
   files into JS modules exporting rendered HTML; `ferrite-tailwind`
   compiles `ferrite:tailwind.css` from project content using the

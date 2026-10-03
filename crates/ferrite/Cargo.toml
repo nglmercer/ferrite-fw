@@ -49,3 +49,6 @@ swc = [
     "ferrite-server/swc",
     "ferrite-transform/swc",
 ]
+
+[dev-dependencies]
+tempfile = { workspace = true }

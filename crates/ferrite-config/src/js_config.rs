@@ -131,7 +131,20 @@ pub(crate) fn load_one(path: &Path) -> Result<LoadedConfigFile> {
                  object literals (optionally wrapped in `defineConfig(...)`) are supported"
             ))
         })?;
-    let config = map_config(&object, &mut warnings, &file);
+    if let Some(warning) = warnings
+        .iter()
+        .find(|warning| warning.contains("`foreign_plugins`"))
+    {
+        return Err(FerriteError::Config(format!(
+            "{warning}; foreign plugin profiles must be static explicit data"
+        )));
+    }
+    let mut config = map_config(&object, &mut warnings, &file);
+    if let Some(value) = object.get("foreign_plugins") {
+        config.foreign_plugins = Some(serde_json::from_value(value.clone()).map_err(|error| {
+            FerriteError::Config(format!("{file}: invalid foreign_plugins: {error}"))
+        })?);
+    }
     Ok(LoadedConfigFile {
         path: path.to_path_buf(),
         config,
@@ -215,6 +228,11 @@ impl<'a> Evaluator<'a> {
                 continue;
             };
             if property.kind != PropertyKind::Init || property.method {
+                if property_key_name(&property.key).ok().as_deref() == Some("foreign_plugins") {
+                    return Err(
+                        "foreign_plugins must be static profile data, not a method/accessor".into(),
+                    );
+                }
                 warnings.push(format!("{}: ignoring a method or accessor", self.file));
                 continue;
             }
@@ -498,6 +516,7 @@ fn map_config(object: &JsonObject, warnings: &mut Vec<String>, file: &str) -> Us
                 "{file}: ignoring `plugins`: JS plugins cannot be evaluated statically; \
                  add Rust plugins programmatically instead"
             )),
+            "foreign_plugins" => {}
             _ => warnings.push(format!("{file}: ignoring unknown config key `{key}`")),
         }
     }
@@ -939,5 +958,32 @@ mod tests {
         let loaded = load_config_from_file(&dir).unwrap().expect("config");
         assert_eq!(loaded.warnings.len(), 2, "{:?}", loaded.warnings);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod foreign_profile_tests {
+    #[test]
+    fn static_foreign_profiles_are_preserved_and_dynamic_profiles_fail() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("ferrite.config.mjs");
+        std::fs::write(&path, "export default {foreign_plugins: [{name: 'fixture', entry: './plugin.mjs', host: 'node', options: {value: 42}}]};").unwrap();
+        let config = super::load_one(&path).unwrap();
+        assert!(config.warnings.is_empty());
+        assert_eq!(
+            config.config.foreign_plugins.unwrap()[0].options["value"],
+            42
+        );
+        for invalid in [
+            "export default {foreign_plugins: profiles()};",
+            "export default {foreign_plugins: [{name:'fixture', entry:'plugin.mjs', host:'node', unsupported:true}]};",
+            "export default {foreign_plugins: false};",
+            "export default {foreign_plugins() {return []}};",
+            "export default {get foreign_plugins() {return []}};",
+        ] {
+            std::fs::write(&path, invalid).unwrap();
+            let error = super::load_one(&path).unwrap_err();
+            assert!(error.to_string().contains("foreign_plugins"), "{error}");
+        }
     }
 }

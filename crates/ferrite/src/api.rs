@@ -95,6 +95,22 @@ impl Config {
         let merged = merge_user_config(file_config, user);
         let resolved = resolve_config(merged, Some(root_hint), self.overrides)?;
         let mut plugins = self.plugins;
+        for profile in resolved.foreign_plugins.iter().flatten() {
+            let node = profile.node.as_ref().map(|path| resolved.root.join(path));
+            let host = Arc::new(
+                ferrite_plugin::node_adapter::NodeAdapterHost::spawn_with_timeout(
+                    node,
+                    std::time::Duration::from_millis(profile.timeout_ms.unwrap_or(10_000)),
+                ).map_err(|error| ferrite_core::FerriteError::Config(format!("foreign plugin {} explicit Node host failed: {error}; check foreign_plugins.node and timeout_ms", profile.name)))?,
+            );
+            let entry = resolved.root.join(&profile.entry);
+            plugins.push(Arc::new(ferrite_plugin::ForeignHookPlugin::register(
+                host,
+                &profile.name,
+                &entry,
+                profile.options.clone(),
+            ).map_err(|error| ferrite_core::FerriteError::Config(format!("foreign plugin {} at {} failed registration: {error}; check entry/options and the supported hook subset", profile.name, entry.display())))?));
+        }
         if let Some(profile) = &resolved.framework {
             if !profile.enabled.is_empty() {
                 // Only an explicit validated host selection can reach this constructor.
@@ -169,4 +185,86 @@ pub async fn build(config: Config) -> Result<Vec<BuildReport>> {
 pub async fn preview(config: Config) -> Result<()> {
     let (resolved, plugins) = config.resolve().await?;
     preview_with_plugins(&resolved, &plugins).await
+}
+
+#[cfg(test)]
+mod foreign_profile_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn foreign_profiles_require_opt_in_and_do_not_fallback_from_missing_node() {
+        let root = tempfile::tempdir().unwrap();
+        for (host, node, expected) in [
+            (None, None, "requires explicit host"),
+            (
+                Some("node".to_string()),
+                Some(root.path().join("missing-node")),
+                "cannot spawn",
+            ),
+        ] {
+            let user = ferrite_config::UserConfig {
+                foreign_plugins: Some(vec![ferrite_config::ForeignPluginConfig {
+                    name: "fixture".into(),
+                    entry: "missing.mjs".into(),
+                    host,
+                    node,
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            };
+            let config = Config {
+                root: Some(root.path().into()),
+                user,
+                ..Default::default()
+            };
+            let error = match config.resolve().await {
+                Err(error) => error,
+                Ok(_) => panic!("unavailable profile must fail"),
+            };
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires explicitly enabled real Node hook profile"]
+    async fn configured_foreign_hooks_are_selected_by_shared_config_resolution() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("plugin.mjs"), r#"export default options => ({transform(code, id, context) {
+            if (!id.endsWith('/entry.js')) return null;
+            if (context.ssr !== false) throw new Error('lost client options');
+            return {code: code + '\nexport const configured = ' + JSON.stringify(options.value) + ';'};
+        }});"#).unwrap();
+        std::fs::write(root.path().join("entry.js"), "export const original = 1;").unwrap();
+        std::fs::write(root.path().join("selected.toml"), "[[foreign_plugins]]\nname = 'configured'\nentry = 'plugin.mjs'\nhost = 'node'\n[foreign_plugins.options]\nvalue = 'configured-through-file'\n").unwrap();
+        for production in [false, true] {
+            let config = Config {
+                root: Some(root.path().into()),
+                config_path: Some(root.path().join("selected.toml")),
+                overrides: CliOverrides {
+                    mode: Some(
+                        if production {
+                            "production"
+                        } else {
+                            "development"
+                        }
+                        .into(),
+                    ),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let (resolved, plugins) = config.resolve().await.unwrap();
+            assert_eq!(resolved.is_production, production);
+            assert_eq!(resolved.runtime.backend, "auto");
+            let server = DevServer::new_without_watcher(resolved, plugins)
+                .await
+                .unwrap();
+            let output = server
+                .pipeline_module(&ferrite_core::ModuleId::new("/entry.js"), None, "client")
+                .await
+                .unwrap();
+            assert!(output.code.contains("configured-through-file"));
+            server.close();
+        }
+    }
 }

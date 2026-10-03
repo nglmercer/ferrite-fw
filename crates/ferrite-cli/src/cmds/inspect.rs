@@ -34,6 +34,9 @@ pub(crate) async fn inspect(
         }
     }
     let lock = ferrite::npm::Lockfile::read(&resolved.lockfile())?;
+    for _ in resolved.foreign_plugins.iter().flatten() {
+        plugins.push("ferrite:foreign-hook".into());
+    }
     if args.json {
         println!(
             "{}",
@@ -46,6 +49,7 @@ pub(crate) async fn inspect(
                 "build": { "outDir": resolved.build.out_dir, "minify": resolved.build.minify, "target": resolved.build.target },
                 "compiler": resolved.compiler.engine,
                 "framework": resolved.framework,
+                "foreignPlugins": resolved.foreign_plugins.iter().flatten().map(|profile| serde_json::json!({"name":profile.name, "entry":profile.entry, "host":profile.host, "node":profile.node, "timeoutMs":profile.timeout_ms.unwrap_or(10000), "support":"experimental", "executed":false})).collect::<Vec<_>>(),
                 "react": resolved.react,
                 "ssrRuntime": resolved.runtime.backend,
                 "plugins": plugins,
@@ -168,6 +172,9 @@ pub(crate) async fn doctor(
             report.node_probe
         );
         println!("editor packages: {}", report.editor_view);
+        for profile in &report.foreign_plugins {
+            println!("foreign plugin: {profile}");
+        }
         for framework in &report.frameworks {
             if framework.active {
                 println!(

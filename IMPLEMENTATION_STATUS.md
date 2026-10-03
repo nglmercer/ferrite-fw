@@ -1517,3 +1517,61 @@ README records the local-file entry contract. No lock/config/cache schema
 migration or support promotion. These checks ran on Linux; Windows/macOS release
 checks, transitive plugin imports, automatic worker reload, CLI configuration and
 the full remaining mission stay assigned and active.
+
+### Select foreign hook profiles through shared project configuration
+
+`foreign_plugins` now selects explicit local hook profiles from TOML, static JS
+configuration and programmatic `Config`. Each profile names its entry, explicitly
+selects `host = "node"`, supplies JSON factory options and may select a Node
+executable/deadline separately from framework compiler and SSR runtime settings.
+Shared `Config::resolve` registers persistent validated adapters for CLI/library
+pipelines. Missing host opt-in, unsupported hosts, duplicate/empty names, empty
+entries, invalid deadlines and unknown profile fields fail. An explicit empty
+list disables inherited profiles. Dynamic JS profile values/methods/accessors
+fail instead of being skipped. Startup failures identify the profile and relevant
+configuration fields; a missing explicit executable never falls back to PATH.
+
+Doctor reports selected plugin entries and executables without executing them,
+with experimental support and unverified execution. Missing entries/executables
+are actionable errors. Inspect reports selections without factory options.
+README documents the configuration and bounded hook contract.
+
+Validation on Linux with Node 26.10.0:
+
+- `cargo test -p ferrite-config -p ferrite -p ferrite-frameworks --locked` passed
+  27 config, 14 facade and 27 framework unit tests, plus four executed doc tests.
+  Includes profile roundtrip/merge/validation, static JS/dynamic rejection,
+  host opt-in/no fallback and read-only doctor regression.
+  Output: `/tmp/ferrite-configured-hooks-unit.log`.
+- The separately executed real-Node `configured_foreign_hooks` facade fixture
+  passed development/production resolution with the selected config file and
+  unchanged SSR runtime selection, on default and SWC builds. Outputs:
+  `/tmp/ferrite-configured-hooks-node.log` and `/tmp/ferrite-configured-hooks-swc.log`.
+- New Chromium/Firefox CLI fixtures passed rendering, trusted clicks, source
+  edit/full reload, changed interaction, scope-hoisted build and preview
+  interaction, with no page/console errors. Then all 12 generated-app acceptance
+  tests passed with `--test-threads=2` (95.94 seconds), including all six existing
+  templates, dependency HMR and startup recovery. Command:
+  `cargo test -p ferrite-test --test generated_apps --locked -- --ignored --nocapture --test-threads=2`
+  with explicit CLI/browser paths. Outputs: `/tmp/ferrite-configured-hooks-browsers.log`
+  and `/tmp/ferrite-configured-hooks-bounded-browsers.log`.
+- An additional rebuilt-CLI smoke check selected `selected.toml` explicitly,
+  asserted inspect/doctor JSON, fetched transformed dev JavaScript and verified
+  transformed production assets (`/tmp/ferrite-configured-hooks-cli.log`).
+- Workspace compilation, affected-crate all-target Clippy with
+  `--locked -- -D warnings`, formatting and diff checks passed.
+
+The first full browser run concurrent with large SWC compilation failed one of
+12 tests with an actual Node worker boot timeout; the remaining 11 passed.
+Output: `/tmp/ferrite-configured-hooks-all-browsers.log`. Bounded concurrency
+changed scheduling only; no timeout or interaction assertions were weakened.
+High-concurrency startup under that resource load is not established.
+
+Migration: the optional additive config field defaults to no foreign profiles;
+existing projects retain their selections. Cargo.lock adds test-only edges to
+the existing pinned tempfile crate. No Ferrite lock/global cache schema change.
+Transitive plugin-import tracking, host/version cache identity, automatic worker
+reload, ordered/context/lifecycle hooks, broader plugin conformance and
+cross-platform checks remain assigned. No framework support status is promoted;
+SSR, complete Refresh, framework HMR/checkers, additional frameworks and the full
+remaining mission stay active.

@@ -15,3 +15,6 @@ oxc_ast = { workspace = true }
 oxc_parser = { workspace = true }
 oxc_span = { workspace = true }
 oxc_syntax = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

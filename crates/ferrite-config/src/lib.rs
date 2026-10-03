@@ -48,10 +48,36 @@ pub struct UserConfig {
     pub react: ReactConfig,
     /// Explicit official framework compiler configuration, separate from SSR runtime.
     pub framework: Option<FrameworkConfig>,
+    /// Explicit foreign hook profiles. Some(empty) disables inherited profiles.
+    pub foreign_plugins: Option<Vec<ForeignPluginConfig>>,
     /// Embedded runtime options.
     pub runtime: RuntimeConfig,
     /// End-to-end test options.
     pub e2e: E2eConfig,
+}
+
+/// Explicit local Node hook profile; separate from compiler and SSR hosts.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ForeignPluginConfig {
+    pub name: String,
+    pub entry: PathBuf,
+    pub host: Option<String>,
+    pub node: Option<PathBuf>,
+    pub timeout_ms: Option<u64>,
+    pub options: serde_json::Value,
+}
+impl Default for ForeignPluginConfig {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            entry: PathBuf::new(),
+            host: None,
+            node: None,
+            timeout_ms: None,
+            options: serde_json::json!({}),
+        }
+    }
 }
 
 /// Explicit opt-in to official framework compilation.
@@ -786,6 +812,8 @@ pub struct ResolvedConfig {
     pub react: ReactConfig,
     /// Explicit framework compiler options.
     pub framework: Option<FrameworkConfig>,
+    /// Explicit foreign hook profiles.
+    pub foreign_plugins: Option<Vec<ForeignPluginConfig>>,
     /// Runtime options.
     pub runtime: RuntimeConfig,
     /// E2E options.
@@ -990,6 +1018,9 @@ pub fn merge_user_config(mut base: UserConfig, over: UserConfig) -> UserConfig {
     }
     if over.framework.is_some() {
         base.framework = over.framework;
+    }
+    if over.foreign_plugins.is_some() {
+        base.foreign_plugins = over.foreign_plugins;
     }
     base.runtime = merge_runtime(base.runtime, over.runtime);
     base.e2e = merge_e2e(base.e2e, over.e2e);
@@ -1266,6 +1297,25 @@ pub fn resolve_config(
     if let Some(framework) = &user.framework {
         framework.validate()?;
     }
+    let mut names = std::collections::HashSet::new();
+    for plugin in user.foreign_plugins.iter().flatten() {
+        if plugin.name.trim().is_empty() || !names.insert(&plugin.name) {
+            return Err(FerriteError::Config(
+                "foreign_plugins requires unique nonempty names".into(),
+            ));
+        }
+        if plugin.host.as_deref() != Some("node") {
+            return Err(FerriteError::Config(format!("foreign plugin {} requires explicit host = \"node\"; other hook hosts are unavailable; SSR runtime is configured separately", plugin.name)));
+        }
+        if plugin.entry.as_os_str().is_empty()
+            || !(1..=300_000).contains(&plugin.timeout_ms.unwrap_or(10_000))
+        {
+            return Err(FerriteError::Config(format!(
+                "foreign plugin {} requires an entry and timeout_ms between 1 and 300000",
+                plugin.name
+            )));
+        }
+    }
     let mut root = root_hint
         .or_else(|| user.root.clone().map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from("."));
@@ -1341,6 +1391,7 @@ pub fn resolve_config(
         package,
         react: user.react.clone(),
         framework: user.framework.clone(),
+        foreign_plugins: user.foreign_plugins.clone(),
         runtime: {
             let mut runtime = user.runtime.clone();
             if let Some(backend) = overrides.runtime {
@@ -1794,5 +1845,55 @@ mod tests {
             configured.ssr_env().define["process.env.NODE_ENV"],
             "\"custom\""
         );
+    }
+}
+
+#[cfg(test)]
+mod foreign_profile_tests {
+    use super::*;
+
+    #[test]
+    fn explicit_profiles_validate_and_empty_overrides_disable_inheritance() {
+        let text = "[[foreign_plugins]]\nname = 'fixture'\nentry = 'plugin.mjs'\nhost = 'node'\n[foreign_plugins.options]\nprefix = 'value'\n";
+        let user: UserConfig = toml::from_str(text).unwrap();
+        let roundtrip: UserConfig = toml::from_str(&toml::to_string(&user).unwrap()).unwrap();
+        assert_eq!(
+            roundtrip.foreign_plugins.as_ref().unwrap()[0].options["prefix"],
+            "value"
+        );
+        assert_eq!(
+            resolve_config(user.clone(), None, Default::default())
+                .unwrap()
+                .foreign_plugins
+                .unwrap()
+                .len(),
+            1
+        );
+        let over: UserConfig = toml::from_str("foreign_plugins = []").unwrap();
+        assert!(merge_user_config(user.clone(), over)
+            .foreign_plugins
+            .unwrap()
+            .is_empty());
+        for invalid in [
+            text.replace("host = 'node'", ""),
+            text.replace("host = 'node'", "host = 'embedded'"),
+            text.replace("entry = 'plugin.mjs'", "entry = ''"),
+            text.replace("name = 'fixture'", "name = ''"),
+            text.replace("host = 'node'", "host = 'node'\ntimeout_ms = 0"),
+        ] {
+            let user: UserConfig = toml::from_str(&invalid).unwrap();
+            assert!(
+                resolve_config(user, None, Default::default()).is_err(),
+                "{invalid}"
+            );
+        }
+        let mut duplicated = user;
+        let duplicate = duplicated.foreign_plugins.as_ref().unwrap()[0].clone();
+        duplicated.foreign_plugins.as_mut().unwrap().push(duplicate);
+        assert!(resolve_config(duplicated, None, Default::default()).is_err());
+        assert!(toml::from_str::<UserConfig>(
+            &text.replace("host = 'node'", "host = 'node'\nunsupported = true")
+        )
+        .is_err());
     }
 }
