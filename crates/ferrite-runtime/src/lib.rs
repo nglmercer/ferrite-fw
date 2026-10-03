@@ -84,6 +84,43 @@ pub struct CompiledModule {
     pub url: Option<String>,
 }
 
+/// A complete compiled module graph supplied by the compilation pipeline.
+#[derive(Debug, Clone)]
+pub struct CompiledModuleGraph {
+    /// Canonical entry module ID.
+    pub entry: String,
+    /// Compiled modules, including the entry and its dependencies.
+    pub modules: Vec<CompiledModule>,
+}
+
+impl CompiledModuleGraph {
+    /// Validate identities before registering any guest module.
+    pub fn validate(&self) -> Result<()> {
+        let mut ids = std::collections::HashSet::new();
+        for module in &self.modules {
+            if module.id.is_empty() || module.id.starts_with('.') {
+                return Err(FerriteError::Runtime(format!(
+                    "compiled graph module ID `{}` must be absolute or a stable name",
+                    module.id
+                )));
+            }
+            if !ids.insert(&module.id) {
+                return Err(FerriteError::Runtime(format!(
+                    "duplicate compiled graph module ID `{}`",
+                    module.id
+                )));
+            }
+        }
+        if !ids.contains(&self.entry) {
+            return Err(FerriteError::Runtime(format!(
+                "compiled graph entry `{}` is missing",
+                self.entry
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// Runtime environment flags.
 #[derive(Debug, Clone)]
 pub struct RuntimeEnvironment {
@@ -172,6 +209,24 @@ pub trait JsRuntime: Send + Sync {
         env: RuntimeEnvironment,
     ) -> Result<ModuleNamespace>;
 
+    /// Evaluate an explicitly compiled graph without substituting another host.
+    async fn evaluate_module_graph(
+        &self,
+        graph: CompiledModuleGraph,
+        env: RuntimeEnvironment,
+    ) -> Result<ModuleNamespace> {
+        graph.validate()?;
+        if graph.modules.len() == 1 {
+            return self
+                .evaluate_module(
+                    graph.modules.into_iter().next().expect("validated graph"),
+                    env,
+                )
+                .await;
+        }
+        Err(FerriteError::Runtime(format!("backend `{}` does not support compiled module graphs; select a graph-capable runtime explicitly", self.name())))
+    }
+
     /// Call a function handle with arguments.
     async fn call(&self, _handle: &JsHandle, _args: Vec<JsValue>) -> Result<JsValue> {
         Err(FerriteError::Runtime(format!(
@@ -195,6 +250,15 @@ pub struct UnavailableRuntime {
 impl JsRuntime for UnavailableRuntime {
     fn name(&self) -> &'static str {
         "unavailable"
+    }
+
+    async fn evaluate_module_graph(
+        &self,
+        graph: CompiledModuleGraph,
+        _env: RuntimeEnvironment,
+    ) -> Result<ModuleNamespace> {
+        graph.validate()?;
+        Err(FerriteError::Runtime(format!("cannot evaluate compiled module graphs: embedded JS backend `{}` is unavailable in this build; select a graph-capable runtime explicitly", self.backend)))
     }
 
     async fn evaluate_module(
@@ -345,6 +409,45 @@ pub struct FetchResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn compiled_graphs_validate_before_reporting_backend_capability() {
+        let runtime = UnavailableRuntime {
+            backend: "quickjs".into(),
+        };
+        let module = |id: &str| CompiledModule {
+            id: id.into(),
+            code: "export const value = 1;".into(),
+            url: None,
+        };
+        let graph = CompiledModuleGraph {
+            entry: "entry".into(),
+            modules: vec![module("entry"), module("dependency")],
+        };
+        let error = runtime
+            .evaluate_module_graph(
+                graph.clone(),
+                RuntimeEnvironment {
+                    ssr: true,
+                    request_id: None,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("compiled module graphs")
+                && error.to_string().contains("quickjs")
+        );
+        let mut invalid = graph;
+        invalid.modules[1].id = "./relative".into();
+        assert!(invalid
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("stable name"));
+        invalid.modules[1].id = String::new();
+        assert!(invalid.validate().is_err());
+    }
 
     #[test]
     fn json_bridge() {

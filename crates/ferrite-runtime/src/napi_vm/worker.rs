@@ -15,6 +15,7 @@ pub(crate) fn worker_loop(options: NapiVmOptions, rx: Receiver<Job>) {
             for job in rx {
                 match job {
                     Job::EvalModule { reply, .. }
+                    | Job::EvalGraph { reply, .. }
                     | Job::Call { reply, .. }
                     | Job::Require { reply, .. } => {
                         let _ = reply.send(Err(error.clone()));
@@ -28,6 +29,26 @@ pub(crate) fn worker_loop(options: NapiVmOptions, rx: Receiver<Job>) {
         match job {
             Job::EvalModule { id, code, reply } => {
                 let _ = reply.send(state.eval_module(&id, &code));
+            }
+            Job::EvalGraph { graph, reply } => {
+                let result = graph
+                    .validate()
+                    .map_err(|error| error.to_string())
+                    .and_then(|()| {
+                        for module in &graph.modules {
+                            state.interp.remove_module(&module.id);
+                        }
+                        for module in &graph.modules {
+                            state.interp.define_module(&module.id, module.code.clone());
+                        }
+                        let entry = graph
+                            .modules
+                            .iter()
+                            .find(|module| module.id == graph.entry)
+                            .expect("validated entry");
+                        state.eval_module(&entry.id, &entry.code)
+                    });
+                let _ = reply.send(result);
             }
             Job::Call {
                 handle,

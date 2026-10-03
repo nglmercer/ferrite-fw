@@ -95,6 +95,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn evaluates_explicit_compiled_dependency_graph_without_filesystem_sources() {
+        let runtime = NapiVmRuntime::with_defaults();
+        let graph = crate::CompiledModuleGraph {
+            entry: "/compiled/entry.js".into(),
+            modules: vec![
+                CompiledModule { id: "/compiled/entry.js".into(), code: "import { value } from '/compiled/dependency.js'; export const answer = value + 1;".into(), url: None },
+                CompiledModule { id: "/compiled/dependency.js".into(), code: "export const value = 41;".into(), url: None },
+            ],
+        };
+        let namespace = runtime
+            .evaluate_module_graph(
+                graph.clone(),
+                RuntimeEnvironment {
+                    ssr: true,
+                    request_id: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(namespace.get("answer"), Some(JsValue::Number(value)) if *value == 42.0));
+        let mut updated = graph.clone();
+        updated.modules[1].code = "export const value = 42;".into();
+        let namespace = runtime
+            .evaluate_module_graph(
+                updated,
+                RuntimeEnvironment {
+                    ssr: true,
+                    request_id: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(namespace.get("answer"), Some(JsValue::Number(value)) if *value == 43.0));
+        let mut invalid = graph.clone();
+        invalid.modules.push(invalid.modules[0].clone());
+        let error = runtime
+            .evaluate_module_graph(
+                invalid,
+                RuntimeEnvironment {
+                    ssr: true,
+                    request_id: None,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("duplicate"));
+        let mut invalid = graph;
+        invalid.entry = "/compiled/missing.js".into();
+        let error = runtime
+            .evaluate_module_graph(
+                invalid,
+                RuntimeEnvironment {
+                    ssr: true,
+                    request_id: None,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("missing"));
+    }
+
+    #[tokio::test]
     async fn awaits_async_exports() {
         let runtime = NapiVmRuntime::with_defaults();
         let namespace = runtime

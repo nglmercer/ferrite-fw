@@ -1,5 +1,36 @@
 # Framework support implementation status
 
+## Runtime accepts explicitly compiled module graphs
+
+`CompiledModuleGraph` carries a canonical entry and compiled module list, with
+validation for duplicate/empty/relative identities and a missing entry. The
+`JsRuntime` graph method fails explicitly on unsupported multi-module backends;
+single-module graphs can use the existing evaluation contract. Unavailable
+backends identify the selected backend in graph errors.
+
+The explicitly enabled napi-vm backend registers supplied modules on its existing
+persistent owner thread before evaluating the entry. It removes earlier export
+records for these identities before replacement, preventing stale evaluation of
+updated supplied modules. The implementation reuses the pinned interpreter's
+define_module/remove_module APIs, inspected at revision
+0fa987d8860d620cd1008a84f2a17c9b67c495cd. Existing worker budgets, jobs, replies,
+shutdown, and runtime selection remain in use; no Node subprocess is introduced.
+
+Validation: 18 napi-vm-enabled runtime tests and three default-feature tests
+passed. The compiled dependency graph test executes modules without filesystem
+source files, checks replacement, duplicate IDs and missing entries. It also
+passed from the built test binary with PATH empty. Feature-enabled runtime
+all-target Clippy with `-D warnings`, CLI `cargo check --features napi-vm`,
+changed-file formatting, and diff checks passed. No existing backend must
+implement the new method immediately; unsupported graphs return actionable errors.
+
+This is low-level graph execution evidence, not framework SSR/hydration support.
+CLI adapter wiring still uses its old single-entry compilation path and must
+consume shared compiled graphs. Full request isolation, removal of modules absent
+from a replacement graph, source-map/URL propagation, graph cancellation/resource
+limits, real framework package execution, full workspace/browser/host/release
+matrices, and the full mission remain incomplete.
+
 ## Development and build share physical server-entry selection
 
 `ferrite-config::resolve_js_server_entry` now owns explicit entry validation and

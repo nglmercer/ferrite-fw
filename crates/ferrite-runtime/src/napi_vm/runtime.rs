@@ -95,6 +95,21 @@ impl JsRuntime for NapiVmRuntime {
         namespace_from_json(&json)
     }
 
+    async fn evaluate_module_graph(
+        &self,
+        graph: crate::CompiledModuleGraph,
+        _env: RuntimeEnvironment,
+    ) -> Result<ModuleNamespace> {
+        graph.validate()?;
+        let (reply, receive) = tokio::sync::oneshot::channel();
+        self.send(Job::EvalGraph { graph, reply })?;
+        let json = receive
+            .await
+            .map_err(|_| FerriteError::Runtime("napi-vm worker stopped".into()))?
+            .map_err(FerriteError::Runtime)?;
+        namespace_from_json(&json)
+    }
+
     async fn call(&self, handle: &JsHandle, args: Vec<JsValue>) -> Result<JsValue> {
         let mut encoded = Vec::with_capacity(args.len());
         for arg in &args {
