@@ -6,6 +6,7 @@
 // resolveId(id, importer, options), load(id, options), transform(code, id, options).
 // A hook returning `null`/`undefined` means "skip" (Rust keeps its default).
 import { createInterface } from "node:readline";
+import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -19,6 +20,9 @@ const registeredEntries = new Set();
 const supportedHooks = new Set(['resolveId', 'load', 'transform']);
 // Capture the running host before any guest is evaluated. This is capability
 // identity, not a promise of compatibility for every Node version.
+function environmentHash() {
+  return createHash('sha256').update(JSON.stringify(Object.entries(process.env).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0))).digest('hex');
+}
 const hostProfile = {
   nodeVersion: process.version,
   executable: realpathSync(process.execPath),
@@ -27,7 +31,14 @@ const hostProfile = {
   versions: {...process.versions},
   execArgs: [...process.execArgv],
   nodeOptions: process.env.NODE_OPTIONS ?? null,
+  cwd: realpathSync(process.cwd()),
+  environmentHash: environmentHash(),
 };
+function assertHostState(stage) {
+  if (realpathSync(process.cwd()) !== hostProfile.cwd || environmentHash() !== hostProfile.environmentHash) {
+    throw new Error(`Node worker environment or cwd changed ${stage}; recreate the explicit host and avoid mutating process.env/process.chdir in compiler or plugin hooks`);
+  }
+}
 function hookHandler(value, name) {
   if (value == null) return null;
   if (typeof value === 'function') return value;
@@ -80,6 +91,7 @@ async function register(id, name, entry, profile, options) {
       hookHandler(plugin[key], `${name}.${key}`);
     }
   }
+  assertHostState(`during registration of ${name}`);
   plugins.set(name, module);
   if (profile === 'hooks') hookPlugins.set(name, plugin);
   else hookPlugins.delete(name);
@@ -111,6 +123,7 @@ async function hook(id, name, hook, input) {
     args = [input];
   }
   const result = await hookFn.apply(hookContext, args);
+  assertHostState(`during ${name}.${hook}`);
   respond(id, true, result === undefined ? null : result);
 }
 
@@ -129,6 +142,7 @@ rl.on("line", (line) => {
   }
   tail = tail
     .then(async () => {
+      assertHostState(`before ${message.cmd}`);
       if (message.cmd === "profile") {
         respond(message.id, true, hostProfile);
       } else if (message.cmd === "register") {
@@ -136,7 +150,9 @@ rl.on("line", (line) => {
       } else if (message.cmd === "call") {
         const module = plugins.get(message.name);
         if (!module || typeof module[message.export] !== "function") throw new Error(`missing callable export ${message.name}.${message.export}`);
-        respond(message.id, true, await module[message.export](message.input));
+        const result = await module[message.export](message.input);
+        assertHostState(`during ${message.name}.${message.export}`);
+        respond(message.id, true, result);
       } else if (message.cmd === "hook") {
         await hook(message.id, message.name, message.hook, message.input);
       } else {

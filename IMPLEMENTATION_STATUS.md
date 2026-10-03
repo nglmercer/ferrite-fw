@@ -1666,3 +1666,42 @@ additional host/platform versions remain unverified. This fixture proves host
 conditional resolution and key isolation, not Ferrite installer/browser support
 for arbitrary custom-condition packages. No framework support status is promoted;
 the full remaining mission stays active.
+
+### Isolate Node startup environment and working directory
+
+The running-host snapshot now includes canonical cwd and a deterministic SHA-256
+hash of the startup environment, captured before guest evaluation. Foreign-hook
+and official compiler keys consume both automatically. The profile does not
+publish the environment dictionary. Persistent cwd/environment mutation during
+registration or an awaited hook/export rejects the result with an actionable
+host-restart error; subsequent protocol requests also reject the drift. Ferrite
+does not silently reset the process, restart it or substitute another backend.
+
+Validation on Linux/Node 26.10.0:
+
+- `cargo test -p ferrite-plugin -p ferrite-frameworks -p ferrite --locked`:
+  19 plugin, 27 framework and 14 facade unit tests, plus three doc tests passed.
+  Output: `/tmp/ferrite-node-environment-unit.log`.
+- All eight explicitly executed real-Node tests passed. Isolated executable
+  wrappers vary environment/cwd without mutating Rust's global environment.
+  Actual transforms and cache identities differ for both inputs, and the profile
+  excludes the dummy private environment values. Registration, transform and
+  typed-export mutation fixtures reject drift and require a new host.
+  Output: `/tmp/ferrite-node-environment-real.log`.
+- Actual project-matched Vue/Svelte client/server/runes compilation and shared
+  foreign-hook dev/production pipeline fixtures passed after the final guard.
+  Outputs: `/tmp/ferrite-node-environment-compilers.log` and
+  `/tmp/ferrite-node-environment-pipeline.log`.
+- Workspace compilation and plugin/framework all-target Clippy with
+  `--locked -- -D warnings` passed; CLI rebuilt successfully.
+- All 12 explicitly executed Chromium/Firefox generated-app acceptance tests
+  passed with `--test-threads=2` (98.85 seconds), including the six existing
+  templates and foreign-hook/dependency/startup flows. Output:
+  `/tmp/ferrite-node-environment-browsers.log`. Formatting and diff checks passed.
+
+Node-derived cache keys change automatically; no lock/config schema migration.
+This is process-state consistency, not a sandbox or general purity guarantee.
+Transient restored mutations, asynchronous changes after returning, arbitrary
+files, transitive guest imports, executable integrity and other host/platform
+versions remain unverified. No framework support status is promoted. Complete
+Refresh, framework HMR/checkers, real SSR/SSG and the remaining mission stay active.

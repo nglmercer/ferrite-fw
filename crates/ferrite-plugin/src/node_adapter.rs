@@ -59,6 +59,8 @@ pub struct NodeHostProfile {
     pub versions: std::collections::BTreeMap<String, String>,
     pub exec_args: Vec<String>,
     pub node_options: Option<String>,
+    pub cwd: PathBuf,
+    pub environment_hash: String,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -176,6 +178,12 @@ impl NodeAdapterHost {
                 FerriteError::Build(format!("Node host profile protocol mismatch: {error}"))
             })?;
         if profile.node_version.is_empty()
+            || !profile.cwd.is_absolute()
+            || profile.environment_hash.len() != 64
+            || !profile
+                .environment_hash
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
             || !profile.executable.is_absolute()
             || profile.platform.is_empty()
             || profile.arch.is_empty()
@@ -569,6 +577,8 @@ mod tests {
             .into(),
             exec_args: vec!["--max-old-space-size=256".into()],
             node_options: None,
+            cwd: "/project".into(),
+            environment_hash: "0".repeat(64),
         };
         let expected = profile_cache_identity(&profile);
         assert_eq!(expected, profile_cache_identity(&profile.clone()));
@@ -580,6 +590,8 @@ mod tests {
             "abi",
             "args",
             "node-options",
+            "cwd",
+            "environment",
         ] {
             let mut changed = profile.clone();
             match field {
@@ -592,6 +604,8 @@ mod tests {
                 "arch" => changed.arch = "arm64".into(),
                 "args" => changed.exec_args.push("--conditions=custom".into()),
                 "node-options" => changed.node_options = Some("--conditions=custom".into()),
+                "cwd" => changed.cwd = "/different-project".into(),
+                "environment" => changed.environment_hash = "1".repeat(64),
                 _ => {
                     changed.versions.insert("v8".into(), "different".into());
                 }
@@ -606,7 +620,7 @@ mod tests {
         for profile in [
             serde_json::Value::Null,
             serde_json::json!({"nodeVersion":"v26.10.0"}),
-            serde_json::json!({"nodeVersion":"v26.10.0", "executable":"/node", "platform":"linux", "arch":"x64", "versions":{"node":"27.0.0"}, "execArgs":[]}),
+            serde_json::json!({"nodeVersion":"v26.10.0", "executable":"/node", "platform":"linux", "arch":"x64", "versions":{"node":"27.0.0"}, "execArgs":[], "cwd":"/project", "environmentHash":"0".repeat(64)}),
         ] {
             let dir = tempfile::tempdir().unwrap();
             fake_node_script(
@@ -625,7 +639,7 @@ mod tests {
     async fn real_node_reports_stable_running_host_identity() {
         let dir = tempfile::tempdir().unwrap();
         let entry = dir.path().join("probe.mjs");
-        std::fs::write(&entry, "export function probe() { return {nodeVersion:process.version, executable:process.execPath, platform:process.platform, arch:process.arch, versions:process.versions, execArgs:process.execArgv, nodeOptions:process.env.NODE_OPTIONS ?? null}; }").unwrap();
+        std::fs::write(&entry, "import {createHash} from 'node:crypto'; export function probe() { return {nodeVersion:process.version, executable:process.execPath, platform:process.platform, arch:process.arch, versions:process.versions, execArgs:process.execArgv, nodeOptions:process.env.NODE_OPTIONS ?? null, cwd:process.cwd(), environmentHash:createHash('sha256').update(JSON.stringify(Object.entries(process.env).sort(([a],[b]) => a < b ? -1 : a > b ? 1 : 0))).digest('hex')}; }").unwrap();
         let host = NodeAdapterHost::spawn(None).unwrap();
         let profile = host.profile().unwrap();
         let identity = host.cache_identity().unwrap();
@@ -641,6 +655,8 @@ mod tests {
         assert_eq!(profile.versions, observed.versions);
         assert_eq!(profile.exec_args, observed.exec_args);
         assert_eq!(profile.node_options, observed.node_options);
+        assert_eq!(profile.cwd, observed.cwd.canonicalize().unwrap());
+        assert_eq!(profile.environment_hash, observed.environment_hash);
         assert_eq!(
             profile.executable,
             observed.executable.canonicalize().unwrap()
@@ -651,6 +667,126 @@ mod tests {
         assert_eq!(identity, other.cache_identity().unwrap());
         host.shutdown();
         other.shutdown();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires real Node; executed explicitly"]
+    async fn real_node_environment_and_cwd_isolate_transform_cache_keys() {
+        use crate::Plugin;
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("working-a");
+        let second = dir.path().join("working-b");
+        std::fs::create_dir(&first).unwrap();
+        std::fs::create_dir(&second).unwrap();
+        let entry = dir.path().join("plugin.mjs");
+        std::fs::write(&entry, "export default () => { const selected = process.env.FERRITE_HOST_FIXTURE + '|' + process.cwd(); return {transform(code) { return {code:code.replace(\"'original'\", JSON.stringify(selected))}; }}; };").unwrap();
+        let node = find_on_path("node")
+            .expect("real Node required")
+            .canonicalize()
+            .unwrap();
+        let quote =
+            |path: &std::path::Path| format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"));
+        let mut keys = Vec::new();
+        let mut profiles = Vec::new();
+        for (index, value, cwd) in [
+            (0, "private-environment-value-alpha", &first),
+            (1, "private-environment-value-beta", &first),
+            (2, "private-environment-value-alpha", &second),
+        ] {
+            let wrapper = dir.path().join(format!("node-env-{index}"));
+            std::fs::write(
+                &wrapper,
+                format!(
+                    "#!/bin/sh\ncd {} || exit 1\nFERRITE_HOST_FIXTURE='{value}' exec {} \"$@\"\n",
+                    quote(cwd),
+                    quote(&node)
+                ),
+            )
+            .unwrap();
+            std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let host = Arc::new(NodeAdapterHost::spawn(Some(wrapper)).unwrap());
+            let profile = host.profile().unwrap();
+            assert_eq!(profile.cwd, cwd.canonicalize().unwrap());
+            assert!(
+                !serde_json::to_string(&profile).unwrap().contains(value),
+                "raw environment value must not appear in host metadata"
+            );
+            let plugin = crate::ForeignHookPlugin::register(
+                host.clone(),
+                "fixture",
+                &entry,
+                serde_json::json!({}),
+            )
+            .unwrap();
+            keys.push(plugin.cache_key());
+            let result = crate::ForeignPluginHost::call_hook(
+                host.as_ref(),
+                &PluginHandle {
+                    name: "fixture".into(),
+                    host: "node-adapter".into(),
+                },
+                HookName::Transform,
+                serde_json::json!({"code":"export const source = 'original';", "id":"/source.js"}),
+            )
+            .await
+            .unwrap();
+            let selected = format!("{value}|{}", cwd.canonicalize().unwrap().display());
+            assert_eq!(
+                result["code"],
+                format!(
+                    "export const source = {};",
+                    serde_json::to_string(&selected).unwrap()
+                )
+            );
+            profiles.push(profile);
+            host.shutdown();
+        }
+        assert_eq!(profiles[0].cwd, profiles[1].cwd);
+        assert_ne!(profiles[0].environment_hash, profiles[1].environment_hash);
+        assert_ne!(
+            keys[0], keys[1],
+            "startup environment must isolate transformed output"
+        );
+        assert_ne!(
+            keys[0], keys[2],
+            "startup cwd must isolate transformed output"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires real Node; executed explicitly"]
+    async fn real_node_rejects_environment_drift_during_guest_calls() {
+        let dir = tempfile::tempdir().unwrap();
+        for (index, source, stage) in [
+            (0, "export default () => {process.env.FERRITE_HOST_MUTATION = 'changed'; return {transform(code) {return code}};};", "registration"),
+            (1, "export default () => ({transform(code) {process.env.FERRITE_HOST_MUTATION = 'changed'; return code;}}); export function noop() {return true;}", "hook"),
+            (2, "export function mutate(input) {process.chdir(input.cwd); return 'discarded';} export function noop() {return true;}", "export"),
+        ] {
+            let entry = dir.path().join(format!("mutation-{index}.mjs"));
+            std::fs::write(&entry, source).unwrap();
+            let host = NodeAdapterHost::spawn(None).unwrap();
+            let error = match stage {
+                "registration" => host.register_hook_plugin("mutation", &entry.to_string_lossy(), serde_json::json!({})).unwrap_err(),
+                "hook" => {
+                    host.register_hook_plugin("mutation", &entry.to_string_lossy(), serde_json::json!({})).unwrap();
+                    crate::ForeignPluginHost::call_hook(&host, &PluginHandle {name:"mutation".into(), host:"node-adapter".into()}, HookName::Transform, serde_json::json!({"code":"export const value = 1;", "id":"/entry.js"})).await.unwrap_err()
+                },
+                _ => {
+                    host.register_plugin("mutation", &entry.to_string_lossy()).unwrap();
+                    host.call_export("mutation", "mutate", serde_json::json!({"cwd":dir.path()})).await.unwrap_err()
+                }
+            };
+            assert!(error.to_string().contains("environment or cwd changed"), "{error}");
+            assert!(error.to_string().contains("recreate the explicit host"), "{error}");
+            if stage != "registration" {
+                let error = host.call_export("mutation", "noop", serde_json::Value::Null).await.unwrap_err();
+                assert!(error.to_string().contains("before call"), "{error}");
+            }
+            host.shutdown();
+        }
     }
 
     #[cfg(unix)]

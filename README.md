@@ -255,11 +255,15 @@ imports — plus the items below.
   entries/executables and reports execution as unverified; dev/build validate
   the required hook contract. Inspect omits factory options from its report.
   Running Node hosts expose `profile()` with their actual executable, Node/V8
-  and ABI versions, platform, architecture, execution arguments and `NODE_OPTIONS`.
+  and ABI versions, platform, architecture, execution arguments, `NODE_OPTIONS`,
+  canonical working directory and a hash of the startup environment.
   Foreign-hook and official
   Vue/Svelte compiler cache identities include this profile and the bridge/
   compiler-wrapper implementation. This is cache identity, not a compatibility
   claim for untested Node versions; doctor still does not start a host.
+  Persistent environment/cwd changes during registration or guest calls fail
+  with an explicit host-restart error. This consistency check does not sandbox
+  Node or track arbitrary files and asynchronous guest state.
 - **Markdown docs + vendored utility CSS.** `ferrite-docs` turns `.md`
   files into JS modules exporting rendered HTML; `ferrite-tailwind`
   compiles `ferrite:tailwind.css` from project content using the
