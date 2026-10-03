@@ -592,3 +592,104 @@ async fn chromium_transitive_self_acceptance() {
 async fn firefox_transitive_self_acceptance() {
     transitive_self_acceptance(BrowserKind::Firefox).await;
 }
+
+async fn initial_load_recovery(kind: BrowserKind) {
+    let binary = cli();
+    let executable = match kind {
+        BrowserKind::Chromium => ferrite_e2e::find_chromium(None),
+        BrowserKind::Firefox => ferrite_e2e::find_firefox(None),
+    }
+    .expect("initial recovery requires a real browser");
+    let browser = Browser::launch(
+        LaunchOptions::default()
+            .browser(kind)
+            .executable(executable),
+    )
+    .await
+    .unwrap();
+    for missing in [false, true] {
+        let project = ferrite_test::TempProject::new(&[("index.html", "<html><head><link rel='icon' href='data:,'></head><body><button id='counter'>loading</button><script type='module' src='/main.js'></script></body></html>")]);
+        let main = project.root.join("main.js");
+        if !missing {
+            std::fs::write(&main, "export const count = ;").unwrap();
+        }
+        let (mut dev, url) = server(&binary, &project.root, "dev", false).await;
+        // Fail a module request before any HMR socket exists, then connect
+        // through the actual document to require diagnostic replay.
+        let failed_request = browser.new_page().await.unwrap();
+        failed_request
+            .goto(&format!("{url}/main.js"))
+            .await
+            .unwrap();
+        failed_request
+            .wait_for_function(
+                "document.body.textContent.includes('error')",
+                std::time::Duration::from_secs(10),
+            )
+            .await
+            .unwrap();
+        let page = browser.new_page().await.unwrap();
+        page.goto(&url).await.unwrap();
+        page.wait_for_function("document.readyState === 'complete' && document.querySelector('#ferrite-error-overlay')?.textContent.includes('/main.js')", Duration::from_secs(10)).await.unwrap_or_else(|error| panic!("{error}; errors={:?}; console={:?}", page.page_errors(), page.console_messages()));
+        assert_eq!(
+            page.evaluate::<String>("document.querySelector('#counter').textContent")
+                .await
+                .unwrap(),
+            "loading"
+        );
+        std::fs::write(&main, "export const ready = true; let count = 0; const button = document.querySelector('#counter'); button.textContent = 'count: 0'; button.onclick = () => {count++; button.textContent = `count: ${count}`;};").unwrap();
+        page.wait_for_function("!document.querySelector('#ferrite-error-overlay') && document.querySelector('#counter')?.textContent === 'count: 0'", Duration::from_secs(10)).await.unwrap();
+        page.locator("#counter").click().await.unwrap();
+        page.wait_for_function(
+            "document.querySelector('#counter')?.textContent === 'count: 1'",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        // Initial failing requests intentionally have browser network errors.
+        // A fresh document must receive neither stale diagnostics nor errors.
+        let clean = browser.new_page().await.unwrap();
+        clean.goto(&url).await.unwrap();
+        clean
+            .wait_for_function(
+                "document.querySelector('#counter')?.textContent === 'count: 0'",
+                Duration::from_secs(10),
+            )
+            .await
+            .unwrap();
+        clean.locator("#counter").click().await.unwrap();
+        clean
+            .wait_for_function(
+                "document.querySelector('#counter')?.textContent === 'count: 1'",
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
+        assert!(clean
+            .evaluate::<bool>("!document.querySelector('#ferrite-error-overlay')")
+            .await
+            .unwrap());
+        assert!(clean.page_errors().is_empty(), "{:?}", clean.page_errors());
+        assert!(
+            clean
+                .console_messages()
+                .iter()
+                .all(|message| message.kind != "error"),
+            "{:?}",
+            clean.console_messages()
+        );
+        dev.kill().await.unwrap();
+        dev.wait().await.unwrap();
+    }
+    browser.close().await.unwrap();
+}
+#[tokio::test]
+#[ignore = "requires freshly built CLI and real Chromium"]
+async fn chromium_initial_load_recovery() {
+    initial_load_recovery(BrowserKind::Chromium).await;
+}
+#[tokio::test]
+#[ignore = "requires freshly built CLI and real Firefox"]
+async fn firefox_initial_load_recovery() {
+    initial_load_recovery(BrowserKind::Firefox).await;
+}

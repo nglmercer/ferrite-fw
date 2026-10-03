@@ -1292,3 +1292,37 @@ No schema/cache migration or additional browser compatibility claim. This gate
 covers HMR validation jobs; concurrent HTTP transforms, hooks outside validation,
 cancellation and the wider race matrix remain assigned. Complete Refresh,
 framework HMR, SSR/checkers and the rest of the mission remain active.
+
+### Track failed initial requests and replay diagnostics on connection
+
+Failed local dev-module HTTP requests now create source graph nodes, allowing a
+first correction or creation to trigger watcher validation and reload. Server
+diagnostics are retained for clients connecting after the failure. The HMR socket
+subscribes before its handshake and replays the retained diagnostic afterward,
+avoiding the previous connection gap. Successful HMR validation clears the stored
+diagnostic before publication, so later documents do not receive a stale overlay.
+
+Validation:
+
+- Default and SWC-enabled `cargo test -p ferrite-server --locked`: 42 tests passed
+  in each build. New real HTTP/notify regression requires initial HTTP 500,
+  source tracking, correction/creation, reload, cleared diagnostic and successful
+  subsequent module response. Outputs: `/tmp/ferrite-initial-recovery.log` and
+  `/tmp/ferrite-initial-recovery-swc.log`.
+- Explicitly executed the generated-app browser suite with the rebuilt CLI,
+  Chromium 153 and Firefox 157: all 10 tests passed (82.98 seconds). The two new
+  Node-free tests first fail a module request before any socket exists, then
+  require diagnostic replay, repair/creation recovery and working interaction.
+  A fresh corrected document must have no stale overlay, page errors or console
+  errors. Initial failing requests intentionally retain their real HTTP/browser
+  errors. All six existing profiles still complete their acceptance flows.
+  Command: `cargo test -p ferrite-test --test generated_apps --locked -- --ignored --nocapture`.
+  Output: `/tmp/ferrite-initial-recovery-all-browsers.log`.
+- Server/test all-target Clippy with `--locked -- -D warnings`, formatting and
+  diff checks passed.
+
+No configuration, lock or cache schema migration. The initial-entry JavaScript
+paths above are verified; wider cold dependency graphs, query/virtual resource
+startup, component startup matrices and multiple simultaneous diagnostics remain
+assigned. Runtime-error recovery, complete Refresh, framework HMR, SSR/checkers
+and the full remaining mission stay active. No support profile is promoted.

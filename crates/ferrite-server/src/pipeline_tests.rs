@@ -887,3 +887,69 @@ async fn concurrent_validation_cannot_roll_back_a_later_successful_edit() {
     );
     server.close();
 }
+
+#[tokio::test]
+async fn failed_first_http_load_is_tracked_and_correction_clears_diagnostic() {
+    for missing in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("entry.js");
+        if !missing {
+            std::fs::write(&file, "export const count = ;").unwrap();
+        }
+        let config = ferrite_config::resolve_config(
+            Default::default(),
+            Some(root.path().into()),
+            Default::default(),
+        )
+        .unwrap();
+        let server = DevServer::new(config, vec![]).await.unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let router = server.router();
+        let serving = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        let response = reqwest::get(format!("http://{address}/entry.js"))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR
+        );
+        let id = ModuleId::new("/entry.js");
+        assert!(server.inner.graph.contains(&id));
+        assert_eq!(
+            server
+                .inner
+                .hmr_error
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .id
+                .as_deref(),
+            Some("/entry.js")
+        );
+        let mut messages = server.inner.hmr.subscribe();
+        std::fs::write(&file, "export const count = 1;").unwrap();
+        let message = tokio::time::timeout(std::time::Duration::from_secs(10), messages.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(
+                serde_json::from_str::<ferrite_hmr::HmrMessage>(&message).unwrap(),
+                ferrite_hmr::HmrMessage::FullReload { .. }
+            ),
+            "{message}"
+        );
+        assert!(server.inner.hmr_error.lock().unwrap().is_none());
+        let response = reqwest::get(format!("http://{address}/entry.js"))
+            .await
+            .unwrap();
+        assert!(response.status().is_success());
+        assert!(response.text().await.unwrap().contains("= 1"));
+        server.close();
+        serving.abort();
+    }
+}

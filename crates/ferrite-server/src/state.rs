@@ -112,6 +112,8 @@ pub struct DevServerInner {
     pub hmr: HmrServer,
     /// Serialize validation/rollback/publication across watcher update tasks.
     pub(crate) hmr_validation: tokio::sync::Mutex<()>,
+    /// Latest diagnostic, replayed if compilation failed before a client connected.
+    pub(crate) hmr_error: Mutex<Option<ferrite_core::Diagnostic>>,
     /// Emitted files shared with plugins.
     pub emitted: Mutex<HashMap<String, ferrite_plugin::EmittedFile>>,
     /// Bare-specifier → dev-URL map (`import-map` dev strategy).
@@ -199,6 +201,7 @@ impl DevServer {
             compiler,
             hmr: HmrServer::default(),
             hmr_validation: tokio::sync::Mutex::new(()),
+            hmr_error: Mutex::new(None),
             emitted: Mutex::new(HashMap::new()),
             import_map: Mutex::new(BTreeMap::new()),
             watch_files: Mutex::new(Vec::new()),

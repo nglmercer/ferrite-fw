@@ -34,6 +34,8 @@ pub(crate) async fn ws_handler(
 async fn handle_socket(socket: WebSocket, inner: Arc<DevServerInner>) {
     use futures::{SinkExt as _, StreamExt as _};
     let (mut sender, mut receiver) = socket.split();
+    // Subscribe before the handshake so diagnostics cannot fall into its gap.
+    let mut rx = inner.hmr.subscribe();
     // Handshake.
     let hello = serde_json::to_string(&ferrite_hmr::HmrMessage::Connected {
         version: ferrite_core::VERSION.to_string(),
@@ -42,7 +44,14 @@ async fn handle_socket(socket: WebSocket, inner: Arc<DevServerInner>) {
     if sender.send(Message::Text(hello.into())).await.is_err() {
         return;
     }
-    let mut rx = inner.hmr.subscribe();
+    let previous_error = inner.hmr_error.lock().ok().and_then(|error| error.clone());
+    if let Some(err) = previous_error {
+        let text = serde_json::to_string(&ferrite_hmr::HmrMessage::Error { err })
+            .expect("diagnostics are serializable");
+        if sender.send(Message::Text(text.into())).await.is_err() {
+            return;
+        }
+    }
     let send_task = tokio::spawn(async move {
         while let Ok(text) = rx.recv().await {
             if sender.send(Message::Text(text.into())).await.is_err() {
@@ -221,6 +230,19 @@ pub(crate) async fn fallback_handler(
                         Err(error) => return error_response(&error),
                     }
                 }
+            }
+            if !inner.config.is_production && path.contains('.') && !path.starts_with("/@") {
+                // Failed first loads still need a source node so a correction
+                // or creation produces a reload instead of being untracked.
+                let id = crate::util::strip_hmr_timestamp(&ferrite_core::ModuleId::new(&url));
+                inner
+                    .graph
+                    .ensure(&id, ferrite_core::ModuleType::from_path(&path));
+                let handle = DevServer {
+                    inner: inner.clone(),
+                    watcher: Arc::new(Mutex::new(None)),
+                };
+                handle.report_hmr_error(&id, &error);
             }
             error_response(&error)
         }

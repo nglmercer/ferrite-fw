@@ -287,6 +287,9 @@ impl DevServer {
             self.report_hmr_error(changed, &error);
             return;
         }
+        if let Ok(mut error) = self.inner.hmr_error.lock() {
+            *error = None;
+        }
         match plan {
             HmrPlan::Update(updates) => self.inner.hmr.send_update(updates),
             HmrPlan::FullReload => self.inner.hmr.send_full_reload(Some(changed.0.clone())),
@@ -297,6 +300,9 @@ impl DevServer {
         let mut diagnostic = error.diagnostic();
         if diagnostic.id.is_none() {
             diagnostic.id = Some(changed.0.clone());
+        }
+        if let Ok(mut error) = self.inner.hmr_error.lock() {
+            *error = Some(diagnostic.clone());
         }
         self.inner.hmr.send_error(diagnostic);
     }
