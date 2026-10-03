@@ -172,7 +172,11 @@ impl Builder {
             )));
         }
         // Bundle.
-        let base = with_trailing_slash(&config.base);
+        let base = if env == "ssr" {
+            format!("{}ssr-assets/", with_trailing_slash(&config.base))
+        } else {
+            with_trailing_slash(&config.base)
+        };
         let loader = Arc::new(BuildLoader {
             server: server.clone(),
             minify: options.minify,
@@ -219,7 +223,10 @@ impl Builder {
             )
             .await?;
         // Merge loader-emitted assets.
-        for (name, bytes) in loader.take_assets() {
+        let emitted_assets = loader.take_assets();
+        let public_asset_names: std::collections::HashSet<_> =
+            emitted_assets.keys().cloned().collect();
+        for (name, bytes) in emitted_assets {
             output.bundle.insert(ferrite_plugin::EmittedFile {
                 name,
                 contents: bytes,
@@ -240,6 +247,19 @@ impl Builder {
             std::fs::write(&target, &file.contents)?;
         }
         container.hook_write_bundle(ctx, &output.bundle).await?;
+        if env == "ssr" {
+            // Publish only extracted styles and loader-emitted browser assets.
+            // Server JavaScript and its maps remain in the private server tree.
+            for file in output.bundle.files.values() {
+                if file.name.ends_with(".css") || public_asset_names.contains(&file.name) {
+                    let target = config.out_dir().join("ssr-assets").join(&file.name);
+                    if let Some(parent) = target.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    std::fs::write(target, &file.contents)?;
+                }
+            }
+        }
         // Manifests (§40).
         if env == "ssr" {
             // Keep output entry identities as well as the module-to-chunk map.

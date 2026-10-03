@@ -75,6 +75,44 @@ pub fn load_built_ssr_graph(server_dir: &Path) -> Result<CompiledModuleGraph> {
     Ok(graph)
 }
 
+/// Ordered extracted styles for the single emitted renderer entry.
+pub(crate) fn built_ssr_styles(server_dir: &Path, base: &str) -> Result<Vec<String>> {
+    let manifest = ferrite_manifest::BuildManifest::read(&server_dir.join("manifest.json"))?;
+    let entries: Vec<_> = manifest
+        .entries
+        .values()
+        .filter(|entry| entry.is_entry == Some(true))
+        .collect();
+    if entries.len() != 1 {
+        return Err(FerriteError::Ssr(
+            "built SSR stylesheet selection requires one renderer entry".into(),
+        ));
+    }
+    let mut seen = HashSet::new();
+    entries[0]
+        .css
+        .iter()
+        .filter(|file| seen.insert((*file).clone()))
+        .map(|file| {
+            output_id(file)?;
+            let public_file = server_dir
+                .parent()
+                .ok_or_else(|| FerriteError::Ssr("server output has no parent".into()))?
+                .join("ssr-assets")
+                .join(file);
+            if !public_file.is_file() {
+                return Err(FerriteError::Ssr(format!(
+                    "missing published SSR stylesheet `{file}`; rebuild SSR output"
+                )));
+            }
+            Ok(format!(
+                "{}ssr-assets/{file}",
+                crate::loader::with_trailing_slash(base)
+            ))
+        })
+        .collect()
+}
+
 fn output_id(file: &str) -> Result<String> {
     if file.contains(['?', '#', '\\'])
         || Path::new(file)
@@ -99,10 +137,20 @@ mod tests {
         for scope_hoist in [false, true] {
             let root = tempfile::tempdir().unwrap();
             std::fs::create_dir(root.path().join("src")).unwrap();
-            std::fs::write(root.path().join("src/entry-server.ts"), "import { greeting } from './greeting.ts'; export function render(url: string) { return `<h1>${greeting} ${url}</h1>`; }").unwrap();
+            std::fs::write(root.path().join("src/entry-server.ts"), "import './server.css'; import { greeting } from './greeting.ts'; export function render(url: string) { return `<h1>${greeting} ${url}</h1>`; }").unwrap();
             std::fs::write(
                 root.path().join("src/greeting.ts"),
                 "export const greeting: string = 'built';",
+            )
+            .unwrap();
+            std::fs::write(
+                root.path().join("src/server.css"),
+                ".server-only { color: purple; background-image: url('./server.svg'); }",
+            )
+            .unwrap();
+            std::fs::write(
+                root.path().join("src/server.svg"),
+                "<svg xmlns=\"http://www.w3.org/2000/svg\"><circle r=\"3\"/></svg>",
             )
             .unwrap();
             let mut config = ferrite_config::resolve_config(
@@ -114,7 +162,7 @@ mod tests {
             config.runtime.backend = "napi-vm".into();
             config.build.scope_hoist = scope_hoist;
             config.base = "/app/".into();
-            std::fs::write(root.path().join("index.html"), "<html><body><main><!--ssr-outlet--></main><script type=\"module\" src=\"/src/main.js\"></script></body></html>").unwrap();
+            std::fs::write(root.path().join("index.html"), "<html><head></head><body><main><!--ssr-outlet--></main><script type=\"module\" src=\"/src/main.js\"></script></body></html>").unwrap();
             std::fs::write(
                 root.path().join("src/main.js"),
                 "globalThis.clientLoaded = true;",
@@ -170,6 +218,36 @@ mod tests {
             assert_eq!(response.status(), 200);
             let html = response.text().await.unwrap();
             assert!(html.contains("<main><h1>built /app/</h1></main>"), "{html}");
+            let stylesheet = html
+                .split("href=\"")
+                .skip(1)
+                .map(|part| part.split('"').next().unwrap())
+                .find(|href| href.starts_with("/app/ssr-assets/") && href.ends_with(".css"))
+                .expect("SSR stylesheet link");
+            let origin = url.trim_end_matches("/app/");
+            let response = client
+                .get(format!("{origin}{stylesheet}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 200);
+            let css = response.text().await.unwrap();
+            assert!(
+                css.contains("server-only") && css.contains("purple"),
+                "{css}"
+            );
+            let asset = css
+                .split("url(")
+                .nth(1)
+                .expect("CSS asset URL")
+                .split(')')
+                .next()
+                .unwrap()
+                .trim_matches(['\'', '"']);
+            assert!(asset.starts_with("/app/ssr-assets/"), "{css}");
+            let response = client.get(format!("{origin}{asset}")).send().await.unwrap();
+            assert_eq!(response.status(), 200);
+            assert!(response.text().await.unwrap().contains("<circle"));
             let response = client
                 .post(format!("{url}submit"))
                 .body("payload")
@@ -236,6 +314,27 @@ mod validation_tests {
             let error = load_built_ssr_graph(root.path()).unwrap_err();
             assert!(error.to_string().contains(expected), "{file}: {error}");
         }
+    }
+
+    #[test]
+    fn published_styles_preserve_entry_order_and_require_files() {
+        let root = tempfile::tempdir().unwrap();
+        let server = root.path().join("server");
+        let assets = root.path().join("ssr-assets");
+        std::fs::create_dir(&server).unwrap();
+        std::fs::create_dir(&assets).unwrap();
+        std::fs::write(server.join("manifest.json"), serde_json::json!({"entry": {"file": "server.js", "isEntry": true, "css": ["b.css", "a.css", "b.css"]}}).to_string()).unwrap();
+        std::fs::write(assets.join("b.css"), ".b {}").unwrap();
+        let error = built_ssr_styles(&server, "/app/").unwrap_err();
+        assert!(
+            error.to_string().contains("a.css") && error.to_string().contains("rebuild"),
+            "{error}"
+        );
+        std::fs::write(assets.join("a.css"), ".a {}").unwrap();
+        assert_eq!(
+            built_ssr_styles(&server, "/app/").unwrap(),
+            ["/app/ssr-assets/b.css", "/app/ssr-assets/a.css"]
+        );
     }
 
     #[cfg(unix)]

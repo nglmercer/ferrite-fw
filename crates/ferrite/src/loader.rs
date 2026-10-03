@@ -447,19 +447,22 @@ async fn preview_with_control(
             return Err(FerriteError::Ssr(format!("built SSR preview requires the explicitly selected napi-vm runtime and its compiled feature; selected `{}`. Configure [runtime].backend = 'napi-vm' and build Ferrite with --features napi-vm", control.config.runtime.backend)));
         }
         let graph = crate::load_built_ssr_graph(&server_dir)?;
+        let styles = crate::ssr_build::built_ssr_styles(&server_dir, &control.config.base)?;
         let shell = std::fs::read_to_string(dir.join("index.html"))?;
         let adapter = ferrite_ssr::JsSsrAdapter::from_resolved_graph(&control.config, graph)?
             .with_shell(shell);
         let adapter = Arc::new(tokio::sync::Mutex::new(adapter));
-        Some(
-            Arc::new(ferrite_ssr::FnAdapter::new(move |request, context| {
+        Some(Arc::new(ferrite_ssr::FnAdapter::new(
+            move |request, mut context: ferrite_ssr::SsrContext| {
                 let adapter = adapter.clone();
+                let styles = styles.clone();
                 async move {
+                    context.preload.extend(styles);
                     let adapter = adapter.lock().await;
                     ferrite_ssr::SsrAdapter::render(&*adapter, request, context).await
                 }
-            })) as Arc<dyn ferrite_ssr::SsrAdapter>,
-        )
+            },
+        )) as Arc<dyn ferrite_ssr::SsrAdapter>)
     } else {
         None
     };
