@@ -1,5 +1,28 @@
 # Framework support implementation status
 
+## ModuleRunner delegates cache validation to the shared pipeline
+
+Every ModuleRunner import now goes through `ssr_load_module` and the existing
+per-module pipeline cache instead of returning an independently cached graph.
+That pipeline validates source and compiler-input state. The runner retains only
+successful URL records for its existing cached-URLs/invalidate/clear API; failed
+validation removes the URL record and never returns last-good graph output.
+
+Regressions verify source edits without a watcher, a newly broken transitive
+dependency, removal of its successful record, and correction/reload. A separate
+preprocessing fixture verifies unchanged imports reuse the shared transform
+cache and both declared and watched input edits trigger recompilation. These
+tests exercise native TS lowering and plugin metadata, not official framework
+renderer execution. All 55 server library tests passed, with two explicit-host
+tests ignored; server all-target Clippy with `-D warnings`, formatting, and diff
+checks passed. No public signature or configuration/lockfile migration is needed.
+
+Imports now validate the dependency graph on every call, while reusing valid
+compiled transforms. Browser acceptance, full workspace, compiler-host matrices,
+and releases were not rerun. Runtime execution caching, alias invalidation,
+concurrent close/import behavior, real SSR renderers/hydration, additional
+frameworks, and the full mission remain incomplete.
+
 ## SSR graph loading preserves virtual modules and required failures
 
 `ssr_load_module` now compiles plugin-owned virtual dependencies through the

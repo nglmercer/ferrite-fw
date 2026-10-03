@@ -7,6 +7,61 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 #[tokio::test]
+async fn module_runner_revalidates_source_and_transitive_failures_without_a_watcher() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(
+        root.path().join("server.js"),
+        "import { value } from './dependency.js'; export const result = value + 1;",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("dependency.js"),
+        "export const value = 41;",
+    )
+    .unwrap();
+    let config = ferrite_config::resolve_config(
+        Default::default(),
+        Some(root.path().into()),
+        Default::default(),
+    )
+    .unwrap();
+    let server = DevServer::new_without_watcher(config, Vec::new())
+        .await
+        .unwrap();
+    let runner = server.module_runner();
+    let first = runner.import("/server.js").await.unwrap();
+    assert!(first.code.contains("+ 1"));
+    std::fs::write(
+        root.path().join("server.js"),
+        "import { value } from './dependency.js'; export const result = value + 2;",
+    )
+    .unwrap();
+    let second = runner.import("/server.js").await.unwrap();
+    assert!(second.code.contains("+ 2"));
+    assert_ne!(first.code, second.code);
+    std::fs::write(root.path().join("dependency.js"), "export const value = ;").unwrap();
+    let error = runner.import("/server.js").await.unwrap_err().to_string();
+    assert!(error.contains("dependency.js"), "{error}");
+    assert!(runner.cached_urls().is_empty());
+    std::fs::write(
+        root.path().join("dependency.js"),
+        "export const value = 42;",
+    )
+    .unwrap();
+    runner.import("/server.js").await.unwrap();
+    assert!(server
+        .inner
+        .graph
+        .get(&ModuleId::new("/dependency.js"))
+        .unwrap()
+        .ssr
+        .code
+        .unwrap()
+        .contains("42"));
+    assert_eq!(runner.cached_urls(), ["/server.js"]);
+}
+
+#[tokio::test]
 async fn ssr_graph_loads_virtual_dependencies_and_rejects_required_compile_failures() {
     struct VirtualSsr(bool);
     #[async_trait::async_trait]
@@ -340,6 +395,63 @@ struct CompilerFixture {
     dependency: PathBuf,
     watch: PathBuf,
     calls: Arc<Mutex<usize>>,
+}
+
+#[tokio::test]
+async fn module_runner_reuses_shared_transforms_and_revalidates_compiler_inputs() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("src")).unwrap();
+    std::fs::write(root.path().join("src/main.ts"), "").unwrap();
+    let dependency = root.path().join("compiler-input.txt");
+    let watch = root.path().join("preprocessor-input.txt");
+    std::fs::write(&dependency, "41").unwrap();
+    std::fs::write(&watch, "0").unwrap();
+    let calls = Arc::new(Mutex::new(0));
+    let config = ferrite_config::resolve_config(
+        Default::default(),
+        Some(root.path().into()),
+        Default::default(),
+    )
+    .unwrap();
+    let server = DevServer::new_without_watcher(
+        config,
+        vec![Arc::new(CompilerFixture {
+            dependency: dependency.clone(),
+            watch: watch.clone(),
+            calls: calls.clone(),
+        })],
+    )
+    .await
+    .unwrap();
+    let runner = server.module_runner();
+    assert!(runner
+        .import("/src/main.ts")
+        .await
+        .unwrap()
+        .code
+        .contains("41"));
+    runner.import("/src/main.ts").await.unwrap();
+    assert_eq!(
+        *calls.lock().unwrap(),
+        1,
+        "unchanged inputs must reuse the pipeline cache"
+    );
+    std::fs::write(&dependency, "42").unwrap();
+    assert!(runner
+        .import("/src/main.ts")
+        .await
+        .unwrap()
+        .code
+        .contains("42"));
+    assert_eq!(*calls.lock().unwrap(), 2);
+    std::fs::write(&watch, "1").unwrap();
+    assert!(runner
+        .import("/src/main.ts")
+        .await
+        .unwrap()
+        .code
+        .contains("43"));
+    assert_eq!(*calls.lock().unwrap(), 3);
 }
 
 #[async_trait::async_trait]

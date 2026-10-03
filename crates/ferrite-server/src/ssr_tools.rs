@@ -9,7 +9,7 @@ use ferrite_core::Result;
 use ferrite_graph::ImportKind;
 use ferrite_plugin::TransformRequest as HookTransformRequest;
 use ferrite_ssr::SsrModule;
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -28,12 +28,12 @@ pub struct SsrTransformResult {
 
 /// SSR module runner (`server.moduleRunner`).
 ///
-/// A cached `ssrLoadModule` with explicit invalidation. Executing the
+/// A shared-pipeline-cached `ssrLoadModule` with explicit invalidation. Executing the
 /// loaded graph goes through the configured [`ferrite_ssr::SsrAdapter`];
 /// without one the runner loads and tracks modules only.
 pub struct ModuleRunner {
     server: DevServer,
-    cache: Mutex<HashMap<String, SsrModule>>,
+    cache: Mutex<HashSet<String>>,
 }
 
 impl ModuleRunner {
@@ -42,20 +42,22 @@ impl ModuleRunner {
     pub fn new(server: DevServer) -> Self {
         Self {
             server,
-            cache: Mutex::new(HashMap::new()),
+            cache: Mutex::new(HashSet::new()),
         }
     }
 
-    /// Load an SSR module graph, serving repeat imports from the cache.
+    /// Load an SSR module graph through the shared per-module cache, which
+    /// validates source and compiler-input dependency state on every import.
     pub async fn import(&self, url: &str) -> Result<SsrModule> {
-        if let Ok(cache) = self.cache.lock() {
-            if let Some(module) = cache.get(url) {
-                return Ok(module.clone());
-            }
+        // A second graph cache cannot bypass pipeline validation: source,
+        // preprocessing inputs and transitive modules may have changed even
+        // without a watcher. Retain only successfully validated graph records.
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.remove(url);
         }
         let module = self.server.ssr_load_module(url).await?;
         if let Ok(mut cache) = self.cache.lock() {
-            cache.insert(url.to_string(), module.clone());
+            cache.insert(url.to_string());
         }
         Ok(module)
     }
@@ -80,7 +82,7 @@ impl ModuleRunner {
     pub fn cached_urls(&self) -> Vec<String> {
         self.cache
             .lock()
-            .map(|cache| cache.keys().cloned().collect())
+            .map(|cache| cache.iter().cloned().collect())
             .unwrap_or_default()
     }
 
