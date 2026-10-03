@@ -733,3 +733,34 @@ API migration: library callers must propagate or handle `Ferrite::new(...)` with
 This establishes backend selection failure and the exercised SWC compiler/cache
 matrix, not full SWC framework/browser, SSR or release conformance. Full framework
 mission requirements remain assigned and active.
+
+### Compiler selection follows component ownership
+
+Replaced compiler-host `Lockfile::find` selection, which could accept a unique
+transitive framework package when the owner had no dependency edge. Compiler
+requests now select the concrete framework edge from the component's locked
+package owner or nearest importer. Scoped store identities and concurrent
+framework versions retain their own edges. A framework package can select its
+own identity. Existing paths are canonicalized, missing paths normalized, and
+outside-project or untracked store components fail with ownership diagnostics.
+Missing edges cannot fall back to a root or unique transitive dependency; selected
+versions still pass the existing exact compiler-profile validation before calls.
+
+Validation:
+
+- `cargo test -p ferrite-frameworks --locked`: 23 unit tests passed. The ownership
+  regression covers distinct root/scoped-package/importer versions, missing root
+  and package edges despite available framework packages, unknown store ownership
+  and normalized outside-project rejection. The ordinary command's ignored real
+  compiler test is not counted as support evidence.
+- `FERRITE_COMPILER_FIXTURE=/tmp/ferrite-real-install-45z_otrh cargo test -p ferrite-frameworks --test compiler_host --locked -- --ignored --nocapture`:
+  actual installed Vue 3.5.22/Svelte 5.39.6 compiler client/server/module fixture
+  passed (0.65 seconds), including existing maps, styles and runes assertions.
+- `cargo clippy -p ferrite-frameworks --all-targets --locked -- -D warnings`:
+  passed after correcting the test initializer; formatted files/diff check passed.
+
+No schema migration or new advertised version. This establishes concrete compiler
+ownership selection and preserves the exercised compiler fixture; complete
+workspace installation, cross-package browser/version/peer matrices, linked
+external-package integration, SSR, HMR/checkers and remaining mission work are
+still unfinished. The full goal remains active.

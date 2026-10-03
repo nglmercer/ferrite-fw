@@ -153,11 +153,7 @@ impl NodeCompilerHost {
             ));
         }
         let name = request.framework.name();
-        let package = self.lock.find(name).ok_or_else(|| {
-            FerriteError::Build(format!(
-                "project has no unambiguous locked {name} dependency; run ferrite add {name}"
-            ))
-        })?;
+        let package = selected_compiler_package(&self.lock, &self.root, &request.filename, name)?;
         let supported = match request.framework {
             Framework::Vue => crate::registry::VUE_NODE.framework_version,
             Framework::Svelte => crate::registry::SVELTE_NODE.framework_version,
@@ -252,5 +248,147 @@ impl NodeCompilerHost {
     }
     pub fn root(&self) -> &Path {
         &self.root
+    }
+}
+
+/// Select a concrete compiler edge from the component's package/importer owner.
+/// A unique transitive package is never a substitute for a missing owner edge.
+fn selected_compiler_package<'a>(
+    lock: &'a Lockfile,
+    root: &Path,
+    filename: &Path,
+    name: &str,
+) -> Result<&'a ferrite_npm::LockedPackage> {
+    let absolute = if filename.is_absolute() {
+        filename.to_path_buf()
+    } else {
+        root.join(filename)
+    };
+    let file = absolute
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(ferrite_core::normalize_path(&absolute)));
+    if !file.starts_with(root) {
+        return Err(FerriteError::Build(format!("cannot select {name} compiler for component outside project root: {}; configure an explicit package owner integration", file.display())));
+    }
+    let store = root.join(".ferrite/npm/packages");
+    let target = if file.starts_with(&store) {
+        let owner = lock
+            .package
+            .iter()
+            .filter(|package| file.starts_with(store.join(package.id())))
+            .max_by_key(|package| package.id().len())
+            .ok_or_else(|| {
+                FerriteError::Build(format!(
+                    "component {} has no locked package owner",
+                    file.display()
+                ))
+            })?;
+        if owner.name == name {
+            Some(owner.id())
+        } else {
+            owner.dependencies.get(name).cloned()
+        }
+    } else {
+        lock.importers
+            .iter()
+            .filter(|(path, _)| file.starts_with(root.join(path)))
+            .max_by_key(|(path, _)| path.len())
+            .and_then(|(_, owner)| owner.dependencies.get(name))
+            .cloned()
+    };
+    let id = target.ok_or_else(|| FerriteError::Build(format!("component {} has no concrete {name} dependency edge from its package/importer owner; declare {name} there and run ferrite install", file.display())))?;
+    lock.package_by_id(&id).ok_or_else(|| FerriteError::Build(format!("selected {name} compiler edge references missing {id}; regenerate the lock with ferrite install")))
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    use super::*;
+    use ferrite_npm::{LockedImporter, LockedPackage};
+    #[test]
+    fn component_owner_selects_concrete_versions_without_transitive_fallback() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+        let selected = LockedPackage {
+            name: "vue".into(),
+            version: "3.5.22".into(),
+            source: "npm".into(),
+            ..Default::default()
+        };
+        let old = LockedPackage {
+            version: "3.4.0".into(),
+            ..selected.clone()
+        };
+        let owner = LockedPackage {
+            name: "@scope/components".into(),
+            version: "1.0.0".into(),
+            source: "npm".into(),
+            dependencies: [("vue".into(), old.id())].into(),
+            ..Default::default()
+        };
+        let mut lock = Lockfile {
+            package: vec![selected.clone(), old.clone(), owner.clone()],
+            ..Default::default()
+        };
+        lock.importers.insert(
+            ".".into(),
+            LockedImporter {
+                dependencies: [("vue".into(), selected.id())].into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            selected_compiler_package(&lock, &root, &root.join("App.vue"), "vue")
+                .unwrap()
+                .id(),
+            selected.id()
+        );
+        let component = root
+            .join(".ferrite/npm/packages")
+            .join(owner.id())
+            .join("Nested.vue");
+        assert_eq!(
+            selected_compiler_package(&lock, &root, &component, "vue")
+                .unwrap()
+                .id(),
+            old.id()
+        );
+        lock.importers.insert(
+            "workspace".into(),
+            LockedImporter {
+                dependencies: [("vue".into(), old.id())].into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            selected_compiler_package(&lock, &root, &root.join("workspace/App.vue"), "vue")
+                .unwrap()
+                .id(),
+            old.id()
+        );
+        lock.package
+            .iter_mut()
+            .find(|package| package.name == "@scope/components")
+            .unwrap()
+            .dependencies
+            .clear();
+        assert!(selected_compiler_package(&lock, &root, &component, "vue")
+            .unwrap_err()
+            .to_string()
+            .contains("no concrete vue dependency edge"));
+        lock.importers.get_mut(".").unwrap().dependencies.clear();
+        lock.package = vec![selected];
+        assert!(
+            selected_compiler_package(&lock, &root, &root.join("App.vue"), "vue")
+                .unwrap_err()
+                .to_string()
+                .contains("no concrete vue dependency edge")
+        );
+        assert!(
+            selected_compiler_package(&lock, &root, &root.join("../outside.vue"), "vue").is_err()
+        );
+        assert!(selected_compiler_package(&lock, &root, &component, "vue")
+            .unwrap_err()
+            .to_string()
+            .contains("no locked package owner"));
     }
 }
