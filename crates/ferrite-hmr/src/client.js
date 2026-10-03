@@ -12,6 +12,10 @@ function createHotContext(id) {
     hotModules.set(id, { callbacks: [], disposeCallbacks: [], pruneCallbacks: [], data: {} });
   }
   const entry = hotModules.get(id);
+  entry.callbacks = [];
+  entry.disposeCallbacks = [];
+  entry.pruneCallbacks = [];
+  entry.selfAccept = false;
   return {
     data: entry.data,
     accept(dep, cb) {
@@ -85,7 +89,7 @@ function clearError() {
 
 async function fetchUpdate(path, timestamp) {
   const url = `${path}${path.includes("?") ? "&" : "?"}t=${timestamp}`;
-  await import(/* @vite-ignore */ url);
+  return await import(/* @vite-ignore */ url);
 }
 
 let socket = null;
@@ -121,7 +125,14 @@ function connect() {
           } else {
             console.log(`[ferrite] hmr update ${update.path}`);
             try {
-              await fetchUpdate(update.acceptedPath, update.timestamp);
+              const boundary = hotModules.get(update.acceptedPath);
+              const callbacks = boundary?.callbacks.slice() ?? [];
+              const disposers = boundary?.disposeCallbacks.slice() ?? [];
+              for (const dispose of disposers) await dispose(boundary.data);
+              const next = await fetchUpdate(update.acceptedPath, update.timestamp);
+              for (const { deps, cb } of callbacks) {
+                if (typeof cb === "function" && deps.includes(update.acceptedPath)) await cb(next);
+              }
             } catch (err) {
               console.error("[ferrite] js update failed, reloading", err);
               location.reload();

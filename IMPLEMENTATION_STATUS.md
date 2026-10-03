@@ -906,3 +906,39 @@ behavior under browser HMR and broader version matrices remain assigned. React
 client conformance is still unavailable in Doctor; no framework support profile
 is promoted by this fixture. SSR, checkers, framework HMR and the full mission
 remain active.
+
+### Dispatch self-accept callbacks in the actual HMR client
+
+Fixed the browser client's JS update branch importing modules without ever calling
+registered accept callbacks. It snapshots the previous boundary callbacks and
+disposers, runs disposers, imports the updated namespace and invokes the captured
+self-boundary callbacks. Creating the next module context replaces registrations
+while retaining hot data, preventing old callbacks/disposers accumulating across
+edits. React's footer reuses injected `import.meta.hot` when present instead of
+creating a second context that could clear earlier registrations.
+
+Added explicitly invoked actual-client execution test through the persistent Node
+transport. It loads the shipped `client.js`, uses a controlled WebSocket/DOM
+transport harness and performs three real file-backed dynamic ESM edits. It
+asserts exactly previous-to-next callbacks `[[0,1],[1,2],[2,3]]` and one disposer
+per edit with retained data `[1,2,3]`. Browser transport controls are test fixtures;
+the HMR client and ESM loading are the actual implementations, not stubs.
+
+Validation:
+
+- `cargo test -p ferrite-frameworks --test hmr_client --locked -- --ignored --nocapture`:
+  actual client execution test passed (0.07 seconds).
+- `cargo test -p ferrite-hmr -p ferrite-frameworks --locked`: two HMR and
+  24 framework unit tests passed. Ignored execution cases from this ordinary
+  command do not establish support.
+- `cargo test -p ferrite-frameworks --test react_refresh_runtime --locked -- --ignored --nocapture`:
+  pinned official runtime boundary/registration/family fixture still passed
+  (1.64 seconds).
+- `cargo clippy -p ferrite-hmr -p ferrite-frameworks --all-targets --locked -- -D warnings`:
+  passed; formatting/diff checks passed.
+
+This verifies self-boundary callback lifecycle, not dependency-accept arrays,
+relative dependency normalization, concurrent update ordering, prune/custom-event
+cleanup, syntax-error recovery or browser framework state preservation. Those
+remain assigned alongside complete Refresh, framework HMR, SSR/checkers and the
+full mission. No new template/support profile is advertised.
