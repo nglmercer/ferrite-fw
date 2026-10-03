@@ -607,12 +607,37 @@ async fn initial_load_recovery(kind: BrowserKind) {
     )
     .await
     .unwrap();
-    for missing in [false, true] {
+    for scenario in [
+        "invalid-entry",
+        "missing-entry",
+        "missing-import",
+        "alias-index",
+    ] {
         let project = ferrite_test::TempProject::new(&[("index.html", "<html><head><link rel='icon' href='data:,'></head><body><button id='counter'>loading</button><script type='module' src='/main.js'></script></body></html>")]);
         let main = project.root.join("main.js");
-        if !missing {
-            std::fs::write(&main, "export const count = ;").unwrap();
-        }
+        let repaired_entry = "export const ready = true; let count = 0; const button = document.querySelector('#counter'); button.textContent = 'count: 0'; button.onclick = () => {count++; button.textContent = `count: ${count}`;};";
+        let repair = match scenario {
+            "invalid-entry" => {
+                std::fs::write(&main, "export const count = ;").unwrap();
+                main.clone()
+            }
+            "missing-entry" => main.clone(),
+            "missing-import" => {
+                std::fs::write(&main, format!("import './child'; {repaired_entry}")).unwrap();
+                project.root.join("child.js")
+            }
+            "alias-index" => {
+                std::fs::create_dir(project.root.join("folder")).unwrap();
+                std::fs::write(
+                    project.root.join("ferrite.toml"),
+                    "[resolve.alias]\n'@child' = './folder'\n",
+                )
+                .unwrap();
+                std::fs::write(&main, format!("import '@child'; {repaired_entry}")).unwrap();
+                project.root.join("folder/index.js")
+            }
+            _ => unreachable!(),
+        };
         let (mut dev, url) = server(&binary, &project.root, "dev", false).await;
         // Fail a module request before any HMR socket exists, then connect
         // through the actual document to require diagnostic replay.
@@ -637,7 +662,23 @@ async fn initial_load_recovery(kind: BrowserKind) {
                 .unwrap(),
             "loading"
         );
-        std::fs::write(&main, "export const ready = true; let count = 0; const button = document.querySelector('#counter'); button.textContent = 'count: 0'; button.onclick = () => {count++; button.textContent = `count: ${count}`;};").unwrap();
+        let original_entry = std::fs::read(&main).ok();
+        std::fs::write(
+            &repair,
+            if repair == main {
+                repaired_entry
+            } else {
+                "export const repairedDependency = true;"
+            },
+        )
+        .unwrap();
+        if repair != main {
+            assert_eq!(
+                std::fs::read(&main).ok(),
+                original_entry,
+                "dependency creation alone must recover the importer"
+            );
+        }
         page.wait_for_function("!document.querySelector('#ferrite-error-overlay') && document.querySelector('#counter')?.textContent === 'count: 0'", Duration::from_secs(10)).await.unwrap();
         page.locator("#counter").click().await.unwrap();
         page.wait_for_function(

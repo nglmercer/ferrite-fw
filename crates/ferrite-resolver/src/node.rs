@@ -9,21 +9,9 @@ pub(crate) fn probe_file(file: &Path, extensions: &[String]) -> Option<PathBuf> 
     if file.is_file() {
         return Some(file.to_path_buf());
     }
-    let with_ext: Option<PathBuf> = extensions.iter().find_map(|ext| {
-        let candidate = PathBuf::from(format!("{}{ext}", file.to_string_lossy()));
-        candidate.is_file().then_some(candidate)
-    });
-    if with_ext.is_some() {
-        return with_ext;
-    }
-    if file.is_dir() {
-        for index in ["index", "main"] {
-            for ext in extensions {
-                let candidate = file.join(format!("{index}{ext}"));
-                if candidate.is_file() {
-                    return Some(candidate);
-                }
-            }
+    for candidate in file_probe_candidates(file, extensions).into_iter().skip(1) {
+        if candidate.is_file() {
+            return Some(candidate);
         }
     }
     // Extension-less file that exists (e.g. LICENSE-style or extensionless bin).
@@ -31,6 +19,24 @@ pub(crate) fn probe_file(file: &Path, extensions: &[String]) -> Option<PathBuf> 
         return Some(file.to_path_buf());
     }
     None
+}
+
+/// Ordered paths used by local file resolution, including not-yet-created paths.
+pub(crate) fn file_probe_candidates(file: &Path, extensions: &[String]) -> Vec<PathBuf> {
+    let mut candidates = vec![file.to_path_buf()];
+    candidates.extend(
+        extensions
+            .iter()
+            .map(|ext| PathBuf::from(format!("{}{ext}", file.to_string_lossy()))),
+    );
+    for index in ["index", "main"] {
+        candidates.extend(
+            extensions
+                .iter()
+                .map(|ext| file.join(format!("{index}{ext}"))),
+        );
+    }
+    candidates
 }
 
 /// Walk up looking for `node_modules/<name>` (compatibility fallback).

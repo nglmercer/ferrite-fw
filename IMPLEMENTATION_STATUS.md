@@ -1326,3 +1326,42 @@ paths above are verified; wider cold dependency graphs, query/virtual resource
 startup, component startup matrices and multiple simultaneous diagnostics remain
 assigned. Runtime-error recovery, complete Refresh, framework HMR, SSR/checkers
 and the full remaining mission stay active. No support profile is promoted.
+
+### Recover cold imports when their dependency is created
+
+Failed client imports now retain temporary graph edges to the resolver's actual
+local file candidates, including extension probes, aliases and directory entries.
+Creating a candidate validates the previously failed importer and reloads the
+document without requiring an importer edit. Successful compilation removes
+obsolete candidate nodes. Queued events for removed candidates cannot cause a
+later spurious reload. Query-resource responses now register graph ownership and
+preserve loader/watch dependencies; subsequent edits to a recovered raw resource
+invalidate its importer.
+
+Validation:
+
+- `cargo test -p ferrite-resolver -p ferrite-server --locked`: 16 resolver and
+  43 server tests passed. The real-notify regression covers extensionless imports,
+  aliases, directory indexes and missing raw resources, candidate cleanup and a
+  second raw-data edit. Output: `/tmp/ferrite-missing-import-recovery.log`.
+- `cargo test -p ferrite-server --features swc --locked`: 43 tests passed.
+  Output: `/tmp/ferrite-missing-import-swc.log`.
+- Explicit Chromium/Firefox startup recovery tests passed all four scenarios
+  per browser with Node absent from the CLI's PATH: invalid entry, missing entry,
+  missing extensionless dependency and aliased directory index. Dependency
+  creation must recover interaction while the importer remains byte-identical;
+  fresh documents must have no stale diagnostic or page/console errors.
+  Output: `/tmp/ferrite-missing-import-browsers.log`.
+- The full explicitly executed generated-app suite passed all 10 tests in
+  Chromium and Firefox (86.36 seconds), including all six existing template
+  profiles and dependency HMR flows. Command:
+  `cargo test -p ferrite-test --test generated_apps --locked -- --ignored --nocapture`.
+  Output: `/tmp/ferrite-missing-import-full-browsers.log`.
+- Resolver/server/test all-target Clippy with `--locked -- -D warnings`, Rust
+  formatting and diff checks passed.
+
+The pipeline cache identity advances to v10, rebuilding older cached output;
+lock/config schemas are unchanged. Bare-package installation recovery, cold CJS
+and virtual resources, external watched dependencies, broader component startup
+and multiple simultaneous diagnostics remain unverified. No framework support
+profile is promoted. The rest of the implementation mission remains active.

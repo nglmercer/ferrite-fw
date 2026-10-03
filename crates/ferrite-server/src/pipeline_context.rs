@@ -108,7 +108,7 @@ impl DevServer {
             None
         };
         let pipeline = format!(
-            "pipeline-v9:{invalidation:?}:{}:{:?}:{}:{}:{:?}:{lock_state:?}",
+            "pipeline-v10:{invalidation:?}:{}:{:?}:{}:{}:{:?}:{lock_state:?}",
             self.inner.plugins.cache_key(),
             self.inner.config.react,
             self.inner.config.is_production,
@@ -205,6 +205,24 @@ impl DevServer {
             }
         }
         self.inner.graph.set_imports(&module.id, edges);
+        if let Some(candidates) = self
+            .inner
+            .missing_imports
+            .lock()
+            .map_err(|_| FerriteError::Other("missing-import watch lock poisoned".into()))?
+            .remove(&module.id)
+        {
+            for id in candidates {
+                if self.inner.graph.get(&id).is_some_and(|node| {
+                    node.importers.is_empty()
+                        && node.client.code.is_none()
+                        && node.ssr.code.is_none()
+                }) {
+                    self.inner.graph.remove(&id);
+                }
+            }
+        }
+
         self.inner.graph.set_transformed(
             &module.id,
             env,

@@ -195,6 +195,35 @@ impl Resolver {
         self.resolve(request)
     }
 
+    /// Local paths whose creation can repair an unresolved import. This is
+    /// watch metadata only: it never turns a failed resolution into success.
+    pub fn unresolved_file_candidates(&self, specifier: &str, importer: &ModuleId) -> Vec<PathBuf> {
+        let (specifier, _) = split_query(specifier);
+        let mut specifier = specifier.to_string();
+        let mut seen = std::collections::HashSet::new();
+        while let Some(mapped) = self.apply_alias(&specifier) {
+            if !seen.insert(specifier.clone()) {
+                return Vec::new();
+            }
+            specifier = mapped;
+        }
+        let file = if specifier.starts_with('/') && !specifier.starts_with("/@") {
+            self.root.join(specifier.trim_start_matches('/'))
+        } else if specifier.starts_with("./")
+            || specifier.starts_with("../")
+            || matches!(specifier.as_str(), "." | "..")
+        {
+            self.importer_dir(importer).join(specifier)
+        } else {
+            return Vec::new();
+        };
+        let file = normalize_path(&file);
+        if !is_under(&file, &self.root) || is_under(&file, &self.npm_store) {
+            return Vec::new();
+        }
+        file_probe_candidates(&file, &self.extensions)
+    }
+
     /// Directory containing the importer.
     pub(crate) fn importer_dir(&self, importer: &ModuleId) -> PathBuf {
         let (path, _) = importer.split_query();

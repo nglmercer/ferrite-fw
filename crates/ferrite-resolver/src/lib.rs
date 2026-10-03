@@ -183,3 +183,47 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+#[cfg(test)]
+mod missing_candidate_tests {
+    #[test]
+    fn candidates_share_file_probe_order_aliases_and_query_handling() {
+        let root = std::path::PathBuf::from("/project");
+        let mut config = ferrite_config::ResolveConfig {
+            extensions: vec![".js".into(), ".ts".into()],
+            ..Default::default()
+        };
+        config.alias.insert("@child".into(), "./src/child".into());
+        let resolver = super::Resolver::new(root.clone(), &config);
+        let importer = ferrite_core::ModuleId::new("/src/entry.js");
+        let expected: Vec<_> = [
+            "src/child",
+            "src/child.js",
+            "src/child.ts",
+            "src/child/index.js",
+            "src/child/index.ts",
+            "src/child/main.js",
+            "src/child/main.ts",
+        ]
+        .into_iter()
+        .map(|path| root.join(path))
+        .collect();
+        for specifier in ["./child?raw", "@child", "/src/child"] {
+            assert_eq!(
+                resolver.unresolved_file_candidates(specifier, &importer),
+                expected
+            );
+        }
+        for specifier in [
+            "react",
+            "node:fs",
+            "https://example.com/a.js",
+            "virtual:test",
+            "../../../outside",
+        ] {
+            assert!(resolver
+                .unresolved_file_candidates(specifier, &importer)
+                .is_empty());
+        }
+    }
+}

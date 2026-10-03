@@ -953,3 +953,93 @@ async fn failed_first_http_load_is_tracked_and_correction_clears_diagnostic() {
         serving.abort();
     }
 }
+
+#[tokio::test]
+async fn creating_missing_import_candidates_recovers_the_importer_and_prunes_watches() {
+    for specifier in ["./child", "@child", "./folder", "./data.txt?raw"] {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("folder")).unwrap();
+        let entry = root.path().join("entry.js");
+        std::fs::write(
+            &entry,
+            format!("import value from '{specifier}'; console.log(value);"),
+        )
+        .unwrap();
+        let mut user = ferrite_config::UserConfig::default();
+        user.resolve.alias.insert("@child".into(), "./child".into());
+        let config =
+            ferrite_config::resolve_config(user, Some(root.path().into()), Default::default())
+                .unwrap();
+        let server = DevServer::new(config, vec![]).await.unwrap();
+        let id = ModuleId::new("/entry.js");
+        assert!(server.pipeline_module(&id, None, "client").await.is_err());
+        let candidates = server.inner.missing_imports.lock().unwrap()[&id].clone();
+        assert!(!candidates.is_empty());
+        let (relative, source) = match specifier {
+            "./folder" => ("folder/index.js", "export default 42;"),
+            "./data.txt?raw" => ("data.txt", "first raw value"),
+            _ => ("child.js", "export default 42;"),
+        };
+        let mut messages = server.inner.hmr.subscribe();
+        std::fs::write(root.path().join(relative), source).unwrap();
+        let message = tokio::time::timeout(std::time::Duration::from_secs(10), messages.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(
+                serde_json::from_str::<ferrite_hmr::HmrMessage>(&message).unwrap(),
+                ferrite_hmr::HmrMessage::FullReload { .. }
+            ),
+            "{specifier}: {message}"
+        );
+        let entry = server.inner.graph.get(&id).unwrap();
+        assert!(entry.client.code.is_some());
+        assert!(!server
+            .inner
+            .missing_imports
+            .lock()
+            .unwrap()
+            .contains_key(&id));
+        for candidate in candidates {
+            if let Some(node) = server.inner.graph.get(&candidate) {
+                assert!(
+                    !node.importers.is_empty() || node.client.code.is_some(),
+                    "unused missing candidate must be pruned: {candidate}"
+                );
+            }
+        }
+        if specifier.contains("?raw") {
+            let raw = ModuleId::new("/data.txt?raw");
+            assert!(server
+                .inner
+                .graph
+                .get(&ModuleId::new("/data.txt"))
+                .unwrap()
+                .importers
+                .contains(&raw));
+            std::fs::write(root.path().join(relative), "second raw value").unwrap();
+            let message = tokio::time::timeout(std::time::Duration::from_secs(10), messages.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                matches!(
+                    serde_json::from_str::<ferrite_hmr::HmrMessage>(&message).unwrap(),
+                    ferrite_hmr::HmrMessage::FullReload { .. }
+                ),
+                "{message}"
+            );
+            assert!(server
+                .inner
+                .graph
+                .get(&raw)
+                .unwrap()
+                .client
+                .code
+                .unwrap()
+                .contains("second raw value"));
+        }
+        server.close();
+    }
+}

@@ -316,7 +316,7 @@ impl DevServer {
             self.inner
                 .graph
                 .get(id)
-                .is_some_and(|node| node.client.invalidated && node.client.code.is_some())
+                .is_some_and(|node| node.client.invalidated)
         }));
         let mut seen = std::collections::HashSet::new();
         while let Some(id) = queue.pop_front() {

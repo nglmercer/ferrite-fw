@@ -111,7 +111,7 @@ impl DevServer {
                             server.report_hmr_error(&id, &error);
                             return;
                         }
-                        if !tracked {
+                        if !tracked || !inner_clone.graph.contains(&id) {
                             // Untracked file (e.g. new CSS referenced later):
                             // nothing to push until an importer pulls it.
                             return;

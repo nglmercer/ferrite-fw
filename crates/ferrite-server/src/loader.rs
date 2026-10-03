@@ -59,11 +59,10 @@ impl DevServer {
         // 2. Asset-shim requests (`?asset-shim` appended by import rewriting).
         if query.is_some_and(|q| q.starts_with("asset-shim")) {
             let plain = path_part.to_string();
-            return Ok(PipelineModule::code_only(
-                resolved_id.clone(),
-                asset_to_js(&plain),
-                ModuleType::Js,
-            ));
+            return self.record_query_resource(
+                PipelineModule::code_only(resolved_id.clone(), asset_to_js(&plain), ModuleType::Js),
+                env,
+            );
         }
         // 3. `?direct` CSS (from `<link>` tags).
         let direct_css = query.is_some_and(|q| q.contains("direct")) && path_part.ends_with(".css");
@@ -82,11 +81,18 @@ impl DevServer {
         }
         // 6. `?raw` / `?url` / `?inline` / `?worker` / `?wasm`.
         if let Some(q) = query {
-            if let Some(shim) = self
+            if let Some(mut shim) = self
                 .asset_query_shim(&ctx, &resolved_id, path_part, q, &source)
                 .await?
             {
-                return Ok(shim);
+                shim.dependencies.extend(loaded.dependencies);
+                shim.dependencies.extend(
+                    module_watches
+                        .lock()
+                        .map_err(|_| FerriteError::Other("module watch lock poisoned".into()))?
+                        .clone(),
+                );
+                return self.record_query_resource(shim, env);
             }
         }
         // 7. Cache lookup (`shouldTransformCachedModule` may force a
@@ -279,6 +285,35 @@ impl DevServer {
             &cache_key.0,
             serde_json::to_vec(&CachedTransform::from_module(&module)).unwrap_or_default(),
         );
+        Ok(module)
+    }
+
+    fn record_query_resource(
+        &self,
+        mut module: PipelineModule,
+        env: &str,
+    ) -> Result<PipelineModule> {
+        if let Ok(file) = self.id_to_file(&module.id) {
+            module
+                .dependencies
+                .push(ferrite_core::normalize_path(&file));
+        }
+        module.dependencies = module
+            .dependencies
+            .into_iter()
+            .map(|dependency| {
+                let path = std::path::Path::new(&dependency);
+                let file = if path.is_absolute() {
+                    path.to_path_buf()
+                } else {
+                    self.inner.config.root.join(path)
+                };
+                ferrite_core::normalize_path(&file)
+            })
+            .collect();
+        module.dependencies.sort();
+        module.dependencies.dedup();
+        self.update_graph(&module, env)?;
         Ok(module)
     }
 

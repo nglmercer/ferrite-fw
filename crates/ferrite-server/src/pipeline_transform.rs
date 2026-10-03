@@ -250,6 +250,16 @@ impl DevServer {
                     import_bindings.push(import.bindings.clone());
                 }
                 Err(error) => {
+                    if !environment.kind.is_ssr() && !self.inner.config.is_production {
+                        let mut candidates = self
+                            .inner
+                            .client_resolver
+                            .unresolved_file_candidates(&import.specifier, &module.id);
+                        if candidates.is_empty() && is_bare_specifier(&import.specifier) {
+                            candidates.push(self.inner.config.lockfile());
+                        }
+                        self.track_missing_import(&module.id, &import.specifier, candidates)?;
+                    }
                     return Err(ferrite_core::FerriteError::Resolve(format!(
                         "cannot resolve `{}` from `{}`: {error}",
                         import.specifier, module.id.0
@@ -659,5 +669,35 @@ impl DevServer {
         });
         // Stylesheet links get `?direct` so the pipeline serves CSS, not the JS wrapper.
         rewrite_link_direct(&rewritten)
+    }
+}
+
+impl DevServer {
+    fn track_missing_import(
+        &self,
+        importer: &ModuleId,
+        specifier: &str,
+        candidates: Vec<PathBuf>,
+    ) -> Result<()> {
+        let mut missing = self.inner.missing_imports.lock().map_err(|_| {
+            ferrite_core::FerriteError::Other("missing-import watch lock poisoned".into())
+        })?;
+        for file in candidates {
+            let id = ModuleId::new(ferrite_core::file_to_url(&self.inner.config.root, &file));
+            self.inner.graph.ensure(&id, ModuleType::from_path(&file));
+            self.inner.graph.add_edge(
+                importer,
+                ferrite_graph::ImportEdge {
+                    specifier: specifier.into(),
+                    resolved: id.clone(),
+                    kind: ImportKind::Static,
+                },
+            );
+            let owned = missing.entry(importer.clone()).or_default();
+            if !owned.contains(&id) {
+                owned.push(id);
+            }
+        }
+        Ok(())
     }
 }
