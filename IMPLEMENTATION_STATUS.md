@@ -1,5 +1,28 @@
 # Framework support implementation status
 
+## Preview reports missing static resources and unsupported methods
+
+Client preview now returns 404 for missing paths with a file extension, missing
+plugin-mounted files, and missing routes requested with a non-HTML Accept header.
+It previously returned the app HTML with 200 for these requests, masking missing
+scripts/styles/maps. Extensionless HTML-compatible routes retain SPA fallback.
+Static serving supports GET/HEAD and reports other methods as 405 with Allow;
+proxy rules run first and retain their method handling.
+
+Real HTTP tests cover missing JS/CSS/maps/mounted files, JSON requests, successful
+HEAD with no body, POST rejection, SPA fallback and plugin headers, and proxied
+POST. Six lifecycle/preview tests and three CommonJS tests passed, including real
+Chromium/Firefox dev-edit-build-preview interactions with both browsers required.
+Facade/test all-target Clippy with `-D warnings`, changed-file formatting, and
+diff checks passed. Migration: missing dotted routes and missing mounted paths
+now return 404 rather than falling back to index.html; unsupported static methods
+return 405. No configuration or lockfile schema migration is required.
+
+This is static client-preview behavior, not SSR rendering. Full Accept quality
+negotiation, framework routing contracts, the complete generated-profile browser
+suite, full workspace, feature matrices, and releases were not established by
+this increment. The full mission remains incomplete.
+
 ## Production chunks reference maps relative to their own location
 
 External `sourceMappingURL` comments now use the existing relative URL helper.

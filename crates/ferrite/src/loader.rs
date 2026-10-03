@@ -529,6 +529,14 @@ async fn preview_with_parts(
                     .into_response(),
             };
         }
+        if method != Method::GET && method != Method::HEAD {
+            return (
+                StatusCode::METHOD_NOT_ALLOWED,
+                [(axum::http::header::ALLOW, "GET, HEAD")],
+                "static preview supports GET and HEAD",
+            )
+                .into_response();
+        }
         // 2. Plugin static mounts.
         for mount in &state.mounts {
             let prefix = mount.prefix.trim_end_matches('/');
@@ -542,6 +550,7 @@ async fn preview_with_parts(
                 if file.is_file() {
                     return file_response(&file, &state.headers);
                 }
+                return (StatusCode::NOT_FOUND, "mounted file not found").into_response();
             }
         }
         // 3. Output dir with SPA fallback.
@@ -549,6 +558,13 @@ async fn preview_with_parts(
         let file = if file.is_file() {
             file
         } else {
+            let accepts_html = headers
+                .get(axum::http::header::ACCEPT)
+                .and_then(|value| value.to_str().ok())
+                .is_none_or(|value| value.contains("text/html") || value.contains("*/*"));
+            if std::path::Path::new(&path).extension().is_some() || !accepts_html {
+                return (StatusCode::NOT_FOUND, "file not found").into_response();
+            }
             state.dir.join("index.html")
         };
         file_response(&file, &state.headers)

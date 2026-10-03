@@ -93,11 +93,7 @@ impl Plugin for RenderPlugin {
         Ok(Some("/* probe-footer */".to_string()))
     }
 
-    async fn build_end(
-        &self,
-        _ctx: &PluginContext,
-        end: ferrite::plugin::BuildEnd,
-    ) -> Result<()> {
+    async fn build_end(&self, _ctx: &PluginContext, end: ferrite::plugin::BuildEnd) -> Result<()> {
         *self.probe.build_end_error.lock().unwrap() = Some(end.error);
         Ok(())
     }
@@ -179,11 +175,7 @@ impl Plugin for FailPlugin {
         Err(ferrite::FerriteError::Build("boom".to_string()))
     }
 
-    async fn build_end(
-        &self,
-        _ctx: &PluginContext,
-        end: ferrite::plugin::BuildEnd,
-    ) -> Result<()> {
+    async fn build_end(&self, _ctx: &PluginContext, end: ferrite::plugin::BuildEnd) -> Result<()> {
         *self.probe.build_end_error.lock().unwrap() = Some(end.error);
         Ok(())
     }
@@ -242,11 +234,11 @@ async fn js_config_drives_server() {
 #[tokio::test]
 async fn dotenv_expansion_flows_into_server() {
     let project = TempProject::new(&[
-        (".env", "FERRITE_BASE=/srv\nFERRITE_URL=${FERRITE_BASE}/api\nSECRET=no\n"),
         (
-            ".env.production",
-            "FERRITE_MODE_TAG=prod-${FERRITE_BASE}\n",
+            ".env",
+            "FERRITE_BASE=/srv\nFERRITE_URL=${FERRITE_BASE}/api\nSECRET=no\n",
         ),
+        (".env.production", "FERRITE_MODE_TAG=prod-${FERRITE_BASE}\n"),
     ]);
     let server = ferrite::create_server(ferrite::Config {
         root: Some(project.root.clone()),
@@ -287,11 +279,17 @@ impl Plugin for PreviewPlugin {
 
 /// Minimal raw-HTTP GET (no client dependency in this crate).
 async fn http_get(port: u16, path: &str) -> (String, String) {
+    http_request(port, path, "GET", "*/*").await
+}
+
+async fn http_request(port: u16, path: &str, method: &str, accept: &str) -> (String, String) {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
         .await
         .expect("connect");
-    let request = format!("GET {path} HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\r\n");
+    let request = format!(
+        "{method} {path} HTTP/1.1\r\nhost: x\r\naccept: {accept}\r\nconnection: close\r\n\r\n"
+    );
     stream.write_all(request.as_bytes()).await.expect("write");
     let mut raw = Vec::new();
     stream.read_to_end(&mut raw).await.expect("read");
@@ -305,7 +303,9 @@ async fn http_get(port: u16, path: &str) -> (String, String) {
 /// Tiny echo origin for the preview proxy (responds `origin:{path}`).
 async fn spawn_echo_origin() -> (String, tokio::task::JoinHandle<()>) {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
     let addr = listener.local_addr().expect("addr");
     let task = tokio::spawn(async move {
         loop {
@@ -318,11 +318,7 @@ async fn spawn_echo_origin() -> (String, tokio::task::JoinHandle<()>) {
                     return;
                 };
                 let request = String::from_utf8_lossy(&buf[..read]);
-                let path = request
-                    .split_whitespace()
-                    .nth(1)
-                    .unwrap_or("/")
-                    .to_string();
+                let path = request.split_whitespace().nth(1).unwrap_or("/").to_string();
                 let body = format!("origin:{path}");
                 let response = format!(
                     "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
@@ -346,7 +342,10 @@ fn free_port() -> u16 {
 #[tokio::test]
 async fn preview_serves_hooks_mounts_and_proxy() {
     let project = TempProject::new(&[
-        ("dist/index.html", "<!doctype html><html><body>app</body></html>"),
+        (
+            "dist/index.html",
+            "<!doctype html><html><body>app</body></html>",
+        ),
         ("dist/app.js", "console.log(1);\n"),
         ("extra/hello.txt", "mounted\n"),
     ]);
@@ -375,10 +374,16 @@ async fn preview_serves_hooks_mounts_and_proxy() {
             task.await.unwrap().unwrap();
             panic!("preview task exited early");
         }
-        if tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
+        if tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_ok()
+        {
             break;
         }
-        assert!(std::time::Instant::now() < deadline, "preview never listened");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "preview never listened"
+        );
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 
@@ -386,6 +391,28 @@ async fn preview_serves_hooks_mounts_and_proxy() {
     assert!(head.contains("200"), "{head}");
     assert!(head.contains("x-ferrite-test: yes"), "{head}");
     assert!(body.contains("app"), "{body}");
+
+    for missing in [
+        "/assets/missing.js",
+        "/assets/missing.css",
+        "/assets/missing.js.map",
+        "/docs/missing.txt",
+    ] {
+        let (head, body) = http_get(port, missing).await;
+        assert!(head.contains("404"), "{missing}: {head}");
+        assert!(!body.contains("<html>"), "{missing}: {body}");
+    }
+    let (head, body) = http_request(port, "/missing-route", "GET", "application/json").await;
+    assert!(head.contains("404"), "{head}");
+    assert!(!body.contains("<html>"), "{body}");
+    let (head, body) = http_request(port, "/app.js", "HEAD", "*/*").await;
+    assert!(head.contains("200"), "{head}");
+    assert!(body.is_empty(), "{body}");
+    let (head, _) = http_request(port, "/app.js", "POST", "*/*").await;
+    assert!(
+        head.contains("405") && head.contains("allow: GET, HEAD"),
+        "{head}"
+    );
 
     // SPA fallback + plugin headers on every static response.
     let (head, body) = http_get(port, "/missing-route").await;
@@ -400,6 +427,9 @@ async fn preview_serves_hooks_mounts_and_proxy() {
     // Config/plugin proxy rule.
     let (_, body) = http_get(port, "/api/echo?x=1").await;
     assert_eq!(body, "origin:/api/echo?x=1");
+    let (head, body) = http_request(port, "/api/echo", "POST", "*/*").await;
+    assert!(head.contains("200"), "{head}");
+    assert_eq!(body, "origin:/api/echo");
 
     task.abort();
     origin_task.abort();
@@ -420,7 +450,11 @@ async fn facade_reexports_cover_parity_api() {
     over.server.port = 3000;
     let merged = ferrite::merge_config(ferrite::UserConfig::default(), over);
     assert_eq!(merged.server.port, 3000);
-    assert!(ferrite::define_config(ferrite::UserConfig::default()).server.hmr);
+    assert!(
+        ferrite::define_config(ferrite::UserConfig::default())
+            .server
+            .hmr
+    );
     let env = ferrite::load_env("development", &project.root, &["FERRITE_".to_string()]);
     assert!(env.is_empty());
 }
