@@ -9,6 +9,8 @@ pub struct TemplateProfile {
     pub language: &'static str,
     pub rendering: &'static str,
     pub compiler_host: &'static str,
+    pub framework_version: Option<&'static str>,
+    pub support: crate::registry::Support,
 }
 pub const TEMPLATES: &[TemplateProfile] = &[
     TemplateProfile {
@@ -16,12 +18,53 @@ pub const TEMPLATES: &[TemplateProfile] = &[
         language: "js",
         rendering: "client",
         compiler_host: "native",
+        framework_version: None,
+        support: crate::registry::Support::Experimental,
     },
     TemplateProfile {
         framework: "vanilla",
         language: "ts",
         rendering: "client",
         compiler_host: "native",
+        framework_version: None,
+        support: crate::registry::Support::Experimental,
+    },
+];
+
+pub const VUE_TEMPLATES: &[TemplateProfile] = &[
+    TemplateProfile {
+        framework: "vue",
+        language: "js",
+        rendering: "client",
+        compiler_host: "node",
+        framework_version: Some(crate::registry::VUE_NODE.framework_version),
+        support: crate::registry::Support::Experimental,
+    },
+    TemplateProfile {
+        framework: "vue",
+        language: "ts",
+        rendering: "client",
+        compiler_host: "node",
+        framework_version: Some(crate::registry::VUE_NODE.framework_version),
+        support: crate::registry::Support::Experimental,
+    },
+];
+pub const SVELTE_TEMPLATES: &[TemplateProfile] = &[
+    TemplateProfile {
+        framework: "svelte",
+        language: "js",
+        rendering: "client",
+        compiler_host: "node",
+        framework_version: Some(crate::registry::SVELTE_NODE.framework_version),
+        support: crate::registry::Support::Experimental,
+    },
+    TemplateProfile {
+        framework: "svelte",
+        language: "ts",
+        rendering: "client",
+        compiler_host: "node",
+        framework_version: Some(crate::registry::SVELTE_NODE.framework_version),
+        support: crate::registry::Support::Experimental,
     },
 ];
 
@@ -30,10 +73,18 @@ pub fn select(
     language: &str,
     rendering: &str,
 ) -> Result<&'static TemplateProfile> {
-    crate::registry::descriptor(framework).map(|descriptor| descriptor.template_variants).unwrap_or(&[]).iter().find(|profile| profile.framework == framework && profile.language == language && profile.rendering == rendering)
-        .ok_or_else(|| FerriteError::Config(format!(
-            "unavailable generation profile {framework}/{language}/{rendering}; available: vanilla/js/client, vanilla/ts/client; SSR requires a validated renderer and hydration profile"
-        )))
+    let selected = crate::registry::descriptor(framework).and_then(|descriptor| {
+        descriptor
+            .template_variants
+            .iter()
+            .find(|profile| profile.language == language && profile.rendering == rendering)
+    });
+    selected.ok_or_else(|| {
+        let available = crate::registry::FRAMEWORKS.iter().flat_map(|descriptor| descriptor.template_variants)
+            .map(|profile| format!("{}/{}/{}", profile.framework, profile.language, profile.rendering))
+            .collect::<Vec<_>>().join(", ");
+        FerriteError::Config(format!("unavailable generation profile {framework}/{language}/{rendering}; available: {available}; SSR requires a validated renderer and hydration profile"))
+    })
 }
 
 pub fn files(profile: &TemplateProfile, name: &str) -> Result<BTreeMap<String, String>> {
@@ -69,7 +120,52 @@ pub fn files(profile: &TemplateProfile, name: &str) -> Result<BTreeMap<String, S
         files.insert("tsconfig.json".into(), "{\n  \"compilerOptions\": {\"target\": \"ES2022\", \"module\": \"ESNext\", \"moduleResolution\": \"Bundler\", \"lib\": [\"ES2022\", \"DOM\"], \"strict\": true, \"noEmit\": true},\n  \"include\": [\"src\"]\n}\n".into());
     }
     files.insert("README.md".into(), format!("# {name}\n\nRun `ferrite install`, then `ferrite dev`. Click the counter to verify interaction.\nRun `ferrite build` and `ferrite preview` to verify production behavior.\n\nThis is a client application; it has no SSR renderer. JavaScript/TypeScript\ntranspilation uses Ferrite's native compiler. TypeScript transpilation does not\nperform type checking; the tsconfig provides editor settings.\n"));
+    if profile.framework != "vanilla" {
+        component_files(profile, name, &mut files)?;
+    }
     Ok(files)
+}
+
+fn component_files(
+    profile: &TemplateProfile,
+    name: &str,
+    files: &mut BTreeMap<String, String>,
+) -> Result<()> {
+    let language = profile.language;
+    let typed = language == "ts";
+    let tag = if typed { " lang=\"ts\"" } else { "" };
+    let (version, component, main) = match profile.framework {
+        "vue" => (
+            crate::registry::VUE_NODE.framework_version,
+            format!("<script setup{tag}>\nimport {{ ref }} from 'vue';\nconst count = ref{}(0);\n</script>\n<template><h1>Hello Ferrite + Vue</h1><button id=\"counter\" @click=\"count += 1\">count: {{{{ count }}}}</button></template>\n<style scoped>button {{ padding: .5rem 1rem; color: rgb(128, 0, 0); }}</style>\n", if typed { "<number>" } else { "" }),
+            "import './style.css';\nimport { createApp } from 'vue';\nimport App from './App.vue';\ncreateApp(App).mount('#app');\n".to_string(),
+        ),
+        "svelte" => (
+            crate::registry::SVELTE_NODE.framework_version,
+            format!("<script{tag}>\nlet count{} = $state(0);\n</script>\n<h1>Hello Ferrite + Svelte</h1><button id=\"counter\" onclick={{() => count += 1}}>count: {{count}}</button>\n<style>button {{ padding: .5rem 1rem; color: rgb(128, 0, 0); }}</style>\n", if typed { ": number" } else { "" }),
+            "import './style.css';\nimport { mount } from 'svelte';\nimport App from './App.svelte';\nconst target = document.querySelector('#app');\nif (!target) throw new Error('missing #app');\nmount(App, { target });\n".to_string(),
+        ),
+        _ => return Err(FerriteError::Config("no component scaffold implementation".into())),
+    };
+    files.insert(format!("src/main.{language}"), main);
+    files.insert(format!("src/App.{}", profile.framework), component);
+    let html = files.get_mut("index.html").unwrap();
+    *html = html.replace(
+        "<h1>Hello Ferrite</h1><button id=\"counter\" type=\"button\">count: 0</button>",
+        "",
+    );
+    files.insert("package.json".into(), format!("{}\n", serde_json::to_string_pretty(&serde_json::json!({
+        "name": name, "private": true, "type": "module", "scripts": {"dev":"ferrite dev", "build":"ferrite build", "preview":"ferrite preview"}, "dependencies": {profile.framework: version}, "devDependencies": {}
+    }))?));
+    files.insert("ferrite.toml".into(), format!("[framework]\nenabled = [\"{}\"]\ncompiler_host = \"node\"\n\n[server]\nport = 5173\n\n[build]\nentries = [\"index.html\"]\n", profile.framework));
+    let types = match profile.framework {
+        "vue" => "declare module '*.css';\ndeclare module '*.vue' {\n  import type { DefineComponent } from 'vue';\n  const component: DefineComponent;\n  export default component;\n}\n",
+        "svelte" => "/// <reference types=\"svelte\" />\ndeclare module '*.css';\n",
+        _ => unreachable!(),
+    };
+    files.insert("src/ferrite-env.d.ts".into(), types.into());
+    files.insert("README.md".into(), format!("# {name}\n\nExperimental {framework} {version} client profile. Install Node explicitly for the\ncompiler host, then run `ferrite install` and `ferrite dev`. Node is used only\nfor official component compilation; it is not selected as an SSR runtime.\nClick the counter to verify interaction. Run `ferrite build` and\n`ferrite preview` to verify production behavior.\n\nSource edits currently perform full reloads and intentionally reset state.\nThis profile has no SSR renderer or hydration entry. Transpilation does not\nperform type checking. Use the framework's official editor extension; complete\nchecker integration remains unavailable.\n", framework = profile.framework));
+    Ok(())
 }
 
 /// Anchored parent directory; publication never replaces an existing destination.
@@ -207,7 +303,7 @@ mod tests {
     fn profiles_fail_before_writing() {
         for (framework, language, rendering) in [
             ("vanila", "ts", "client"),
-            ("vue", "ts", "client"),
+            ("unknown", "ts", "client"),
             ("vanilla", "rust", "client"),
             ("vanilla", "ts", "ssr"),
         ] {
@@ -222,6 +318,36 @@ mod tests {
             assert!(files[&format!("src/main.{language}")].contains("addEventListener"));
         }
     }
+    #[test]
+    fn component_scaffolds_pin_official_compilers_and_mount_real_components() {
+        for framework in ["vue", "svelte"] {
+            for language in ["js", "ts"] {
+                let profile = select(framework, language, "client").unwrap();
+                assert_eq!(profile.compiler_host, "node");
+                let files = files(profile, "app").unwrap();
+                let package: serde_json::Value =
+                    serde_json::from_str(&files["package.json"]).unwrap();
+                let expected = if framework == "vue" {
+                    crate::registry::VUE_NODE.framework_version
+                } else {
+                    crate::registry::SVELTE_NODE.framework_version
+                };
+                assert_eq!(package["dependencies"][framework], expected);
+                assert!(files[&format!("src/App.{framework}")].contains("count += 1"));
+                assert!(
+                    files[&format!("src/main.{language}")].contains(&format!("./App.{framework}"))
+                );
+                assert!(!files["index.html"].contains("id=\"counter\""));
+                assert!(files["ferrite.toml"].contains("compiler_host = \"node\""));
+                assert!(!files["ferrite.toml"].contains("[runtime]"));
+                assert_eq!(
+                    files[&format!("src/App.{framework}")].contains("lang=\"ts\""),
+                    language == "ts"
+                );
+            }
+        }
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn publication_is_atomic_and_never_overwrites_a_raced_destination() {

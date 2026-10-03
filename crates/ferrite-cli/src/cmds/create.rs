@@ -16,8 +16,13 @@ pub(crate) async fn create(args: CreateArgs) -> ferrite::Result<()> {
             .flat_map(|descriptor| descriptor.template_variants)
         {
             println!(
-                "{}/{}/{} (compiler host: {})",
-                profile.framework, profile.language, profile.rendering, profile.compiler_host
+                "{}/{}/{} (version: {}, compiler host: {}, {}; SSR unavailable)",
+                profile.framework,
+                profile.language,
+                profile.rendering,
+                profile.framework_version.unwrap_or("builtin"),
+                profile.compiler_host,
+                profile.support.label()
             );
         }
         return Ok(());
@@ -33,6 +38,16 @@ pub(crate) async fn create(args: CreateArgs) -> ferrite::Result<()> {
         .or(args.template.as_deref())
         .unwrap_or("vanilla");
     let profile = scaffold::select(framework, &args.language, &args.rendering)?;
+    if args
+        .compiler_host
+        .as_deref()
+        .is_some_and(|host| host != profile.compiler_host)
+        || (profile.compiler_host == "node" && args.compiler_host.as_deref() != Some("node"))
+    {
+        return Err(ferrite::FerriteError::Config(format!(
+            "{framework} requires --compiler-host {}; Node is an explicit compiler opt-in and does not select an SSR runtime", profile.compiler_host
+        )));
+    }
     let name = args.name.ok_or_else(|| {
         ferrite::FerriteError::Config(
             "create requires an app directory; use --list-templates to inspect profiles".into(),
@@ -110,6 +125,7 @@ mod tests {
             name: Some(path.to_string_lossy().into_owned()),
             template: None,
             framework: None,
+            compiler_host: None,
             language: "ts".into(),
             rendering: "client".into(),
             list_templates: false,
@@ -138,6 +154,29 @@ mod tests {
         );
         assert_eq!(std::fs::read_dir(&path).unwrap().count(), 1);
     }
+    #[tokio::test]
+    async fn component_generation_requires_explicit_host_and_installs_no_runtime_fallback() {
+        let root = tempfile::tempdir().unwrap();
+        for framework in ["vue", "svelte"] {
+            let path = root.path().join(framework);
+            let mut request = args(&path);
+            request.framework = Some(framework.into());
+            request.no_install = true;
+            let error = create(request).await.unwrap_err();
+            assert!(error.to_string().contains("--compiler-host node"));
+            assert!(!path.exists());
+            let mut request = args(&path);
+            request.framework = Some(framework.into());
+            request.compiler_host = Some("node".into());
+            request.no_install = true;
+            create(request).await.unwrap();
+            assert!(path.join(format!("src/App.{framework}")).exists());
+            assert!(!path.join("ferrite.lock").exists());
+            let package = ferrite::npm::JsPackageJson::read(&path.join("package.json")).unwrap();
+            assert!(package.dependencies.contains_key(framework));
+        }
+    }
+
     #[tokio::test]
     async fn create_resolves_lock_and_no_install_retains_a_real_manifest() {
         let root = tempfile::tempdir().unwrap();

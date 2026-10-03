@@ -1,7 +1,7 @@
 //! Versioned, evidence-based framework capabilities shared by adapters.
 
 /// Registry schema version; independent of framework package versions.
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// A capability is tested only after the entire acceptance profile executes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -10,6 +10,17 @@ pub enum Support {
     Experimental,
     UpstreamManaged,
     Unavailable,
+}
+
+impl Support {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Tested => "tested",
+            Self::Experimental => "experimental",
+            Self::UpstreamManaged => "upstream-managed",
+            Self::Unavailable => "unavailable",
+        }
+    }
 }
 
 /// Compiler-only evidence. This does not advertise rendering, HMR or SSR runtime support.
@@ -78,20 +89,20 @@ pub const FRAMEWORKS: &[FrameworkDescriptor] = &[
     FrameworkDescriptor {
         name: "vue",
         extensions: &["vue"],
-        template_variants: &[],
+        template_variants: crate::scaffold::VUE_TEMPLATES,
         compiler_profiles: &[VUE_NODE],
         compiler_package: Some("vue/compiler-sfc"),
-        client: Support::Unavailable,
+        client: Support::Experimental,
         ssr: Support::Unavailable,
         tested_versions: &[],
     },
     FrameworkDescriptor {
         name: "svelte",
         extensions: &["svelte", "svelte.js", "svelte.ts"],
-        template_variants: &[],
+        template_variants: crate::scaffold::SVELTE_TEMPLATES,
         compiler_profiles: &[SVELTE_NODE],
         compiler_package: Some("svelte/compiler"),
-        client: Support::Unavailable,
+        client: Support::Experimental,
         ssr: Support::Unavailable,
         tested_versions: &[],
     },
@@ -141,7 +152,8 @@ mod tests {
             let error = compiler_unavailable(framework, "/App").to_string();
             assert!(error.contains(descriptor(framework).unwrap().compiler_package.unwrap()));
             assert!(error.contains("validated compiler host"));
-            assert_eq!(descriptor(framework).unwrap().client, Support::Unavailable);
+            assert_eq!(descriptor(framework).unwrap().ssr, Support::Unavailable);
+            assert_eq!(descriptor(framework).unwrap().client, Support::Experimental);
         }
     }
 }

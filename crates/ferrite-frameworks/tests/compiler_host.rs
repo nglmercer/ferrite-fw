@@ -132,6 +132,68 @@ async fn actual_project_matched_compilers_client_server_and_runes() {
             })
             .unwrap();
     }
+    // Svelte 5.39.6's multi-root map includes an impossible negative source
+    // column. Keep every valid token, retain the generated position as an
+    // unmapped barrier, and report the lost upstream location explicitly.
+    let source = "<script>\nlet count = $state(0);\n</script>\n<h1>Hello Ferrite + Svelte</h1><button id=\"counter\" onclick={() => count += 1}>count: {count}</button>\n<style>button { padding: .5rem 1rem; color: rgb(128, 0, 0); }</style>\n";
+    let result = host
+        .compile(CompileRequest {
+            framework: Framework::Svelte,
+            filename: root.join("App.svelte"),
+            source: source.into(),
+            target: CompileTarget::Client,
+            development: true,
+            module: false,
+        })
+        .await
+        .unwrap();
+    assert!(result.diagnostics.iter().any(|diagnostic| diagnostic.code
+        == "invalid_original_source_map_position"
+        && diagnostic.severity == "warning"));
+    // Obtain an independent raw reference from the exact same official package.
+    // Its decoder preserves signed positions, including subsequent valid tokens.
+    let reference = tokio::process::Command::new("node")
+        .args(["-e", "const {createRequire}=require('node:module');const r=createRequire(process.argv[1]+'/package.json');const c=r('svelte/compiler');const {decode}=r('@jridgewell/sourcemap-codec');console.log(JSON.stringify(decode(c.compile(process.argv[3],{filename:process.argv[2],generate:'client',dev:true,css:'external',hmr:false}).js.map.mappings)));" ])
+        .arg(root.join(".ferrite/npm/packages/svelte@5.39.6"))
+        .arg(root.join("App.svelte"))
+        .arg(source)
+        .kill_on_drop(true).output();
+    let reference = tokio::time::timeout(std::time::Duration::from_secs(10), reference)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        reference.status.success(),
+        "{}",
+        String::from_utf8_lossy(&reference.stderr)
+    );
+    let rows: Vec<Vec<Vec<i64>>> = serde_json::from_slice(&reference.stdout).unwrap();
+    let expected: Vec<_> = rows
+        .iter()
+        .enumerate()
+        .flat_map(|(line, row)| {
+            row.iter().map(move |segment| {
+                let original = (segment.len() > 1 && segment[2] >= 0 && segment[3] >= 0)
+                    .then(|| (segment[1] as u32, segment[2] as u32, segment[3] as u32));
+                (line as u32, segment[0] as u32, original)
+            })
+        })
+        .collect();
+    let encoded = result.map.unwrap().mappings;
+    let actual = oxc_sourcemap::SourceMap::from_json_string(&encoded).unwrap();
+    let actual: Vec<_> = actual
+        .get_tokens()
+        .map(|token| {
+            (
+                token.get_dst_line(),
+                token.get_dst_col(),
+                token
+                    .get_source_id()
+                    .map(|source| (source, token.get_src_line(), token.get_src_col())),
+            )
+        })
+        .collect();
+    assert_eq!(actual, expected, "every valid source position and invalid-location barrier must remain exact, including valid positions after an invalid one");
     let result = host.compile(CompileRequest { framework: Framework::Svelte, filename: root.join("counter.svelte.ts"), source: "let count: number = $state(0); export function increment() { count++; return count; }".into(), target: CompileTarget::Client, development: true, module: true }).await.unwrap();
     assert!(result.code.contains("svelte/internal"));
     assert!(!result.code.contains(": number"));

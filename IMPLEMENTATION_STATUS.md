@@ -474,3 +474,72 @@ all requested syntax-recovery, map, asset/base-path or platform matrices. Genera
 standalone interaction-test packaging, actual TypeScript checking, full framework
 templates, Doctor, SSR/hydration and all remaining mission work are unfinished.
 The complete mission remains active.
+
+## Real Vue/Svelte client scaffolds and compiler map regression (2026-10-02)
+
+Implemented JavaScript and TypeScript client generation for pinned Vue 3.5.22
+and Svelte 5.39.6. Components use official Vue refs/script setup and Svelte runes;
+entries use `createApp` and Svelte 5 `mount`, respectively. Manifest dependencies,
+component types, editor settings, public assets, scoped styles and configuration
+are generated through the shared scaffold registry and existing transactional
+installer. Node compilation requires explicit CLI opt-in:
+
+```sh
+ferrite create my-vue-app --framework vue --language ts --rendering client --compiler-host node
+ferrite create my-svelte-app --framework svelte --language ts --rendering client --compiler-host node
+```
+
+Selecting these profiles without the host flag fails before writing. Generation
+sets only the compiler host; it does not select Node as an SSR runtime. No-install
+works without invoking a compiler. Profiles retain full-reload update behavior
+with intentional state reset; SSR variants remain unavailable.
+
+Registry schema is now 4. Template profiles report framework version and support
+status in addition to host/language/rendering. Custom profile constructors must
+supply `framework_version` and `support`. Listing reports exact pinned versions,
+experimental client status and unavailable SSR. Vue/Svelte client descriptors now
+report experimental support; no complete tested-profile or SSR claim is made.
+Lockfile format is unchanged.
+
+The standalone Svelte scaffold exposed a real upstream source-map defect:
+Svelte 5.39.6 can emit negative original columns in multi-root component maps.
+The focused compiler wrapper now uses the compiler's project-resolved
+`@jridgewell/sourcemap-codec` dependency to retain all valid positions and represent
+invalid original positions as explicit unmapped generated positions, with a
+structured warning. It does not clamp to fabricated source coordinates or discard
+whole maps. This follows ECMA-426's optional-error/null-original-position decoding:
+https://tc39.es/ecma426/#sec-mappings-grammar . The upstream issue is
+https://github.com/sveltejs/svelte/issues/16615 . Original location information for
+these invalid positions remains unavailable and is reported explicitly.
+
+Validation:
+
+- `cargo test -p ferrite-frameworks -p ferrite-cli --locked`: 19 framework and
+  13 CLI unit tests passed. Added tests verify version pins, real component
+  mounting entries, language-specific source, explicit host selection,
+  no-install behavior and absence of SSR runtime substitution. The ignored
+  actual compiler-host integration is not established by this command.
+- `FERRITE_COMPILER_FIXTURE=/tmp/ferrite-real-install-45z_otrh cargo test -p ferrite-frameworks --test compiler_host --locked -- --ignored --nocapture`:
+  passed (0.77 seconds). The new map regression independently invokes the same
+  official compiler and codec, then compares every emitted generated/original
+  position and invalid-position barrier, including valid positions after an
+  invalid one. Existing Vue/Svelte client/server compiler, runes, style and
+  diagnostic checks also passed against the installed pinned fixture.
+- Fresh CLI build followed by
+  `FERRITE_CLI_PATH=/home/meme/Documentos/challenges/ferrite-fw/target/debug/ferrite FERRITE_CHROMIUM_PATH=/home/meme/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome cargo test -p ferrite-test --test generated_apps --locked -- --ignored --nocapture`:
+  all four tests passed (74.46 seconds), covering all six generated profiles in
+  both Chromium and Firefox. Actual CLI create, Ferrite installation, frozen
+  replay with unchanged lock bytes, dev clicks, source edits/invalidation,
+  updated scoped CSS, production build with scope hoisting, extracted CSS,
+  preview clicks and absence of dev-only code/page/console errors were checked.
+  Vanilla processes used an empty PATH; Node compiler profiles were exercised
+  separately with Node enabled. No assertion was weakened for compiler failures.
+- `cargo clippy -p ferrite-cli -p ferrite-test --all-targets --locked -- -D warnings`:
+  passed after final registry/status changes. Actual `create --list-templates`
+  printed all six profiles with versions, hosts and capability status.
+
+Remaining: framework-specific HMR/state preservation, generated standalone test
+packaging, complete checker/editor package resolution, Doctor, full source-map
+and syntax-recovery matrices, real SSR/hydration/streaming, React Refresh,
+remaining dependency/host capabilities, additional adapters and release/upstream
+acceptance. The complete mission remains active.

@@ -200,9 +200,12 @@ pub(crate) struct CreateArgs {
     /// Legacy template alias (`vanilla`).
     #[arg(long)]
     pub(crate) template: Option<String>,
-    /// Framework owner (`vanilla`; other profiles require completed acceptance).
+    /// Framework owner (`vanilla`, `vue`, `svelte`; see --list-templates).
     #[arg(long)]
     pub(crate) framework: Option<String>,
+    /// Explicit compiler host (`native` or `node`); required for Node profiles.
+    #[arg(long)]
+    pub(crate) compiler_host: Option<String>,
     /// Source language (`js` or `ts`).
     #[arg(long, default_value = "ts")]
     pub(crate) language: String,

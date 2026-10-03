@@ -19,6 +19,32 @@ function compiler(request) {
   return compilers.get(key);
 }
 function map(value) { return value ? JSON.parse(JSON.stringify(value)) : null; }
+// ECMA-426 DecodeMappingsField: invalid original positions are null, with
+// a reported diagnostic. Never clamp them to fabricated source coordinates.
+function svelteMap(value, request, diagnostics) {
+  const json = map(value);
+  if (!json) return null;
+  const require = createRequire(join(request.packageDir, 'package.json'));
+  const { decode, encode } = require('@jridgewell/sourcemap-codec');
+  const lines = decode(json.mappings);
+  let invalid = 0;
+  for (const line of lines) {
+    for (let i = 0; i < line.length; i++) {
+      const segment = line[i];
+      if (segment.length > 1 && (segment[2] < 0 || segment[3] < 0)) {
+        line[i] = [segment[0]];
+        invalid++;
+      }
+    }
+  }
+  if (invalid) {
+    json.mappings = encode(lines);
+    diagnostics.push({ severity: 'warning', code: 'invalid_original_source_map_position',
+      message: `Svelte ${request.version} emitted ${invalid} negative original source-map positions; those positions are unmapped per ECMA-426, and valid mappings are retained`,
+      filename: request.filename, start: null });
+  }
+  return json;
+}
 function errors(values, filename) {
   if (values?.length) throw new Error(`${filename}: ${values.map(value => typeof value === 'string' ? value : value.message).join('\n')}`);
 }
@@ -30,7 +56,10 @@ export async function compile(request) {
     const result = request.module
       ? module.compileModule(source, { filename, generate: target, dev: development })
       : module.compile(source, { filename, generate: target, dev: development, css: 'external', hmr: false });
-    return { pieces: [{ code: result.js.code, map: map(result.js.map) }], language: 'js', css: result.css ? [{ id: 'style-0', code: result.css.code, map: map(result.css.map), modules: null }] : [], dependencies: [], diagnostics: result.warnings.map(warning => ({ severity: 'warning', code: warning.code, message: warning.message, filename: warning.filename || filename, start: warning.start || null })), compilerVersion: module.VERSION };
+    const diagnostics = result.warnings.map(warning => ({ severity: 'warning', code: warning.code, message: warning.message, filename: warning.filename || filename, start: warning.start || null }));
+    const jsMap = svelteMap(result.js.map, request, diagnostics);
+    const cssMap = result.css ? svelteMap(result.css.map, request, diagnostics) : null;
+    return { pieces: [{ code: result.js.code, map: jsMap }], language: 'js', css: result.css ? [{ id: 'style-0', code: result.css.code, map: cssMap, modules: null }] : [], dependencies: [], diagnostics, compilerVersion: module.VERSION };
   }
   const parsed = module.parse(source, { filename, sourceMap: true });
   errors(parsed.errors, filename);
