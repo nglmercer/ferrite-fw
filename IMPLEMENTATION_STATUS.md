@@ -1,5 +1,31 @@
 # Framework support implementation status
 
+## Resolved stylesheet references participate in invalidation
+
+The shared CSS transform now registers filesystem inputs for resolved CSS
+`@import`s and local `url()` assets. These registrations flow through existing
+request-scoped watches into module dependencies, graph ownership edges, and cache
+dependency snapshots. This also applies to direct CSS responses and the new
+production extraction path. Previously references changed output URLs without
+retaining their filesystem dependency state.
+
+The development/production stylesheet regression now checks imported CSS and SVG
+dependencies, graph ownership, stale cache snapshots after an SVG edit, and
+invalidation reaching the owning stylesheet. Existing preprocessing-input and
+extraction/browser-cache isolation assertions remain. The pipeline namespace
+advances from v12 to v13 so previous cached transforms cannot omit these inputs.
+No configuration or lockfile migration is needed.
+
+Validation: 51 server library tests passed, two explicit-host tests ignored;
+six build/manifest integration tests passed, including missing-input recovery and
+shared pre/post transforms. Server all-target Clippy with `-D warnings`, changed
+file formatting, and diff checks passed. This verifies dependency metadata and
+graph/cache invalidation, not browser image-cache behavior after an asset edit.
+Unresolved CSS reference recovery, complete public/virtual asset ownership,
+final CSS maps, SSR, additional frameworks, and the full mission remain unfinished.
+Browser acceptance, full workspace, feature matrices, and release checks were
+not rerun for this increment.
+
 ## Production CSS extraction consumes the shared pipeline
 
 Build CSS loading now uses `pipeline_stylesheet_module` instead of reloading raw

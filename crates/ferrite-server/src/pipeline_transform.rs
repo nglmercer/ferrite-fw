@@ -71,7 +71,7 @@ impl DevServer {
     /// Core transform dispatch by module type.
     pub(crate) async fn core_transform(
         &self,
-        _ctx: &PluginContext<'_>,
+        ctx: &PluginContext<'_>,
         id: &ModuleId,
         source: &str,
         module_type: &ModuleType,
@@ -98,6 +98,9 @@ impl DevServer {
                     if let Ok(resolved) =
                         self.resolve_relative(&css_id, &import.specifier, environment)
                     {
+                        if let Ok(file) = self.id_to_file(&ModuleId::new(&resolved)) {
+                            ctx.add_watch_file(file.to_string_lossy().as_ref());
+                        }
                         mapping.insert(import.specifier.clone(), resolved);
                     }
                 }
@@ -108,6 +111,9 @@ impl DevServer {
                     {
                         if let Ok(resolved) = self.resolve_relative(&css_id, &url.url, environment)
                         {
+                            if let Ok(file) = self.id_to_file(&ModuleId::new(&resolved)) {
+                                ctx.add_watch_file(file.to_string_lossy().as_ref());
+                            }
                             mapping.insert(url.url.clone(), resolved);
                         }
                     }

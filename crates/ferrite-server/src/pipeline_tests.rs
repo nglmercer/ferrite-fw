@@ -74,10 +74,11 @@ async fn stylesheet_payload_survives_hooks_cache_and_dependency_changes() {
         std::fs::write(&input, "red").unwrap();
         std::fs::write(
             root.path().join("style.module.css"),
-            ".button { color: COLOR; background: url('./asset.svg'); }",
+            "@import './nested.css'; .button { color: COLOR; background: url('./asset.svg'); }",
         )
         .unwrap();
         std::fs::write(root.path().join("asset.svg"), "<svg/>").unwrap();
+        std::fs::write(root.path().join("nested.css"), "h1 { color: green; }").unwrap();
         let config = ferrite_config::resolve_config(
             Default::default(),
             Some(root.path().into()),
@@ -105,6 +106,23 @@ async fn stylesheet_payload_survives_hooks_cache_and_dependency_changes() {
         let id = ModuleId::new("/style.module.css");
         let first = server.pipeline_module(&id, None, "client").await.unwrap();
         assert!(first.code.contains("stylesheetPost"));
+        let asset = root.path().join("asset.svg").to_string_lossy().into_owned();
+        assert!(first.dependencies.contains(&asset));
+        assert!(first.dependencies.contains(
+            &root
+                .path()
+                .join("nested.css")
+                .to_string_lossy()
+                .into_owned()
+        ));
+        let owner = server.inner.graph.get(&id).unwrap();
+        assert!(owner.imports.iter().any(|edge| {
+            server.inner.graph.get(&edge.resolved).is_some_and(|node| {
+                node.file
+                    .as_ref()
+                    .is_some_and(|file| file == &PathBuf::from(&asset))
+            })
+        }));
         let stylesheet = first.stylesheet.as_ref().unwrap();
         assert!(stylesheet.is_modules);
         assert!(stylesheet.exports.contains_key("button"));
@@ -135,6 +153,15 @@ async fn stylesheet_payload_survives_hooks_cache_and_dependency_changes() {
             let browser = server.pipeline_module(&id, None, "client").await.unwrap();
             assert_eq!(browser.code, first.code);
         }
+        let snapshot = crate::CachedTransform::from_module(&first);
+        assert!(snapshot.dependencies_current());
+        std::fs::write(&asset, "<svg><path/></svg>").unwrap();
+        assert!(!snapshot.dependencies_current());
+        let invalidated = server
+            .inner
+            .graph
+            .invalidate_tree(&ModuleId::new("/asset.svg"));
+        assert!(invalidated.contains(&id));
         std::fs::write(&input, "blue").unwrap();
         let changed = server.pipeline_module(&id, None, "client").await.unwrap();
         assert!(changed.stylesheet.unwrap().code.contains("blue"));
