@@ -73,8 +73,8 @@ pub fn preamble_code() -> String {
 pub type Registration = (String, String);
 
 /// Detect refreshable components in transformed JSX output: capitalized
-/// named-export locals plus named default exports. Anonymous default
-/// components are skipped (documented heuristic gap).
+/// named-export locals plus default exports. Anonymous defaults are addressed
+/// through the module namespace without rewriting their declarations.
 #[must_use]
 pub fn detect_components(id: &str, code: &str) -> Vec<Registration> {
     let parsed = ferrite_transform::compiler_for_engine("oxc").and_then(|compiler| {
@@ -93,9 +93,11 @@ pub fn detect_components(id: &str, code: &str) -> Vec<Registration> {
             continue;
         }
         if export.exported == "default" {
-            if let Some(local) = export.local.as_deref() {
-                registrations.push((local.to_string(), format!("{id} %default%")));
-            }
+            let local = export
+                .local
+                .as_deref()
+                .unwrap_or("__ferrite_refresh_exports__.default");
+            registrations.push((local.to_string(), format!("{id} %default%")));
             continue;
         }
         let capitalized = export
@@ -164,6 +166,10 @@ pub fn is_jsx_id(id: &str) -> bool {
 impl Plugin for ReactPlugin {
     fn name(&self) -> &'static str {
         "ferrite:react-refresh"
+    }
+
+    fn cache_key(&self) -> String {
+        format!("{}:namespace-default-v1:{}", self.name(), self.is_enabled())
     }
 
     fn transform_filter(&self) -> Option<HookFilter> {
@@ -461,11 +467,35 @@ mod tests {
     }
 
     #[test]
-    fn skips_anonymous_default_and_reexports() {
+    fn registers_anonymous_default_without_registering_reexports() {
         let code = "import { jsx as _jsx } from \"react/jsx-runtime\";\n\
             export default () => _jsx(\"div\", {});\n\
             export { x } from \"./other\";\n";
-        assert!(detect_components("/src/anon.tsx", code).is_empty());
+        assert_eq!(
+            detect_components("/src/anon.tsx", code),
+            vec![(
+                "__ferrite_refresh_exports__.default".into(),
+                "/src/anon.tsx %default%".into()
+            )]
+        );
+        for expression in ["function() {}", "class {}", "memo(() => null)"] {
+            let code = format!("export default {expression};");
+            assert_eq!(
+                detect_components("/anonymous.jsx", &code),
+                vec![(
+                    "__ferrite_refresh_exports__.default".into(),
+                    "/anonymous.jsx %default%".into()
+                )],
+                "{expression}"
+            );
+        }
+    }
+
+    #[test]
+    fn cache_identity_tracks_registration_version_and_enablement() {
+        let enabled = ReactPlugin::with_enabled(true).cache_key();
+        assert!(enabled.contains("namespace-default-v1"));
+        assert_ne!(enabled, ReactPlugin::with_enabled(false).cache_key());
     }
 
     #[test]

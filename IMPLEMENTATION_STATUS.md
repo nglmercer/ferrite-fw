@@ -1385,3 +1385,32 @@ This fixture writes installed package files and the lock directly; it does not
 establish live installer/browser acceptance or frozen reinstall support beyond
 the previously recorded tests. No cache, configuration or lock schema migration
 and no framework support promotion. The full mission remains active.
+
+### Register anonymous React default exports
+
+The native Refresh registration pass now addresses anonymous default exports
+through the self-imported module namespace. It preserves the declaration and
+its source locations while assigning a stable `%default%` family identity.
+Named exports retain their previous registration behavior; reexports are still
+excluded. Boundary validation still uses the official runtime's component check,
+so registration does not cause an anonymous function to bypass safe invalidation.
+The React plugin cache identity now includes the registration implementation
+version and enablement, invalidating prior plugin output without a lock/config
+schema migration.
+
+Validation: `cargo test -p ferrite-frameworks --locked` passed all 26 unit tests,
+including anonymous arrows/functions/classes/memo expressions and cache identity.
+The separately executed ignored `react_refresh_runtime` test installed and
+executed actual `react-refresh@0.17.0` through the explicit Node transport. It
+requires an anonymous default family, preserves the six mixed-export boundary
+checks and verifies unsafe anonymous updates invalidate. Outputs:
+`/tmp/ferrite-anonymous-refresh-all.log` and
+`/tmp/ferrite-anonymous-refresh-runtime.log`. Framework all-target Clippy with
+`--locked -- -D warnings`, formatting and diff checks passed.
+
+This is registration coverage, not complete anonymous-component state
+preservation or HOC instrumentation. Hook signatures, custom hooks, full HOC
+transforms and actual React DOM renderer/browser state tests remain assigned.
+Other ignored compiler/browser fixtures were not executed for this change and
+do not add evidence. React remains unavailable as a complete advertised create
+profile; no support status is promoted. The full mission remains active.

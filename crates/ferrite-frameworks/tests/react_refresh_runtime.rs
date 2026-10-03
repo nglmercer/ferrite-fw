@@ -1,5 +1,5 @@
 //! Execute generated footer against the official runtime; not renderer/state conformance.
-use ferrite_frameworks::react::{preamble_code, refresh_footer};
+use ferrite_frameworks::react::{detect_components, preamble_code, refresh_footer};
 use std::time::Duration;
 
 #[tokio::test]
@@ -35,12 +35,32 @@ async fn official_refresh_runtime_validates_export_boundaries() {
         ),
     )
     .unwrap();
+    let anonymous = root.join("Anonymous.mjs");
+    let anonymous_url = url::Url::from_file_path(&anonymous).unwrap().to_string();
+    let anonymous_source = "export default () => null;";
+    let anonymous_footer = refresh_footer(
+        &anonymous_url,
+        &detect_components(&anonymous_url, anonymous_source),
+    )
+    .replace(
+        "\"/@react-refresh\"",
+        &serde_json::to_string(url::Url::from_file_path(&preamble).unwrap().as_str()).unwrap(),
+    )
+    .replace(
+        "\"react-refresh/runtime\"",
+        &serde_json::to_string(&runtime_url).unwrap(),
+    );
+    std::fs::write(
+        &anonymous,
+        format!("{anonymous_source}\n{anonymous_footer}"),
+    )
+    .unwrap();
     let app = root.join("App.mjs");
     let app_url = url::Url::from_file_path(&app).unwrap().to_string();
     let footer = refresh_footer(&app_url, &[("App".into(), "boundary App".into())])
         .replace(
             "\"/@react-refresh\"",
-            &serde_json::to_string(url::Url::from_file_path(preamble).unwrap().as_str()).unwrap(),
+            &serde_json::to_string(url::Url::from_file_path(&preamble).unwrap().as_str()).unwrap(),
         )
         .replace(
             "\"react-refresh/runtime\"",
@@ -53,7 +73,7 @@ async fn official_refresh_runtime_validates_export_boundaries() {
     .unwrap();
     let wrapper = root.join("probe.mjs");
     std::fs::write(&wrapper, r#"
-export async function probe({app, runtime}) {
+export async function probe({app, anonymous, runtime}) {
   globalThis.window = globalThis;
   let callback;
   let invalidations = 0;
@@ -82,6 +102,14 @@ export async function probe({app, runtime}) {
     if (invalidations !== before + 1) throw new Error('unsafe export boundary accepted');
   }
   callback(null);
+  const anonymousModule = await import(anonymous);
+  const anonymousFamily = Runtime.getFamilyByType(anonymousModule.default);
+  if (!anonymousFamily || anonymousFamily.current !== anonymousModule.default) throw new Error('anonymous default was not registered');
+  // The runtime does not classify this anonymous function as a component.
+  // Registration must not bypass the boundary safety check.
+  const beforeAnonymous = invalidations;
+  callback({default: () => null});
+  if (invalidations !== beforeAnonymous + 1) throw new Error('anonymous boundary bypassed validation');
   return {invalidations, app: typeof previous.App, preamble: globalThis.__ferrite_react_preamble_installed__};
 }
 "#).unwrap();
@@ -99,11 +127,11 @@ export async function probe({app, runtime}) {
         .call_export(
             "refresh-probe",
             "probe",
-            serde_json::json!({"app": app_url, "runtime": runtime_url}),
+            serde_json::json!({"app": app_url, "anonymous": anonymous_url, "runtime": runtime_url}),
         )
         .await
         .unwrap();
-    assert_eq!(result["invalidations"], 6);
+    assert_eq!(result["invalidations"], 7);
     assert_eq!(result["app"], "function");
     assert_eq!(result["preamble"], true);
     host.shutdown();
