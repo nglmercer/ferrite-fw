@@ -1,5 +1,37 @@
 # Framework support implementation status
 
+## Production rejects missing relative CSS resources
+
+Production CSS extraction now fails on unresolved relative `url()` assets,
+unreadable asset files, and unresolved relative `@import`s. Previously these
+errors only produced warnings and left broken references in successful output.
+Errors identify the reference and importing stylesheet; unreadable assets also
+identify the resolved filesystem path. Existing asset emission and file-URL
+hooks are reused. Remote and absolute references retain their current handling.
+
+The regression covers missing SVG and imported CSS, verifies no output is written
+on failure in a clean project, creates each input, and rebuilds with the same
+builder. It asserts the emitted input contents and hashed reference in the
+importing stylesheet. CSS content assertions account for minification while
+retaining selector/declaration checks.
+
+Validation: `cargo test -p ferrite -p ferrite-test --locked --
+--test-threads=1` with explicit Chromium/Firefox paths and both browsers required
+passed: 71 tests, zero failures, 36 ignored across 20 targets. This includes the
+new regression, existing CSS/module/import/URL extraction, CommonJS browser
+interaction, build shaking, and preview hook tests. Facade/test all-target Clippy
+with `-D warnings`, changed-file formatting, and diff checks passed. The first
+broader invocation omitted Chromium's executable path and correctly failed the
+mandatory browser launch check; the corrected invocation above passed without
+changing that assertion.
+
+Migration: missing relative CSS inputs now fail builds rather than warning.
+No lockfile/configuration migration is needed. This does not establish public
+asset existence validation, complete CSS plugin/map parity, or SSR rendering.
+Generated-profile browser acceptance, full workspace, feature matrices, and
+cross-platform release checks were not rerun in this increment. The full mission
+remains incomplete.
+
 ## Client preview separates compiler requirements from runtime requirements
 
 Preview resolves configuration and existing plugin hooks without starting the

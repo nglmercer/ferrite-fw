@@ -107,27 +107,26 @@ impl BuildLoader {
             if !spec.starts_with("./") && !spec.starts_with("../") {
                 continue;
             }
-            match self.resolve_css_ref(id, spec, &resolve_env) {
-                Ok(dep) => match self.server.id_to_file(&dep).and_then(|file| {
-                    let bytes = std::fs::read(&file)?;
-                    let name = file
-                        .file_name()
-                        .map(|name| name.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "asset".to_string());
-                    Ok((name, bytes))
-                }) {
-                    Ok((name, bytes)) => {
-                        let url = self.emit_url(&name, bytes, env).await?;
-                        url_mapping.insert(spec.clone(), url);
-                    }
-                    Err(error) => {
-                        tracing::warn!("cannot emit CSS asset `{spec}` from `{id}`: {error}");
-                    }
-                },
-                Err(error) => {
-                    tracing::warn!("cannot resolve CSS asset `{spec}` from `{id}`: {error}");
-                }
-            }
+            let dep = self
+                .resolve_css_ref(id, spec, &resolve_env)
+                .map_err(|error| {
+                    FerriteError::Build(format!(
+                        "cannot resolve CSS asset `{spec}` from `{id}`: {error}"
+                    ))
+                })?;
+            let file = self.server.id_to_file(&dep)?;
+            let bytes = std::fs::read(&file).map_err(|error| {
+                FerriteError::Build(format!(
+                    "cannot read CSS asset `{spec}` from `{id}` at {}: {error}",
+                    file.display()
+                ))
+            })?;
+            let name = file
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "asset".to_string());
+            let url = self.emit_url(&name, bytes, env).await?;
+            url_mapping.insert(spec.clone(), url);
         }
         let text =
             ferrite_css::rewrite_css_urls(&result.code, |spec| url_mapping.get(spec).cloned());
@@ -137,12 +136,14 @@ impl BuildLoader {
             if !spec.starts_with("./") && !spec.starts_with("../") {
                 continue;
             }
-            match self.resolve_css_ref(id, spec, &resolve_env) {
-                Ok(dep) => imports.push((spec.clone(), dep, ferrite_graph::ImportKind::Static)),
-                Err(error) => {
-                    tracing::warn!("cannot resolve CSS @import `{spec}` from `{id}`: {error}");
-                }
-            }
+            let dep = self
+                .resolve_css_ref(id, spec, &resolve_env)
+                .map_err(|error| {
+                    FerriteError::Build(format!(
+                        "cannot resolve CSS @import `{spec}` from `{id}`: {error}"
+                    ))
+                })?;
+            imports.push((spec.clone(), dep, ferrite_graph::ImportKind::Static));
         }
         // Deterministic stub (sorted export map — content-hashed downstream).
         let code = if is_modules {
@@ -423,7 +424,14 @@ async fn preview_with_control(
     port: u16,
     control: &ferrite_plugin::PreviewControl,
 ) -> Result<()> {
-    preview_with_parts(dir, port, &control.headers, &control.mounts, &control.proxies).await
+    preview_with_parts(
+        dir,
+        port,
+        &control.headers,
+        &control.mounts,
+        &control.proxies,
+    )
+    .await
 }
 
 /// Shared preview server: proxies → mounts → static + SPA fallback.
@@ -476,8 +484,16 @@ async fn preview_with_parts(
                     "no-cache"
                 };
                 let mut map = HeaderMap::new();
-                map.insert(axum::http::header::CONTENT_TYPE, content_type.parse().unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")));
-                map.insert(axum::http::header::CACHE_CONTROL, HeaderValue::from_static(cache));
+                map.insert(
+                    axum::http::header::CONTENT_TYPE,
+                    content_type
+                        .parse()
+                        .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+                );
+                map.insert(
+                    axum::http::header::CACHE_CONTROL,
+                    HeaderValue::from_static(cache),
+                );
                 for (name, value) in headers {
                     map.insert(name, value.clone());
                 }
@@ -550,16 +566,18 @@ async fn preview_with_parts(
             dir.display()
         )));
     }
-    let router = axum::Router::new().fallback(handler).with_state(PreviewState {
-        dir: dir.to_path_buf(),
-        headers: parsed_headers(headers),
-        mounts: mounts.to_vec(),
-        proxies: proxies.to_vec(),
-        http_client: reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new()),
-    });
+    let router = axum::Router::new()
+        .fallback(handler)
+        .with_state(PreviewState {
+            dir: dir.to_path_buf(),
+            headers: parsed_headers(headers),
+            mounts: mounts.to_vec(),
+            proxies: proxies.to_vec(),
+            http_client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
+        });
     let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}"))
         .await
         .map_err(|error| FerriteError::Other(format!("cannot bind preview:{port}: {error}")))?;

@@ -3,6 +3,84 @@
 use ferrite_test::TempProject;
 
 #[tokio::test]
+async fn missing_relative_css_inputs_fail_build_and_recover_when_created() {
+    for (css, missing, contents, diagnostic) in [
+        (
+            "body { background: url('./missing.svg'); }",
+            "missing.svg",
+            "<svg xmlns='http://www.w3.org/2000/svg'></svg>",
+            "CSS asset",
+        ),
+        (
+            "@import './missing.css'; body { color: blue; }",
+            "missing.css",
+            "h1 { color: red; }",
+            "CSS @import",
+        ),
+    ] {
+        let project = TempProject::new(&[
+            (
+                "index.html",
+                "<script type='module' src='/main.js'></script>",
+            ),
+            ("main.js", "import './style.css'; console.log('ready');"),
+            ("style.css", css),
+        ]);
+        let builder = ferrite::create_builder(ferrite::Config {
+            root: Some(project.root.clone()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let error = builder.build("client").await.unwrap_err().to_string();
+        assert!(error.contains(diagnostic), "{error}");
+        assert!(error.contains(missing), "{error}");
+        assert!(error.contains("style.css"), "{error}");
+        assert!(!project.root.join("dist").exists());
+        std::fs::write(project.root.join(missing), contents).unwrap();
+        let report = builder.build("client").await.unwrap();
+        let outputs: Vec<_> = std::fs::read_dir(report.out_dir.join("assets"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        let emitted = outputs
+            .iter()
+            .find(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("missing")
+            })
+            .expect("the recovered CSS input must be emitted");
+        let output = std::fs::read_to_string(emitted).unwrap();
+        if missing.ends_with(".svg") {
+            assert_eq!(output, contents);
+        } else {
+            // CSS formatting/minification can change whitespace.
+            assert!(output.contains("h1") && output.contains("red"), "{output}");
+        }
+        let stylesheet = outputs
+            .iter()
+            .find(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("style-")
+            })
+            .expect("the importing stylesheet must be emitted");
+        let stylesheet = std::fs::read_to_string(stylesheet).unwrap();
+        assert!(
+            stylesheet.contains(&emitted.file_name().unwrap().to_string_lossy().to_string()),
+            "{stylesheet}"
+        );
+        assert!(
+            !stylesheet.contains(&format!("./{missing}")),
+            "{stylesheet}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn named_build_modes_load_their_env_and_remove_development_hooks() {
     let project = TempProject::new(&[
         ("ferrite.toml", "mode = 'staging'\n[build]\nminify = false\n"),
