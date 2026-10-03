@@ -3,6 +3,27 @@
 /// Registry schema version; independent of framework package versions.
 pub const SCHEMA_VERSION: u32 = 4;
 
+/// Direct package markers for JSX ownership detection, including unavailable
+/// adapters. Detection is not evidence of framework/compiler support.
+pub const JSX_OWNER_PACKAGES: &[&str] = &["react", "preact", "solid-js", "@builder.io/qwik"];
+
+/// Detect package-local owners, excluding transitive dependencies and type packages.
+pub fn jsx_owners(manifest: &serde_json::Value) -> Vec<&'static str> {
+    JSX_OWNER_PACKAGES
+        .iter()
+        .copied()
+        .filter(|name| {
+            ["dependencies", "devDependencies", "peerDependencies"]
+                .iter()
+                .any(|section| {
+                    manifest[*section]
+                        .as_object()
+                        .is_some_and(|entries| entries.contains_key(*name))
+                })
+        })
+        .collect()
+}
+
 /// A capability is tested only after the entire acceptance profile executes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Support {
@@ -135,6 +156,24 @@ pub(crate) fn compiler_unavailable(framework: &str, id: &str) -> ferrite_core::F
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn jsx_owner_markers_are_direct_and_do_not_advertise_adapters() {
+        let manifest = serde_json::json!({
+            "dependencies": {"react": "19", "preact": "10"},
+            "peerDependencies": {"solid-js": "1"},
+            "devDependencies": {"@builder.io/qwik": "1", "react": "19"}
+        });
+        assert_eq!(jsx_owners(&manifest), JSX_OWNER_PACKAGES);
+        assert!(jsx_owners(&serde_json::json!({
+            "dependencies": {"@types/react": "19", "vue": "3", "svelte": "5"},
+            "description": "react preact solid-js"
+        }))
+        .is_empty());
+        for owner in ["preact", "solid-js", "@builder.io/qwik"] {
+            assert!(descriptor(owner).is_none());
+        }
+    }
 
     #[test]
     fn component_ownership_is_precise() {

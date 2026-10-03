@@ -21,6 +21,60 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 impl DevServer {
+    /// Package boundaries are filesystem identities, never browser/virtual URLs.
+    pub(crate) fn jsx_manifest_candidates(&self, id: &ModuleId) -> Vec<String> {
+        let Ok(file) = self.id_to_file(id) else {
+            return Vec::new();
+        };
+        let mut candidates = Vec::new();
+        let Some(parent) = file.parent() else {
+            return candidates;
+        };
+        for directory in parent.ancestors() {
+            let manifest = directory.join("package.json");
+            candidates.push(manifest.to_string_lossy().into_owned());
+            if manifest.exists() || directory == self.inner.config.root {
+                break;
+            }
+        }
+        candidates
+    }
+
+    fn validate_inferred_jsx_owner(&self, id: &ModuleId) -> Result<()> {
+        // Explicit framework or JSX runtime selection takes precedence over detection.
+        if self.inner.config.framework.is_some()
+            || self.inner.config.react.import_source.is_some()
+            || self.inner.config.react.factory.is_some()
+        {
+            return Ok(());
+        }
+        for candidate in self.jsx_manifest_candidates(id) {
+            let contents = match std::fs::read_to_string(&candidate) {
+                Ok(contents) => contents,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(ferrite_core::FerriteError::Config(format!(
+                        "cannot inspect JSX owner in {candidate}: {error}"
+                    )))
+                }
+            };
+            let manifest: serde_json::Value = serde_json::from_str(&contents).map_err(|error| {
+                ferrite_core::FerriteError::Config(format!(
+                    "cannot inspect JSX owner in {candidate}: {error}"
+                ))
+            })?;
+            let owners = ferrite_frameworks::registry::jsx_owners(&manifest);
+            if owners.len() > 1 || owners.first().is_some_and(|owner| *owner != "react") {
+                return Err(ferrite_core::FerriteError::Transform {
+                    id: id.0.clone(),
+                    message: format!("JSX ownership in {candidate} is {} ({}); select an explicit framework/compiler profile or provide a JSX-lowering plugin. Native Preact, Solid and Qwik framework adapters are unavailable", if owners.len() > 1 { "ambiguous" } else { "unavailable" }, owners.join(", ")),
+                });
+            }
+            break;
+        }
+        Ok(())
+    }
+
     /// Core transform dispatch by module type.
     pub(crate) async fn core_transform(
         &self,
@@ -101,6 +155,9 @@ impl DevServer {
                 Ok(module)
             }
             _ if module_type.is_js_like() || *module_type == ModuleType::Json => {
+                if matches!(module_type, ModuleType::Jsx | ModuleType::Tsx) {
+                    self.validate_inferred_jsx_owner(id)?;
+                }
                 if matches!(module_type, ModuleType::Jsx | ModuleType::Tsx)
                     && self
                         .inner

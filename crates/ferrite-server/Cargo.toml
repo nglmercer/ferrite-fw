@@ -20,6 +20,7 @@ ferrite-css = { workspace = true }
 ferrite-assets = { workspace = true }
 ferrite-cache = { workspace = true }
 ferrite-ssr = { workspace = true }
+ferrite-frameworks = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true }
 tower = { workspace = true }
@@ -35,7 +36,6 @@ reqwest = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
-ferrite-frameworks = { workspace = true }
 tempfile = { workspace = true }
 oxc_sourcemap = { workspace = true }
 async-trait = { workspace = true }

@@ -67,11 +67,16 @@ impl DevServer {
         // 3. `?direct` CSS (from `<link>` tags).
         let direct_css = query.is_some_and(|q| q.contains("direct")) && path_part.ends_with(".css");
         // 4. Load (plugin first, then built-ins / fs).
-        let loaded = self
+        let mut loaded = self
             .load_source_full(&ctx, &resolved_id, &environment)
             .await?;
         let source = loaded.code;
         let mut module_type = loaded.module_type;
+        if matches!(module_type, ModuleType::Jsx | ModuleType::Tsx) {
+            loaded
+                .dependencies
+                .extend(self.jsx_manifest_candidates(&resolved_id));
+        }
         if direct_css {
             module_type = ModuleType::Css;
         }

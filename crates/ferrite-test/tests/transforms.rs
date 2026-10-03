@@ -149,6 +149,85 @@ async fn tsx_automatic_runtime() {
 // --- errors ------------------------------------------------------------------------------------------
 
 #[tokio::test]
+async fn jsx_ownership_uses_package_boundaries_and_invalidates_manifest_changes() {
+    let project = TempProject::new(&[
+        ("package.json", r#"{"dependencies":{"react":"19.2.0"}}"#),
+        ("src/app.jsx", "export const App = () => <div />;"),
+        ("packages/new/app.jsx", "export const App = () => <div />;"),
+        (
+            "packages/widget/package.json",
+            r#"{"peerDependencies":{"preact":"10.0.0"}}"#,
+        ),
+        (
+            "packages/widget/app.tsx",
+            "export const App = () => <div />;",
+        ),
+    ]);
+    let mut config = project.resolve_config();
+    config.react.runtime = "classic".into();
+    let server = ferrite::server::DevServer::new_without_watcher(config.clone(), vec![])
+        .await
+        .unwrap();
+    let id = ModuleId::new("/src/app.jsx");
+    let first = server.pipeline_module(&id, None, "client").await.unwrap();
+    assert!(first.code.contains("React.createElement"));
+    assert!(first
+        .dependencies
+        .iter()
+        .any(|path| path.ends_with("package.json")));
+    let nested = ModuleId::new("/packages/new/app.jsx");
+    server
+        .pipeline_module(&nested, None, "client")
+        .await
+        .unwrap();
+    std::fs::write(
+        project.root.join("packages/new/package.json"),
+        r#"{"devDependencies":{"solid-js":"1.0.0"}}"#,
+    )
+    .unwrap();
+    let error = server
+        .pipeline_module(&nested, None, "client")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("unavailable (solid-js)"), "{error}");
+    let error = server
+        .pipeline_module(&ModuleId::new("/packages/widget/app.tsx"), None, "client")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("unavailable (preact)"), "{error}");
+    assert!(error.contains("packages/widget/package.json"), "{error}");
+
+    std::fs::write(
+        project.root.join("package.json"),
+        r#"{"dependencies":{"react":"19.2.0","solid-js":"1.0.0"}}"#,
+    )
+    .unwrap();
+    let error = server
+        .pipeline_module(&id, None, "client")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("ambiguous (react, solid-js)"), "{error}");
+
+    config.framework = Some(ferrite::config::FrameworkConfig {
+        enabled: vec!["react".into()],
+        compiler_host: Some("native".into()),
+        ..Default::default()
+    });
+    let explicit = ferrite::server::DevServer::new_without_watcher(config, vec![])
+        .await
+        .unwrap();
+    assert!(explicit
+        .pipeline_module(&id, None, "client")
+        .await
+        .unwrap()
+        .code
+        .contains("React.createElement"));
+}
+
+#[tokio::test]
 async fn explicit_framework_exclusion_rejects_unowned_jsx_in_all_targets() {
     let project = TempProject::new(&[
         ("src/app.jsx", "export const App = () => <div />;"),

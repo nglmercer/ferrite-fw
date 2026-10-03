@@ -2326,3 +2326,46 @@ HMR, syntax-error recovery, build and preview with Node absent from Ferrite CLI
 PATH. Output: /tmp/ferrite-jsx-owner-browsers.log. Formatting of changed Rust
 files and diff checks passed. No full workspace rerun or new support promotion
 in this increment; the broader mission remains active.
+
+
+### Package-local inferred JSX ownership (2026-10-03)
+
+Implemented direct dependency/devDependency/peerDependency JSX owner markers
+in the shared framework registry, including unavailable Preact/Solid/Qwik
+markers without adding supported adapter descriptors. Shared lowering examines
+the nearest filesystem package.json for each JSX/TSX module. Multiple markers
+produce an actionable ambiguity error; a sole unavailable marker fails instead
+of receiving implicit React compilation. Explicit framework selection, JSX
+import source or custom factory overrides inference. Package-local boundaries
+prevent a root React dependency from claiming a nested Preact package. Plugins
+that pre-lower to JavaScript do not enter core JSX inference.
+
+Manifest candidates, including absent nearer package.json paths, participate in
+transform dependency snapshots before cache lookup. Regression tests execute a
+successful cached transform, change its owning manifest, and create a nearer
+manifest, then verify neither request returns stale React output. No lockfile
+or registry schema migration. Previously implicit JSX in ambiguous or sole
+unavailable-owner packages now requires explicit selection or pre-lowering.
+
+Validation: `cargo test -p ferrite-frameworks -p ferrite-server -p ferrite-test
+--lib --test transforms --locked` passed 31 framework units, 45 server units and
+8 transform integration tests. Two server external-tool tests remained ignored;
+they establish no support. Affected framework/server/test all-target Clippy
+with `--locked -- -D warnings`, changed-file formatting and diff checks passed.
+Fresh CLI builds passed. Logs: /tmp/ferrite-jsx-inference-tests.log,
+/tmp/ferrite-jsx-inference-clippy.log, /tmp/ferrite-jsx-inference-build.log.
+
+Both Chromium/Firefox generated React tests passed four JS/TS create/install/dev/
+interaction/HMR/recovery/build/preview flows in 88.34 seconds, with Node absent
+from CLI PATH. Browser execution used the ownership implementation before its
+unchanged marker logic was extracted into the shared registry; final registry
+and pipeline tests were rerun afterward. Log:
+/tmp/ferrite-jsx-inference-browsers.log. No full-workspace rerun or support
+promotion in this increment. Source pragmas, explicit per-file ownership maps,
+virtual-module ownership, inspector/doctor inference parity, unrecognized
+ecosystems and unavailable framework compilers remain incomplete. The full
+framework mission remains active.
+
+The rebuilt final CLI also passed the explicitly executed create/install/
+inspect/transform selection regression (4.32 seconds), with Node absent from
+CLI PATH. Output: /tmp/ferrite-jsx-inference-cli.log.
