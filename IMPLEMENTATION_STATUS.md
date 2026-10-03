@@ -1,5 +1,25 @@
 # Framework support implementation status
 
+## Preview revalidates files that can change between builds
+
+Static preview responses now default to `Cache-Control: no-cache`. The previous
+hyphen-in-filename heuristic incorrectly granted year-long immutable caching to
+unhashed public files and plugin-mounted files. Filenames alone do not establish
+content-addressed identity, including names that resemble a hash. Explicit plugin
+headers still override the default policy.
+
+HTTP regressions request a hyphenated SVG, a hash-looking custom JS filename, and
+a mounted text file, replace their contents in place, and verify updated bytes
+and revalidation headers at the same URLs. Six lifecycle/preview tests and three
+CommonJS tests passed, including Chromium/Firefox dev-edit-build-preview flows
+with both browsers required. Facade/test all-target Clippy with `-D warnings`,
+formatting, and diff checks passed. Migration: preview no longer infers immutable
+caching from names; plugins can set an explicit policy when appropriate. No
+configuration or lockfile schema migration is needed. Conditional-request/ETag
+optimization, generated-profile browser coverage for in-place asset changes,
+full workspace, feature matrices, and releases remain unexecuted here. SSR and
+the full framework mission remain incomplete.
+
 ## Preview reports missing static resources and unsupported methods
 
 Client preview now returns 404 for missing paths with a file extension, missing

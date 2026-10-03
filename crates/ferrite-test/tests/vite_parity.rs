@@ -347,7 +347,10 @@ async fn preview_serves_hooks_mounts_and_proxy() {
             "<!doctype html><html><body>app</body></html>",
         ),
         ("dist/app.js", "console.log(1);\n"),
+        ("dist/company-logo.svg", "<svg>first</svg>"),
+        ("dist/custom-deadbeef.js", "console.log('first');"),
         ("extra/hello.txt", "mounted\n"),
+        ("extra/company-guide.txt", "mounted-first"),
     ]);
     let (origin, origin_task) = spawn_echo_origin().await;
     let port = free_port();
@@ -391,6 +394,36 @@ async fn preview_serves_hooks_mounts_and_proxy() {
     assert!(head.contains("200"), "{head}");
     assert!(head.contains("x-ferrite-test: yes"), "{head}");
     assert!(body.contains("app"), "{body}");
+
+    for (url, file, first, second) in [
+        (
+            "/company-logo.svg",
+            "dist/company-logo.svg",
+            "<svg>first</svg>",
+            "<svg>second</svg>",
+        ),
+        (
+            "/custom-deadbeef.js",
+            "dist/custom-deadbeef.js",
+            "console.log('first');",
+            "console.log('second');",
+        ),
+        (
+            "/docs/company-guide.txt",
+            "extra/company-guide.txt",
+            "mounted-first",
+            "mounted-second",
+        ),
+    ] {
+        let (head, body) = http_get(port, url).await;
+        assert!(head.contains("cache-control: no-cache"), "{head}");
+        assert!(!head.contains("immutable"), "{head}");
+        assert_eq!(body, first);
+        std::fs::write(project.root.join(file), second).unwrap();
+        let (head, body) = http_get(port, url).await;
+        assert!(head.contains("cache-control: no-cache"), "{head}");
+        assert_eq!(body, second);
+    }
 
     for missing in [
         "/assets/missing.js",

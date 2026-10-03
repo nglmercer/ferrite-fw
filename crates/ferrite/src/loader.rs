@@ -468,15 +468,6 @@ async fn preview_with_parts(
         match std::fs::read(file) {
             Ok(bytes) => {
                 let content_type = ferrite_assets::content_type(file.to_string_lossy().as_ref());
-                let immutable = file
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| name.contains('-'));
-                let cache = if immutable {
-                    "public, max-age=31536000, immutable"
-                } else {
-                    "no-cache"
-                };
                 let mut map = HeaderMap::new();
                 map.insert(
                     axum::http::header::CONTENT_TYPE,
@@ -486,7 +477,9 @@ async fn preview_with_parts(
                 );
                 map.insert(
                     axum::http::header::CACHE_CONTROL,
-                    HeaderValue::from_static(cache),
+                    // Preview output and plugin mounts may change in place
+                    // between builds. Filenames alone cannot prove immutability.
+                    HeaderValue::from_static("no-cache"),
                 );
                 for (name, value) in headers {
                     map.insert(name, value.clone());
