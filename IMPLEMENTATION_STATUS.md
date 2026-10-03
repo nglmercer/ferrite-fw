@@ -1,5 +1,33 @@
 # Framework support implementation status
 
+## Executed generated-binary acceptance for staged packaging
+
+The Rust standalone test suite now exposes a napi-vm feature and a real SSR
+acceptance case. It builds both environments from TypeScript source, compiles the
+published generated Cargo application offline, alters server source after the
+build, and executes the binary from an empty directory with PATH empty. Assertions
+cover meaningful pre-JavaScript HTML, status/custom headers, POST method/URL,
+empty HEAD body, the emitted client script, and private renderer-file rejection.
+The slow test remains explicitly selectable; it was actually executed and passed,
+including its expanded request/asset assertions. This is custom-renderer SSR, not
+React/Vue/Svelte hydration evidence.
+
+Executing the existing real static-binary test exposed a previously unexecuted
+mismatch: unknown extensionless routes returned the shell despite an existing 404
+assertion. The generated static server now returns 404 for missing paths. The
+assertion was preserved and the real build/boot test passed after correction.
+Migration note: standalone static mode no longer substitutes index.html for
+unknown extensionless paths; explicit files and directory index serving remain.
+Test-owned servers now use cleanup guards on assertion failure.
+
+Feature-enabled facade tests passed 32 with one ignored; the ordinary standalone
+suite passed three with three ignored. Both real binary cases
+were selected with `--ignored --exact` and passed; musl remains unexecuted.
+Feature-enabled facade/test all-target Clippy and the final standalone-test Clippy
+passed with warnings denied. SDK provenance, concurrent/atomic binary publication,
+cross-platform releases, framework renderers/hydration, browser interaction and
+the full remaining mission are still unfinished.
+
 ## Scaffold generation stages before publication
 
 Standalone generation now writes and optionally builds in a temporary sibling

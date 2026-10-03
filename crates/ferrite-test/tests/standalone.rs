@@ -76,21 +76,27 @@ async fn standalone_build_compiles_and_serves() {
     // sibling dist/.
     let serve_dir = tempfile::tempdir().expect("tempdir");
     let port = free_port();
-    let mut child = std::process::Command::new(&binary)
+    let child = std::process::Command::new(&binary)
         .env("PORT", port.to_string())
         .env("HOST", "127.0.0.1")
         .current_dir(serve_dir.path())
         .stdout(std::process::Stdio::null())
         .spawn()
         .expect("spawn");
+    struct Running(std::process::Child);
+    impl Drop for Running {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let _running = Running(child);
     wait_until_ready(port);
     let body = http_get(port, "/index.html");
     assert!(body.contains("200"), "{body}");
     assert!(body.contains("<script"), "{body}");
     let missing = http_get(port, "/does-not-exist");
     assert!(missing.contains("404"), "{missing}");
-    child.kill().ok();
-    child.wait().ok();
 }
 
 /// Cross-compiles the scaffold for musl: the cross-target claim.
@@ -138,9 +144,17 @@ fn wait_until_ready(port: u16) {
 }
 
 fn http_get(port: u16, path: &str) -> String {
+    http_request(port, path, "GET")
+}
+
+fn http_request(port: u16, path: &str, method: &str) -> String {
     use std::io::{Read as _, Write as _};
     let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect");
-    write!(stream, "GET {path} HTTP/1.0\r\nHost: x\r\n\r\n").expect("write");
+    write!(
+        stream,
+        "{method} {path} HTTP/1.0\r\nHost: x\r\nContent-Length: 0\r\n\r\n"
+    )
+    .expect("write");
     let mut body = String::new();
     stream.read_to_string(&mut body).expect("read");
     body
@@ -217,4 +231,96 @@ fn existing_ssr_output_is_not_embedded_or_packaged_as_static() {
         "{error}"
     );
     assert!(!root.path().join("standalone").exists());
+}
+
+/// Build the real production graph, compile its generated application, then
+/// execute the embedded renderer with no source directory or command PATH.
+#[cfg(feature = "napi-vm")]
+#[tokio::test]
+#[ignore = "slow: generated SSR Cargo build and HTTP server"]
+async fn standalone_ssr_build_compiles_and_renders_without_node() {
+    let project = TempProject::new(&[
+        ("index.html", "<html><head></head><body><!--ssr-outlet--><script type=\"module\" src=\"/src/main.js\"></script></body></html>"),
+        ("src/main.js", "globalThis.clientLoaded = true;"),
+        ("src/entry-server.ts", "export function render(url: string, request: any) { return { html: `<h1>embedded ${request.method} ${url}</h1>`, status: 202, headers: [['x-renderer', 'compiled']] }; }"),
+    ]);
+    let mut config = standalone_config(&project, None);
+    config.runtime.backend = "napi-vm".into();
+    config.package.ssr_sdk =
+        Some(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../ferrite"));
+    config.base = "/app/".into();
+    let reports = ferrite::Builder::new(config, vec![])
+        .build_app()
+        .await
+        .unwrap();
+    assert_eq!(reports.len(), 2);
+    let scaffold = reports[0].out_dir.join("standalone");
+    let target = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target");
+    let status = std::process::Command::new("cargo")
+        .args(["build", "--offline", "--manifest-path"])
+        .arg(scaffold.join("Cargo.toml"))
+        .env("CARGO_TARGET_DIR", &target)
+        .status()
+        .expect("build generated application");
+    assert!(status.success(), "generated SSR application did not build");
+    let binary = target
+        .join("debug")
+        .join(format!("ferrite-app{}", std::env::consts::EXE_SUFFIX));
+    // Alter sources: request handling must use only the embedded emitted graph.
+    std::fs::write(
+        project.root.join("src/entry-server.ts"),
+        "throw new Error('source must not execute');",
+    )
+    .unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let port = free_port();
+    let child = std::process::Command::new(binary)
+        .env("PATH", "")
+        .env("HOST", "127.0.0.1")
+        .env("PORT", port.to_string())
+        .current_dir(cwd.path())
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .expect("start embedded renderer");
+    struct Running(std::process::Child);
+    impl Drop for Running {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let _running = Running(child);
+    wait_until_ready(port);
+    let response = http_get(port, "/app/");
+    assert!(response.starts_with("HTTP/1.0 202"), "{response}");
+    assert!(
+        response.to_lowercase().contains("x-renderer: compiled"),
+        "{response}"
+    );
+    assert!(
+        response.contains("<h1>embedded GET /app/</h1>"),
+        "{response}"
+    );
+    assert!(response.contains("<script"), "{response}");
+    let post = http_request(port, "/app/submitted", "POST");
+    assert!(post.starts_with("HTTP/1.0 202"), "{post}");
+    assert!(
+        post.contains("<h1>embedded POST /app/submitted</h1>"),
+        "{post}"
+    );
+    let head = http_request(port, "/app/", "HEAD");
+    assert!(head.starts_with("HTTP/1.0 202"), "{head}");
+    assert_eq!(head.split_once("\r\n\r\n").unwrap().1, "");
+    let script = response
+        .split("src=\"")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap();
+    let asset = http_get(port, script);
+    assert!(asset.starts_with("HTTP/1.0 200"), "{asset}");
+    assert!(asset.contains("clientLoaded"), "{asset}");
+    let private = http_get(port, "/app/server/renderer.json");
+    assert!(private.starts_with("HTTP/1.0 404"), "{private}");
 }

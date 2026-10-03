@@ -201,7 +201,7 @@ pub fn render_assets_rs(entries: &[(String, String, bool)], compress: bool) -> S
     out
 }
 
-/// Render the scaffold server: embedded lookup + SPA fallback, or a
+/// Render the scaffold server: embedded static lookup, or a
 /// sibling-`dist/` static server when not embedding.
 fn render_main_rs(embed: bool) -> String {
     if embed {
@@ -236,13 +236,6 @@ fn render_main_rs(embed: bool) -> String {
              }\n\
              if let Some(found) = assets::get(&path) {\n\
              return respond(found);\n\
-             }\n\
-             // SPA fallback: extensionless paths serve the shell.\n\
-             let leaf = path.rsplit('/').next().unwrap_or(\"\");\n\
-             if !leaf.contains('.') {\n\
-             if let Some(found) = assets::get(\"/index.html\") {\n\
-             return respond(found);\n\
-             }\n\
              }\n\
              StatusCode::NOT_FOUND.into_response()\n\
              }\n\

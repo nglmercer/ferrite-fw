@@ -6,6 +6,7 @@ description = "Ferrite test helpers: temp projects, fixtures, assertions"
 
 [features]
 swc = ["ferrite/swc"]
+napi-vm = ["ferrite/napi-vm"]
 
 [dependencies]
 ferrite-core = { workspace = true }
