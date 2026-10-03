@@ -303,7 +303,81 @@ async fn final_graph_requires_self_accept_call_not_context_read() {
         assert_eq!(
             server.inner.graph.get(&id).unwrap().hmr.self_accepting,
             expected,
-            "{}", module.code
+            "{}",
+            module.code
         );
     }
+}
+
+#[tokio::test]
+async fn final_graph_resolves_dependency_acceptance_and_clears_stale_metadata() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("dep.js"), "export const count = 1;").unwrap();
+    let file = root.path().join("entry.js");
+    std::fs::write(&file, "import {count} from './dep.js'; if (import.meta.hot) import.meta.hot.accept(['./dep.js'], ([next]) => console.log(next));").unwrap();
+    let config = ferrite_config::resolve_config(
+        Default::default(),
+        Some(root.path().into()),
+        Default::default(),
+    )
+    .unwrap();
+    let server = DevServer::new_without_watcher(config, vec![])
+        .await
+        .unwrap();
+    let id = ModuleId::new("/entry.js");
+    let module = server.pipeline_module(&id, None, "client").await.unwrap();
+    assert!(
+        module.code.contains("accept([\"/dep.js\"]"),
+        "{}",
+        module.code
+    );
+    let node = server.inner.graph.get(&id).unwrap();
+    assert!(!node.hmr.self_accepting);
+    assert_eq!(
+        node.hmr.accepted_deps,
+        std::collections::HashSet::from(["/dep.js".to_string()])
+    );
+    let ferrite_hmr::HmrPlan::Update(updates) =
+        ferrite_hmr::plan_update(&server.inner.graph, &ModuleId::new("/dep.js"), 1)
+    else {
+        panic!("dependency edge should accept");
+    };
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0].path, "/entry.js");
+    assert_eq!(updates[0].accepted_path, "/dep.js");
+    let updated = server
+        .pipeline_module(&ModuleId::new("/dep.js?t=123"), None, "client")
+        .await
+        .unwrap();
+    assert_eq!(updated.id.0, "/dep.js");
+    assert!(!server.inner.graph.contains(&ModuleId::new("/dep.js?t=123")));
+    assert!(matches!(
+        ferrite_hmr::plan_update(&server.inner.graph, &ModuleId::new("/dep.js"), 2),
+        ferrite_hmr::HmrPlan::Update(_)
+    ));
+
+    // A new source hash must replace acceptance, including on a cache hit.
+    std::fs::write(&file, "import {count} from './dep.js'; console.log(count);").unwrap();
+    server.pipeline_module(&id, None, "client").await.unwrap();
+    server.pipeline_module(&id, None, "client").await.unwrap();
+    assert!(server
+        .inner
+        .graph
+        .get(&id)
+        .unwrap()
+        .hmr
+        .accepted_deps
+        .is_empty());
+    std::fs::write(
+        &file,
+        "import.meta.hot.accept(dynamicDependency, callback);",
+    )
+    .unwrap();
+    assert!(server
+        .pipeline_module(&id, None, "client")
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("unsupported dynamic HMR"));
+    server.close();
 }

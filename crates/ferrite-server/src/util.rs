@@ -186,3 +186,51 @@ pub(crate) fn lan_ip() -> Option<std::net::IpAddr> {
 pub fn default_compiler() -> Arc<dyn JsCompiler> {
     Arc::new(OxcCompiler::new(OxcOptions::default()))
 }
+
+/// Numeric `t` is reserved for the dev client's import cache busting.
+/// Resource query flags and their order remain part of module identity.
+pub(crate) fn strip_hmr_timestamp(id: &ferrite_core::ModuleId) -> ferrite_core::ModuleId {
+    let (path, Some(query)) = id.split_query() else {
+        return id.clone();
+    };
+    let retained: Vec<_> = query
+        .split('&')
+        .filter(|part| {
+            !part.strip_prefix("t=").is_some_and(|value| {
+                !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
+            })
+        })
+        .collect();
+    if retained.len() == query.split('&').count() {
+        return id.clone();
+    }
+    ferrite_core::ModuleId::new(if retained.is_empty() {
+        path.to_string()
+    } else {
+        format!("{path}?{}", retained.join("&"))
+    })
+}
+
+#[cfg(test)]
+mod timestamp_tests {
+    #[test]
+    fn transport_timestamp_preserves_resource_query_identity() {
+        for (input, expected) in [
+            ("/dep.js?t=123", "/dep.js"),
+            ("/dep.js?raw&t=123", "/dep.js?raw"),
+            (
+                "/@id/component?ferrite-style=0&t=456&scoped",
+                "/@id/component?ferrite-style=0&scoped",
+            ),
+            ("/dep.js?t=123&t=456", "/dep.js"),
+            ("/dep.js?t=other", "/dep.js?t=other"),
+            ("/dep.js?t=", "/dep.js?t="),
+            ("/dep.js?target=123", "/dep.js?target=123"),
+        ] {
+            assert_eq!(
+                super::strip_hmr_timestamp(&ferrite_core::ModuleId::new(input)).0,
+                expected
+            );
+        }
+    }
+}

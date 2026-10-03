@@ -180,3 +180,71 @@ export async function probe({app}) {
     assert_eq!(result["notices"], serde_json::json!([1, 2, 3]));
     host.shutdown();
 }
+
+#[tokio::test]
+#[ignore = "requires explicitly invoked Node execution"]
+async fn dependency_acceptance_updates_modules_without_reexecuting_owners() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = dir.path().join("client.mjs");
+    std::fs::write(&client, include_str!("../../ferrite-hmr/src/client.js")).unwrap();
+    let wrapper = dir.path().join("dependencies.mjs");
+    std::fs::write(&wrapper, r#"
+import {writeFileSync} from 'node:fs';
+export async function probe({client, a, b, parent, second}) {
+  globalThis.location = {protocol:'http:', host:'fixture', reload() {throw new Error('unexpected reload');}};
+  globalThis.document = {getElementById() {return null;}};
+  const handlers = {};
+  globalThis.WebSocket = class {addEventListener(event, cb) {handlers[event] = cb;}};
+  await import(client);
+  globalThis.runs = {}; globalThis.disposed = []; globalThis.single = []; globalThis.array = []; globalThis.other = [];
+  for (const [name, url] of [['a', a], ['b', b]]) {
+    writeFileSync(new URL(url), `export const version = Number(new URL(import.meta.url).searchParams.get('t') || 0);
+      globalThis.runs[${JSON.stringify(name)}] = (globalThis.runs[${JSON.stringify(name)}] || 0) + 1;
+      const hot = globalThis.__ferrite_create_hot__(${JSON.stringify(url)});
+      hot.dispose(() => globalThis.disposed.push([${JSON.stringify(name)}, version]));`);
+    await import(url);
+  }
+  writeFileSync(new URL(parent), `globalThis.runs.parent = (globalThis.runs.parent || 0) + 1;
+    const hot = globalThis.__ferrite_create_hot__(${JSON.stringify(parent)});
+    hot.accept(${JSON.stringify(a)}, next => globalThis.single.push(next.version));
+    hot.accept(${JSON.stringify([a,b])}, next => globalThis.array.push(next.map(module => module?.version ?? null)));
+    hot.dispose(() => { throw new Error('accepting parent was disposed'); });`);
+  writeFileSync(new URL(second), `globalThis.runs.second = (globalThis.runs.second || 0) + 1;
+    const hot = globalThis.__ferrite_create_hot__(${JSON.stringify(second)});
+    hot.accept(${JSON.stringify(a)}, next => globalThis.other.push(next.version));`);
+  await import(parent); await import(second);
+  const update = (owner, accepted, timestamp) => ({type:'js-update', path:owner, acceptedPath:accepted, timestamp});
+  await handlers.message({data:JSON.stringify({type:'update', updates:[update(parent,a,1),update(second,a,1)]})});
+  await handlers.message({data:JSON.stringify({type:'update', updates:[update(parent,a,2),update(parent,b,2),update(second,a,2)]})});
+  return {runs:globalThis.runs, disposed:globalThis.disposed, single:globalThis.single, array:globalThis.array, other:globalThis.other};
+}
+"#).unwrap();
+    let host = ferrite_plugin::node_adapter::NodeAdapterHost::spawn_with_timeout(
+        None,
+        Duration::from_secs(10),
+    )
+    .unwrap();
+    host.register_plugin(
+        "dependency-probe",
+        url::Url::from_file_path(wrapper).unwrap().as_str(),
+    )
+    .unwrap();
+    let file = |name: &str| {
+        url::Url::from_file_path(dir.path().join(name))
+            .unwrap()
+            .to_string()
+    };
+    let result = host.call_export("dependency-probe", "probe", serde_json::json!({"client":file("client.mjs"),"a":file("a.mjs"),"b":file("b.mjs"),"parent":file("parent.mjs"),"second":file("second.mjs")})).await.unwrap();
+    assert_eq!(
+        result["runs"],
+        serde_json::json!({"a":3,"b":2,"parent":1,"second":1})
+    );
+    assert_eq!(
+        result["disposed"],
+        serde_json::json!([["a", 0], ["a", 1], ["b", 0]])
+    );
+    assert_eq!(result["single"], serde_json::json!([1, 2]));
+    assert_eq!(result["array"], serde_json::json!([[1, null], [2, 2]]));
+    assert_eq!(result["other"], serde_json::json!([1, 2]));
+    host.shutdown();
+}

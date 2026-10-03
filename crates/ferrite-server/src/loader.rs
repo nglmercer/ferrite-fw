@@ -35,7 +35,14 @@ impl DevServer {
         let module_watches = std::sync::Mutex::new(Vec::new());
         ctx.watch_files = &module_watches;
         // 0. `/@id/` URLs map back to internal `\0` virtual ids (§14).
-        let id = unvirtualize(id);
+        // The dev transport timestamp changes browser import identity, not the
+        // graph/resource identity or the hot-context owner.
+        let id = if !ssr && !self.inner.config.is_production {
+            strip_hmr_timestamp(id)
+        } else {
+            id.clone()
+        };
+        let id = unvirtualize(&id);
         // 1. Resolve (plugin first, then resolver).
         let resolved = self.resolve_id(&ctx, &id.0, importer, &environment).await?;
         if resolved.external {
@@ -105,7 +112,7 @@ impl DevServer {
                     .await?;
                 if !retransform && cached.dependencies_current() {
                     let module = PipelineModule::from_cached(resolved_id.clone(), cached);
-                    self.update_graph(&module, env);
+                    self.update_graph(&module, env)?;
                     return Ok(module);
                 }
             }
@@ -262,7 +269,7 @@ impl DevServer {
             module.code = code;
         }
         // 13. Graph update + hooks + cache.
-        self.update_graph(&module, env);
+        self.update_graph(&module, env)?;
         let parsed_id = module.id.clone();
         self.inner
             .plugins

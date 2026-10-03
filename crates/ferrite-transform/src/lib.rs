@@ -37,7 +37,7 @@ pub use types::{
     ParsedImportKind, ParsedModule, ShakeInfo, TransformRequest, TransformResult,
 };
 
-pub use parse::self_accepts_hmr;
+pub use parse::{hmr_dependencies, self_accepts_hmr};
 
 #[cfg(test)]
 mod tests {
@@ -63,6 +63,30 @@ mod tests {
         ] {
             assert!(crate::parse::self_accepts_hmr("/test.js", code), "{code}");
         }
+    }
+
+    #[test]
+    fn hot_dependency_literals_are_ast_based_and_dynamic_forms_fail() {
+        let source = "if (import.meta.hot) import.meta.hot.accept(['./a.js', './b.js'], ([a,b]) => {}); import.meta.hot.accept('./a.js', next => {});";
+        let deps = crate::hmr_dependencies("/entry.js", source).unwrap();
+        assert_eq!(
+            deps.iter().map(|(s, _)| s.as_str()).collect::<Vec<_>>(),
+            vec!["./a.js", "./b.js", "./a.js"]
+        );
+        for (specifier, (start, end)) in deps {
+            assert_eq!(&source[start + 1..end - 1], specifier);
+        }
+        for source in [
+            "import.meta.hot.accept(dep, cb);",
+            "import.meta.hot.accept(['./a.js', ...deps], cb);",
+            "import.meta.hot.accept([, './a.js'], cb);",
+        ] {
+            assert!(crate::hmr_dependencies("/entry.js", source)
+                .unwrap_err()
+                .to_string()
+                .contains("literal dependency"));
+        }
+        assert!(crate::hmr_dependencies("/entry.js", "function deferred() { import.meta.hot.accept(dep); } const text = 'import.meta.hot.accept(dep)'; unrelated.accept(dep);").unwrap().is_empty());
     }
 
     use super::*;

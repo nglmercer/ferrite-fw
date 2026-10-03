@@ -306,3 +306,85 @@ async fn chromium_generated_components() {
 async fn firefox_generated_components() {
     acceptance(BrowserKind::Firefox, &["svelte", "vue"]).await;
 }
+
+async fn dependency_acceptance(kind: BrowserKind) {
+    let binary = cli();
+    let project = ferrite_test::TempProject::new(&[
+        ("index.html", "<html><head><link rel='icon' href='data:,'></head><body><button id='counter'>loading</button><span id='other'></span><script type='module' src='/main.js'></script></body></html>"),
+        ("dep.js", "export const step = 1; if (import.meta.hot) import.meta.hot.dispose(() => { globalThis.disposals = (globalThis.disposals || 0) + 1; });"),
+        ("main.js", "import {step} from './dep.js'; import './other.js'; globalThis.parentRuns = (globalThis.parentRuns || 0) + 1; globalThis.session = Math.random(); let increment = step; let count = 0; const button = document.querySelector('#counter'); const render = () => button.textContent = `count: ${count}, step: ${increment}`; render(); button.onclick = () => { count += increment; render(); }; if (import.meta.hot) { import.meta.hot.accept(['./dep.js'], ([next]) => { increment = next.step; render(); }); import.meta.hot.dispose(() => { throw new Error('accepting parent was disposed'); }); }"),
+        ("other.js", "import {step} from './dep.js'; globalThis.otherRuns = (globalThis.otherRuns || 0) + 1; document.querySelector('#other').textContent = `other: ${step}`; if (import.meta.hot) import.meta.hot.accept('./dep.js', next => { document.querySelector('#other').textContent = `other: ${next.step}`; globalThis.otherCallbacks = (globalThis.otherCallbacks || 0) + 1; });"),
+    ]);
+    let executable = match kind {
+        BrowserKind::Chromium => ferrite_e2e::find_chromium(None),
+        BrowserKind::Firefox => ferrite_e2e::find_firefox(None),
+    }
+    .expect("dependency acceptance requires a real browser");
+    let browser = Browser::launch(
+        LaunchOptions::default()
+            .browser(kind)
+            .executable(executable),
+    )
+    .await
+    .unwrap();
+    let (mut dev, url) = server(&binary, &project.root, "dev", false).await;
+    let page = browser.new_page().await.unwrap();
+    page.goto(&url).await.unwrap();
+    page.wait_for_function("document.querySelector('#counter')?.textContent === 'count: 0, step: 1' && document.querySelector('#other')?.textContent === 'other: 1'", Duration::from_secs(10)).await.unwrap_or_else(|error| panic!("{error}: errors={:?}; console={:?}", page.page_errors(), page.console_messages()));
+    let session: f64 = page.evaluate("globalThis.session").await.unwrap();
+    page.locator("#counter").click().await.unwrap();
+    let mut count = 1;
+    for step in [2, 3] {
+        std::fs::write(project.root.join("dep.js"), format!("export const step = {step}; if (import.meta.hot) import.meta.hot.dispose(() => {{ globalThis.disposals = (globalThis.disposals || 0) + 1; }});")).unwrap();
+        page.wait_for_function(&format!("document.querySelector('#counter')?.textContent === 'count: {count}, step: {step}' && document.querySelector('#other')?.textContent === 'other: {step}'"), Duration::from_secs(10)).await.unwrap_or_else(|error| panic!("{error}: errors={:?}; console={:?}", page.page_errors(), page.console_messages()));
+        assert_eq!(
+            page.evaluate::<f64>("globalThis.session").await.unwrap(),
+            session,
+            "document must not reload"
+        );
+        assert_eq!(
+            page.evaluate::<u32>("globalThis.parentRuns").await.unwrap(),
+            1
+        );
+        assert_eq!(
+            page.evaluate::<u32>("globalThis.otherRuns").await.unwrap(),
+            1
+        );
+        assert_eq!(
+            page.evaluate::<u32>("globalThis.disposals").await.unwrap(),
+            step - 1,
+            "shared dependency is disposed once"
+        );
+        assert_eq!(
+            page.evaluate::<u32>("globalThis.otherCallbacks")
+                .await
+                .unwrap(),
+            step - 1
+        );
+        page.locator("#counter").click().await.unwrap();
+        count += step;
+        page.wait_for_function(&format!("document.querySelector('#counter')?.textContent === 'count: {count}, step: {step}'"), Duration::from_secs(5)).await.unwrap();
+    }
+    assert!(page.page_errors().is_empty(), "{:?}", page.page_errors());
+    assert!(
+        page.console_messages()
+            .iter()
+            .all(|message| message.kind != "error"),
+        "{:?}",
+        page.console_messages()
+    );
+    dev.kill().await.unwrap();
+    dev.wait().await.unwrap();
+    browser.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires freshly built CLI and real Chromium"]
+async fn chromium_dependency_acceptance() {
+    dependency_acceptance(BrowserKind::Chromium).await;
+}
+#[tokio::test]
+#[ignore = "requires freshly built CLI and real Firefox"]
+async fn firefox_dependency_acceptance() {
+    dependency_acceptance(BrowserKind::Firefox).await;
+}

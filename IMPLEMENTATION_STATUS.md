@@ -1117,3 +1117,52 @@ profiles and the existing publication/symlink protections. Framework all-targets
 Clippy with `--locked -- -D warnings` passed; formatting and diff checks passed.
 No additional browser acceptance or support promotion is claimed. Complete
 Refresh, framework HMR, SSR/checkers and the remaining mission remain assigned.
+
+### Dependency acceptance through the pipeline, planner and shipped client
+
+Final JavaScript now supplies AST-analyzed literal/string-array hot acceptance.
+Dependency literals resolve through the plugin-aware resolver, become executable
+dev URLs even with import maps, and retain chained edit maps. The graph records
+accepted concrete dependency IDs and removes stale acceptance on new transforms
+and cache hits. Dynamic acceptance arguments fail with an actionable error;
+external dependencies cannot establish a local boundary. Deferred/aliased hot
+contexts and computed acceptance forms remain outside this exercised subset.
+
+The planner carries both the callback owner and accepted module. The client
+re-imports/disposes the dependency without re-running its accepting parent,
+deduplicates shared imports/disposals per update batch, and invokes array
+callbacks once with entries for changed dependencies. This subset's callback
+shape was checked against the official [HMR API](https://vite.dev/guide/api-hmr);
+this does not claim complete Vite compatibility or syntax-error recovery.
+
+Real-browser regressions exposed timestamp IDs creating unaccepted graph roots
+after the first edit. Dev transport-only numeric `t` parameters now leave graph,
+cache and hot-context ownership unchanged. Other resource queries retain their
+identity and order; production/SSR requests do not use this normalization.
+
+Validation:
+
+- `cargo test -p ferrite-transform -p ferrite-graph -p ferrite-hmr -p ferrite-server --locked`:
+  47 transform, 7 graph, 3 HMR and 35 server tests passed.
+  Output: `/tmp/ferrite-dependency-hmr.log`.
+- `cargo test -p ferrite-frameworks --test hmr_client --locked -- --ignored --nocapture`:
+  all 3 actual-client execution fixtures passed, including shared dependencies,
+  batched array callbacks, one disposal/import and retained parent registrations.
+  Output: `/tmp/ferrite-dependency-client.log`.
+- Explicitly executed `cargo test -p ferrite-test --test generated_apps --locked -- --ignored --nocapture`
+  with the freshly built CLI, Chromium 153 and Firefox 157: all 6 tests passed
+  (72.70 seconds). This includes clean create/install/dev/edit/build/preview for
+  all six existing profiles in both browsers and two new Node-free dependency
+  acceptance tests. Both edits preserve parent counter state and document
+  identity, deliver updated exports to both owners, dispose once, and produce
+  no page/console errors. Output: `/tmp/ferrite-dependency-all-browsers.log`.
+- `cargo test -p ferrite-server --features swc --locked`: all 35 tests passed.
+- All-target Clippy for transform/graph/HMR/server/frameworks/test with
+  `--locked -- -D warnings`, formatting and diff checks passed.
+
+No lock/config schema migration. Pipeline cache identity advances to v7. Custom
+dev-protocol consumers must interpret `path` as callback owner and `acceptedPath`
+as the module to import; restart/reload dev clients when upgrading. Transitive
+self boundaries still require dependency cache-busting work; syntax recovery,
+complete Refresh, component-specific HMR, SSR/checkers and remaining mission
+requirements remain assigned. No framework profile is promoted.

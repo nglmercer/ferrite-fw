@@ -98,7 +98,7 @@ impl DevServer {
             .ok()
             .map(|bytes| Hash::of_bytes(&bytes).0);
         let pipeline = format!(
-            "pipeline-v6:{}:{:?}:{}:{}:{:?}:{lock_state:?}",
+            "pipeline-v7:{}:{:?}:{}:{}:{:?}:{lock_state:?}",
             self.inner.plugins.cache_key(),
             self.inner.config.react,
             self.inner.config.is_production,
@@ -139,7 +139,7 @@ impl DevServer {
     }
 
     /// Record a module in the graph.
-    pub(crate) fn update_graph(&self, module: &PipelineModule, env: &str) {
+    pub(crate) fn update_graph(&self, module: &PipelineModule, env: &str) -> Result<()> {
         let mut node = self.inner.graph.get(&module.id).unwrap_or_else(|| {
             ModuleNode::new(
                 module.id.clone(),
@@ -153,6 +153,14 @@ impl DevServer {
             node.file = Some(file);
         }
         node.hmr.self_accepting = ferrite_transform::self_accepts_hmr(&module.id.0, &module.code);
+        node.hmr.accepted_deps = if module.module_type.is_js_like() {
+            ferrite_transform::hmr_dependencies(&module.id.0, &module.code)?
+                .into_iter()
+                .map(|(specifier, _)| specifier)
+                .collect()
+        } else {
+            Default::default()
+        };
         self.inner.graph.upsert(node);
         let mut edges: Vec<ImportEdge> = module
             .imports
@@ -193,6 +201,7 @@ impl DevServer {
             module.code.clone(),
             &Hash::of_str(&module.code),
         );
+        Ok(())
     }
 
     /// Environment for an env name (`ssr`, or anything else → client).

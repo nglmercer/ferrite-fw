@@ -259,6 +259,48 @@ impl DevServer {
             module.map = crate::loader::merge_maps(map, module.map, code == module.code)?;
             module.code = code;
         }
+        // Acceptance literals are executable HMR protocol URLs, even when
+        // ordinary bare imports use an import map. Resolve them after plugins.
+        let mut edits = Vec::new();
+        for (specifier, (start, end)) in
+            ferrite_transform::hmr_dependencies(&module.id.0, &module.code)?
+        {
+            let resolved = self
+                .resolve_id(ctx, &specifier, Some(&module.id), environment)
+                .await
+                .map_err(|error| {
+                    ferrite_core::FerriteError::Resolve(format!(
+                        "cannot resolve HMR dependency `{specifier}` from `{}`: {error}",
+                        module.id.0
+                    ))
+                })?;
+            if resolved.external {
+                return Err(ferrite_core::FerriteError::Config(format!(
+                    "cannot hot-accept external dependency `{specifier}` from `{}`",
+                    module.id.0
+                )));
+            }
+            let url = if resolved.id.0.starts_with('\0') {
+                virtual_url(&resolved.id.0)
+            } else {
+                resolved.id.0.clone()
+            };
+            edits.push((start, end, serde_json::to_string(&url)?));
+            if !imports.iter().any(|(_, id, _)| id.0 == url) {
+                imports.push((specifier, ModuleId::new(url), ImportKind::Dynamic));
+                import_bindings.push(Vec::new());
+            }
+        }
+        if !edits.is_empty() {
+            let (code, map) = ferrite_transform::apply_text_edits(
+                &module.id.0,
+                &module.code,
+                &edits,
+                module.map.is_some(),
+            )?;
+            module.map = crate::loader::merge_maps(map, module.map, code == module.code)?;
+            module.code = code;
+        }
         // Resolve re-export sources to module ids (specifier matching would
         // not survive the resolved-URL rewriting below; `mapping` misses
         // the import-map path, so key off the recorded imports instead).
@@ -475,14 +517,17 @@ impl DevServer {
                 dependencies.push(file.to_string_lossy().into_owned());
             }
             dependencies.extend(module.dependencies);
-            let metadata = module.commonjs.ok_or_else(|| {
-                ferrite_core::FerriteError::Transform {
+            let metadata =
+                module
+                    .commonjs
+                    .ok_or_else(|| {
+                        ferrite_core::FerriteError::Transform {
                     id: target.into(),
                     message:
                         "CommonJS re-export target is not a synchronous factory; use ESM re-exports"
                             .into(),
                 }
-            })?;
+                    })?;
             names.extend(metadata.names);
             for target in &metadata.reexports {
                 self.collect_commonjs_exports(target, environment, visited, names, dependencies)

@@ -32,10 +32,10 @@ function createHotContext(id) {
     data: entry.data,
     accept(dep, cb) {
       if (typeof dep === "undefined") entry.selfAccept = true;
-      else if (typeof dep === "function") entry.callbacks.push({ deps: [id], cb: dep });
+      else if (typeof dep === "function") entry.callbacks.push({ deps: [id], cb: dep, array: false });
       else {
         const deps = Array.isArray(dep) ? dep : [dep];
-        entry.callbacks.push({ deps, cb });
+        entry.callbacks.push({ deps, cb, array: Array.isArray(dep) });
       }
     },
     dispose(cb) {
@@ -141,30 +141,36 @@ function connect() {
           break;
         case "update": {
           clearError();
+          // Snapshot owners before any import re-registers self boundaries.
+          const pendingCallbacks = new Set();
           for (const update of payload.updates) {
-            if (update.type === "css-update") {
-              try {
-                await fetchUpdate(update.path, update.timestamp);
-              } catch (err) {
-                console.error("[ferrite] css update failed, reloading", err);
-                location.reload();
-              }
-            } else {
-              console.log(`[ferrite] hmr update ${update.path}`);
-              try {
-                const boundary = hotModules.get(update.acceptedPath);
-                const callbacks = boundary?.callbacks.slice() ?? [];
-                const disposers = boundary?.disposeCallbacks.slice() ?? [];
-                for (const dispose of disposers) await dispose(boundary.data);
-                const next = await fetchUpdate(update.acceptedPath, update.timestamp);
-                for (const { deps, cb } of callbacks) {
-                  if (typeof cb === "function" && deps.includes(update.acceptedPath)) await cb(next);
-                }
-              } catch (err) {
-                console.error("[ferrite] js update failed, reloading", err);
-                location.reload();
+            if (update.type !== "css-update") {
+              for (const registration of hotModules.get(update.path)?.callbacks ?? []) {
+                if (registration.deps.includes(update.acceptedPath)) pendingCallbacks.add(registration);
               }
             }
+          }
+          const loaded = new Map();
+          try {
+            for (const update of payload.updates) {
+              if (update.type === "css-update") {
+                await fetchUpdate(update.path, update.timestamp);
+              } else if (!loaded.has(update.acceptedPath)) {
+                console.log(`[ferrite] hmr update ${update.acceptedPath}`);
+                const accepted = hotModules.get(update.acceptedPath);
+                const disposers = accepted?.disposeCallbacks.slice() ?? [];
+                for (const dispose of disposers) await dispose(accepted.data);
+                loaded.set(update.acceptedPath, await fetchUpdate(update.acceptedPath, update.timestamp));
+              }
+            }
+            for (const { deps, cb, array } of pendingCallbacks) {
+              if (typeof cb === "function") {
+                await cb(array ? deps.map(dep => loaded.get(dep)) : loaded.get(deps[0]));
+              }
+            }
+          } catch (err) {
+            console.error("[ferrite] update failed, reloading", err);
+            location.reload();
           }
           break;
         }

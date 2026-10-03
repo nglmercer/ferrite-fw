@@ -338,6 +338,18 @@ impl ModuleGraph {
     /// Collect every accepting boundary. An unaccepted root forces a reload.
     /// Unlike the legacy nearest-chain query, this checks all importer branches.
     pub fn hmr_accepting_boundaries(&self, changed: &ModuleId) -> Option<Vec<ModuleId>> {
+        let mut boundaries: Vec<_> = self
+            .hmr_accepting_updates(changed)?
+            .into_iter()
+            .map(|(boundary, _)| boundary)
+            .collect();
+        boundaries.sort_by(|a, b| a.0.cmp(&b.0));
+        boundaries.dedup();
+        Some(boundaries)
+    }
+
+    /// Return (callback owner, module to re-import) for every accepting edge.
+    pub fn hmr_accepting_updates(&self, changed: &ModuleId) -> Option<Vec<(ModuleId, ModuleId)>> {
         let mut queue = VecDeque::from([changed.clone()]);
         let mut seen = HashSet::new();
         let mut boundaries = HashSet::new();
@@ -347,7 +359,7 @@ impl ModuleGraph {
             }
             let node = self.get(&current)?;
             if node.hmr.self_accepting || node.module_type == ModuleType::Css {
-                boundaries.insert(current);
+                boundaries.insert((current.clone(), current));
                 continue;
             }
             if node.importers.is_empty() {
@@ -356,7 +368,7 @@ impl ModuleGraph {
             for importer_id in node.importers {
                 let importer = self.get(&importer_id)?;
                 if importer.hmr.accepted_deps.contains(&current.0) {
-                    boundaries.insert(importer_id);
+                    boundaries.insert((importer_id, current.clone()));
                 } else {
                     queue.push_back(importer_id);
                 }
@@ -366,7 +378,7 @@ impl ModuleGraph {
             return None;
         }
         let mut boundaries: Vec<_> = boundaries.into_iter().collect();
-        boundaries.sort_by(|a, b| a.0.cmp(&b.0));
+        boundaries.sort_by(|a, b| (&a.0 .0, &a.1 .0).cmp(&(&b.0 .0, &b.1 .0)));
         Some(boundaries)
     }
 

@@ -321,31 +321,33 @@ pub(crate) fn static_dynamic_specifier(
     ))
 }
 
+fn hot(expression: &Expression<'_>, id: &str) -> bool {
+    use oxc_ast::ast::Argument;
+    match expression.get_inner_expression() {
+        Expression::StaticMemberExpression(member) => {
+            member.property.name == "hot" && matches!(member.object, Expression::ImportMeta(_))
+        }
+        Expression::LogicalExpression(logical) => {
+            matches!(
+                logical.operator,
+                oxc_syntax::operator::LogicalOperator::Or
+                    | oxc_syntax::operator::LogicalOperator::Coalesce
+            ) && hot(&logical.left, id)
+        }
+        Expression::CallExpression(call) => {
+            matches!(call.callee.get_inner_expression(), Expression::StaticMemberExpression(member)
+                    if member.property.name == "__ferrite_create_hot__" && matches!(member.object.get_inner_expression(), Expression::Identifier(identifier) if identifier.name == "globalThis"))
+                && call.arguments.len() == 1
+                && matches!(call.arguments.first(), Some(Argument::StringLiteral(value)) if value.value == id)
+        }
+        _ => false,
+    }
+}
+
 /// Distinguish explicit self-accept calls from merely reading the hot context.
 /// Opaque dependency/callback expressions do not establish a self boundary.
 pub fn self_accepts_hmr(id: &str, code: &str) -> bool {
     use oxc_ast::ast::{Argument, CallExpression};
-    fn hot(expression: &Expression<'_>, id: &str) -> bool {
-        match expression.get_inner_expression() {
-            Expression::StaticMemberExpression(member) => {
-                member.property.name == "hot" && matches!(member.object, Expression::ImportMeta(_))
-            }
-            Expression::LogicalExpression(logical) => {
-                matches!(
-                    logical.operator,
-                    oxc_syntax::operator::LogicalOperator::Or
-                        | oxc_syntax::operator::LogicalOperator::Coalesce
-                ) && hot(&logical.left, id)
-            }
-            Expression::CallExpression(call) => {
-                matches!(call.callee.get_inner_expression(), Expression::StaticMemberExpression(member)
-                    if member.property.name == "__ferrite_create_hot__" && matches!(member.object.get_inner_expression(), Expression::Identifier(identifier) if identifier.name == "globalThis"))
-                    && call.arguments.len() == 1
-                    && matches!(call.arguments.first(), Some(Argument::StringLiteral(value)) if value.value == id)
-            }
-            _ => false,
-        }
-    }
     struct Finder {
         found: bool,
         id: String,
@@ -381,4 +383,65 @@ pub fn self_accepts_hmr(id: &str, code: &str) -> bool {
     };
     finder.visit_program(&parsed.program);
     finder.found
+}
+
+/// Static hot-accepted specifiers and their literal byte ranges in final JavaScript.
+/// Dynamic arguments cannot be safely represented in the dependency graph.
+pub fn hmr_dependencies(id: &str, code: &str) -> Result<Vec<(String, (usize, usize))>> {
+    use oxc_ast::ast::{Argument, ArrayExpressionElement, CallExpression};
+    struct Finder<'s> {
+        id: &'s str,
+        dependencies: Vec<(String, (usize, usize))>,
+        unsupported: bool,
+    }
+    impl<'a> Visit<'a> for Finder<'_> {
+        fn visit_function_body(&mut self, _: &oxc_ast::ast::FunctionBody<'a>) {}
+        fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+            if let Expression::StaticMemberExpression(member) = call.callee.get_inner_expression() {
+                if member.property.name == "accept" && hot(&member.object, self.id) {
+                    match call.arguments.first() {
+                        None
+                        | Some(
+                            Argument::ArrowFunctionExpression(_) | Argument::FunctionExpression(_),
+                        ) => {}
+                        Some(Argument::StringLiteral(value)) => self.dependencies.push((
+                            value.value.to_string(),
+                            (value.span.start as usize, value.span.end as usize),
+                        )),
+                        Some(Argument::ArrayExpression(array)) => {
+                            for element in &array.elements {
+                                if let ArrayExpressionElement::StringLiteral(value) = element {
+                                    self.dependencies.push((
+                                        value.value.to_string(),
+                                        (value.span.start as usize, value.span.end as usize),
+                                    ));
+                                } else {
+                                    self.unsupported = true;
+                                }
+                            }
+                        }
+                        _ => self.unsupported = true,
+                    }
+                }
+            }
+            oxc_ast_visit::walk::walk_call_expression(self, call);
+        }
+    }
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, code, source_type_for(id, &ModuleType::Js)).parse();
+    if parsed.fatal_error || !parsed.diagnostics.is_empty() {
+        return Err(FerriteError::Config(format!(
+            "cannot analyze HMR in invalid JavaScript: {id}"
+        )));
+    }
+    let mut finder = Finder {
+        id,
+        dependencies: Vec::new(),
+        unsupported: false,
+    };
+    finder.visit_program(&parsed.program);
+    if finder.unsupported {
+        return Err(FerriteError::Config(format!("unsupported dynamic HMR acceptance in {id}; use import.meta.hot.accept with a literal dependency string, an array of literal strings, or an inline self-accept callback")));
+    }
+    Ok(finder.dependencies)
 }

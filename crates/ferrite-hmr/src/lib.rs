@@ -58,9 +58,9 @@ pub struct HmrUpdate {
     /// `js-update` or `css-update`.
     #[serde(rename = "type")]
     pub kind: String,
-    /// Changed module path.
+    /// Boundary owning the acceptance callback.
     pub path: String,
-    /// Boundary path that accepted the update.
+    /// Accepted module to re-import.
     #[serde(rename = "acceptedPath")]
     pub accepted_path: String,
     /// Change timestamp (unix millis).
@@ -85,7 +85,7 @@ pub enum HmrPlan {
 
 /// Plan an HMR action for `changed` using the graph boundary walk (§34).
 pub fn plan_update(graph: &ModuleGraph, changed: &ModuleId, timestamp: u64) -> HmrPlan {
-    match graph.hmr_accepting_boundaries(changed) {
+    match graph.hmr_accepting_updates(changed) {
         Some(boundaries) => {
             let node = graph.get(changed);
             let is_css = node
@@ -94,13 +94,13 @@ pub fn plan_update(graph: &ModuleGraph, changed: &ModuleId, timestamp: u64) -> H
             HmrPlan::Update(
                 boundaries
                     .into_iter()
-                    .map(|accepted| HmrUpdate {
+                    .map(|(boundary, accepted)| HmrUpdate {
                         kind: if is_css {
                             "css-update".to_string()
                         } else {
                             "js-update".to_string()
                         },
-                        path: changed.0.clone(),
+                        path: boundary.0,
                         accepted_path: accepted.0,
                         timestamp,
                         css_only: is_css,
@@ -246,13 +246,13 @@ mod tests {
         assert_eq!(
             updates
                 .iter()
-                .map(|update| update.accepted_path.as_str())
+                .map(|update| update.path.as_str())
                 .collect::<Vec<_>>(),
             vec!["/a.ts", "/b.ts"]
         );
         assert!(updates
             .iter()
-            .all(|update| update.path == "/leaf.ts" && update.timestamp == 42));
+            .all(|update| update.path == update.accepted_path && update.timestamp == 42));
         graph.add_edge(
             &ModuleId::new("/entry.ts"),
             ferrite_graph::ImportEdge {
