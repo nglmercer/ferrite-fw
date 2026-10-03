@@ -267,6 +267,7 @@ impl DevServer {
     /// Validate compiler output before browser disposal/import or full reload.
     /// A failed edit retains the previous client and graph acceptance boundary.
     pub(crate) async fn publish_hmr_plan(&self, changed: &ModuleId, plan: HmrPlan) {
+        let _validation = self.inner.hmr_validation.lock().await;
         let acceptance: std::collections::HashMap<_, _> = self
             .inner
             .graph

@@ -1272,3 +1272,23 @@ edit. Outputs: `/tmp/ferrite-hmr-hook-errors.log` and
 No lock/config/cache migration. This verifies the Rust plugin-container/watcher
 failure path, not complete foreign-plugin compatibility or a new browser profile.
 No support status is promoted; the full mission remains active.
+
+### Serialize HMR validation and acceptance rollback
+
+A shared async lock now serializes HMR validation, failure rollback and message
+publication. An older failing validation cannot restore its acceptance snapshot
+after a later HMR validation succeeds. Watcher and programmatic update publication
+share the same gate.
+
+Validation: default and SWC-enabled `cargo test -p ferrite-server --locked` each
+passed all 41 tests. The new controlled-concurrency regression blocks the first
+failed edit while a corrected edit arrives, requires one active validation,
+ordered error/update publication, corrected code and corrected acceptance metadata.
+Outputs: `/tmp/ferrite-serialized-validation.log` and
+`/tmp/ferrite-serialized-validation-swc.log`. Server all-target Clippy with
+`--locked -- -D warnings`, formatting and diff checks passed.
+
+No schema/cache migration or additional browser compatibility claim. This gate
+covers HMR validation jobs; concurrent HTTP transforms, hooks outside validation,
+cancellation and the wider race matrix remain assigned. Complete Refresh,
+framework HMR, SSR/checkers and the rest of the mission remain active.

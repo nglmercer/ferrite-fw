@@ -110,6 +110,8 @@ pub struct DevServerInner {
     pub compiler: Arc<dyn JsCompiler>,
     /// HMR hub.
     pub hmr: HmrServer,
+    /// Serialize validation/rollback/publication across watcher update tasks.
+    pub(crate) hmr_validation: tokio::sync::Mutex<()>,
     /// Emitted files shared with plugins.
     pub emitted: Mutex<HashMap<String, ferrite_plugin::EmittedFile>>,
     /// Bare-specifier → dev-URL map (`import-map` dev strategy).
@@ -196,6 +198,7 @@ impl DevServer {
             ssr_resolver,
             compiler,
             hmr: HmrServer::default(),
+            hmr_validation: tokio::sync::Mutex::new(()),
             emitted: Mutex::new(HashMap::new()),
             import_map: Mutex::new(BTreeMap::new()),
             watch_files: Mutex::new(Vec::new()),

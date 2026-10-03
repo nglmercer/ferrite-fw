@@ -773,3 +773,117 @@ async fn watcher_reports_required_hook_failures_without_fallback_and_recovers() 
         server.close();
     }
 }
+
+struct DelayedFailedValidation {
+    enabled: std::sync::atomic::AtomicBool,
+    calls: std::sync::atomic::AtomicUsize,
+    active: std::sync::atomic::AtomicUsize,
+    maximum: std::sync::atomic::AtomicUsize,
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+#[async_trait::async_trait]
+impl Plugin for DelayedFailedValidation {
+    fn name(&self) -> &'static str {
+        "delayed-validation"
+    }
+    async fn transform(
+        &self,
+        _: &PluginContext,
+        request: TransformRequest,
+    ) -> Result<Option<TransformResult>> {
+        use std::sync::atomic::Ordering;
+        if request.id != "/entry.js" || !self.enabled.load(Ordering::SeqCst) {
+            return Ok(None);
+        }
+        let call = self.calls.fetch_add(1, Ordering::SeqCst);
+        let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+        self.maximum.fetch_max(active, Ordering::SeqCst);
+        if call == 0 {
+            self.entered.notify_one();
+            self.release.notified().await;
+            self.active.fetch_sub(1, Ordering::SeqCst);
+            return Err(ferrite_core::FerriteError::Other(
+                "delayed failed edit".into(),
+            ));
+        }
+        self.active.fetch_sub(1, Ordering::SeqCst);
+        Ok(None)
+    }
+}
+
+#[tokio::test]
+async fn concurrent_validation_cannot_roll_back_a_later_successful_edit() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    let root = tempfile::tempdir().unwrap();
+    let file = root.path().join("entry.js");
+    std::fs::write(
+        &file,
+        "export const count = 1; if (import.meta.hot) import.meta.hot.accept();",
+    )
+    .unwrap();
+    let config = ferrite_config::resolve_config(
+        Default::default(),
+        Some(root.path().into()),
+        Default::default(),
+    )
+    .unwrap();
+    let plugin = Arc::new(DelayedFailedValidation {
+        enabled: AtomicBool::new(false),
+        calls: AtomicUsize::new(0),
+        active: AtomicUsize::new(0),
+        maximum: AtomicUsize::new(0),
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+    });
+    let server = DevServer::new_without_watcher(config, vec![plugin.clone()])
+        .await
+        .unwrap();
+    let id = ModuleId::new("/entry.js");
+    server.pipeline_module(&id, None, "client").await.unwrap();
+    let mut messages = server.inner.hmr.subscribe();
+    plugin.enabled.store(true, Ordering::SeqCst);
+    std::fs::write(&file, "export const count = 2;").unwrap();
+    let first_server = server.clone();
+    let first_id = id.clone();
+    let first = tokio::spawn(async move {
+        first_server.invalidate_module(&first_id).await;
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), plugin.entered.notified())
+        .await
+        .unwrap();
+    std::fs::write(&file, "export const count = 3;").unwrap();
+    let second_server = server.clone();
+    let second_id = id.clone();
+    let second = tokio::spawn(async move {
+        second_server.invalidate_module(&second_id).await;
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    assert_eq!(
+        plugin.calls.load(Ordering::SeqCst),
+        1,
+        "later validation must wait for the first rollback"
+    );
+    plugin.release.notify_one();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        first.await.unwrap();
+        second.await.unwrap();
+    })
+    .await
+    .unwrap();
+    assert_eq!(plugin.maximum.load(Ordering::SeqCst), 1);
+    assert_eq!(plugin.calls.load(Ordering::SeqCst), 2);
+    let first: ferrite_hmr::HmrMessage =
+        serde_json::from_str(&messages.recv().await.unwrap()).unwrap();
+    let second: ferrite_hmr::HmrMessage =
+        serde_json::from_str(&messages.recv().await.unwrap()).unwrap();
+    assert!(matches!(first, ferrite_hmr::HmrMessage::Error { .. }));
+    assert!(matches!(second, ferrite_hmr::HmrMessage::Update { .. }));
+    let node = server.inner.graph.get(&id).unwrap();
+    assert!(node.client.code.unwrap().contains("= 3"));
+    assert!(
+        !node.hmr.self_accepting,
+        "the old failure must not restore stale acceptance after the correction"
+    );
+    server.close();
+}
