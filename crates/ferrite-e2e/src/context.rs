@@ -778,6 +778,11 @@ impl BrowserContext {
             page.mark_closed();
             return Err(E2eError::Cancelled("popup closed during adoption".into()));
         }
+        if matches!(&page.driver, Driver::Cdp(_)) {
+            // Headless pages must not wait for a native authentication prompt.
+            // Keep challenge handling active even without configured credentials.
+            page.driver.set_auth_credentials(None, None).await?;
+        }
         if let Some(viewport) = self.options.viewport {
             page.set_viewport(viewport).await?;
         }

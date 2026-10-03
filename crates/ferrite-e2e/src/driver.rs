@@ -823,15 +823,15 @@ pub struct CdpDriver {
     fetch_update: Arc<tokio::sync::Mutex<()>>,
 }
 
-/// Shared Fetch-domain state: routing owns `patterns`, credentials own
-/// `handleAuthRequests`, and every change re-enables with the merge.
+/// Shared Fetch-domain state: routing owns patterns, the page auth pump owns
+/// challenge handling, and credentials select its response. Changes merge both.
 #[derive(Debug, Default)]
 struct FetchAuthState {
     /// Active routing patterns (`None` = routing off).
     routing_patterns: Option<Vec<Value>>,
-    /// Credentials for `Fetch.authRequired` (`None` = no challenges).
+    /// Credentials for `Fetch.authRequired` (`None` cancels challenges).
     creds: Option<(String, String)>,
-    /// Auth-challenge pump (alive while `creds` is set).
+    /// Auth-challenge pump, including cancellation without credentials.
     auth_task: Option<tokio::task::AbortHandle>,
     cleanup: Vec<crate::cdp::QueuedCleanup>,
     cleanup_dirty: bool,
@@ -870,7 +870,9 @@ impl Drop for FetchRoutingStartup {
                 format!("abandoned Fetch cleanup could not be queued: {error}"),
             ),
         }
-        if let Some(params) = fetch_enable_params(None, state.creds.is_some()) {
+        if let Some(params) =
+            fetch_enable_params(None, state.creds.is_some() || state.auth_task.is_some())
+        {
             match self
                 .driver
                 .cdp
@@ -3563,7 +3565,10 @@ impl CdpDriver {
             }
             let params = {
                 let state = self.fetch_auth.lock().unwrap_or_else(|e| e.into_inner());
-                fetch_enable_params(state.routing_patterns.as_deref(), state.creds.is_some())
+                fetch_enable_params(
+                    state.routing_patterns.as_deref(),
+                    state.creds.is_some() || state.auth_task.is_some(),
+                )
             };
             let value = match params {
                 Some(params) => self.call("Fetch.enable", params).await?,
@@ -3586,20 +3591,12 @@ impl CdpDriver {
         }
     }
 
-    /// Answer `Fetch.authRequired` with `creds` (`None` clears).
+    /// Answer challenges with configured credentials, or cancel without prompting.
     async fn set_auth_credentials(&self, creds: Option<(String, String)>) -> E2eResult<()> {
         let spawn_pump = {
             let mut shared = self.fetch_auth.lock().unwrap_or_else(|e| e.into_inner());
             shared.creds = creds;
-            match (&shared.creds, &shared.auth_task) {
-                (Some(_), None) => true,
-                (None, Some(task)) => {
-                    task.abort();
-                    shared.auth_task = None;
-                    false
-                }
-                _ => false,
-            }
+            shared.auth_task.is_none()
         };
         if spawn_pump {
             let task = self.spawn_auth_pump();
@@ -3610,17 +3607,21 @@ impl CdpDriver {
         self.apply_fetch_config().await
     }
 
-    /// Pump answering auth challenges (ignores `requestPaused`: the routing
-    /// pump owns those, so the two never race a request).
+    /// Answer auth challenges and continue unrouted requests. While routing is
+    /// active, its pump retains ownership of paused requests.
     fn spawn_auth_pump(&self) -> tokio::task::AbortHandle {
         let mut events = self.cdp.subscribe();
         let session = self.session.clone();
         let cdp = self.cdp.clone();
         let timeout = self.timeout();
         let shared = Arc::clone(&self.fetch_auth);
+        let lifecycle = self.lifecycle.clone();
         tokio::spawn(async move {
             loop {
-                let event = match events.recv().await {
+                let event = match tokio::select! {
+                    _ = lifecycle.cancelled() => break,
+                    event = events.recv() => event,
+                } {
                     Ok(event) => event,
                     Err(_) => break,
                 };
@@ -3656,8 +3657,13 @@ impl CdpDriver {
                     .lock()
                     .map(|state| state.creds.clone())
                     .unwrap_or(None);
-                let Some((username, password)) = creds else {
-                    continue;
+                let response = match creds {
+                    Some((username, password)) => serde_json::json!({
+                        "response": "ProvideCredentials",
+                        "username": username,
+                        "password": password,
+                    }),
+                    None => serde_json::json!({"response": "CancelAuth"}),
                 };
                 let _ = cdp
                     .call(
@@ -3665,11 +3671,7 @@ impl CdpDriver {
                         "Fetch.continueWithAuth",
                         serde_json::json!({
                             "requestId": event.params["requestId"],
-                            "authChallengeResponse": {
-                                "response": "ProvideCredentials",
-                                "username": username,
-                                "password": password,
-                            },
+                            "authChallengeResponse": response,
                         }),
                         timeout,
                     )
@@ -7807,7 +7809,7 @@ mod tests {
                 "handleAuthRequests": false,
             }))
         );
-        // Auth only: empty patterns (nothing pauses) with challenges on.
+        // Auth only: wildcard requests are resumed by the auth pump.
         assert_eq!(
             fetch_enable_params(None, true),
             Some(serde_json::json!({

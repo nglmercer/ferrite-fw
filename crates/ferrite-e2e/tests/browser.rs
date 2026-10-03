@@ -4865,6 +4865,26 @@ async fn context_digest_auth() {
             .await
             .unwrap();
         assert_eq!(body, "digest-ok", "{tag}");
+        page.set_http_credentials(None, None).await.unwrap();
+        let status: i64 = page
+            .evaluate("fetch('api/digest').then(r => r.status)")
+            .await
+            .unwrap();
+        assert_eq!(
+            status, 401,
+            "{tag}: clearing credentials must cancel the challenge"
+        );
+        page.set_http_credentials(Some("ada"), Some("s3cret"))
+            .await
+            .unwrap();
+        let restored: String = page
+            .evaluate("fetch('api/digest').then(r => r.text())")
+            .await
+            .unwrap();
+        assert_eq!(
+            restored, "digest-ok",
+            "{tag}: credentials must be reusable after cancellation"
+        );
 
         page.close().await.unwrap();
         browser.close().await.unwrap();

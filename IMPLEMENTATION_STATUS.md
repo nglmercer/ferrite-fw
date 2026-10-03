@@ -2162,3 +2162,61 @@ the same two-browser requirement and --test-threads=2 is still running, output:
 Its process must be resumed and its terminal result inspected before claiming
 workspace validation. Browser-tool failures and broader framework work remain
 assigned; focused generated React acceptance is independently green as above.
+
+### Cancel unattended native authentication challenges in acceptance tooling
+
+The resumed bounded workspace run completed with 90 browser tests passing and
+three repeatable Chromium authentication failures: Digest without credentials,
+page credentials after clearing, and context credentials after clearing. Output:
+ /tmp/ferrite-react-scaffold-workspace-tests-bounded.log.
+These were native CDP evaluation timeouts, not component/compiler failures.
+
+Chromium page/context initialization now activates the existing Fetch auth pump
+even without credentials. The pump answers absent or cleared credentials with
+native CancelAuth and configured credentials with ProvideCredentials; clearing
+credentials no longer aborts the responder and leaves the browser awaiting an
+unattended native prompt. Routing continues to own paused requests while active;
+auth-only mode continues unrouted requests. Routing cleanup restores the active
+challenge handler, and the pump exits when its page lifecycle is cancelled.
+Default setup lives in context page wrapping (including popup adoption), preserving
+the raw driver initialization/routing contract and all its existing strict tests.
+
+The Digest browser regression now additionally authenticates, clears credentials
+and asserts 401, restores credentials and asserts digest-ok. Existing Basic/page/
+context assertions remain unchanged. Firefox authentication stays explicitly
+unavailable; both browser executables are required by the test harness, and this
+does not advertise Firefox Digest support. The native response contract was
+checked against the official Chromium Fetch protocol definition:
+https://raw.githubusercontent.com/ChromeDevTools/devtools-protocol/master/pdl/domains/Fetch.pdl
+
+Validation:
+- All 303 E2E unit tests passed with unchanged routing/startup/cleanup assertions.
+  Output: /tmp/ferrite-auth-cancellation-unit-final.log.
+- Both Basic/page/context credential browser tests passed (8.80 seconds), and
+  Digest passed (6.71 seconds). The stronger clear/restore Digest regression
+  passed in 4.51 seconds. Outputs:
+  /tmp/ferrite-auth-cancellation-credentials-final.log,
+  /tmp/ferrite-auth-cancellation-digest-final.log and
+  /tmp/ferrite-auth-cancellation-digest-clear.log.
+- E2E all-target Clippy with --locked -- -D warnings, CLI rebuild, formatting and
+  diff checks passed. Outputs: /tmp/ferrite-auth-cancellation-clippy-final.log
+  and /tmp/ferrite-auth-cancellation-cli-build.log.
+- All 28 explicitly executed framework acceptance tests passed (553.79 seconds),
+  retaining both browsers, all generated client languages, React Refresh shapes,
+  startup recovery, hook/plugin/watch flows, production interactions and Node-free
+  CLI profiles. Output: /tmp/ferrite-auth-cancellation-generated-apps.log.
+- The workspace rerun with two threads passed 92 browser tests, including all
+  authentication cases. Its remaining runner_modes_and_overrides failure was
+  the 600 ms roomy-test success deadline while the separate acceptance run was
+  also active. That test passed in isolation with unchanged assertions in 7.81
+  seconds. Outputs: /tmp/ferrite-auth-cancellation-workspace.log and
+  /tmp/ferrite-auth-cancellation-runner-modes.log.
+
+A fresh complete workspace run is now active with both browser paths,
+FERRITE_E2E_REQUIRE_BOTH_BROWSERS=1 and --test-threads=1, after the separate
+acceptance run finished. Output:
+ /tmp/ferrite-auth-cancellation-workspace-serial.log.
+Resume its live process and inspect its terminal result before claiming the
+workspace gate passed. No assertions, time budgets or capability guards were
+weakened, and no compiler/rendering support promotion or lock migration occurs.
+The full remaining framework mission stays assigned and active.
