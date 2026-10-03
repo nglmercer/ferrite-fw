@@ -35,6 +35,14 @@ pub(crate) fn worker_loop(options: NapiVmOptions, rx: Receiver<Job>) {
                     .validate()
                     .map_err(|error| error.to_string())
                     .and_then(|()| {
+                        for id in state.graph_modules.drain(..) {
+                            state.interp.remove_module(&id);
+                        }
+                        state.graph_modules = graph
+                            .modules
+                            .iter()
+                            .map(|module| module.id.clone())
+                            .collect();
                         for module in &graph.modules {
                             state.interp.remove_module(&module.id);
                         }
@@ -78,6 +86,7 @@ pub(crate) struct WorkerState {
     interp: napi_vm::Interpreter,
     runtime: Option<napi_vm::NativeAddonRuntime>,
     next_handle: u64,
+    graph_modules: Vec<String>,
 }
 
 impl WorkerState {
@@ -149,6 +158,7 @@ impl WorkerState {
             interp,
             runtime,
             next_handle: 1,
+            graph_modules: Vec::new(),
         })
     }
 

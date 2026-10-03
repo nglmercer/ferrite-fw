@@ -1,5 +1,24 @@
 # Framework support implementation status
 
+## Replacement compiled graphs remove omitted module registrations
+
+The embedded graph worker now records supplied graph IDs and removes all prior
+graph registrations before registering a validated replacement, including modules
+omitted from it. Previously a replacement could accidentally import a dependency
+left behind by an earlier graph. Structural validation still precedes mutation.
+Registrations from a failed evaluation are tracked for cleanup on replacement.
+
+The graph regression now omits a previously supplied dependency, requires an
+evaluation error rather than previous exports, and verifies recovery with a
+complete graph. All 18 napi-vm-enabled runtime tests passed; the expanded graph
+test passed from the built test binary with PATH empty. Feature-enabled all-target
+Clippy with `-D warnings`, changed-file formatting, and diff checks passed.
+No public API, configuration, or lockfile migration is needed. This replaces graph
+registrations; it does not establish isolation of globals, handles, built-ins,
+filesystem module loaders, or concurrent requests. CLI graph wiring, framework
+SSR/hydration, workspace/browser/host matrices, and releases remain unfinished.
+The full mission remains active.
+
 ## Runtime accepts explicitly compiled module graphs
 
 `CompiledModuleGraph` carries a canonical entry and compiled module list, with
