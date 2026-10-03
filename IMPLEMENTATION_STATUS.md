@@ -1929,3 +1929,43 @@ version evidence, not current-doc compatibility with untested releases.
 No migration or support promotion. These are hand-authored conformance fixtures;
 generated React templates, imported hook-only modules, other HOC shapes,
 anonymous/default/mixed-export matrices and the broader mission remain assigned.
+
+### Instrument imported React hook-only modules
+
+The React post-transform filter now includes JavaScript/TypeScript module
+extensions. Parsed direct React imports plus locally declared exported
+`use[A-Z0-9]` names select hook instrumentation; package-store/virtual modules
+and re-export-only barrels do not establish this ownership. Lowered hook code
+uses the same pinned native Oxc signature pass and map chain. Hook-only modules
+receive no component acceptance footer, so edits propagate through the existing
+HMR graph to importing component boundaries. SSR/production guards remain
+before detection. Cache identity advances to `oxc-0.151.0-imported-hooks-v3`.
+
+The conformance fixture retains the plain and local memo/custom-hook cases and
+adds a separate typed `hooks.ts` imported by a memo component. A hook-file-only
+compatible edit preserves live counter state while visibly changing its value;
+a hook-order edit resets the component without document reload. Syntax recovery,
+subsequent clicks, build/preview and production Refresh exclusion remain asserted.
+This is native client compilation with pinned React/React DOM 19.2.0 and
+react-refresh 0.17.0; all CLI processes run without Node on PATH.
+
+Validation:
+
+- Both new explicit Chromium/Firefox imported-hook acceptance tests passed
+  (42.20 seconds), output `/tmp/ferrite-imported-hooks-compatible.log`.
+- 27 framework and 45 server unit tests passed. Regressions check hook signatures
+  without false component boundaries and negative ownership cases. Server SWC
+  matrix also passed 45 tests. Outputs `/tmp/ferrite-imported-hooks-unit.log`
+  and `/tmp/ferrite-imported-hooks-swc.log`.
+- Rebuilt CLI, workspace compilation, framework/server/test all-target Clippy
+  with `--locked -- -D warnings`, formatting and diff checks passed.
+
+No lock/config migration or support promotion. General per-file/package framework
+ownership and ambiguous JSX rejection remain assigned, as do hook re-export
+chains, namespace/alias/dynamic import matrices, mixed exports, anonymous defaults,
+other HOC shapes, React generation/checking and real SSR. The full mission stays active.
+
+The complete explicitly executed Chromium/Firefox acceptance suite passed all
+18 tests with `--test-threads=2` (230.09 seconds), including all six React cases
+and the existing template/plugin/dependency/startup flows. Output:
+`/tmp/ferrite-imported-hooks-all-browsers.log`.

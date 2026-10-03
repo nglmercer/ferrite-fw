@@ -114,6 +114,32 @@ pub fn detect_components(id: &str, code: &str) -> Vec<Registration> {
     registrations
 }
 
+/// React-owned hook modules require a direct React import and a locally
+/// declared exported hook name. Re-exports alone do not establish ownership.
+fn is_react_hook_module(id: &str, code: &str) -> Result<bool> {
+    if id.starts_with("/@npm/") || id.starts_with('\0') {
+        return Ok(false);
+    }
+    let parsed =
+        ferrite_transform::compiler_for_engine("oxc")?.parse(ferrite_transform::ParseRequest {
+            id: id.into(),
+            code: code.into(),
+            module_type: ModuleType::Js,
+        })?;
+    Ok(parsed
+        .imports
+        .iter()
+        .any(|import| import.specifier == "react")
+        && parsed.export_details.iter().any(|export| {
+            export.from.is_none()
+                && export.local.as_deref().is_some_and(|name| {
+                    name.strip_prefix("use")
+                        .and_then(|suffix| suffix.chars().next())
+                        .is_some_and(|first| first.is_ascii_uppercase() || first.is_ascii_digit())
+                })
+        }))
+}
+
 /// Refresh footer: preamble import, registrations, HMR boundary.
 /// Uses the `globalThis` hot factory because plugin-appended code runs
 /// after `import.meta.hot` detection.
@@ -170,7 +196,7 @@ impl Plugin for ReactPlugin {
 
     fn cache_key(&self) -> String {
         format!(
-            "{}:oxc-0.151.0-entry-preamble-v2:{}",
+            "{}:oxc-0.151.0-imported-hooks-v3:{}",
             self.name(),
             self.is_enabled()
         )
@@ -178,7 +204,7 @@ impl Plugin for ReactPlugin {
 
     fn transform_filter(&self) -> Option<HookFilter> {
         Some(HookFilter {
-            id: Some("\\.[jt]sx($|\\?)".to_string()),
+            id: Some("\\.[cm]?[jt]sx?($|\\?)".to_string()),
             code: None,
             query: None,
         })
@@ -238,20 +264,25 @@ impl Plugin for ReactPlugin {
             || request.ssr
             || request.environment.is_ssr()
             || ctx.environment.kind.is_ssr()
-            || !is_jsx_id(&request.id)
         {
             return Ok(None);
         }
-        // Only files that actually used JSX (post-core output references
-        // the runtime); plain `.ts`-in-`.tsx` files pass through.
-        if !request.code.contains("react/jsx-") && !request.code.contains("React.createElement") {
+        let jsx = is_jsx_id(&request.id)
+            && (request.code.contains("react/jsx-")
+                || request.code.contains("React.createElement"));
+        let hook_module =
+            request.module_type.is_js_like() && is_react_hook_module(&request.id, &request.code)?;
+        if !jsx && !hook_module {
             return Ok(None);
         }
-        let registrations = detect_components(&request.id, &request.code);
-        if registrations.is_empty() {
-            // Entry modules often mount imported components without exporting
-            // any themselves. Their first dependency must install the hook
-            // before react-dom evaluates and registers its renderer.
+        let registrations = if jsx {
+            detect_components(&request.id, &request.code)
+        } else {
+            Vec::new()
+        };
+        if registrations.is_empty() && !hook_module {
+            // Mounting entries install the hook before react-dom evaluates,
+            // without becoming component boundaries themselves.
             let (code, map) = ferrite_transform::apply_text_edits(
                 &request.id,
                 &request.code,
@@ -282,7 +313,11 @@ impl Plugin for ReactPlugin {
             runtime_binding.push('_');
         }
         let prefix = format!("import {spec:?};\nimport {runtime_binding} from {runtime:?};\nconst {reg} = (type, key) => {runtime_binding}.register(type, {id:?} + ' ' + key);\nconst {sig} = {runtime_binding}.createSignatureFunctionForTransform;\n", spec=REFRESH_SPEC, runtime=REFRESH_RUNTIME_SPEC, id=request.id);
-        let footer = refresh_footer(&request.id, &registrations);
+        let footer = if registrations.is_empty() {
+            String::new()
+        } else {
+            refresh_footer(&request.id, &registrations)
+        };
         let (code, map) = ferrite_transform::apply_text_edits(
             &request.id,
             &instrumented,
@@ -400,6 +435,37 @@ mod tests {
             watch_files: &watches,
             warnings: &warnings,
         };
+        let hook_source =
+            "import {useState} from 'react'; export function useCounter() { return useState(0); }";
+        let hook = plugin
+            .transform(
+                &ctx,
+                TransformRequest {
+                    id: "/hooks.ts".into(),
+                    code: hook_source.into(),
+                    module_type: ModuleType::Js,
+                    environment: EnvironmentKind::Client,
+                    ssr: false,
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(hook.code.contains("__ferrite_refresh_sig__()"));
+        assert!(
+            !hook.code.contains(".accept("),
+            "hook modules cannot form component boundaries"
+        );
+        assert!(is_react_hook_module("/hooks.js", hook_source).unwrap());
+        assert!(!is_react_hook_module("/@npm/other/hooks.js", hook_source).unwrap());
+        assert!(
+            !is_react_hook_module("/other.js", "export function useCounter() {return 0;}").unwrap()
+        );
+        assert!(!is_react_hook_module(
+            "/barrel.js",
+            "import 'react'; export {useCounter} from './hooks.js';"
+        )
+        .unwrap());
         let entry = plugin.transform(&ctx, TransformRequest {
             id:"/main.jsx".into(), code:"import {createRoot} from 'react-dom/client'; createRoot(document.body).render(React.createElement(App));".into(),
             module_type:ModuleType::Js, environment:EnvironmentKind::Client, ssr:false,
@@ -584,7 +650,7 @@ mod tests {
     #[test]
     fn cache_identity_tracks_registration_version_and_enablement() {
         let enabled = ReactPlugin::with_enabled(true).cache_key();
-        assert!(enabled.contains("oxc-0.151.0-entry-preamble-v2"));
+        assert!(enabled.contains("oxc-0.151.0-imported-hooks-v3"));
         assert_ne!(enabled, ReactPlugin::with_enabled(false).cache_key());
     }
 

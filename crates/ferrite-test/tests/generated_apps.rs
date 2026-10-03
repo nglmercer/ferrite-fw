@@ -841,14 +841,17 @@ async fn firefox_configured_foreign_hooks() {
     configured_foreign_hook_acceptance(BrowserKind::Firefox).await;
 }
 
-async fn react_refresh_dom_acceptance(kind: BrowserKind, wrapped: bool) {
+async fn react_refresh_dom_acceptance(kind: BrowserKind, wrapped: bool, imported_hook: bool) {
     let binary = cli();
     let project = ferrite_test::TempProject::new(&[
         ("package.json", r#"{"private":true,"dependencies":{"react":"19.2.0","react-dom":"19.2.0","react-refresh":"0.17.0"}}"#),
         ("index.html", "<html><head><link rel='icon' href='data:,'></head><body><div id='root'></div><script type='module' src='/main.jsx'></script></body></html>"),
         ("main.jsx", "import {createRoot} from 'react-dom/client'; import {App} from './App.jsx'; globalThis.session = Math.random(); createRoot(document.querySelector('#root')).render(<App/>);"),
     ]);
-    let source = if wrapped {
+    std::fs::write(project.root.join("hooks.ts"), "import {useState} from 'react'; export function useCounter(): [number, (value: number) => void] { return useState(0); }").unwrap();
+    let source = if imported_hook {
+        "import {memo} from 'react'; import {useCounter} from './hooks.ts'; export const App = memo(function Counter() { const [count, setCount] = useCounter(); return <button id='counter' onClick={() => setCount(count + 1)}>first: {count}</button>; });"
+    } else if wrapped {
         "import {useState, memo} from 'react'; function useCounter() { return useState(0); } export const App = memo(function Counter() { const [count, setCount] = useCounter(); return <button id='counter' onClick={() => setCount(count + 1)}>first: {count}</button>; });"
     } else {
         "import {useState} from 'react'; export function App() { const [count, setCount] = useState(0); return <button id='counter' onClick={() => setCount(count + 1)}>first: {count}</button>; }"
@@ -947,7 +950,46 @@ async fn react_refresh_dom_acceptance(kind: BrowserKind, wrapped: bool) {
     )
     .await
     .unwrap();
-    let changed_signature = if wrapped {
+    if imported_hook {
+        std::fs::write(project.root.join("hooks.ts"), "import {useState} from 'react'; export function useCounter(): [number, (value: number) => void] { return useState(0).map((value, index) => index === 0 ? (value as number) + 10 : value) as [number, (value: number) => void]; }").unwrap();
+        page.wait_for_function(
+            "document.querySelector('#counter')?.textContent === 'recovered: 13'",
+            Duration::from_secs(15),
+        )
+        .await
+        .unwrap_or_else(|error| {
+            panic!(
+                "compatible imported hook update failed: {error}; errors={:?}",
+                page.page_errors()
+            )
+        });
+        assert_eq!(
+            page.evaluate::<f64>("globalThis.session").await.unwrap(),
+            session
+        );
+    }
+    if imported_hook {
+        std::fs::write(project.root.join("hooks.ts"), "import {useState} from 'react'; export function useCounter(): [number, (value: number) => void] { useState('extra'); return useState(0); }").unwrap();
+        page.wait_for_function(
+            "document.querySelector('#counter')?.textContent === 'recovered: 0'",
+            Duration::from_secs(15),
+        )
+        .await
+        .unwrap_or_else(|error| {
+            panic!(
+                "imported hook reset failed: {error}; errors={:?}; console={:?}",
+                page.page_errors(),
+                page.console_messages()
+            )
+        });
+        assert_eq!(
+            page.evaluate::<f64>("globalThis.session").await.unwrap(),
+            session
+        );
+    }
+    let changed_signature = if imported_hook {
+        source.to_string()
+    } else if wrapped {
         source.replace(
             "return useState(0);",
             "useState('extra'); return useState(0);",
@@ -1053,21 +1095,32 @@ async fn react_refresh_dom_acceptance(kind: BrowserKind, wrapped: bool) {
 #[tokio::test]
 #[ignore = "requires freshly built CLI, registry packages and Chromium"]
 async fn chromium_react_refresh_dom() {
-    react_refresh_dom_acceptance(BrowserKind::Chromium, false).await;
+    react_refresh_dom_acceptance(BrowserKind::Chromium, false, false).await;
 }
 #[tokio::test]
 #[ignore = "requires freshly built CLI, registry packages and Firefox"]
 async fn firefox_react_refresh_dom() {
-    react_refresh_dom_acceptance(BrowserKind::Firefox, false).await;
+    react_refresh_dom_acceptance(BrowserKind::Firefox, false, false).await;
 }
 
 #[tokio::test]
 #[ignore = "requires freshly built CLI, registry packages and Chromium"]
 async fn chromium_react_refresh_wrapped() {
-    react_refresh_dom_acceptance(BrowserKind::Chromium, true).await;
+    react_refresh_dom_acceptance(BrowserKind::Chromium, true, false).await;
 }
 #[tokio::test]
 #[ignore = "requires freshly built CLI, registry packages and Firefox"]
 async fn firefox_react_refresh_wrapped() {
-    react_refresh_dom_acceptance(BrowserKind::Firefox, true).await;
+    react_refresh_dom_acceptance(BrowserKind::Firefox, true, false).await;
+}
+
+#[tokio::test]
+#[ignore = "requires freshly built CLI, registry packages and Chromium"]
+async fn chromium_react_refresh_imported_hook() {
+    react_refresh_dom_acceptance(BrowserKind::Chromium, true, true).await;
+}
+#[tokio::test]
+#[ignore = "requires freshly built CLI, registry packages and Firefox"]
+async fn firefox_react_refresh_imported_hook() {
+    react_refresh_dom_acceptance(BrowserKind::Firefox, true, true).await;
 }
