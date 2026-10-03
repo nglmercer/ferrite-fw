@@ -870,3 +870,39 @@ hook signatures/registration, mixed exports and syntax recovery remains assigned
 these hook exclusion tests do not establish functioning Refresh or SSR rendering.
 React client conformance remains unavailable in Doctor. JSX ownership, checker,
 framework HMR, real SSR and the full mission remain active.
+
+### React Refresh export boundary uses real runtime APIs
+
+Removed the footer's nonexistent `isLikelyComponentModule` call. A development
+module imports its current export namespace and compares it with the update using
+`isLikelyComponentType`. Added/removed export keys, changed noncomponent exports,
+component-to-noncomponent changes, empty boundaries and throwing getters invalidate
+safely. Unchanged mixed constants can retain a component boundary. At least one
+component must remain; null updates return without attempting refresh. Existing
+server/production exclusion gates remain intact.
+
+Added ignored-by-default, explicitly invoked actual-runtime conformance test using
+Ferrite's installer and persistent Node plugin transport. It installs pinned
+`react-refresh@0.17.0` in a clean directory, executes the generated preamble and
+footer as real ESM (including self-namespace import), verifies component
+registration and family advancement through the official runtime, then checks
+six unsafe export shapes and null update handling. No runtime mock or placeholder
+compiler is used; the test hot-context callback records invalidation decisions.
+
+Validation:
+
+- `cargo test -p ferrite-frameworks --locked`: 24 unit tests passed; separately
+  ignored execution tests are not counted as support evidence.
+- `cargo test -p ferrite-frameworks --test react_refresh_runtime --locked -- --ignored --nocapture`:
+  actual runtime test passed, then passed again with the stronger registered
+  family advancement assertion (1.67 seconds).
+- `cargo clippy -p ferrite-frameworks --all-targets --locked -- -D warnings`:
+  passed after final changes; formatting/diff checks passed.
+
+This proves the exercised runtime API and export-boundary decisions, not complete
+React Refresh. Hook signatures/custom hooks, anonymous defaults, hygienic
+instrumentation, actual browser state preservation/recovery, self-import graph
+behavior under browser HMR and broader version matrices remain assigned. React
+client conformance is still unavailable in Doctor; no framework support profile
+is promoted by this fixture. SSR, checkers, framework HMR and the full mission
+remain active.

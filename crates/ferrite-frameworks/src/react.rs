@@ -118,7 +118,7 @@ pub fn detect_components(id: &str, code: &str) -> Vec<Registration> {
 #[must_use]
 pub fn refresh_footer(id: &str, registrations: &[Registration]) -> String {
     let mut footer = format!(
-        "\nimport {spec:?};\nimport RefreshRuntime from {runtime:?};\n",
+        "\nimport {spec:?};\nimport RefreshRuntime from {runtime:?};\nimport * as __ferrite_refresh_exports__ from {id:?};\n",
         spec = REFRESH_SPEC,
         runtime = REFRESH_RUNTIME_SPEC,
     );
@@ -130,7 +130,19 @@ pub fn refresh_footer(id: &str, registrations: &[Registration]) -> String {
          const __ferrite_hot__ = globalThis.__ferrite_create_hot__({id:?});\n\
          __ferrite_hot__.accept((next) => {{\n\
          if (next == null) return;\n\
-         if (!RefreshRuntime.isLikelyComponentModule(next)) {{\n\
+         let valid = false;\n\
+         try {{\n\
+         const previous = __ferrite_refresh_exports__;\n\
+         const keys = Object.keys(previous);\n\
+         const nextKeys = Object.keys(next);\n\
+         let components = 0;\n\
+         valid = keys.length === nextKeys.length && keys.every((key) => {{\n\
+         if (!Object.prototype.hasOwnProperty.call(next, key)) return false;\n\
+         if (RefreshRuntime.isLikelyComponentType(previous[key]) && RefreshRuntime.isLikelyComponentType(next[key])) {{ components++; return true; }}\n\
+         return previous[key] === next[key];\n\
+         }}) && components > 0;\n\
+         }} catch {{ valid = false; }}\n\
+         if (!valid) {{\n\
          __ferrite_hot__.invalidate();\n\
          return;\n\
          }}\n\
@@ -472,7 +484,8 @@ mod tests {
             "{footer}"
         );
         assert!(footer.contains("performReactRefresh"), "{footer}");
-        assert!(footer.contains("isLikelyComponentModule"), "{footer}");
+        assert!(footer.contains("isLikelyComponentType"), "{footer}");
+        assert!(!footer.contains("isLikelyComponentModule"), "{footer}");
     }
 
     #[test]
