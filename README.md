@@ -17,6 +17,12 @@ cd my-app
 ferrite dev
 ```
 
+Experimental React 19.2.0 client applications can be generated with
+`ferrite create my-react-app --framework react --language ts --rendering client`.
+Both JavaScript and TypeScript profiles use the native compiler and pinned
+Refresh runtime; Node is not required. SSR and integrated type checking remain
+unavailable for these profiles.
+
 No `node`, `npm`, `pnpm`, `bun`, or `node_modules` required.
 
 ```bash
@@ -216,7 +222,9 @@ imports — plus the items below.
   a newly loaded implementation without stale output or document reload.
   Named default components and anonymous functions exported through `memo` also
   have browser Refresh/reset/production-preview coverage.
-  The full component/hook matrix and React generation profiles remain incomplete.
+  Experimental JavaScript/TypeScript React client generation profiles use these
+  pinned runtimes and native compilation. The full component/hook matrix remains
+  incomplete.
   Experimental Vue 3.5.22 and
   Svelte 5.39.6 compilation uses their official project-matched compilers on
   the explicitly enabled Node compiler host. Client templates are exercised

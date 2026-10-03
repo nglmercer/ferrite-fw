@@ -29,6 +29,11 @@ pub(crate) async fn inspect(
         .collect();
     if let Some(profile) = &resolved.framework {
         for name in &profile.enabled {
+            if name == "react" {
+                plugins.retain(|plugin| plugin != "ferrite:react");
+                plugins.push("ferrite:react".into());
+                continue;
+            }
             plugins.retain(|plugin| plugin != &format!("ferrite:{name}"));
             plugins.push(format!("ferrite:{name}-official"));
         }

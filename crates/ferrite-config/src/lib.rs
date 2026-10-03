@@ -84,9 +84,9 @@ impl Default for ForeignPluginConfig {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct FrameworkConfig {
-    /// Component owners to enable (`vue`, `svelte`). An empty list disables this integration.
+    /// Component owners to enable (`react`, `vue`, `svelte`). An empty list disables this integration.
     pub enabled: Vec<String>,
-    /// Compiler host. Currently only explicitly selected `node` is validated.
+    /// Compiler host: native React or explicitly selected Node for Vue/Svelte.
     pub compiler_host: Option<String>,
     /// Optional Node executable; never used for SSR runtime selection.
     pub node: Option<PathBuf>,
@@ -108,8 +108,8 @@ impl FrameworkConfig {
     pub fn validate(&self) -> Result<()> {
         let mut seen = std::collections::HashSet::new();
         for name in &self.enabled {
-            if !matches!(name.as_str(), "vue" | "svelte") {
-                return Err(FerriteError::Config(format!("framework `{name}` has no configured official compiler adapter; available: vue, svelte")));
+            if !matches!(name.as_str(), "react" | "vue" | "svelte") {
+                return Err(FerriteError::Config(format!("framework `{name}` has no configured compiler adapter; available: react (native), vue, svelte (node)")));
             }
             if !seen.insert(name) {
                 return Err(FerriteError::Config(format!(
@@ -117,7 +117,11 @@ impl FrameworkConfig {
                 )));
             }
         }
-        if !self.enabled.is_empty() && self.compiler_host.as_deref() != Some("node") {
+        if self.enabled.iter().any(|name| name == "react") {
+            if self.enabled.len() != 1 || self.compiler_host.as_deref() != Some("native") {
+                return Err(FerriteError::Config("React requires framework.compiler_host = \"native\"; mixed native/Node framework profiles are unavailable in one framework configuration; SSR runtime is separate".into()));
+            }
+        } else if !self.enabled.is_empty() && self.compiler_host.as_deref() != Some("node") {
             return Err(FerriteError::Config("official framework compilation requires explicit framework.compiler_host = \"node\"; native and embedded compiler profiles are unavailable; SSR runtime is configured separately".into()));
         }
         if self.timeout_ms == 0 || self.timeout_ms > 300_000 {
@@ -1522,6 +1526,9 @@ mod tests {
             "[framework]\nenabled=['angular']\ncompiler_host='node'",
             "[framework]\nenabled=['vue','vue']\ncompiler_host='node'",
             "[framework]\nenabled=['svelte']\ncompiler_host='node'\ntimeout_ms=0",
+            "[framework]\nenabled=['react']\ncompiler_host='node'",
+            "[framework]\nenabled=['react']",
+            "[framework]\nenabled=['react','vue']\ncompiler_host='native'",
         ] {
             assert!(
                 resolve_config(parse(text), None, CliOverrides::default()).is_err(),
@@ -1542,6 +1549,19 @@ mod tests {
             Some("node")
         );
         assert!(toml::from_str::<UserConfig>("[framework]\ncompiler_hosts='node'").is_err());
+        let native = resolve_config(
+            parse(
+                "[framework]\nenabled=['react']\ncompiler_host='native'\n[runtime]\nbackend='boa'",
+            ),
+            None,
+            CliOverrides::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            native.framework.unwrap().compiler_host.as_deref(),
+            Some("native")
+        );
+        assert_eq!(native.runtime.backend, "boa");
     }
 
     #[test]

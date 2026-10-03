@@ -2089,3 +2089,76 @@ function, not arbitrary naked anonymous defaults or every HOC shape. No migratio
 or full-profile support promotion. Mixed exports, additional anonymous/HOC
 matrices, ownership rules, React generation/checking and the entire remaining
 framework mission stay assigned and active.
+
+### Generate experimental native React client applications
+
+The shared registry now exposes React JavaScript/TypeScript client templates,
+pinned to React/React DOM 19.2.0 and react-refresh 0.17.0. Generation writes real
+default-exported counter components, JSX/TSX mounting entries, an empty client
+mount container, existing public assets/CSS, explicit native framework/automatic
+JSX/Refresh configuration and package scripts. TypeScript profiles additionally
+install @types/react and @types/react-dom 19.2.0 through Ferrite and select
+react-jsx in editor settings. SSR requests remain rejected before generation;
+transpilation does not claim checker execution.
+
+The first actual browser attempt failed during creation because framework
+configuration still only allowed Vue/Svelte on Node. This regression is retained
+in /tmp/ferrite-react-scaffold-browsers.log. Shared configuration now accepts
+explicit native React, and the library constructor installs its native plugin
+without constructing a Node compiler host. Mixed native/Node owners in this
+single-host configuration are rejected with an actionable error. CLI inspect
+reports the native plugin rather than an invented official Node adapter.
+Doctor exposes the experimental client capability only with installed concrete
+React/React DOM/Refresh dependencies at the selected pinned versions; missing,
+different or identity-mismatched packages produce errors. Broader host/version
+and per-file ownership configuration remains assigned.
+
+The generated-app acceptance helper now checks React state retention rather
+than expecting the full reload used by other component templates. In clean
+directories both languages execute create (including Ferrite installation),
+frozen reinstall, dev rendering/clicks, invalid-source overlay with retained UI,
+compatible component recovery preserving the counter, scope-hoisted build and
+preview interaction with strict console/page checks. Every React CLI invocation
+runs with an empty PATH.
+
+Validation so far:
+- Both explicit Chromium/Firefox generated React tests passed, covering four
+  browser/language profiles in 84.80 seconds. Output:
+  /tmp/ferrite-react-scaffold-browsers-final.log.
+- Framework (30), configuration (27) and facade (14) library tests passed;
+  one unrelated explicitly enabled Node fixture remains ignored by default.
+  Output: /tmp/ferrite-react-scaffold-unit-final.log.
+- All-target Clippy for configuration/framework/facade/CLI/test crates passed
+  with --locked -- -D warnings. Output:
+  /tmp/ferrite-react-scaffold-clippy-final.log.
+- CLI build and workspace compilation passed; outputs:
+  /tmp/ferrite-react-scaffold-build.log and
+  /tmp/ferrite-react-scaffold-workspace.log.
+
+No lock migration or Tested support promotion. These are experimental client
+profiles, with no framework SSR/hydration/SSG renderer or integrated checker.
+Complete Refresh conformance, CSS/cache/reinstall matrices, per-file ownership,
+additional framework adapters, managed integrations and the full remaining
+mission stay assigned and active.
+
+Existing generated-template regressions also passed: all four explicit
+Chromium/Firefox Vanilla/Vue/Svelte tests, covering twelve browser/language
+profiles, completed in 109.05 seconds. This retains frozen/configured-lock,
+editor-store, syntax recovery, scoped/generated CSS, build and preview checks.
+Output: /tmp/ferrite-react-scaffold-regression-browsers.log. Formatting and
+diff checks passed.
+
+The full workspace test run is not green. The first invocation omitted browser
+paths and stopped at ci_policy's isolated Chromium child; rerunning that target
+with explicit Chromium/Firefox paths passed all six tests. A subsequent workspace
+run with both paths and FERRITE_E2E_REQUIRE_BOTH_BROWSERS=1 reached browser.rs:
+86 passed, seven failed (Firefox startup 404, three Chromium authentication/CDP
+evaluation timeouts, a favicon/request event-order mismatch, runner modes and
+missing video attachment). Output:
+ /tmp/ferrite-react-scaffold-workspace-tests-final.log.
+No assertions or capability guards were weakened. A full workspace rerun with
+the same two-browser requirement and --test-threads=2 is still running, output:
+ /tmp/ferrite-react-scaffold-workspace-tests-bounded.log.
+Its process must be resumed and its terminal result inspected before claiming
+workspace validation. Browser-tool failures and broader framework work remain
+assigned; focused generated React acceptance is independently green as above.

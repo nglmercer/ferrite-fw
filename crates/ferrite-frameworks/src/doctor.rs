@@ -172,11 +172,46 @@ pub fn inspect(config: &ResolvedConfig) -> Result<DoctorReport> {
         if active {
             issues.push(Issue { severity: "warning", message: format!("{name} checker integration is unavailable; transpilation does not type-check"), action: "use the official framework checker separately until Ferrite checker execution is implemented".into() });
         }
+        if active && name == "react" {
+            let mut required = vec![
+                ("react", crate::scaffold::REACT_VERSION),
+                ("react-dom", crate::scaffold::REACT_VERSION),
+            ];
+            if config.react.refresh {
+                required.push(("react-refresh", crate::scaffold::REACT_REFRESH_VERSION));
+            }
+            for (dependency, expected) in required {
+                let selected = lock
+                    .importers
+                    .get(".")
+                    .and_then(|root| root.dependencies.get(dependency))
+                    .and_then(|id| lock.package_by_id(id));
+                let installed = selected.and_then(|package| {
+                    std::fs::read(
+                        config
+                            .root
+                            .join(".ferrite/npm/packages")
+                            .join(package.id())
+                            .join("package.json"),
+                    )
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+                });
+                if selected.is_none_or(|package| package.version != expected)
+                    || installed.as_ref().is_none_or(|manifest| {
+                        manifest["name"] != dependency || manifest["version"] != expected
+                    })
+                {
+                    available = false;
+                    issues.push(Issue { severity: "error", message: format!("React experimental client profile requires installed {dependency}@{expected}"), action: format!("declare {dependency} = {expected} in package.json and run ferrite install; other versions have no validated client profile") });
+                }
+            }
+        }
         frameworks.push(FrameworkReport {
             framework: name, active, selection: if explicit.is_some() { "configuration" } else { "manifest" },
             version: package.map(|package| package.version.clone()), identity: package.map(|package| package.id()),
             compiler_host: host, compiler_support: if available { "experimental" } else { "unavailable" },
-            client: if available && name != "react" { descriptor.client.label() } else { "unavailable" }, ssr: descriptor.ssr.label(),
+            client: if available { descriptor.client.label() } else { "unavailable" }, ssr: descriptor.ssr.label(),
             updates: if !available { "unavailable" } else if name == "react" { "experimental-refresh-incomplete" } else { "full-reload" }, checker: "unavailable",
             compiler_profiles: descriptor.compiler_profiles.iter().map(|profile| serde_json::json!({
                 "host": profile.host, "framework_version": profile.framework_version,
@@ -320,6 +355,84 @@ mod tests {
         assert_eq!(report.node_probe, "not-located");
         assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
     }
+    #[test]
+    fn react_client_requires_concrete_runtime_and_refresh_dependencies() {
+        use ferrite_npm::{LockedImporter, LockedPackage};
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("package.json"), r#"{"dependencies":{"react":"19.2.0","react-dom":"19.2.0"},"devDependencies":{"react-refresh":"0.17.0"}}"#).unwrap();
+        let user = UserConfig {
+            framework: Some(FrameworkConfig {
+                enabled: vec!["react".into()],
+                compiler_host: Some("native".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let resolved =
+            resolve_config(user, Some(root.path().into()), CliOverrides::default()).unwrap();
+        let mut lock = Lockfile::default();
+        let mut importer = LockedImporter::default();
+        for (name, version) in [
+            ("react", "19.2.0"),
+            ("react-dom", "19.2.0"),
+            ("react-refresh", "0.17.0"),
+        ] {
+            let package = LockedPackage {
+                name: name.into(),
+                version: version.into(),
+                source: "npm".into(),
+                ..Default::default()
+            };
+            importer.specifiers.insert(name.into(), version.into());
+            importer.dependencies.insert(name.into(), package.id());
+            let directory = root.path().join(".ferrite/npm/packages").join(package.id());
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(
+                directory.join("package.json"),
+                serde_json::json!({"name":name,"version":version}).to_string(),
+            )
+            .unwrap();
+            lock.package.push(package);
+        }
+        lock.importers.insert(".".into(), importer);
+        lock.write(&resolved.lockfile()).unwrap();
+        let report = inspect(&resolved).unwrap();
+        let react = report
+            .frameworks
+            .iter()
+            .find(|row| row.framework == "react")
+            .unwrap();
+        assert_eq!(react.client, "experimental");
+        assert_eq!(react.compiler_host.as_deref(), Some("native"));
+        assert_eq!(react.ssr, "unavailable");
+        let refresh = lock
+            .package
+            .iter()
+            .find(|package| package.name == "react-refresh")
+            .unwrap();
+        std::fs::remove_file(
+            root.path()
+                .join(".ferrite/npm/packages")
+                .join(refresh.id())
+                .join("package.json"),
+        )
+        .unwrap();
+        let report = inspect(&resolved).unwrap();
+        assert_eq!(
+            report
+                .frameworks
+                .iter()
+                .find(|row| row.framework == "react")
+                .unwrap()
+                .client,
+            "unavailable"
+        );
+        assert!(report
+            .issues
+            .iter()
+            .any(|issue| issue.message.contains("installed react-refresh@0.17.0")));
+    }
+
     #[cfg(unix)]
     #[test]
     fn concrete_root_version_wins_and_located_host_is_never_executed() {

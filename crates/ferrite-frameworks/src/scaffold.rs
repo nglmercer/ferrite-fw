@@ -31,6 +31,27 @@ pub const TEMPLATES: &[TemplateProfile] = &[
     },
 ];
 
+pub const REACT_VERSION: &str = "19.2.0";
+pub const REACT_REFRESH_VERSION: &str = "0.17.0";
+pub const REACT_TEMPLATES: &[TemplateProfile] = &[
+    TemplateProfile {
+        framework: "react",
+        language: "js",
+        rendering: "client",
+        compiler_host: "native",
+        framework_version: Some(REACT_VERSION),
+        support: crate::registry::Support::Experimental,
+    },
+    TemplateProfile {
+        framework: "react",
+        language: "ts",
+        rendering: "client",
+        compiler_host: "native",
+        framework_version: Some(REACT_VERSION),
+        support: crate::registry::Support::Experimental,
+    },
+];
+
 pub const VUE_TEMPLATES: &[TemplateProfile] = &[
     TemplateProfile {
         framework: "vue",
@@ -128,10 +149,52 @@ pub fn files(profile: &TemplateProfile, name: &str) -> Result<BTreeMap<String, S
         files.insert("tsconfig.json".into(), "{\n  \"compilerOptions\": {\"target\": \"ES2022\", \"module\": \"ESNext\", \"moduleResolution\": \"Bundler\", \"lib\": [\"ES2022\", \"DOM\"], \"strict\": true, \"noEmit\": true},\n  \"include\": [\"src\"]\n}\n".into());
     }
     files.insert("README.md".into(), format!("# {name}\n\nRun `ferrite install`, then `ferrite dev`. Click the counter to verify interaction.\nRun `ferrite build` and `ferrite preview` to verify production behavior.\n\nThis is a client application; it has no SSR renderer. JavaScript/TypeScript\ntranspilation uses Ferrite's native compiler. TypeScript transpilation does not\nperform type checking; the tsconfig provides editor settings.\n"));
-    if profile.framework != "vanilla" {
+    if profile.framework == "react" {
+        react_files(profile, name, &mut files)?;
+    } else if profile.framework != "vanilla" {
         component_files(profile, name, &mut files)?;
     }
     Ok(files)
+}
+
+fn react_files(
+    profile: &TemplateProfile,
+    name: &str,
+    files: &mut BTreeMap<String, String>,
+) -> Result<()> {
+    let typed = profile.language == "ts";
+    let extension = if typed { "tsx" } else { "jsx" };
+    files.remove(&format!("src/main.{}", profile.language));
+    files.insert(format!("src/main.{extension}"), "import './style.css';\nimport { createRoot } from 'react-dom/client';\nimport App from './App';\nconst target = document.querySelector('#app');\nif (!target) throw new Error('missing #app');\ncreateRoot(target).render(<App />);\n".into());
+    files.insert(format!("src/App.{extension}"), format!("import {{ useState }} from 'react';\nexport default function App() {{\n  const [count, setCount] = useState{}(0);\n  return <><h1>Hello Ferrite + React</h1><button id=\"counter\" type=\"button\" onClick={{() => setCount(count + 1)}}>count: {{count}}</button></>;\n}}\n", if typed { "<number>" } else { "" }));
+    let html = files.get_mut("index.html").unwrap();
+    *html = html
+        .replace(
+            "<h1>Hello Ferrite</h1><button id=\"counter\" type=\"button\">count: 0</button>",
+            "",
+        )
+        .replace(
+            &format!("src/main.{}", profile.language),
+            &format!("src/main.{extension}"),
+        );
+    let mut dev = serde_json::json!({"react-refresh": REACT_REFRESH_VERSION});
+    if typed {
+        dev["@types/react"] = serde_json::json!("19.2.0");
+        dev["@types/react-dom"] = serde_json::json!("19.2.0");
+        let config = files.get_mut("tsconfig.json").unwrap();
+        *config = config.replace(
+            "\"strict\": true",
+            "\"jsx\": \"react-jsx\", \"strict\": true",
+        );
+    }
+    files.insert("package.json".into(), format!("{}\n", serde_json::to_string_pretty(&serde_json::json!({
+        "name": name, "private": true, "type": "module",
+        "scripts": {"dev":"ferrite dev", "build":"ferrite build", "preview":"ferrite preview"},
+        "dependencies": {"react": REACT_VERSION, "react-dom": REACT_VERSION}, "devDependencies": dev
+    }))?));
+    files.insert("ferrite.toml".into(), "[framework]\nenabled = [\"react\"]\ncompiler_host = \"native\"\n\n[react]\nruntime = \"automatic\"\nimport_source = \"react\"\nrefresh = true\n\n[server]\nport = 5173\n\n[build]\nentries = [\"index.html\"]\n".into());
+    files.insert("README.md".into(), format!("# {name}\n\nExperimental React {REACT_VERSION} client profile. Run `ferrite install`,\nthen `ferrite dev`. Click the counter, edit `src/App.{extension}`, then run\n`ferrite build` and `ferrite preview` to verify production interaction.\n\nCompilation and Refresh instrumentation use the native compiler; Node is not\nrequired. Compatible component edits preserve state; hook signature changes\nreset it, and unsafe export boundaries reload the document.\nThis profile has no SSR renderer or hydration entry. TypeScript transpilation\ndoes not perform type checking; editor types are installed through Ferrite.\nComplete checker integration and broader Refresh conformance remain unavailable.\n"));
+    Ok(())
 }
 
 fn component_files(
@@ -309,7 +372,7 @@ mod tests {
     use super::*;
     #[test]
     fn public_generation_rejects_profile_substitution() {
-        for framework in ["vanilla", "vue", "svelte"] {
+        for framework in ["vanilla", "react", "vue", "svelte"] {
             for language in ["js", "ts"] {
                 let canonical = select(framework, language, "client").unwrap();
                 for field in ["host", "version", "support"] {
@@ -328,6 +391,40 @@ mod tests {
                 assert!(files(&canonical.clone(), "app").is_ok());
             }
         }
+    }
+
+    #[test]
+    fn react_scaffolds_pin_runtime_and_editor_dependencies() {
+        for language in ["js", "ts"] {
+            let profile = select("react", language, "client").unwrap();
+            let generated = files(profile, "app").unwrap();
+            let extension = if language == "ts" { "tsx" } else { "jsx" };
+            let package: serde_json::Value =
+                serde_json::from_str(&generated["package.json"]).unwrap();
+            assert_eq!(package["dependencies"]["react"], REACT_VERSION);
+            assert_eq!(package["dependencies"]["react-dom"], REACT_VERSION);
+            assert_eq!(
+                package["devDependencies"]["react-refresh"],
+                REACT_REFRESH_VERSION
+            );
+            assert_eq!(
+                package["devDependencies"]["@types/react"].is_string(),
+                language == "ts"
+            );
+            assert!(generated[&format!("src/main.{extension}")]
+                .contains("createRoot(target).render(<App />)"));
+            assert!(generated[&format!("src/App.{extension}")].contains("setCount(count + 1)"));
+            assert!(!generated.contains_key(&format!("src/main.{language}")));
+            assert!(generated["index.html"].contains(&format!("src/main.{extension}")));
+            assert!(!generated["index.html"].contains("id=\"counter\""));
+            assert!(generated["ferrite.toml"].contains("compiler_host = \"native\""));
+            if language == "ts" {
+                let config: serde_json::Value =
+                    serde_json::from_str(&generated["tsconfig.json"]).unwrap();
+                assert_eq!(config["compilerOptions"]["jsx"], "react-jsx");
+            }
+        }
+        assert!(select("react", "ts", "ssr").is_err());
     }
 
     #[test]

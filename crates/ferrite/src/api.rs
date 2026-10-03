@@ -112,7 +112,12 @@ impl Config {
             ).map_err(|error| ferrite_core::FerriteError::Config(format!("foreign plugin {} at {} failed registration: {error}; check entry/options and the supported hook subset", profile.name, entry.display())))?));
         }
         if let Some(profile) = &resolved.framework {
-            if !profile.enabled.is_empty() {
+            if profile.enabled.iter().any(|name| name == "react") {
+                plugins.retain(|plugin| plugin.name() != "ferrite:react");
+                plugins.push(Arc::new(crate::frameworks::ReactPlugin::with_enabled(
+                    resolved.react.refresh,
+                )));
+            } else if !profile.enabled.is_empty() {
                 // Only an explicit validated host selection can reach this constructor.
                 for name in &profile.enabled {
                     let official = format!("ferrite:{name}-official");

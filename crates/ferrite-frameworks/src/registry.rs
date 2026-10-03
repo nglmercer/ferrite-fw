@@ -79,7 +79,7 @@ pub const FRAMEWORKS: &[FrameworkDescriptor] = &[
     FrameworkDescriptor {
         name: "react",
         extensions: &["jsx", "tsx"],
-        template_variants: &[],
+        template_variants: crate::scaffold::REACT_TEMPLATES,
         compiler_profiles: &[],
         compiler_package: None,
         client: Support::Experimental,

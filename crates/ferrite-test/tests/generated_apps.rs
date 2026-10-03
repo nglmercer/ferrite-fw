@@ -80,7 +80,8 @@ async fn acceptance(kind: BrowserKind, frameworks: &[&str]) {
     .await
     .unwrap();
     for framework in frameworks {
-        let node_enabled = *framework != "vanilla";
+        let node_enabled = matches!(*framework, "vue" | "svelte");
+        let react = *framework == "react";
         for language in ["js", "ts"] {
             let project = ferrite_test::TempProject::new(&[]);
             let destination = project.root.join("app");
@@ -123,7 +124,7 @@ async fn acceptance(kind: BrowserKind, frameworks: &[&str]) {
                 std::fs::read_link(destination.join("node_modules")).unwrap(),
                 PathBuf::from(".ferrite/npm/node_modules")
             );
-            if node_enabled {
+            if *framework != "vanilla" {
                 let graph = ferrite::npm::Lockfile::read(&lock_path).unwrap();
                 let identity = &graph.importers["."].dependencies[*framework];
                 let actual = destination
@@ -179,7 +180,9 @@ async fn acceptance(kind: BrowserKind, frameworks: &[&str]) {
                     .unwrap();
                 assert_eq!(color, "rgb(128, 0, 0)", "initial generated scoped CSS");
             }
-            let main = destination.join(if node_enabled {
+            let main = destination.join(if react {
+                format!("src/App.{}", if language == "ts" { "tsx" } else { "jsx" })
+            } else if node_enabled {
                 format!("src/App.{framework}")
             } else {
                 format!("src/main.{language}")
@@ -219,29 +222,39 @@ async fn acceptance(kind: BrowserKind, frameworks: &[&str]) {
                 "invalid source must keep the running application"
             );
 
-            let changed = source.replace("count += 1", "count += 2");
+            let changed = source
+                .replace("count += 1", "count += 2")
+                .replace("setCount(count + 1)", "setCount(count + 2)");
             let changed = if node_enabled {
                 changed
                     .replace(">count: ", ">edited count: ")
                     .replace("rgb(128, 0, 0)", "rgb(0, 0, 128)")
+            } else if react {
+                changed.replace(">count: ", ">edited count: ")
             } else {
                 format!("{changed}\ndocument.body.dataset.revision = 'edited';\n")
             };
             std::fs::write(&main, changed).unwrap();
-            let prefix = if node_enabled {
+            let prefix = if node_enabled || react {
                 "edited count"
             } else {
                 "count"
             };
             page.wait_for_function(
-                &format!("document.querySelector('#counter')?.textContent === '{prefix}: 0'"),
+                &format!(
+                    "document.querySelector('#counter')?.textContent === '{prefix}: {}'",
+                    if react { 1 } else { 0 }
+                ),
                 Duration::from_secs(15),
             )
             .await
             .unwrap();
             page.locator("#counter").click().await.unwrap();
             page.wait_for_function(
-                &format!("document.querySelector('#counter')?.textContent === '{prefix}: 2'"),
+                &format!(
+                    "document.querySelector('#counter')?.textContent === '{prefix}: {}'",
+                    if react { 3 } else { 2 }
+                ),
                 Duration::from_secs(10),
             )
             .await
@@ -1300,4 +1313,15 @@ async fn chromium_react_refresh_mixed_exports() {
 #[ignore = "requires freshly built CLI, registry packages and Firefox"]
 async fn firefox_react_refresh_mixed_exports() {
     react_refresh_dom_acceptance(BrowserKind::Firefox, ReactFixture::MixedExports).await;
+}
+
+#[tokio::test]
+#[ignore = "requires freshly built CLI, registry packages and Chromium"]
+async fn chromium_generated_react_profiles() {
+    acceptance(BrowserKind::Chromium, &["react"]).await;
+}
+#[tokio::test]
+#[ignore = "requires freshly built CLI, registry packages and Firefox"]
+async fn firefox_generated_react_profiles() {
+    acceptance(BrowserKind::Firefox, &["react"]).await;
 }
