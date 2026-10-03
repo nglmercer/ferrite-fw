@@ -70,6 +70,15 @@ impl Config {
 
     /// Resolve into concrete config + plugins (runs `config` hooks).
     pub async fn resolve(self) -> Result<(ResolvedConfig, Vec<Arc<dyn Plugin>>)> {
+        self.resolve_with_compilers(true).await
+    }
+
+    // Preview consumes built artifacts; configured compiler workers belong only
+    // to source compilation. Foreign preview hooks still retain their host.
+    async fn resolve_with_compilers(
+        self,
+        compile_sources: bool,
+    ) -> Result<(ResolvedConfig, Vec<Arc<dyn Plugin>>)> {
         let mut user = self.user;
         let container = PluginContainer::new(self.plugins.clone(), Apply::All);
         container.hook_config(&mut user).await?;
@@ -119,7 +128,7 @@ impl Config {
                 plugins.push(Arc::new(crate::frameworks::ReactPlugin::with_enabled(
                     resolved.react.refresh,
                 )));
-            } else if !profile.enabled.is_empty() {
+            } else if compile_sources && !profile.enabled.is_empty() {
                 // Only an explicit validated host selection can reach this constructor.
                 for name in &profile.enabled {
                     let official = format!("ferrite:{name}-official");
@@ -193,15 +202,36 @@ pub async fn build(config: Config) -> Result<Vec<BuildReport>> {
 }
 
 /// Preview a production build (spec §9), running `configResolved` and
-/// the preview-server hooks.
+/// the preview-server hooks. Configured framework compiler workers are not
+/// started; explicit foreign plugins retain their configured host requirements.
 pub async fn preview(config: Config) -> Result<()> {
-    let (resolved, plugins) = config.resolve().await?;
+    let (resolved, plugins) = config.resolve_with_compilers(false).await?;
     preview_with_plugins(&resolved, &plugins).await
 }
 
 #[cfg(test)]
 mod foreign_profile_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn preview_resolution_does_not_require_compiler_executable_or_packages() {
+        for framework in ["vue", "svelte"] {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::write(
+                root.path().join("ferrite.toml"),
+                format!("[framework]\nenabled=['{framework}']\ncompiler_host='node'\nnode='missing-node'\n"),
+            )
+            .unwrap();
+            let config = || Config {
+                root: Some(root.path().into()),
+                ..Default::default()
+            };
+            let (resolved, plugins) = config().resolve_with_compilers(false).await.unwrap();
+            assert_eq!(resolved.framework.unwrap().enabled, [framework]);
+            assert!(plugins.is_empty());
+            assert!(config().resolve().await.is_err());
+        }
+    }
 
     #[tokio::test]
     async fn build_mode_precedence_preserves_named_modes_with_production_behavior() {
@@ -303,12 +333,19 @@ mod foreign_profile_tests {
     #[tokio::test]
     async fn foreign_profiles_require_opt_in_and_do_not_fallback_from_missing_node() {
         let root = tempfile::tempdir().unwrap();
-        for (host, node, expected) in [
-            (None, None, "requires explicit host"),
+        for (host, node, expected, compile_sources) in [
+            (None, None, "requires explicit host", true),
             (
                 Some("node".to_string()),
                 Some(root.path().join("missing-node")),
                 "cannot spawn",
+                true,
+            ),
+            (
+                Some("node".to_string()),
+                Some(root.path().join("missing-node")),
+                "cannot spawn",
+                false,
             ),
         ] {
             let user = ferrite_config::UserConfig {
@@ -326,7 +363,7 @@ mod foreign_profile_tests {
                 user,
                 ..Default::default()
             };
-            let error = match config.resolve().await {
+            let error = match config.resolve_with_compilers(compile_sources).await {
                 Err(error) => error,
                 Ok(_) => panic!("unavailable profile must fail"),
             };

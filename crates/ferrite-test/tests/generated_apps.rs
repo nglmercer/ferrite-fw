@@ -483,7 +483,8 @@ async fn acceptance(kind: BrowserKind, frameworks: &[&str]) {
                 }
             }
 
-            let (mut preview, url) = server(&binary, &destination, "preview", node_enabled).await;
+            // Built client artifacts need no compiler host, including Vue/Svelte.
+            let (mut preview, url) = server(&binary, &destination, "preview", false).await;
             let page = browser.new_page().await.unwrap();
             page.goto(&url).await.unwrap();
             page.wait_for_function(

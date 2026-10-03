@@ -1,5 +1,33 @@
 # Framework support implementation status
 
+## Client preview separates compiler requirements from runtime requirements
+
+Preview resolves configuration and existing plugin hooks without starting the
+configured Vue/Svelte compiler worker. Compilation through `Config::resolve`,
+development, and build still requires the explicitly selected compiler host and
+installed compiler packages. Foreign plugins retain their explicit host during
+preview; an unavailable foreign host remains an error rather than silently losing
+preview hooks. Explicit Rust plugin instances retain their existing lifecycle.
+No configuration or lockfile migration is required.
+
+Validation: 17 facade unit tests passed, one unrelated real-Node test ignored.
+The new test resolves Vue and Svelte preview configurations with a missing Node
+executable and no installed packages, while source compilation fails. The foreign
+host regression also covers preview resolution. The real HTTP preview test for
+hooks, mounted files, and proxying passed. A fresh CLI build, facade/test
+all-target Clippy with `-D warnings`, changed-file formatting, and diff checks
+passed. All six generated-profile browser tests passed: 16 Chromium/Firefox
+flows across Vanilla/React/Vue/Svelte JavaScript and TypeScript, now with an empty
+PATH for every preview process. Existing interactions, staging environment flags,
+development-code exclusion, CSS, HMR, syntax recovery, and reinstall assertions
+remain in place.
+
+This establishes Node-free serving of these built client fixtures, not Node-free
+Vue/Svelte compilation or SSR rendering. Meaningful SSR preview, framework
+semantic coverage, checker integration, additional adapters, cross-platform
+release checks, and the broader mission remain incomplete. The full workspace
+and feature matrix were not rerun for this increment.
+
 ## Named build modes use production compilation
 
 Builds now separate the environment-file mode from production compilation.
