@@ -170,7 +170,7 @@ impl Plugin for ReactPlugin {
 
     fn cache_key(&self) -> String {
         format!(
-            "{}:oxc-0.151.0-signatures-v1:{}",
+            "{}:oxc-0.151.0-entry-preamble-v2:{}",
             self.name(),
             self.is_enabled()
         )
@@ -196,7 +196,7 @@ impl Plugin for ReactPlugin {
         ctx: &PluginContext,
         request: ResolveHookRequest<'_>,
     ) -> Result<Option<ferrite_resolver::ResolvedId>> {
-        if request.specifier == REFRESH_SPEC {
+        if request.specifier == REFRESH_SPEC || request.specifier == REFRESH_VIRTUAL {
             if request.ssr
                 || request.environment.is_ssr()
                 || ctx.environment.kind.is_ssr()
@@ -249,7 +249,21 @@ impl Plugin for ReactPlugin {
         }
         let registrations = detect_components(&request.id, &request.code);
         if registrations.is_empty() {
-            return Ok(None);
+            // Entry modules often mount imported components without exporting
+            // any themselves. Their first dependency must install the hook
+            // before react-dom evaluates and registers its renderer.
+            let (code, map) = ferrite_transform::apply_text_edits(
+                &request.id,
+                &request.code,
+                &[(0, 0, format!("import {REFRESH_SPEC:?};\n"))],
+                true,
+            )?;
+            return Ok(Some(TransformResult {
+                code,
+                map: map.map(ferrite_core::SourceMap::external),
+                dependencies: Vec::new(),
+                module_type: None,
+            }));
         }
         // Keep compiler-generated registration/signature identifiers module-local,
         // so component names in different files cannot share a Refresh family.
@@ -386,6 +400,15 @@ mod tests {
             watch_files: &watches,
             warnings: &warnings,
         };
+        let entry = plugin.transform(&ctx, TransformRequest {
+            id:"/main.jsx".into(), code:"import {createRoot} from 'react-dom/client'; createRoot(document.body).render(React.createElement(App));".into(),
+            module_type:ModuleType::Js, environment:EnvironmentKind::Client, ssr:false,
+        }).await.unwrap().unwrap();
+        assert!(entry.code.starts_with("import \"/@react-refresh\";"));
+        assert!(
+            !entry.code.contains(".accept("),
+            "entries without exports must not become Refresh boundaries"
+        );
         let source = "const __ferrite_refresh_runtime__ = 1; import {useState} from 'react'; export function App() { const [count] = useState(0); return React.createElement('div', null, count); }";
         let instrumented = plugin
             .transform(
@@ -561,7 +584,7 @@ mod tests {
     #[test]
     fn cache_identity_tracks_registration_version_and_enablement() {
         let enabled = ReactPlugin::with_enabled(true).cache_key();
-        assert!(enabled.contains("oxc-0.151.0-signatures-v1"));
+        assert!(enabled.contains("oxc-0.151.0-entry-preamble-v2"));
         assert_ne!(enabled, ReactPlugin::with_enabled(false).cache_key());
     }
 

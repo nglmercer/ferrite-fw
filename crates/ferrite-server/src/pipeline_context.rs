@@ -61,6 +61,11 @@ impl DevServer {
     /// Map a module id to a file path.
     pub fn id_to_file(&self, id: &ModuleId) -> Result<PathBuf> {
         let (path, _) = id.split_query();
+        if path.starts_with('\0') || path.starts_with("/@id/") {
+            return Err(FerriteError::Resolve(format!(
+                "no file for virtual `{path}`"
+            )));
+        }
         if let Some(rest) = path.strip_prefix("/@npm/") {
             return Ok(self
                 .inner

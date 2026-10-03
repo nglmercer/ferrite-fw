@@ -1851,3 +1851,53 @@ renderer. Browser state retention, hook-only modules outside JSX ownership,
 HOCs/anonymous declarations across the full conformance matrix, inserted binding
 interactions, source-location accuracy and syntax-error recovery remain assigned.
 No React template/profile is promoted. The full framework mission stays active.
+
+### Verify React DOM Refresh and fix virtual dispatch/preamble ordering
+
+New real Chromium/Firefox acceptance installs pinned React/React DOM 19.2.0 and
+react-refresh 0.17.0 through Ferrite, renders with the official `createRoot` API,
+clicks a stateful component, edits it, builds with scope hoisting and interacts
+with the preview. Install/dev/build/preview run with Node absent from `PATH`.
+This is a hand-authored conformance fixture, not a newly advertised template.
+
+The first run mounted and clicked successfully but failed Refresh in both
+browsers. A diagnostic rerun showed an overlay resolving a browser virtual URL
+as a project filesystem path and zero registered Refresh renderers. Fixes:
+
+- Shared resolve dispatch now decodes `/@id/` URLs before plugin/resolver hooks,
+  as loading already does. Virtual IDs/URLs cannot acquire filesystem identity.
+  React's internal virtual ID also goes through its client-development capability
+  guard, preventing the internal alias from bypassing SSR/production rejection.
+- JSX mounting entries with no component exports now prepend the Refresh
+  preamble as their first ESM dependency, so the hook is installed before React
+  DOM evaluates. Such entries do not become self-accepting Refresh boundaries.
+  Cache identity advances to `oxc-0.151.0-entry-preamble-v2`.
+
+Validation:
+
+- Both new browser tests passed the full expanded flow (45.38 seconds): compatible
+  edits preserve counter state/document identity; invalid syntax keeps the live
+  UI and shows a source-named overlay; correction clears it and retains state;
+  an added hook resets component state without reloading the document; subsequent
+  clicks work. Build/preview interactions pass, with no page/console errors.
+  Production JS is checked for absence of Ferrite Refresh instrumentation and
+  `createSignatureFunctionForTransform`. Output `/tmp/ferrite-react-dom-recovery.log`.
+- Initial failure logs `/tmp/ferrite-react-dom-browsers.log` and
+  `/tmp/ferrite-react-dom-diagnostic.log` are retained; assertions/timeouts were
+  not weakened. The earlier narrower post-fix run also passed both browsers.
+- 27 framework and 45 server unit tests passed; the server SWC matrix also passed
+  45 tests. Regressions check entry preamble/no false boundary, virtual dispatch,
+  missing physical paths and SSR rejection. Logs `/tmp/ferrite-react-dom-unit.log`,
+  `/tmp/ferrite-react-dom-frameworks.log`, `/tmp/ferrite-react-dom-swc.log`.
+- Rebuilt CLI, workspace compilation, server/framework/test all-target Clippy
+  with `--locked -- -D warnings`, formatting and diff checks passed.
+- The complete explicit Chromium/Firefox acceptance suite passed all 14 tests
+  with `--test-threads=2` (131.48 seconds), retaining the six existing generated
+  templates and plugin/dependency/startup cases alongside the two React DOM
+  fixtures. Output `/tmp/ferrite-react-dom-all-browsers.log`.
+
+The renderer API matches the official
+[React createRoot contract](https://react.dev/reference/react-dom/client/createRoot).
+No lock/config migration or full-profile support promotion. Hook-only modules,
+HOCs, anonymous/default/mixed-export browser matrices, JSX ownership, generated
+React templates/checkers and real SSR remain assigned. The full mission stays active.

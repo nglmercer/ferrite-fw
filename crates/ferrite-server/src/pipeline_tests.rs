@@ -1336,3 +1336,34 @@ async fn foreign_dependency_watcher_rejects_stale_imports_inside_and_outside_roo
         host.shutdown();
     }
 }
+
+#[tokio::test]
+async fn refresh_virtual_urls_resolve_without_filesystem_identity() {
+    let root = tempfile::tempdir().unwrap();
+    let config = ferrite_config::resolve_config(
+        Default::default(),
+        Some(root.path().into()),
+        Default::default(),
+    )
+    .unwrap();
+    let server = DevServer::new_without_watcher(
+        config,
+        vec![Arc::new(ferrite_frameworks::ReactPlugin::new())],
+    )
+    .await
+    .unwrap();
+    let resolved = server
+        .resolve_module("/@id/react-refresh", None, "client")
+        .await
+        .unwrap();
+    assert_eq!(resolved.id.0, ferrite_frameworks::react::REFRESH_VIRTUAL);
+    assert!(server.id_to_file(&resolved.id).is_err());
+    assert!(server
+        .id_to_file(&ModuleId::new("/@id/react-refresh"))
+        .is_err());
+    assert!(server
+        .resolve_module("/@id/react-refresh", None, "ssr")
+        .await
+        .is_err());
+    server.close();
+}

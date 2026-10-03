@@ -840,3 +840,213 @@ async fn chromium_configured_foreign_hooks() {
 async fn firefox_configured_foreign_hooks() {
     configured_foreign_hook_acceptance(BrowserKind::Firefox).await;
 }
+
+async fn react_refresh_dom_acceptance(kind: BrowserKind) {
+    let binary = cli();
+    let project = ferrite_test::TempProject::new(&[
+        ("package.json", r#"{"private":true,"dependencies":{"react":"19.2.0","react-dom":"19.2.0","react-refresh":"0.17.0"}}"#),
+        ("index.html", "<html><head><link rel='icon' href='data:,'></head><body><div id='root'></div><script type='module' src='/main.jsx'></script></body></html>"),
+        ("main.jsx", "import {createRoot} from 'react-dom/client'; import {App} from './App.jsx'; globalThis.session = Math.random(); createRoot(document.querySelector('#root')).render(<App/>);"),
+    ]);
+    let source = "import {useState} from 'react'; export function App() { const [count, setCount] = useState(0); return <button id='counter' onClick={() => setCount(count + 1)}>first: {count}</button>; }";
+    std::fs::write(project.root.join("App.jsx"), source).unwrap();
+    command(&binary, &project.root, &["install"], false).await;
+    let executable = match kind {
+        BrowserKind::Chromium => ferrite_e2e::find_chromium(None),
+        BrowserKind::Firefox => ferrite_e2e::find_firefox(None),
+    }
+    .expect("React DOM acceptance requires a real browser");
+    let browser = Browser::launch(
+        LaunchOptions::default()
+            .browser(kind)
+            .executable(executable),
+    )
+    .await
+    .unwrap();
+    let (mut dev, url) = server(&binary, &project.root, "dev", false).await;
+    let page = browser.new_page().await.unwrap();
+    page.goto(&url).await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'first: 0'",
+        Duration::from_secs(15),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "{error}; errors={:?}; console={:?}",
+            page.page_errors(),
+            page.console_messages()
+        )
+    });
+    page.locator("#counter").click().await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'first: 1'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap();
+    let session: f64 = page.evaluate("globalThis.session").await.unwrap();
+    std::fs::write(
+        project.root.join("App.jsx"),
+        source.replace("first:", "edited:"),
+    )
+    .unwrap();
+    let refresh_result = page
+        .wait_for_function(
+            "document.querySelector('#counter')?.textContent === 'edited: 1'",
+            Duration::from_secs(15),
+        )
+        .await;
+    if let Err(error) = refresh_result {
+        let state: serde_json::Value = page.evaluate("({text:document.querySelector('#counter')?.textContent, session:globalThis.session, overlay:document.querySelector('#ferrite-error-overlay')?.textContent, renderers:globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__?.renderers?.size, preamble:globalThis.__ferrite_react_preamble_installed__})").await.unwrap();
+        panic!("{error}; state={state}; errors={:?}", page.page_errors());
+    }
+    assert_eq!(
+        page.evaluate::<f64>("globalThis.session").await.unwrap(),
+        session,
+        "Refresh must not reload the document"
+    );
+    page.locator("#counter").click().await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'edited: 2'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap();
+    std::fs::write(project.root.join("App.jsx"), "export function App( {").unwrap();
+    page.wait_for_function(
+        "document.querySelector('#ferrite-error-overlay')?.textContent.includes('/App.jsx')",
+        Duration::from_secs(15),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        page.evaluate::<String>("document.querySelector('#counter').textContent")
+            .await
+            .unwrap(),
+        "edited: 2"
+    );
+    assert_eq!(
+        page.evaluate::<f64>("globalThis.session").await.unwrap(),
+        session
+    );
+    std::fs::write(
+        project.root.join("App.jsx"),
+        source.replace("first:", "recovered:"),
+    )
+    .unwrap();
+    page.wait_for_function("document.querySelector('#counter')?.textContent === 'recovered: 2' && !document.querySelector('#ferrite-error-overlay')", Duration::from_secs(15)).await.unwrap();
+    page.locator("#counter").click().await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'recovered: 3'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap();
+    let changed_signature = source
+        .replace(
+            "const [count, setCount]",
+            "const [extra] = useState(0); const [count, setCount]",
+        )
+        .replace("first:", "reset:");
+    std::fs::write(project.root.join("App.jsx"), changed_signature).unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'reset: 0'",
+        Duration::from_secs(15),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "signature reset failed: {error}; errors={:?}",
+            page.page_errors()
+        )
+    });
+    assert_eq!(
+        page.evaluate::<f64>("globalThis.session").await.unwrap(),
+        session,
+        "hook changes reset the component without reloading its document"
+    );
+    page.locator("#counter").click().await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'reset: 1'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap();
+    assert!(page.page_errors().is_empty(), "{:?}", page.page_errors());
+    assert!(
+        page.console_messages()
+            .iter()
+            .all(|message| message.kind != "error"),
+        "{:?}",
+        page.console_messages()
+    );
+    dev.kill().await.unwrap();
+    dev.wait().await.unwrap();
+    command(&binary, &project.root, &["build", "--scope-hoist"], false).await;
+    let mut directories = vec![project.root.join("dist")];
+    while let Some(directory) = directories.pop() {
+        for entry in std::fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                directories.push(path);
+            } else if path.extension().is_some_and(|extension| extension == "js") {
+                let output = std::fs::read_to_string(&path).unwrap();
+                assert!(
+                    !output.contains("__ferrite_refresh_"),
+                    "Refresh instrumentation in production: {}",
+                    path.display()
+                );
+                assert!(
+                    !output.contains("createSignatureFunctionForTransform"),
+                    "Refresh runtime in production: {}",
+                    path.display()
+                );
+            }
+        }
+    }
+    let (mut preview, url) = server(&binary, &project.root, "preview", false).await;
+    let page = browser.new_page().await.unwrap();
+    page.goto(&url).await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'reset: 0'",
+        Duration::from_secs(15),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "{error}; errors={:?}; console={:?}",
+            page.page_errors(),
+            page.console_messages()
+        )
+    });
+    page.locator("#counter").click().await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'reset: 1'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap();
+    assert!(page.page_errors().is_empty(), "{:?}", page.page_errors());
+    assert!(
+        page.console_messages()
+            .iter()
+            .all(|message| message.kind != "error"),
+        "{:?}",
+        page.console_messages()
+    );
+    preview.kill().await.unwrap();
+    preview.wait().await.unwrap();
+    browser.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires freshly built CLI, registry packages and Chromium"]
+async fn chromium_react_refresh_dom() {
+    react_refresh_dom_acceptance(BrowserKind::Chromium).await;
+}
+#[tokio::test]
+#[ignore = "requires freshly built CLI, registry packages and Firefox"]
+async fn firefox_react_refresh_dom() {
+    react_refresh_dom_acceptance(BrowserKind::Firefox).await;
+}

@@ -337,6 +337,10 @@ impl DevServer {
         environment: &ferrite_core::Environment,
         kind: ResolveKind,
     ) -> Result<ResolvedId> {
+        // Import analysis and HMR validation can supply browser virtual URLs.
+        // Decode them before plugin/resolver dispatch, just like module loading.
+        let virtual_id = crate::util::url_to_virtual(specifier);
+        let specifier = virtual_id.as_ref().map_or(specifier, |id| id.0.as_str());
         if specifier == ferrite_hmr::CLIENT_ID {
             if environment.kind.is_ssr() || self.inner.config.is_production {
                 return Err(FerriteError::Resolve(
