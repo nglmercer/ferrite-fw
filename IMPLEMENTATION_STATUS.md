@@ -976,3 +976,35 @@ This establishes ordered client message handling and preserves exercised generat
 profiles; it does not establish complete React hook/state conformance, dependency
 acceptance, syntax-error recovery or bounded/cancellable update queues. Remaining
 framework HMR, SSR/checkers, adapters and the complete mission stay active.
+
+### Prune cleanup and custom-event ownership
+
+Pruning now awaits disposal/prune callbacks, removes owned custom-event handlers,
+releases hot data and removes owned style resources. Cleanup failures are reported
+without preventing remaining callbacks/modules from cleanup; repeated prune paths
+are harmless. Custom events await asynchronous handlers through the message queue.
+
+Custom-event registrations are tracked by module and context generation. Repeated
+registration of the same callback in one owner is deduplicated; separate modules
+may register the same callback independently. `off` removes only the caller's
+registration. Re-evaluation clears old handlers, and stale/pruned contexts cannot
+register or remove handlers in a newer generation.
+
+Validation:
+
+- `cargo test -p ferrite-frameworks --test hmr_client --locked -- --ignored --nocapture`:
+  actual shipped client execution fixture passed (0.11 seconds). It now checks
+  current-generation asynchronous custom events after edits, disposal/prune once
+  with retained data, absent handlers/data after duplicate pruning, independent
+  shared-callback owners, stale/pruned contexts and cleanup continuation after a
+  deliberate failing prune hook. Expected handler/cleanup errors are logged;
+  assertions require later callbacks/modules to continue and remain cleaned up.
+- `cargo clippy -p ferrite-hmr -p ferrite-frameworks --all-targets --locked -- -D warnings`:
+  passed after final changes; diff check passed.
+
+This establishes the exercised client cleanup APIs in the actual-client transport
+harness, not additional browser/component state-preservation conformance. Server
+prune emission and generated-resource ownership matrices, dependency acceptance,
+syntax recovery, complete Refresh, SSR/checkers and remaining adapters/acceptance
+work are still assigned. No support profile is promoted; the full mission remains
+active.

@@ -7,11 +7,23 @@ const hotModules = new Map(); // id -> { callbacks, disposeCallbacks, data }
 const customHandlers = new Map(); // event -> Set<cb>
 const styleSheets = new Map(); // id -> HTMLStyleElement
 
+function clearCustomHandlers(entry) {
+  for (const [event, callbacks] of entry.customHandlers ?? []) {
+    const handlers = customHandlers.get(event);
+    for (const wrapper of callbacks.values()) handlers?.delete(wrapper);
+    if (handlers?.size === 0) customHandlers.delete(event);
+  }
+  entry.customHandlers = new Map();
+}
+
 function createHotContext(id) {
   if (!hotModules.has(id)) {
     hotModules.set(id, { callbacks: [], disposeCallbacks: [], pruneCallbacks: [], data: {} });
   }
   const entry = hotModules.get(id);
+  clearCustomHandlers(entry);
+  const generation = {};
+  entry.generation = generation;
   entry.callbacks = [];
   entry.disposeCallbacks = [];
   entry.pruneCallbacks = [];
@@ -37,11 +49,24 @@ function createHotContext(id) {
       location.reload();
     },
     on(event, cb) {
+      if (hotModules.get(id) !== entry || entry.generation !== generation) return;
       if (!customHandlers.has(event)) customHandlers.set(event, new Set());
-      customHandlers.get(event).add(cb);
+      if (!entry.customHandlers.has(event)) entry.customHandlers.set(event, new Map());
+      const owned = entry.customHandlers.get(event);
+      if (!owned.has(cb)) {
+        const wrapper = (data) => cb(data);
+        owned.set(cb, wrapper);
+        customHandlers.get(event).add(wrapper);
+      }
     },
     off(event, cb) {
-      customHandlers.get(event)?.delete(cb);
+      if (hotModules.get(id) !== entry || entry.generation !== generation) return;
+      const owned = entry.customHandlers.get(event);
+      const wrapper = owned?.get(cb);
+      if (wrapper) customHandlers.get(event)?.delete(wrapper);
+      owned?.delete(cb);
+      if (owned?.size === 0) entry.customHandlers.delete(event);
+      if (customHandlers.get(event)?.size === 0) customHandlers.delete(event);
     },
     send(event, data) {
       socket?.send(JSON.stringify({ type: "custom", event, data }));
@@ -148,7 +173,7 @@ function connect() {
           break;
         case "custom": {
           const handlers = customHandlers.get(payload.event);
-          handlers?.forEach((cb) => cb(payload.data));
+          for (const cb of [...(handlers ?? [])]) await cb(payload.data);
           break;
         }
         case "error":
@@ -156,7 +181,18 @@ function connect() {
           break;
         case "prune": {
           for (const path of payload.paths ?? []) {
-            hotModules.delete(path);
+            const entry = hotModules.get(path);
+            if (!entry) continue;
+            try {
+              for (const callback of [...entry.disposeCallbacks, ...entry.pruneCallbacks]) {
+                try { await callback(entry.data); }
+                catch (error) { console.error(`[ferrite] cleanup failed ${path}`, error); }
+              }
+            } finally {
+              clearCustomHandlers(entry);
+              hotModules.delete(path);
+              removeStyle(path);
+            }
           }
           break;
         }
