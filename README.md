@@ -204,7 +204,9 @@ imports — plus the items below.
   module with `$f{index}$`-prefixed locals, bailing out to chunked
   output for graphs it cannot prove safe (namespaces, `eval`, etc.).
 - **React / Vue / Svelte.** `ferrite-frameworks` ships a React plugin
-  with partial dev-only Refresh instrumentation. Experimental Vue 3.5.22 and
+  with partial dev-only Refresh instrumentation, including pinned Oxc hook
+  signatures checked against `react-refresh@0.17.0`. React DOM state preservation
+  and the full component/hook matrix remain unverified. Experimental Vue 3.5.22 and
   Svelte 5.39.6 compilation uses their official project-matched compilers on
   the explicitly enabled Node compiler host. Client templates are exercised
   in Chromium/Firefox; server compilation alone does not establish SSR rendering.

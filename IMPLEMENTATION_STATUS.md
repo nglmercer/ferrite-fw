@@ -1812,3 +1812,42 @@ Validation on Linux/Node 26.10.0:
 No migration or support promotion. Automatic plugin restart, stale-state recovery
 without restart, browser overlay assertion for this precise helper-edit case,
 other notify backends/platforms and the broader remaining mission stay assigned.
+
+### Connect pinned native Refresh signature instrumentation
+
+React's enabled client-development post transform now invokes the pinned
+`oxc_transformer@0.151.0` React Refresh pass on lowered JavaScript, with JSX
+lowering disabled. It reuses the existing semantic/transform/codegen service,
+adds module-local registration/signature/runtime bindings, prefixes compiler
+family keys by module ID and chains compiler maps through preamble/footer edits.
+Generated local bindings avoid names already present in the source. Existing
+export-boundary validation and anonymous-default registration are retained.
+Production/SSR exclusion remains enforced before instrumentation. React cache
+identity advances to `oxc-0.151.0-signatures-v1`; no lock/config migration.
+The exact compiler API was inspected in the installed pinned crate's source and
+validated by compilation, rather than assuming the latest docs matched it.
+
+Validation:
+
+- `cargo test -p ferrite-frameworks -p ferrite-transform --locked` passed 27
+  framework and 48 transform unit tests. New assertions check actual hook
+  instrumentation, syntactically valid plugin output, source-map content and a
+  runtime-binding collision. Output `/tmp/ferrite-react-signatures-unit.log`.
+- Transform tests with `--features swc --locked` passed 56 tests; this also
+  exercises the native Refresh helper when SWC is available. The frameworks
+  crate itself has no SWC feature; an initial invocation there was rejected and
+  corrected to the crate that owns the feature. Output
+  `/tmp/ferrite-react-signatures-swc.log`.
+- The explicitly executed official `react-refresh@0.17.0` runtime fixture passed.
+  It executes compiler-instrumented custom-hook/component functions, verifies a
+  compatible edit appears in `updatedFamilies`, and a changed hook signature in
+  `staleFamilies`, retaining the previous mixed-export and anonymous-default
+  assertions. Output `/tmp/ferrite-react-signatures-runtime.log`.
+- Workspace compilation, transform/framework all-target Clippy with
+  `--locked -- -D warnings`, formatting and diff checks passed.
+
+This runtime fixture proves signature/family decisions without a React DOM
+renderer. Browser state retention, hook-only modules outside JSX ownership,
+HOCs/anonymous declarations across the full conformance matrix, inserted binding
+interactions, source-location accuracy and syntax-error recovery remain assigned.
+No React template/profile is promoted. The full framework mission stays active.

@@ -31,7 +31,7 @@ pub use rewrite::{
     apply_define, apply_text_edits, inject_hmr_mapped, rewrite_import_meta_hot, rewrite_specifiers,
     rewrite_specifiers_mapped, with_hmr_client,
 };
-pub use transform::drop_unused_exports;
+pub use transform::{drop_unused_exports, instrument_react_refresh};
 pub use types::{
     ImportBinding, MinifyRequest, MinifyResult, ParseRequest, ParsedExport, ParsedImport,
     ParsedImportKind, ParsedModule, ShakeInfo, TransformRequest, TransformResult,

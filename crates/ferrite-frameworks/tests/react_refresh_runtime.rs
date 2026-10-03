@@ -26,6 +26,27 @@ async fn official_refresh_runtime_validates_export_boundaries() {
         .join(lock.find("react-refresh").unwrap().id())
         .join("runtime.js");
     let runtime_url = url::Url::from_file_path(runtime).unwrap().to_string();
+    let mut signature_urls = Vec::new();
+    for (index, body) in [
+        "return count;",
+        "return count + 1;",
+        "useEffect(() => {}, []); return count;",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let source = format!("function useState(value) {{return [value];}} function useEffect() {{}} function useCounter() {{return useState(0);}} export function App() {{const [count] = useCounter(); {body}}}");
+        let (code, _) = ferrite_transform::instrument_react_refresh(
+            "/Signature.js",
+            &source,
+            "localReg",
+            "localSig",
+        )
+        .unwrap();
+        let path = root.join(format!("signature-{index}.mjs"));
+        std::fs::write(&path, format!("import Runtime from {runtime_url:?}; const localReg = (type, key) => Runtime.register(type, '/Signature.js ' + key); const localSig = Runtime.createSignatureFunctionForTransform;\n{code}")).unwrap();
+        signature_urls.push(url::Url::from_file_path(path).unwrap().to_string());
+    }
     let preamble = root.join("preamble.mjs");
     std::fs::write(
         &preamble,
@@ -73,7 +94,7 @@ async fn official_refresh_runtime_validates_export_boundaries() {
     .unwrap();
     let wrapper = root.join("probe.mjs");
     std::fs::write(&wrapper, r#"
-export async function probe({app, anonymous, runtime}) {
+export async function probe({app, anonymous, runtime, signatures}) {
   globalThis.window = globalThis;
   let callback;
   let invalidations = 0;
@@ -110,6 +131,18 @@ export async function probe({app, anonymous, runtime}) {
   const beforeAnonymous = invalidations;
   callback({default: () => null});
   if (invalidations !== beforeAnonymous + 1) throw new Error('anonymous boundary bypassed validation');
+  const initial = await import(signatures[0]);
+  initial.App(); // Collect custom-hook signatures through the actual runtime.
+  const signatureFamily = Runtime.getFamilyByType(initial.App);
+  if (!signatureFamily) throw new Error('compiler component registration missing');
+  const compatible = await import(signatures[1]);
+  compatible.App();
+  const preserved = Runtime.performReactRefresh();
+  if (!preserved?.updatedFamilies.has(signatureFamily) || preserved.staleFamilies.has(signatureFamily)) throw new Error('compatible hook signature did not preserve family');
+  const changed = await import(signatures[2]);
+  changed.App();
+  const reset = Runtime.performReactRefresh();
+  if (!reset?.staleFamilies.has(signatureFamily)) throw new Error('changed hook signature did not reset family');
   return {invalidations, app: typeof previous.App, preamble: globalThis.__ferrite_react_preamble_installed__};
 }
 "#).unwrap();
@@ -127,7 +160,7 @@ export async function probe({app, anonymous, runtime}) {
         .call_export(
             "refresh-probe",
             "probe",
-            serde_json::json!({"app": app_url, "anonymous": anonymous_url, "runtime": runtime_url}),
+            serde_json::json!({"app": app_url, "anonymous": anonymous_url, "runtime": runtime_url, "signatures":signature_urls}),
         )
         .await
         .unwrap();

@@ -169,7 +169,11 @@ impl Plugin for ReactPlugin {
     }
 
     fn cache_key(&self) -> String {
-        format!("{}:namespace-default-v1:{}", self.name(), self.is_enabled())
+        format!(
+            "{}:oxc-0.151.0-signatures-v1:{}",
+            self.name(),
+            self.is_enabled()
+        )
     }
 
     fn transform_filter(&self) -> Option<HookFilter> {
@@ -247,13 +251,40 @@ impl Plugin for ReactPlugin {
         if registrations.is_empty() {
             return Ok(None);
         }
+        // Keep compiler-generated registration/signature identifiers module-local,
+        // so component names in different files cannot share a Refresh family.
+        let mut reg = "__ferrite_refresh_reg__".to_string();
+        while request.code.contains(&reg) {
+            reg.push('_');
+        }
+        let mut sig = "__ferrite_refresh_sig__".to_string();
+        while request.code.contains(&sig) {
+            sig.push('_');
+        }
+        let (instrumented, instrument_map) =
+            ferrite_transform::instrument_react_refresh(&request.id, &request.code, &reg, &sig)?;
+        let mut runtime_binding = "__ferrite_refresh_runtime__".to_string();
+        while request.code.contains(&runtime_binding) {
+            runtime_binding.push('_');
+        }
+        let prefix = format!("import {spec:?};\nimport {runtime_binding} from {runtime:?};\nconst {reg} = (type, key) => {runtime_binding}.register(type, {id:?} + ' ' + key);\nconst {sig} = {runtime_binding}.createSignatureFunctionForTransform;\n", spec=REFRESH_SPEC, runtime=REFRESH_RUNTIME_SPEC, id=request.id);
         let footer = refresh_footer(&request.id, &registrations);
         let (code, map) = ferrite_transform::apply_text_edits(
             &request.id,
-            &request.code,
-            &[(request.code.len(), request.code.len(), footer)],
+            &instrumented,
+            &[
+                (0, 0, prefix),
+                (instrumented.len(), instrumented.len(), footer),
+            ],
             true,
         )?;
+        let map = match (map, instrument_map) {
+            (Some(outer), Some(inner)) => Some(ferrite_transform::chain_source_maps(
+                &outer,
+                &inner.mappings,
+            )?),
+            (map, _) => map,
+        };
         Ok(Some(TransformResult {
             code,
             map: map.map(ferrite_core::SourceMap::external),
@@ -355,6 +386,42 @@ mod tests {
             watch_files: &watches,
             warnings: &warnings,
         };
+        let source = "const __ferrite_refresh_runtime__ = 1; import {useState} from 'react'; export function App() { const [count] = useState(0); return React.createElement('div', null, count); }";
+        let instrumented = plugin
+            .transform(
+                &ctx,
+                TransformRequest {
+                    id: "/App.jsx".into(),
+                    code: source.into(),
+                    module_type: ModuleType::Js,
+                    environment: EnvironmentKind::Client,
+                    ssr: false,
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            instrumented.code.contains("__ferrite_refresh_sig__()"),
+            "{}",
+            instrumented.code
+        );
+        assert!(instrumented
+            .code
+            .contains("import __ferrite_refresh_runtime___ from"));
+        ferrite_transform::compiler_for_engine("oxc")
+            .unwrap()
+            .parse(ferrite_transform::ParseRequest {
+                id: "/App.jsx".into(),
+                code: instrumented.code,
+                module_type: ModuleType::Js,
+            })
+            .unwrap();
+        let emitted_map = instrumented.map.unwrap();
+        let map = oxc_sourcemap::SourceMap::from_json_string(&emitted_map.mappings).unwrap();
+        assert!(map
+            .get_source_contents()
+            .any(|content| content == Some(source)));
         assert!(plugin
             .load(
                 &ctx,
@@ -494,7 +561,7 @@ mod tests {
     #[test]
     fn cache_identity_tracks_registration_version_and_enablement() {
         let enabled = ReactPlugin::with_enabled(true).cache_key();
-        assert!(enabled.contains("namespace-default-v1"));
+        assert!(enabled.contains("oxc-0.151.0-signatures-v1"));
         assert_ne!(enabled, ReactPlugin::with_enabled(false).cache_key());
     }
 

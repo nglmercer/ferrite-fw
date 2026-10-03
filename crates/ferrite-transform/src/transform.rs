@@ -101,6 +101,33 @@ pub(crate) fn transform_module(request: TransformRequest) -> Result<TransformRes
 
 /// Run Oxc semantic analysis + transformer + codegen.
 pub(crate) fn transform_js_like(request: &TransformRequest) -> Result<(String, Option<SourceMap>)> {
+    transform_js_like_with_refresh(request, None)
+}
+
+/// Instrument lowered JavaScript with the pinned Oxc React Refresh transform.
+/// JSX lowering is disabled; registration/signature bindings are caller-local.
+pub fn instrument_react_refresh(
+    id: &str,
+    code: &str,
+    registration: &str,
+    signature: &str,
+) -> Result<(String, Option<SourceMap>)> {
+    let mut request = TransformRequest::new(id, code, ModuleType::Js);
+    request.sourcemap = true;
+    transform_js_like_with_refresh(
+        &request,
+        Some(oxc_transformer::ReactRefreshOptions {
+            refresh_reg: registration.into(),
+            refresh_sig: signature.into(),
+            emit_full_signatures: false,
+        }),
+    )
+}
+
+fn transform_js_like_with_refresh(
+    request: &TransformRequest,
+    refresh: Option<oxc_transformer::ReactRefreshOptions>,
+) -> Result<(String, Option<SourceMap>)> {
     let allocator = Allocator::default();
     let source_type = source_type_for(&request.id, &request.module_type);
     let parsed = Parser::new(&allocator, &request.code, source_type).parse();
@@ -128,8 +155,13 @@ pub(crate) fn transform_js_like(request: &TransformRequest) -> Result<(String, O
         .semantic
         .into_scoping();
     let mut options = TransformOptions::default();
-    options.jsx.jsx_plugin = true;
-    options.jsx.development = request.development;
+    if refresh.is_some() {
+        options.jsx = oxc_transformer::JsxOptions::disable();
+        options.jsx.refresh = refresh;
+    } else {
+        options.jsx.jsx_plugin = true;
+    }
+    options.jsx.development = options.jsx.jsx_plugin && request.development;
     options.jsx.runtime = if request.jsx_runtime == "classic" {
         JsxRuntime::Classic
     } else {
@@ -370,4 +402,24 @@ pub(crate) fn declarator_names(
             _ => None,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod refresh_tests {
+    use super::*;
+    #[test]
+    fn official_refresh_instruments_hooks_and_preserves_source_maps() {
+        let source = "import {useState} from 'react'; function useCounter() { return useState(0); } export function App() { const [count] = useCounter(); return count; }";
+        let (code, map) =
+            instrument_react_refresh("/App.js", source, "localReg", "localSig").unwrap();
+        assert!(code.contains("localSig()"), "{code}");
+        assert!(code.contains("localReg("), "{code}");
+        assert!(code.contains("useCounter"), "{code}");
+        parse_module("/App.js", &code, &ModuleType::Js).unwrap();
+        let emitted_map = map.unwrap();
+        let map = oxc_sourcemap::SourceMap::from_json_string(&emitted_map.mappings).unwrap();
+        assert!(map
+            .get_source_contents()
+            .any(|content| content == Some(source)));
+    }
 }
