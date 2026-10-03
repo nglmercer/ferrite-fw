@@ -1969,3 +1969,30 @@ The complete explicitly executed Chromium/Firefox acceptance suite passed all
 18 tests with `--test-threads=2` (230.09 seconds), including all six React cases
 and the existing template/plugin/dependency/startup flows. Output:
 `/tmp/ferrite-imported-hooks-all-browsers.log`.
+
+### Verify hook alias/star re-exports and barrel retargeting
+
+The React browser conformance helper retains its previous plain, memo and direct
+imported-hook cases and adds a typed named-alias re-export followed by a star
+barrel. App imports the hook through that chain. Both browsers check compatible
+hook edits preserve state and hook-order changes reset the memo component without
+reloading the document. An additional barrel edit retargets its alias to a newly
+loaded TypeScript hook implementation: the rendered value changes while live
+state survives, and retargeting back restores the prior behavior without stale
+output. Syntax recovery, later clicks, scope-hoisted build/preview and production
+Refresh exclusion assertions remain active. No runtime workaround was required.
+
+Validation: explicitly executed the two Chromium/Firefox barrel tests with
+`--test-threads=2`; both passed in 44.51 seconds. Output
+`/tmp/ferrite-hook-barrel-retarget.log`. The initial chain-only probe also passed
+but is superseded by the retargeting assertions. Test-target Clippy with
+`--locked -- -D warnings`, formatting and diff checks passed; output
+`/tmp/ferrite-hook-barrel-clippy.log`. The same pinned React/React DOM 19.2.0 and
+react-refresh 0.17.0 packages are installed by Ferrite, with install/dev/build/
+preview CLI processes running without Node on PATH.
+
+This proves the tested named-alias/star chain, not all hook re-export graphs.
+No lock/config migration or support promotion. Cyclic/conflicting re-export
+matrices, other namespace/default hook shapes, mixed exports, anonymous default
+components, ownership rules, generated React profiles and the full remaining
+framework mission stay assigned and active.
