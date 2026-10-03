@@ -39,7 +39,49 @@ impl Builder {
     pub async fn build_app(&self) -> Result<Vec<BuildReport>> {
         let has_server_entry = self.ssr_entry()?.is_some();
         if has_server_entry && self.config.package.standalone {
-            return Err(crate::package::unsupported_ssr_standalone());
+            let sdk = self.config.package.ssr_sdk.as_ref().ok_or_else(|| {
+                FerriteError::Build("SSR standalone requires explicit package.ssr_sdk pointing to a Ferrite SDK crate; build without standalone for preview".into())
+            })?;
+            if !cfg!(feature = "napi-vm") {
+                return Err(FerriteError::Build(
+                    "SSR standalone requires Ferrite built with the napi-vm feature".into(),
+                ));
+            }
+            let sdk = if sdk.is_absolute() {
+                sdk.clone()
+            } else {
+                self.config.root.join(sdk)
+            };
+            let opts = crate::package::StandaloneOptions {
+                embed_assets: self.config.package.embed_assets,
+                compress_assets: self.config.package.compress_assets,
+                target: self.config.package.target.clone(),
+                cargo: None,
+            };
+            let sdk = crate::package::validate_ssr_standalone_inputs(
+                &opts,
+                &sdk,
+                &self.config.runtime,
+                &self.config.base,
+            )?;
+            // Both environments must finish before embedding. Never build a static
+            // scaffold first, which would omit or substitute the renderer.
+            let mut config = self.config.clone();
+            config.package.standalone = false;
+            let builder = Self::new(config, self.plugins.clone());
+            let mut reports = vec![builder.build("client").await?, builder.build("ssr").await?];
+            let out = self.config.out_dir();
+            let runtime = self.config.runtime.clone();
+            let base = self.config.base.clone();
+            let package = tokio::task::spawn_blocking(move || {
+                crate::package::write_ssr_standalone(&out, &opts, &sdk, &runtime, &base)
+            })
+            .await
+            .map_err(|error| {
+                FerriteError::Build(format!("SSR standalone packaging failed: {error}"))
+            })??;
+            reports.last_mut().expect("SSR report").standalone_binary = package.binary;
+            return Ok(reports);
         }
         let mut reports = vec![self.build("client").await?];
         if has_server_entry {
@@ -64,7 +106,7 @@ impl Builder {
             )));
         }
         if env == "ssr" && self.config.package.standalone {
-            return Err(crate::package::unsupported_ssr_standalone());
+            return Err(FerriteError::Build("SSR standalone packaging requires both client and server output; use build_app() or ferrite build without --env".into()));
         }
         let entries = self.default_entries(env)?;
         let mut config = self.config.clone();
@@ -529,5 +571,123 @@ impl BundleHooks for ContainerRenderHooks<'_> {
                 },
             )
             .await
+    }
+}
+
+#[cfg(test)]
+mod standalone_tests {
+    use super::*;
+
+    fn project(root: &std::path::Path) -> ResolvedConfig {
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("src/entry-server.ts"),
+            "export function render(url: string) { return `<h1>packaged ${url}</h1>`; }",
+        )
+        .unwrap();
+        std::fs::write(root.join("src/main.js"), "globalThis.clientLoaded = true;").unwrap();
+        std::fs::write(root.join("index.html"), "<html><head></head><body><!--ssr-outlet--><script type=\"module\" src=\"/src/main.js\"></script></body></html>").unwrap();
+        let mut config = ferrite_config::resolve_config(
+            Default::default(),
+            Some(root.into()),
+            Default::default(),
+        )
+        .unwrap();
+        config.package.standalone = true;
+        config.runtime.backend = "napi-vm".into();
+        config
+    }
+
+    #[tokio::test]
+    async fn missing_sdk_fails_before_client_output() {
+        let root = tempfile::tempdir().unwrap();
+        let config = project(root.path());
+        let out = config.out_dir();
+        let error = Builder::new(config, vec![]).build_app().await.unwrap_err();
+        assert!(error.to_string().contains("package.ssr_sdk"), "{error}");
+        assert!(!out.exists());
+    }
+
+    #[cfg(feature = "napi-vm")]
+    #[tokio::test]
+    async fn unsupported_profiles_fail_before_client_output() {
+        for (backend, embedded, expected) in [
+            ("node", true, "explicit napi-vm"),
+            ("napi-vm", false, "embed_assets = true"),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let mut config = project(root.path());
+            config.runtime.backend = backend.into();
+            config.package.embed_assets = embedded;
+            config.package.ssr_sdk = Some(env!("CARGO_MANIFEST_DIR").into());
+            let out = config.out_dir();
+            let error = Builder::new(config, vec![]).build_app().await.unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+            assert!(!out.exists());
+        }
+    }
+
+    #[cfg(not(feature = "napi-vm"))]
+    #[tokio::test]
+    async fn unavailable_runtime_feature_fails_before_output() {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = project(root.path());
+        config.package.ssr_sdk = Some(env!("CARGO_MANIFEST_DIR").into());
+        let out = config.out_dir();
+        let error = Builder::new(config, vec![]).build_app().await.unwrap_err();
+        assert!(error.to_string().contains("napi-vm feature"), "{error}");
+        assert!(!out.exists());
+    }
+
+    #[cfg(feature = "napi-vm")]
+    #[tokio::test]
+    async fn standalone_app_packages_final_renderer_after_both_builds() {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = project(root.path());
+        config.package.ssr_sdk = Some(env!("CARGO_MANIFEST_DIR").into());
+        config.base = "/app/".into();
+        let out = config.out_dir();
+        let reports = Builder::new(config.clone(), vec![])
+            .build_app()
+            .await
+            .unwrap();
+        assert_eq!(
+            reports
+                .iter()
+                .map(|report| report.env.as_str())
+                .collect::<Vec<_>>(),
+            ["client", "ssr"]
+        );
+        let scaffold = out.join(crate::package::SCAFFOLD_DIR);
+        let artifact = crate::SsrRendererArtifact::from_bytes(
+            &std::fs::read(scaffold.join("src/renderer.json")).unwrap(),
+        )
+        .unwrap();
+        let adapter = artifact
+            .into_adapter(
+                Arc::new(ferrite_runtime::napi_vm::NapiVmRuntime::with_defaults()),
+                std::fs::read_to_string(out.join("index.html")).unwrap(),
+                &config.base,
+            )
+            .unwrap();
+        let response = adapter
+            .render(
+                ferrite_ssr::SsrHttpRequest {
+                    method: "GET".into(),
+                    uri: "/app/".into(),
+                    headers: vec![],
+                    body: vec![],
+                },
+                ferrite_ssr::SsrContext {
+                    url: "/app/".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let html = response.into_string().await.unwrap();
+        assert!(html.contains("<h1>packaged /app/</h1>"), "{html}");
+        let main = std::fs::read_to_string(scaffold.join("src/main.rs")).unwrap();
+        assert!(main.contains("artifact.into_adapter"));
     }
 }

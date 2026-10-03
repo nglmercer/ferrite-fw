@@ -1,5 +1,35 @@
 # Framework support implementation status
 
+## Standalone app builds select the embedded SSR scaffold
+
+`package.ssr_sdk` is an optional explicit SDK crate path (relative paths resolve
+from the project root). With a server entry and standalone selection, `build_app`
+requires this setting, the napi-vm feature/backend, embedded assets, a valid SDK
+source directory and supported base before either environment writes output. It
+builds client and server without intermediate static packaging, then embeds the
+final renderer artifact with the existing standalone API. The CLI default build
+uses this same library path. Explicit server-only standalone builds fail with an
+action directing callers to build both environments. Explicit client-only builds
+retain their static behavior; the static writer still rejects private SSR output.
+
+Validation: feature-enabled facade tests passed 28 with one ignored; config tests
+passed 29; default facade tests passed 25 with one ignored; standalone regression
+tests passed three with two ignored. The new builder tests also passed with PATH
+empty. The successful case compiles a TypeScript server through the production
+pipeline, packages after both build reports, deserializes the embedded artifact,
+and renders meaningful HTML using the rootless runtime. Failures assert that no
+output directory was written. Feature-enabled all-target facade/config Clippy,
+standalone-test Clippy, CLI feature compile check, formatting and diff checks
+passed. Ignored real-build/cross-target tests do not establish additional support.
+
+Existing TOML requires no migration; experimental SSR packaging opts in with
+`[package] standalone = true, ssr_sdk = '/explicit/sdk/crates/ferrite'` and
+`[runtime] backend = 'napi-vm'` (each setting on its own TOML line). SDK
+identity/version/provenance checks, transactional replacement, CLI process-level
+acceptance, cross-platform releases, framework renderer/hydration profiles and
+the rest of the full mission remain unfinished. This tests custom-renderer SSR,
+not framework SSR compatibility.
+
 ## Embedded standalone SSR scaffold with an explicit SDK
 
 The new library API `package::write_ssr_standalone` validates a versioned renderer

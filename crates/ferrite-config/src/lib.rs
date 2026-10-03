@@ -404,6 +404,9 @@ pub struct PackageConfig {
     pub embed_assets: bool,
     /// Compress embedded assets.
     pub compress_assets: bool,
+    /// Explicit Ferrite SDK crate source directory for experimental SSR packaging.
+    /// Relative paths resolve from the project root; never inferred from the tool installation.
+    pub ssr_sdk: Option<PathBuf>,
     /// Cross-compilation triple (`cargo build --target`).
     pub target: Option<String>,
 }
@@ -414,6 +417,7 @@ impl Default for PackageConfig {
             standalone: false,
             embed_assets: true,
             compress_assets: true,
+            ssr_sdk: None,
             target: None,
         }
     }
@@ -2043,5 +2047,25 @@ mod server_entry_tests {
                 .to_string()
                 .contains("missing.ts"));
         }
+    }
+}
+
+#[cfg(test)]
+mod ssr_package_tests {
+    #[test]
+    fn explicit_sdk_survives_resolution_and_serialization() {
+        let user: super::UserConfig =
+            toml::from_str("[package]\nstandalone = true\nssr_sdk = '../sdk/crates/ferrite'\n")
+                .unwrap();
+        let config = super::resolve_config(user, None, Default::default()).unwrap();
+        assert_eq!(
+            config.package.ssr_sdk.as_deref(),
+            Some(std::path::Path::new("../sdk/crates/ferrite"))
+        );
+        let encoded = toml::to_string(&config.package).unwrap();
+        let decoded: super::PackageConfig = toml::from_str(&encoded).unwrap();
+        assert_eq!(decoded.ssr_sdk, config.package.ssr_sdk);
+        assert!(decoded.standalone);
+        assert!(super::PackageConfig::default().ssr_sdk.is_none());
     }
 }

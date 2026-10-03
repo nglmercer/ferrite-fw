@@ -162,7 +162,7 @@ async fn ssr_standalone_rejects_static_shell_packaging_before_writing_output() {
     assert!(
         error
             .to_string()
-            .contains("SSR standalone packaging is unavailable"),
+            .contains("SSR standalone packaging requires both client and server output"),
         "{error}"
     );
     assert!(
@@ -170,7 +170,7 @@ async fn ssr_standalone_rejects_static_shell_packaging_before_writing_output() {
         "unsupported packaging must not write output"
     );
     let error = builder.build_app().await.unwrap_err();
-    assert!(error.to_string().contains("static files"), "{error}");
+    assert!(error.to_string().contains("package.ssr_sdk"), "{error}");
     assert!(!output.exists());
 }
 

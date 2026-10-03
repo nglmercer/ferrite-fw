@@ -417,6 +417,41 @@ pub fn write_ssr_standalone(
     runtime: &ferrite_config::RuntimeConfig,
     base: &str,
 ) -> Result<StandaloneReport> {
+    let sdk = validate_ssr_standalone_inputs(opts, sdk, runtime, base)?;
+    let artifact = crate::SsrRendererArtifact::read(&out_dir.join("server"))?;
+    let _ = std::fs::read_to_string(out_dir.join("index.html"))?;
+    for style in &artifact.stylesheets {
+        if !out_dir.join("ssr-assets").join(style).is_file() {
+            return Err(FerriteError::Build(format!(
+                "missing published SSR style `{style}`; rebuild SSR output"
+            )));
+        }
+    }
+    let runtime_json = serde_json::to_string(runtime).map_err(FerriteError::Json)?;
+    let main = include_str!("ssr_standalone_main.rs.txt")
+        .replace("__BASE__", &format!("{base:?}"))
+        .replace("__RUNTIME_JSON__", &format!("{runtime_json:?}"));
+    let dependency = format!(
+        "ferrite = {{ path = {}, features = [\"napi-vm\"] }}\nserde_json = \"1\"\n",
+        serde_json::to_string(&sdk.to_string_lossy()).map_err(FerriteError::Json)?
+    );
+    write_standalone_scaffold(
+        out_dir,
+        opts,
+        Some(SsrScaffold {
+            main,
+            dependency,
+            artifact: serde_json::to_vec(&artifact).map_err(FerriteError::Json)?,
+        }),
+    )
+}
+
+pub(crate) fn validate_ssr_standalone_inputs(
+    opts: &StandaloneOptions,
+    sdk: &Path,
+    runtime: &ferrite_config::RuntimeConfig,
+    base: &str,
+) -> Result<PathBuf> {
     if !opts.embed_assets {
         return Err(FerriteError::Build(
             "SSR standalone currently requires embed_assets = true".into(),
@@ -445,32 +480,7 @@ pub fn write_ssr_standalone(
     if !sdk.join("Cargo.toml").is_file() || !sdk.join("src/lib.rs").is_file() {
         return Err(FerriteError::Build("explicit Ferrite SDK must be a crate source directory containing Cargo.toml and src/lib.rs".into()));
     }
-    let artifact = crate::SsrRendererArtifact::read(&out_dir.join("server"))?;
-    let _ = std::fs::read_to_string(out_dir.join("index.html"))?;
-    for style in &artifact.stylesheets {
-        if !out_dir.join("ssr-assets").join(style).is_file() {
-            return Err(FerriteError::Build(format!(
-                "missing published SSR style `{style}`; rebuild SSR output"
-            )));
-        }
-    }
-    let runtime_json = serde_json::to_string(runtime).map_err(FerriteError::Json)?;
-    let main = include_str!("ssr_standalone_main.rs.txt")
-        .replace("__BASE__", &format!("{base:?}"))
-        .replace("__RUNTIME_JSON__", &format!("{runtime_json:?}"));
-    let dependency = format!(
-        "ferrite = {{ path = {}, features = [\"napi-vm\"] }}\nserde_json = \"1\"\n",
-        serde_json::to_string(&sdk.to_string_lossy()).map_err(FerriteError::Json)?
-    );
-    write_standalone_scaffold(
-        out_dir,
-        opts,
-        Some(SsrScaffold {
-            main,
-            dependency,
-            artifact: serde_json::to_vec(&artifact).map_err(FerriteError::Json)?,
-        }),
-    )
+    Ok(sdk)
 }
 
 fn write_standalone_scaffold(
