@@ -187,6 +187,8 @@ mod ssr_tests {
         )
         .unwrap();
         resolved.runtime.backend = "napi-vm".into();
+        resolved.server.host = "127.0.0.1".into();
+        resolved.server.port = 0;
         let server = ferrite::DevServer::new_without_watcher(resolved.clone(), Vec::new())
             .await
             .unwrap();
@@ -209,7 +211,27 @@ mod ssr_tests {
             response.into_string().await.unwrap(),
             "<h1>compiled /about</h1>"
         );
+        server.set_ssr_adapter(adapter.clone()).await;
+        let listening = server.clone();
+        let serving = tokio::spawn(async move { listening.listen().await });
+        let address = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if let Some(address) = *server.inner().bound_addr.lock().unwrap() {
+                    break address;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("server must bind");
+        let url = format!("http://{address}/");
+        let response = server.inner().http_client.get(&url).send().await.unwrap();
+        assert_eq!(response.status().as_u16(), 200);
+        assert_eq!(response.text().await.unwrap(), "<h1>compiled /</h1>");
         std::fs::write(&dependency, "export const label: string = ;").unwrap();
+        let response = server.inner().http_client.get(&url).send().await.unwrap();
+        assert_eq!(response.status().as_u16(), 500);
+        assert!(response.text().await.unwrap().contains("label.ts"));
         let error = adapter
             .render(
                 ferrite::ssr::SsrHttpRequest {
@@ -241,6 +263,11 @@ mod ssr_tests {
             response.into_string().await.unwrap(),
             "<h1>recovered /</h1>"
         );
+        let response = server.inner().http_client.get(&url).send().await.unwrap();
+        assert_eq!(response.status().as_u16(), 200);
+        assert_eq!(response.text().await.unwrap(), "<h1>recovered /</h1>");
+        serving.abort();
+        let _ = serving.await;
         drop(server);
         let error = adapter
             .render(

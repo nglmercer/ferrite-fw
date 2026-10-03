@@ -2371,3 +2371,87 @@ async fn refresh_virtual_urls_resolve_without_filesystem_identity() {
         .is_err());
     server.close();
 }
+
+#[tokio::test]
+async fn ssr_http_preserves_request_and_response_contracts_at_root() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("index.html"), "STATIC SHELL").unwrap();
+    std::fs::write(root.path().join("asset.js"), "export const asset = 1;").unwrap();
+    let config = ferrite_config::resolve_config(
+        Default::default(),
+        Some(root.path().into()),
+        Default::default(),
+    )
+    .unwrap();
+    let server = DevServer::new_without_watcher(config, Vec::new())
+        .await
+        .unwrap();
+    server
+        .set_ssr_adapter(Arc::new(ferrite_ssr::FnAdapter::new(
+            |request: ferrite_ssr::SsrHttpRequest, context: ferrite_ssr::SsrContext| async move {
+                assert_eq!(request.uri, context.url);
+                assert!(request
+                    .headers
+                    .iter()
+                    .any(|(name, value)| name == "x-request" && value == "present"));
+                assert_eq!(context.headers.get("x-request").unwrap(), "present");
+                let mut response = ferrite_ssr::SsrResponse::html(format!(
+                    "<h1>{} {} {}</h1>",
+                    request.method,
+                    request.uri,
+                    String::from_utf8(request.body).unwrap()
+                ));
+                response.status = 201;
+                response.headers.extend([
+                    ("x-renderer".into(), "actual".into()),
+                    ("set-cookie".into(), "a=1; HttpOnly".into()),
+                    ("set-cookie".into(), "b=2; HttpOnly".into()),
+                ]);
+                Ok(response)
+            },
+        )))
+        .await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let router = server.router();
+    let serving = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let client = reqwest::Client::new();
+    for (method, path, body) in [
+        (reqwest::Method::GET, "/?query=1", ""),
+        (reqwest::Method::POST, "/submit", "request body"),
+        (reqwest::Method::HEAD, "/", ""),
+    ] {
+        let response = client
+            .request(method.clone(), format!("http://{address}{path}"))
+            .header("x-request", "present")
+            .body(body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 201);
+        assert_eq!(response.headers()["x-renderer"], "actual");
+        assert_eq!(
+            response.headers()["content-type"],
+            "text/html; charset=utf-8"
+        );
+        assert_eq!(response.headers().get_all("set-cookie").iter().count(), 2);
+        let html = response.text().await.unwrap();
+        if method == reqwest::Method::HEAD {
+            assert!(html.is_empty());
+        } else {
+            assert_eq!(html, format!("<h1>{method} {path} {body}</h1>"));
+        }
+    }
+    let asset = client
+        .get(format!("http://{address}/asset.js"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(asset.status(), 200);
+    assert!(asset.text().await.unwrap().contains("asset = 1"));
+    serving.abort();
+    let _ = serving.await;
+    server.close();
+}

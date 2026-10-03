@@ -170,6 +170,36 @@ pub(crate) async fn fallback_handler(
             }
         }
     }
+    // Application routes must reach the renderer before index.html fallback.
+    if !path.contains('.') {
+        let adapter = inner.ssr_adapter.read().await.clone();
+        if let Some(adapter) = adapter {
+            let request_headers: Vec<_> = headers
+                .iter()
+                .filter_map(|(name, value)| {
+                    value
+                        .to_str()
+                        .ok()
+                        .map(|value| (name.to_string(), value.to_string()))
+                })
+                .collect();
+            let request = SsrHttpRequest {
+                method: method.to_string(),
+                uri: url.clone(),
+                headers: request_headers.clone(),
+                body: body.to_vec(),
+            };
+            let context = SsrContext {
+                url,
+                headers: request_headers.into_iter().collect(),
+                ..Default::default()
+            };
+            return match adapter.render(request, context).await {
+                Ok(ssr) => ssr_http_response(ssr, method == axum::http::Method::HEAD),
+                Err(error) => error_response(&error),
+            };
+        }
+    }
     // Assemble a lightweight server handle for the pipeline.
     let server = DevServerRef {
         inner: inner.clone(),
@@ -185,51 +215,6 @@ pub(crate) async fn fallback_handler(
         )
             .into_response(),
         Err(error) => {
-            // SSR adapter fallback for app routes (no extension, not a file).
-            if !path.contains('.') {
-                let adapter = inner.ssr_adapter.read().await.clone();
-                if let Some(adapter) = adapter {
-                    let request = SsrHttpRequest {
-                        method: "GET".to_string(),
-                        uri: url.clone(),
-                        headers: Vec::new(),
-                        body: Vec::new(),
-                    };
-                    let context = SsrContext {
-                        url,
-                        ..Default::default()
-                    };
-                    match adapter.render(request, context).await {
-                        Ok(ssr) => {
-                            let status = StatusCode::from_u16(ssr.status).unwrap_or(StatusCode::OK);
-                            match ssr.body {
-                                ferrite_ssr::RenderBody::Full(html) => {
-                                    return (
-                                        status,
-                                        [(
-                                            axum::http::header::CONTENT_TYPE,
-                                            "text/html; charset=utf-8",
-                                        )],
-                                        html,
-                                    )
-                                        .into_response();
-                                }
-                                ferrite_ssr::RenderBody::Stream(stream) => {
-                                    use futures::StreamExt as _;
-                                    let mapped = stream.map(|item| {
-                                        item.map_err(|error| {
-                                            std::io::Error::other(error.to_string())
-                                        })
-                                    });
-                                    let body = axum::body::Body::from_stream(mapped);
-                                    return (status, body).into_response();
-                                }
-                            }
-                        }
-                        Err(error) => return error_response(&error),
-                    }
-                }
-            }
             if !inner.config.is_production && path.contains('.') && !path.starts_with("/@") {
                 // Failed first loads still need a source node so a correction
                 // or creation produces a reload instead of being untracked.
@@ -285,4 +270,50 @@ fn error_response(error: &FerriteError) -> Response {
 
 pub(crate) async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
+}
+
+fn ssr_http_response(ssr: ferrite_ssr::SsrResponse, head: bool) -> Response {
+    let status = match StatusCode::from_u16(ssr.status) {
+        Ok(status) => status,
+        Err(error) => {
+            return error_response(&FerriteError::Ssr(format!(
+                "invalid renderer status: {error}"
+            )))
+        }
+    };
+    let mut response_headers = HeaderMap::new();
+    for (name, value) in ssr.headers {
+        let name = match axum::http::HeaderName::try_from(name) {
+            Ok(name) => name,
+            Err(error) => {
+                return error_response(&FerriteError::Ssr(format!(
+                    "invalid renderer header name: {error}"
+                )))
+            }
+        };
+        let value = match axum::http::HeaderValue::try_from(value) {
+            Ok(value) => value,
+            Err(error) => {
+                return error_response(&FerriteError::Ssr(format!(
+                    "invalid renderer header value: {error}"
+                )))
+            }
+        };
+        response_headers.append(name, value);
+    }
+    let body = if head {
+        axum::body::Body::empty()
+    } else {
+        match ssr.body {
+            ferrite_ssr::RenderBody::Full(html) => axum::body::Body::from(html),
+            ferrite_ssr::RenderBody::Stream(stream) => {
+                use futures::StreamExt as _;
+                axum::body::Body::from_stream(
+                    stream
+                        .map(|item| item.map_err(|error| std::io::Error::other(error.to_string()))),
+                )
+            }
+        }
+    };
+    (status, response_headers, body).into_response()
 }
