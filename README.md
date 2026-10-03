@@ -229,6 +229,9 @@ imports — plus the items below.
   invalid maps fail. Transform side-effect overrides are currently unsupported.
   Changing the entry requires recreating its host/registration; transitive
   plugin imports are not yet tracked automatically.
+  Entry paths and file URLs resolve to the canonical local file, including
+  symlink targets. File-URL queries/fragments and non-file URLs are rejected;
+  alternate entry spellings cannot bypass hook re-registration checks.
 - **Markdown docs + vendored utility CSS.** `ferrite-docs` turns `.md`
   files into JS modules exporting rendered HTML; `ferrite-tailwind`
   compiles `ferrite:tailwind.css` from project content using the

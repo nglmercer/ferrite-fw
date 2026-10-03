@@ -792,6 +792,77 @@ export default async function(options) {
 
     #[tokio::test]
     #[ignore = "requires real Node; executed explicitly"]
+    async fn real_node_hook_entries_share_canonical_file_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = dir.path().join("plugin with spaces.mjs");
+        std::fs::write(
+            &entry,
+            r#"
+let factories = 0;
+export function probe() { return factories; }
+export function entryURL() { return import.meta.url; }
+export default () => { factories++; return {transform(code) { return code; }}; };
+"#,
+        )
+        .unwrap();
+        let host = NodeAdapterHost::spawn(None).unwrap();
+        host.register_hook_plugin("initial", &entry.to_string_lossy(), serde_json::Value::Null)
+            .unwrap();
+        let file_url = host
+            .call_export("initial", "entryURL", serde_json::Value::Null)
+            .await
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
+        let aliases = [
+            file_url.clone(),
+            dir.path()
+                .join("./plugin with spaces.mjs")
+                .to_string_lossy()
+                .into_owned(),
+        ];
+        for alias in aliases {
+            let error = host
+                .register_hook_plugin("alias", &alias, serde_json::Value::Null)
+                .unwrap_err();
+            assert!(error.to_string().contains("entry was loaded"), "{error}");
+        }
+        #[cfg(unix)]
+        {
+            let alias = dir.path().join("symlink.mjs");
+            std::os::unix::fs::symlink(&entry, &alias).unwrap();
+            let error = host
+                .register_hook_plugin("symlink", &alias.to_string_lossy(), serde_json::Value::Null)
+                .unwrap_err();
+            assert!(error.to_string().contains("entry was loaded"), "{error}");
+        }
+        for invalid in [
+            format!("{file_url}?version=2"),
+            format!("{file_url}#changed"),
+            "data:text/javascript,export default {}".into(),
+        ] {
+            let error = host
+                .register_hook_plugin("invalid", &invalid, serde_json::Value::Null)
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("local file URL without query or fragment"),
+                "{error}"
+            );
+        }
+        assert_eq!(
+            host.call_export("initial", "probe", serde_json::Value::Null)
+                .await
+                .unwrap(),
+            1
+        );
+        host.shutdown();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires real Node; executed explicitly"]
     async fn real_node_typed_exports_logs_timeout_and_cancellation() {
         let dir = tempfile::tempdir().unwrap();
         let entry = dir.path().join("worker.mjs");

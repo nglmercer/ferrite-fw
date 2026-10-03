@@ -1491,3 +1491,29 @@ registration deduplication, automatic worker reload, context methods and lifecyc
 integration remain assigned. These Rust pipeline fixtures do not establish browser,
 bundled-output or SSR rendering compatibility. No framework status is promoted;
 the full mission remains active.
+
+### Canonicalize foreign plugin entry identities
+
+The Node driver now resolves local entry paths and file URLs to a canonical
+filesystem path and imports its canonical file URL. Registered-entry checks use
+that same identity, so encoded URLs, dot paths and symlink aliases cannot bypass
+the hook worker's restart requirement. Non-file URLs and file-URL queries or
+fragments fail explicitly instead of acting as module-cache bypasses. Generic
+typed-export compiler workers retain their contract.
+
+Validation: `cargo test -p ferrite-plugin --locked` passed 17 tests, and all four
+explicitly executed real-Node tests passed. The new test registers a file with
+spaces, obtains its actual `import.meta.url`, attempts encoded URL/dot-path/Unix
+symlink aliases and cache-busting URLs, and requires exactly one factory call.
+Outputs: `/tmp/ferrite-plugin-entry-identity-unit.log` and
+`/tmp/ferrite-plugin-entry-identity-node.log`.
+The real-Node shared pipeline fixture passed its dev/production configurations
+(`/tmp/ferrite-plugin-entry-identity-pipeline.log`), and the actual project-matched
+Vue/Svelte client/server/runes compiler fixture passed through the transport
+(`/tmp/ferrite-plugin-entry-identity-compilers.log`). Plugin all-target Clippy
+with `--locked -- -D warnings`, formatting and diff checks passed.
+
+README records the local-file entry contract. No lock/config/cache schema
+migration or support promotion. These checks ran on Linux; Windows/macOS release
+checks, transitive plugin imports, automatic worker reload, CLI configuration and
+the full remaining mission stay assigned and active.

@@ -2,10 +2,13 @@
 // Protocol: stdin JSON-lines `{id, cmd, ...}` → stdout JSON-lines
 // `{id, ok, result?, error?}`. Boot prints `{"ferrite":3}`.
 //
-// Guest plugins are ESM modules exporting hook functions with Vite-like
-// signatures: `resolveId(id)`, `load(id)`, `transform(code, id)`.
+// Explicit hook profiles accept one factory/object or named functions:
+// resolveId(id, importer, options), load(id, options), transform(code, id, options).
 // A hook returning `null`/`undefined` means "skip" (Rust keeps its default).
 import { createInterface } from "node:readline";
+import { realpathSync } from "node:fs";
+import { isAbsolute } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 // Protocol owns the original stdout writer. Ordinary guest output is logs.
 const protocolWrite = process.stdout.write.bind(process.stdout);
@@ -38,6 +41,18 @@ function respond(id, ok, result, error) {
 }
 
 async function register(id, name, entry, profile, options) {
+  if (typeof entry !== 'string') throw new Error('plugin entry must be a filesystem path or file URL');
+  let file = entry;
+  if (!isAbsolute(entry) && /^[a-z][a-z0-9+.-]*:/i.test(entry)) {
+    const url = new URL(entry);
+    if (url.protocol !== 'file:' || url.search || url.hash) {
+      throw new Error('plugin entry must be a local file URL without query or fragment; recreate the explicit host instead of cache-busting imports');
+    }
+    file = fileURLToPath(url);
+  }
+  // Import and registration use the same canonical file identity, including
+  // symlink targets and percent-encoded file URLs.
+  entry = pathToFileURL(realpathSync(file)).href;
   if (hookPlugins.has(name) || (profile === 'hooks' && registeredEntries.has(entry))) {
     throw new Error(`hook plugin ${name} is already registered or its entry was loaded; recreate the explicit Node host to change registrations`);
   }
