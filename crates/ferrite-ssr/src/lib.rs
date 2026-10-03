@@ -245,6 +245,43 @@ mod tests {
 
     #[cfg(feature = "napi-vm")]
     #[tokio::test]
+    async fn independent_adapters_share_a_worker_without_graph_or_guest_state_races() {
+        let runtime = std::sync::Arc::new(ferrite_runtime::napi_vm::NapiVmRuntime::with_defaults());
+        let mut tasks = Vec::new();
+        for owner in 0..24 {
+            let adapter = JsSsrAdapter::new(runtime.clone(), CompiledModule {
+                id: "shared-entry".into(),
+                code: format!("export async function render(url) {{ const previous = globalThis.lastRequest || 'empty'; globalThis.lastRequest = url; return `{owner}|${{url}}|${{previous}}`; }}"), url: None,
+            });
+            tasks.push(tokio::spawn(async move {
+                let uri = format!("/owner-{owner}");
+                for _ in 0..3 {
+                    let response = adapter
+                        .render(
+                            SsrHttpRequest {
+                                method: "GET".into(),
+                                uri: uri.clone(),
+                                headers: Vec::new(),
+                                body: Vec::new(),
+                            },
+                            Default::default(),
+                        )
+                        .await
+                        .unwrap();
+                    assert_eq!(
+                        response.into_string().await.unwrap(),
+                        format!("{owner}|{uri}|empty")
+                    );
+                }
+            }));
+        }
+        for task in tasks {
+            task.await.unwrap();
+        }
+    }
+
+    #[cfg(feature = "napi-vm")]
+    #[tokio::test]
     async fn repeated_and_concurrent_renders_isolate_guest_globals_and_prototypes() {
         let mut resolved = test_resolved();
         resolved.runtime.backend = "napi-vm".into();

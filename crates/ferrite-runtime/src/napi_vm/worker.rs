@@ -16,6 +16,7 @@ pub(crate) fn worker_loop(options: NapiVmOptions, rx: Receiver<Job>) {
                 match job {
                     Job::EvalModule { reply, .. }
                     | Job::EvalGraph { reply, .. }
+                    | Job::InvokeGraph { reply, .. }
                     | Job::Call { reply, .. }
                     | Job::Require { reply, .. } => {
                         let _ = reply.send(Err(error.clone()));
@@ -43,27 +44,30 @@ pub(crate) fn worker_loop(options: NapiVmOptions, rx: Receiver<Job>) {
                     .validate()
                     .map_err(|error| error.to_string())
                     .and_then(|()| state.prepare_evaluation(&options, ssr))
-                    .and_then(|()| {
-                        for id in state.graph_modules.drain(..) {
-                            state.interp.remove_module(&id);
-                        }
-                        state.graph_modules = graph
-                            .modules
-                            .iter()
-                            .map(|module| module.id.clone())
-                            .collect();
-                        for module in &graph.modules {
-                            state.interp.remove_module(&module.id);
-                        }
-                        for module in &graph.modules {
-                            state.interp.define_module(&module.id, module.code.clone());
-                        }
-                        let entry = graph
-                            .modules
-                            .iter()
-                            .find(|module| module.id == graph.entry)
-                            .expect("validated entry");
-                        state.eval_module(&entry.id, &entry.code)
+                    .and_then(|()| state.eval_graph(&graph));
+                let _ = reply.send(result);
+            }
+            Job::InvokeGraph {
+                graph,
+                export,
+                args_json,
+                ssr,
+                reply,
+            } => {
+                let result = graph
+                    .validate()
+                    .map_err(|error| error.to_string())
+                    .and_then(|()| state.prepare_evaluation(&options, ssr))
+                    .and_then(|()| state.eval_graph(&graph))
+                    .and_then(|namespace| {
+                        let handle = namespace
+                            .get(&export)
+                            .and_then(|value| value.get("handle"))
+                            .and_then(serde_json::Value::as_u64)
+                            .ok_or_else(|| {
+                                format!("entry `{}` has no function export `{export}`", graph.entry)
+                            })?;
+                        state.call(handle, &args_json)
                     });
                 let _ = reply.send(result);
             }
@@ -99,6 +103,32 @@ pub(crate) struct WorkerState {
 }
 
 impl WorkerState {
+    fn eval_graph(
+        &mut self,
+        graph: &crate::CompiledModuleGraph,
+    ) -> std::result::Result<serde_json::Value, String> {
+        for id in self.graph_modules.drain(..) {
+            self.interp.remove_module(&id);
+        }
+        self.graph_modules = graph
+            .modules
+            .iter()
+            .map(|module| module.id.clone())
+            .collect();
+        for module in &graph.modules {
+            self.interp.remove_module(&module.id);
+        }
+        for module in &graph.modules {
+            self.interp.define_module(&module.id, module.code.clone());
+        }
+        let entry = graph
+            .modules
+            .iter()
+            .find(|module| module.id == graph.entry)
+            .expect("validated entry");
+        self.eval_module(&entry.id, &entry.code)
+    }
+
     fn prepare_evaluation(
         &mut self,
         options: &NapiVmOptions,

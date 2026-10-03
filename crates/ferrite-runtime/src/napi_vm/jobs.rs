@@ -19,6 +19,14 @@ pub(crate) enum Job {
         ssr: bool,
         reply: tokio::sync::oneshot::Sender<std::result::Result<serde_json::Value, String>>,
     },
+    /// Evaluate and invoke without allowing another job between the steps.
+    InvokeGraph {
+        graph: crate::CompiledModuleGraph,
+        export: String,
+        args_json: String,
+        ssr: bool,
+        reply: tokio::sync::oneshot::Sender<std::result::Result<serde_json::Value, String>>,
+    },
     /// Call a guest function handle with JSON args; reply with JSON result.
     Call {
         handle: u64,

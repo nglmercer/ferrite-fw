@@ -227,6 +227,23 @@ pub trait JsRuntime: Send + Sync {
         Err(FerriteError::Runtime(format!("backend `{}` does not support compiled module graphs; select a graph-capable runtime explicitly", self.name())))
     }
 
+    /// Evaluate a compiled graph and invoke an entry export as one atomic
+    /// worker operation. Backends must implement this explicitly; composing
+    /// separate evaluation/call jobs does not provide request isolation.
+    async fn invoke_module_graph(
+        &self,
+        graph: CompiledModuleGraph,
+        _export: &str,
+        _args: Vec<JsValue>,
+        _env: RuntimeEnvironment,
+    ) -> Result<JsValue> {
+        graph.validate()?;
+        Err(FerriteError::Runtime(format!(
+            "backend `{}` does not support atomic compiled graph invocation",
+            self.name()
+        )))
+    }
+
     /// Call a function handle with arguments.
     async fn call(&self, _handle: &JsHandle, _args: Vec<JsValue>) -> Result<JsValue> {
         Err(FerriteError::Runtime(format!(
@@ -250,6 +267,20 @@ pub struct UnavailableRuntime {
 impl JsRuntime for UnavailableRuntime {
     fn name(&self) -> &'static str {
         "unavailable"
+    }
+
+    async fn invoke_module_graph(
+        &self,
+        graph: CompiledModuleGraph,
+        _export: &str,
+        _args: Vec<JsValue>,
+        _env: RuntimeEnvironment,
+    ) -> Result<JsValue> {
+        graph.validate()?;
+        Err(FerriteError::Runtime(format!(
+            "backend `{}` is unavailable for atomic compiled graph invocation",
+            self.backend
+        )))
     }
 
     async fn evaluate_module_graph(
@@ -437,6 +468,22 @@ mod tests {
         assert!(
             error.to_string().contains("compiled module graphs")
                 && error.to_string().contains("quickjs")
+        );
+        let error = runtime
+            .invoke_module_graph(
+                graph.clone(),
+                "render",
+                Vec::new(),
+                RuntimeEnvironment {
+                    ssr: true,
+                    request_id: None,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("quickjs") && error.to_string().contains("atomic"),
+            "{error}"
         );
         let mut invalid = graph;
         invalid.modules[1].id = "./relative".into();

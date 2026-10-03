@@ -209,19 +209,10 @@ impl SsrAdapter for JsSsrAdapter {
             ssr: true,
             request_id: None,
         };
-        let namespace = match &self.graph {
-            Some(graph) => {
-                self.runtime
-                    .evaluate_module_graph(graph.clone(), environment)
-                    .await?
-            }
-            None => {
-                self.runtime
-                    .evaluate_module(self.module.clone(), environment)
-                    .await?
-            }
-        };
-        let handle = namespace.get_function(&self.export)?.clone();
+        let graph = self.graph.clone().unwrap_or_else(|| CompiledModuleGraph {
+            entry: self.module.id.clone(),
+            modules: vec![self.module.clone()],
+        });
         // Keep the legacy URL argument, adding a lossless request payload.
         // Bytes are an array rather than a lossy UTF-8 body conversion.
         let request_value = JsValue::from(serde_json::json!({
@@ -232,7 +223,12 @@ impl SsrAdapter for JsSsrAdapter {
         }));
         let result = self
             .runtime
-            .call(&handle, vec![JsValue::String(url), request_value])
+            .invoke_module_graph(
+                graph,
+                &self.export,
+                vec![JsValue::String(url), request_value],
+                environment,
+            )
             .await?;
         let mut response = js_render_response(result, &self.export)?;
         if let (Some(shell), crate::RenderBody::Full(html)) = (&self.shell, &mut response.body) {
