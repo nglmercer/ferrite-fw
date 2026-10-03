@@ -126,6 +126,7 @@ pub struct DoctorReport {
     pub compiler: String,
     pub compiler_version: Option<String>,
     pub ssr_runtime: String,
+    pub runtime_config: ferrite_config::RuntimeConfig,
     pub node_executable: Option<PathBuf>,
     pub node_probe: &'static str,
     pub editor_view: &'static str,
@@ -375,6 +376,7 @@ pub fn inspect(config: &ResolvedConfig) -> Result<DoctorReport> {
         compiler: config.compiler.engine.clone(),
         compiler_version,
         ssr_runtime: config.runtime.backend.clone(),
+        runtime_config: config.runtime.clone(),
         node_probe: if node_executable.is_some() {
             "located-not-executed"
         } else {

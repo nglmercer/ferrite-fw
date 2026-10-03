@@ -129,6 +129,8 @@ impl JsSsrAdapter {
         if resolved.runtime.backend == "napi-vm" {
             let mut options = ferrite_runtime::napi_vm::NapiVmOptions {
                 roots: vec![resolved.root.clone()],
+                queue_capacity: resolved.runtime.queue_capacity,
+                max_request_bytes: resolved.runtime.max_request_bytes,
                 fuel_budget: resolved.runtime.fuel_budget,
                 loop_budget: resolved.runtime.loop_budget,
                 ..Default::default()

@@ -518,6 +518,10 @@ impl Default for ReactConfig {
 pub struct RuntimeConfig {
     /// Backend name (`auto`, `none`, `napi-vm`).
     pub backend: String,
+    /// Maximum queued embedded-worker jobs (0 selects 64).
+    pub queue_capacity: usize,
+    /// Maximum encoded embedded-worker request bytes (0 selects 8 MiB).
+    pub max_request_bytes: usize,
     /// Guest fuel budget (0 = engine default).
     pub fuel_budget: u64,
     /// Guest loop budget (0 = engine default).
@@ -532,6 +536,8 @@ impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
             backend: "auto".to_string(),
+            queue_capacity: 0,
+            max_request_bytes: 0,
             fuel_budget: 0,
             loop_budget: 0,
             native_allow: Vec::new(),
@@ -1135,6 +1141,12 @@ fn merge_runtime(mut base: RuntimeConfig, over: RuntimeConfig) -> RuntimeConfig 
     if over.backend != defaults.backend {
         base.backend = over.backend;
     }
+    if over.queue_capacity != 0 {
+        base.queue_capacity = over.queue_capacity;
+    }
+    if over.max_request_bytes != 0 {
+        base.max_request_bytes = over.max_request_bytes;
+    }
     if over.fuel_budget != 0 {
         base.fuel_budget = over.fuel_budget;
     }
@@ -1647,6 +1659,8 @@ mod tests {
         let user: UserConfig = toml::from_str(
             "[runtime]\n\
              backend = \"napi-vm\"\n\
+             queue_capacity = 8\n\
+             max_request_bytes = 1048576\n\
              fuel_budget = 10000000\n\
              native_allow = [\"native/addon.node\"]\n\
              [runtime.native_integrity]\n\
@@ -1654,6 +1668,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(user.runtime.backend, "napi-vm");
+        assert_eq!(user.runtime.queue_capacity, 8);
+        assert_eq!(user.runtime.max_request_bytes, 1_048_576);
         assert_eq!(user.runtime.fuel_budget, 10_000_000);
         assert_eq!(user.runtime.native_allow, vec!["native/addon.node"]);
         assert_eq!(
@@ -1673,9 +1689,16 @@ mod tests {
         let mut over = UserConfig::default();
         over.runtime.backend = "napi-vm".to_string();
         over.runtime.loop_budget = 5;
+        over.runtime.queue_capacity = 4;
+        over.runtime.max_request_bytes = 1024;
         let merged = merge_user_config(base, over);
         assert_eq!(merged.runtime.backend, "napi-vm");
         assert_eq!(merged.runtime.loop_budget, 5);
+        assert_eq!(merged.runtime.queue_capacity, 4);
+        assert_eq!(merged.runtime.max_request_bytes, 1024);
+        let preserved = merge_user_config(merged, UserConfig::default());
+        assert_eq!(preserved.runtime.queue_capacity, 4);
+        assert_eq!(preserved.runtime.max_request_bytes, 1024);
 
         let resolved = resolve_config(
             UserConfig::default(),

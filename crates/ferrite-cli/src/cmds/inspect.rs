@@ -61,6 +61,7 @@ pub(crate) async fn inspect(
                 "foreignPlugins": resolved.foreign_plugins.iter().flatten().map(|profile| serde_json::json!({"name":profile.name, "entry":profile.entry, "host":profile.host, "node":profile.node, "timeoutMs":profile.timeout_ms.unwrap_or(10000), "support":"experimental", "executed":false})).collect::<Vec<_>>(),
                 "react": resolved.react,
                 "ssrRuntime": resolved.runtime.backend,
+                "runtimeConfig": resolved.runtime,
                 "plugins": plugins,
                 "lockfileVersion": lock.version,
                 "importers": lock.importers,
@@ -88,6 +89,10 @@ pub(crate) async fn inspect(
         println!("plugins:  {}", plugins.join(", "));
         println!("framework compiler: {:?}", resolved.framework);
         println!("SSR runtime: {}", resolved.runtime.backend);
+        println!(
+            "runtime limits: queue_capacity={}, max_request_bytes={} (0 selects host defaults)",
+            resolved.runtime.queue_capacity, resolved.runtime.max_request_bytes
+        );
         println!("locked:   {} packages", lock.package.len());
         println!();
         println!(
@@ -183,6 +188,10 @@ pub(crate) async fn doctor(
         println!(
             "compiler: {}; SSR runtime: {}",
             report.compiler, report.ssr_runtime
+        );
+        println!(
+            "runtime limits: queue_capacity={}, max_request_bytes={} (0 selects host defaults)",
+            report.runtime_config.queue_capacity, report.runtime_config.max_request_bytes
         );
         println!(
             "Node: {} (not a compiler execution test)",

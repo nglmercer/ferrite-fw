@@ -245,6 +245,39 @@ mod tests {
 
     #[cfg(feature = "napi-vm")]
     #[tokio::test]
+    async fn resolved_payload_limit_is_enforced_by_the_selected_runtime() {
+        let user: ferrite_config::UserConfig = serde_json::from_value(serde_json::json!({
+            "runtime": {"backend": "napi-vm", "queue_capacity": 2, "max_request_bytes": 16}
+        }))
+        .unwrap();
+        let mut resolved =
+            ferrite_config::resolve_config(user, Some(std::env::temp_dir()), Default::default())
+                .unwrap();
+        let module = CompiledModule {
+            id: "limited-renderer".into(),
+            code: "export function render() { return '<h1>bounded</h1>'; }".into(),
+            url: None,
+        };
+        let request = SsrHttpRequest {
+            method: "GET".into(),
+            uri: "/".into(),
+            headers: Vec::new(),
+            body: Vec::new(),
+        };
+        let adapter = JsSsrAdapter::from_resolved(&resolved, module.clone());
+        let error = adapter
+            .render(request.clone(), Default::default())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("payload exceeds 16"), "{error}");
+        resolved.runtime.max_request_bytes = 4096;
+        let adapter = JsSsrAdapter::from_resolved(&resolved, module);
+        let response = adapter.render(request, Default::default()).await.unwrap();
+        assert_eq!(response.into_string().await.unwrap(), "<h1>bounded</h1>");
+    }
+
+    #[cfg(feature = "napi-vm")]
+    #[tokio::test]
     async fn independent_adapters_share_a_worker_without_graph_or_guest_state_races() {
         let runtime = std::sync::Arc::new(ferrite_runtime::napi_vm::NapiVmRuntime::with_defaults());
         let mut tasks = Vec::new();
