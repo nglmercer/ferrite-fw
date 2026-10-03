@@ -47,6 +47,10 @@ pub struct StandaloneReport {
     pub binary: Option<PathBuf>,
 }
 
+pub(crate) fn unsupported_ssr_standalone() -> FerriteError {
+    FerriteError::Build("SSR standalone packaging is unavailable: the current scaffold serves static files and cannot execute a renderer. Build without --standalone and use ferrite preview with the explicitly selected napi-vm runtime; standalone SSR renderer packaging must be implemented before this profile can be advertised".into())
+}
+
 /// MIME type for a web path (generated server + tests share this).
 #[must_use]
 pub fn content_type_for(path: &str) -> &'static str {
@@ -81,6 +85,8 @@ pub fn content_type_for(path: &str) -> &'static str {
 /// itself. Web paths are `/`-rooted with `/` separators, sorted.
 pub fn collect_assets(out_dir: &Path) -> Result<BTreeMap<String, PathBuf>> {
     let mut files = BTreeMap::new();
+    let private_server = out_dir.join("server");
+    let has_server = private_server.join("manifest.json").is_file();
     let mut stack = vec![out_dir.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let entries = std::fs::read_dir(&dir).map_err(|error| {
@@ -92,6 +98,9 @@ pub fn collect_assets(out_dir: &Path) -> Result<BTreeMap<String, PathBuf>> {
             })?;
             let path = entry.path();
             if path.is_dir() {
+                if has_server && path == private_server {
+                    continue;
+                }
                 if path.file_name().and_then(|name| name.to_str()) == Some(SCAFFOLD_DIR)
                     && path.parent() == Some(out_dir)
                 {
@@ -378,6 +387,9 @@ fn cargo_build(dir: &Path, target: &str, cargo: Option<&Path>) -> Result<PathBuf
 /// Write the standalone scaffold into `out_dir`, embedding output files and
 /// optionally cross-compiling for `opts.target` (§51–§54).
 pub fn write_standalone(out_dir: &Path, opts: &StandaloneOptions) -> Result<StandaloneReport> {
+    if out_dir.join("server/manifest.json").is_file() {
+        return Err(unsupported_ssr_standalone());
+    }
     let dir = out_dir.join(SCAFFOLD_DIR);
     // Never embed a previous scaffold into the next one.
     let assets = collect_assets(out_dir)?;

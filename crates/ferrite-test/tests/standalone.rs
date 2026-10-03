@@ -39,6 +39,12 @@ fn standalone_files() -> Vec<(&'static str, &'static str)> {
 #[tokio::test]
 async fn standalone_build_embeds_scaffold() {
     let project = TempProject::new(&standalone_files());
+    std::fs::create_dir_all(project.root.join("src")).unwrap();
+    std::fs::write(
+        project.root.join("src/entry-server.js"),
+        "export function render() { return '<h1>server</h1>'; }",
+    )
+    .unwrap();
     let config = standalone_config(&project, None);
     assert!(config.package.target.is_none());
     let builder = ferrite::Builder::new(config, vec![]);
@@ -138,4 +144,67 @@ fn http_get(port: u16, path: &str) -> String {
     let mut body = String::new();
     stream.read_to_string(&mut body).expect("read");
     body
+}
+
+#[tokio::test]
+async fn ssr_standalone_rejects_static_shell_packaging_before_writing_output() {
+    let project = TempProject::new(&[
+        ("index.html", "<main><!--ssr-outlet--></main>"),
+        (
+            "src/entry-server.js",
+            "export function render() { return '<h1>actual</h1>'; }",
+        ),
+    ]);
+    let config = standalone_config(&project, None);
+    let output = config.out_dir();
+    let builder = ferrite::Builder::new(config, Vec::new());
+    let error = builder.build("ssr").await.unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("SSR standalone packaging is unavailable"),
+        "{error}"
+    );
+    assert!(
+        !output.exists(),
+        "unsupported packaging must not write output"
+    );
+    let error = builder.build_app().await.unwrap_err();
+    assert!(error.to_string().contains("static files"), "{error}");
+    assert!(!output.exists());
+}
+
+#[test]
+fn existing_ssr_output_is_not_embedded_or_packaged_as_static() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("server")).unwrap();
+    std::fs::write(root.path().join("server/manifest.json"), "{}").unwrap();
+    std::fs::write(
+        root.path().join("server/private.js"),
+        "const secret = 'server-only';",
+    )
+    .unwrap();
+    std::fs::write(root.path().join("index.html"), "shell").unwrap();
+    let assets = ferrite::package::collect_assets(root.path()).unwrap();
+    assert_eq!(
+        assets.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["/index.html"]
+    );
+    let error = ferrite::package::write_standalone(
+        root.path(),
+        &ferrite::package::StandaloneOptions {
+            embed_assets: true,
+            compress_assets: true,
+            target: None,
+            cargo: None,
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("SSR standalone packaging is unavailable"),
+        "{error}"
+    );
+    assert!(!root.path().join("standalone").exists());
 }

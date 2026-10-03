@@ -38,6 +38,9 @@ impl Builder {
     /// Build every configured environment (client + SSR when present).
     pub async fn build_app(&self) -> Result<Vec<BuildReport>> {
         let has_server_entry = self.ssr_entry()?.is_some();
+        if has_server_entry && self.config.package.standalone {
+            return Err(crate::package::unsupported_ssr_standalone());
+        }
         let mut reports = vec![self.build("client").await?];
         if has_server_entry {
             reports.push(self.build("ssr").await?);
@@ -59,6 +62,9 @@ impl Builder {
             return Err(FerriteError::Build(format!(
                 "unsupported build environment `{env}`; select `client` or `ssr`. Use mode to select environment files"
             )));
+        }
+        if env == "ssr" && self.config.package.standalone {
+            return Err(crate::package::unsupported_ssr_standalone());
         }
         let entries = self.default_entries(env)?;
         let mut config = self.config.clone();
