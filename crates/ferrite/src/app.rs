@@ -47,8 +47,8 @@ pub struct ModuleRequest {
 
 impl Ferrite {
     /// Create from resolved config + plugins.
-    #[must_use]
-    pub fn new(config: ResolvedConfig, plugins: Vec<Arc<dyn Plugin>>) -> Self {
+    /// Rejects unknown or unavailable compiler engines without substituting a backend.
+    pub fn new(config: ResolvedConfig, plugins: Vec<Arc<dyn Plugin>>) -> Result<Self> {
         let mode = if config.is_production {
             Apply::Build
         } else {
@@ -60,11 +60,8 @@ impl Ferrite {
             &EnvironmentKind::Client,
         );
         resolver.lockfile = config.lockfile();
-        let compiler: Arc<dyn ferrite_transform::JsCompiler> =
-            ferrite_transform::compiler_for_engine(&config.compiler.engine).unwrap_or_else(|_| {
-                Arc::new(ferrite_transform::OxcCompiler::new(Default::default()))
-            });
-        Self {
+        let compiler = ferrite_transform::compiler_for_engine(&config.compiler.engine)?;
+        Ok(Self {
             config,
             plugins: PluginContainer::new(plugins, mode),
             graph: Arc::new(ferrite_graph::ModuleGraph::default()),
@@ -74,7 +71,7 @@ impl Ferrite {
             watch_files: Mutex::new(Vec::new()),
             warnings: Mutex::new(Vec::new()),
             pipeline_server: tokio::sync::OnceCell::new(),
-        }
+        })
     }
 
     /// Resolve → load → transform one module (spec §99).
@@ -350,6 +347,29 @@ fn merge_maps(
 
 #[cfg(test)]
 mod pipeline_tests {
+    #[test]
+    fn library_construction_rejects_unknown_compiler_without_substitution() {
+        let mut user = ferrite_config::UserConfig::default();
+        user.compiler.engine = "missing-engine".into();
+        let config = ferrite_config::resolve_config(user, None, Default::default()).unwrap();
+        let error = super::Ferrite::new(config, vec![])
+            .err()
+            .expect("unknown compiler must fail construction");
+        assert!(error.to_string().contains("missing-engine"));
+    }
+
+    #[cfg(not(feature = "swc"))]
+    #[test]
+    fn library_construction_rejects_uncompiled_swc() {
+        let mut user = ferrite_config::UserConfig::default();
+        user.compiler.engine = "swc".into();
+        let config = ferrite_config::resolve_config(user, None, Default::default()).unwrap();
+        let error = super::Ferrite::new(config, vec![])
+            .err()
+            .expect("missing compiler feature must fail construction");
+        assert!(error.to_string().contains("--features swc"));
+    }
+
     use super::*;
     use ferrite_plugin::{
         Enforce, LoadRequest, LoadResult, PluginContext, ResolveHookRequest, TransformRequest,
@@ -443,7 +463,7 @@ mod pipeline_tests {
         let config =
             ferrite_config::resolve_config(Default::default(), None, Default::default()).unwrap();
         let plugins: Vec<Arc<dyn Plugin>> = vec![Arc::new(Fixture), Arc::new(FinalFixture)];
-        let library = Ferrite::new(config.clone(), plugins.clone());
+        let library = Ferrite::new(config.clone(), plugins.clone()).unwrap();
         let server = ferrite_server::DevServer::new_without_watcher(config, plugins)
             .await
             .unwrap();

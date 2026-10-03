@@ -37,7 +37,10 @@ pub enum CompilerEngine {
 pub fn compiler_for_engine(engine: &str) -> Result<Arc<dyn JsCompiler>> {
     match engine.to_ascii_lowercase().as_str() {
         "oxc" => Ok(Arc::new(OxcCompiler::new(OxcOptions::default()))),
+        #[cfg(feature = "swc")]
         "swc" => Ok(Arc::new(SwcCompiler)),
+        #[cfg(not(feature = "swc"))]
+        "swc" => Err(FerriteError::Other("the SWC compiler backend is not compiled into this build; rebuild with `--features swc` or set `[compiler] engine = \"oxc\"` (default)".into())),
         other => Err(FerriteError::Other(format!(
             "unknown compiler engine `{other}`"
         ))),

@@ -184,6 +184,7 @@ mod tests {
         assert_eq!(apply_define("A+A", &define), "1+1");
     }
 
+    #[cfg(feature = "swc")]
     #[test]
     fn compiler_versions_differ_by_backend() {
         let oxc = compiler_for_engine("oxc").unwrap();
@@ -298,7 +299,12 @@ mod tests {
     #[cfg(not(feature = "swc"))]
     #[test]
     fn swc_engine_without_feature_fails_loudly() {
-        let compiler = compiler_for_engine("swc").unwrap();
+        let error = compiler_for_engine("swc")
+            .err()
+            .expect("unavailable factory must fail before execution");
+        assert!(error.to_string().contains("--features swc"), "{error}");
+        // Direct parser access is retained without advertising a usable backend.
+        let compiler = SwcCompiler;
         let error = compiler
             .transform(TransformRequest::new(
                 "/a.ts",

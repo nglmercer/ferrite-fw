@@ -70,7 +70,7 @@ async fn maps_exports_cache_and_library_parity() {
         .unwrap();
     assert!(factory.map.is_some());
     assert_eq!(factory.commonjs.unwrap().names.len(), 5);
-    let library = Ferrite::new(config, vec![]);
+    let library = Ferrite::new(config, vec![]).unwrap();
     let result = library
         .transform_request(ModuleRequest {
             specifier: "/barrel.cjs".into(),

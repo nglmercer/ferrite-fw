@@ -236,14 +236,25 @@ mod tests {
         let server = DevServer::new_without_watcher(config, Vec::new())
             .await
             .unwrap();
-        let swc_server = DevServer::new_without_watcher(swc_config, Vec::new())
-            .await
-            .unwrap();
         let id = ModuleId::new("/src/a.js");
         let defines = HashMap::from([("A".to_string(), "1".to_string())]);
         let key_oxc = server.cache_key(&id, "const a = 1;", "client", &defines);
-        let key_swc = swc_server.cache_key(&id, "const a = 1;", "client", &defines);
-        assert_ne!(key_oxc, key_swc);
+        #[cfg(feature = "swc")]
+        {
+            let swc_server = DevServer::new_without_watcher(swc_config, Vec::new())
+                .await
+                .unwrap();
+            let key_swc = swc_server.cache_key(&id, "const a = 1;", "client", &defines);
+            assert_ne!(key_oxc, key_swc);
+        }
+        #[cfg(not(feature = "swc"))]
+        {
+            let error = DevServer::new_without_watcher(swc_config, Vec::new())
+                .await
+                .err()
+                .expect("unavailable backend must reject server construction");
+            assert!(error.to_string().contains("--features swc"));
+        }
         let other_defines = HashMap::from([("A".to_string(), "2".to_string())]);
         let key_changed = server.cache_key(&id, "const a = 1;", "client", &other_defines);
         assert_ne!(key_oxc, key_changed);

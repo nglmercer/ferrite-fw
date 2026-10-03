@@ -55,7 +55,7 @@ async fn official_components_resources_maps_cache_and_library_parity() {
     let server = DevServer::new_without_watcher(config.clone(), plugins.clone())
         .await
         .unwrap();
-    let library = Ferrite::new(config, plugins);
+    let library = Ferrite::new(config, plugins).unwrap();
     for component in ["/Counter.vue", "/Counter.svelte", "/counter.svelte.ts"] {
         let module = server
             .pipeline_module(&ModuleId::new(component), None, "client")

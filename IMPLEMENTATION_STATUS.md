@@ -698,3 +698,38 @@ No lockfile schema migration. Existing commands without explicit configuration
 retain directory discovery. Full Refresh/framework HMR, checkers, real SSR/SSG,
 remaining host/package capabilities, adapters and acceptance matrices remain
 unfinished; the complete mission remains active.
+
+### Reject unavailable compiler backends at construction
+
+Removed the public library facade's silent substitution of Oxc when an engine
+was unknown. `Ferrite::new` now returns `Result<Ferrite>` and propagates compiler
+selection errors. Updated existing facade conformance callers to handle that
+result. The shared compiler factory rejects SWC immediately when its cargo
+feature is absent, rather than returning an object whose transform/minify would
+later fail. Doctor consequently reports unavailable compilation and no compiler
+version for this build profile; dev server construction fails before serving.
+Direct `SwcCompiler` parsing remains available with explicit transform/minify
+errors, preserving the parser API without claiming a compiled backend.
+
+Validation:
+
+- `cargo test -p ferrite-transform -p ferrite-server -p ferrite --locked`:
+  44 transform, 32 server and initially 11 facade tests passed, plus three facade
+  documentation tests. Final facade rerun including new constructor regressions:
+  13 tests and three documentation tests passed.
+- `cargo test -p ferrite-transform --features swc --locked`: 52 tests passed,
+  including actual SWC lowering/minification tests and compiler-version checks.
+- `cargo test -p ferrite-server --features swc --locked cache_key_tracks_backend_and_defines`:
+  the targeted backend/define cache test passed. Default-feature counterpart
+  explicitly asserts construction rejection, while still testing define keys.
+- `cargo clippy -p ferrite -p ferrite-cli -p ferrite-test --all-targets --locked -- -D warnings`:
+  passed; formatting and diff checks passed.
+- Fresh default CLI build: unknown engine and SWC without feature both produced
+  nonzero doctor JSON with unavailable compiler support/no compiler version;
+  transform rejected both with the expected actionable backend errors.
+
+API migration: library callers must propagate or handle `Ferrite::new(...)` with
+`?`/error handling; unknown engine configurations no longer compile through Oxc.
+This establishes backend selection failure and the exercised SWC compiler/cache
+matrix, not full SWC framework/browser, SSR or release conformance. Full framework
+mission requirements remain assigned and active.
