@@ -2,7 +2,6 @@
 
 use crate::minify::*;
 use crate::parse::*;
-use crate::rewrite::*;
 use crate::types::*;
 use ferrite_core::FerriteError;
 use ferrite_core::ModuleType;
@@ -62,9 +61,21 @@ pub(crate) fn transform_module(request: TransformRequest) -> Result<TransformRes
         parse_module(&request.id, &request.code, &request.module_type)?;
         (request.code.clone(), None)
     };
-    // Compile-time defines (AST-safe enough: word-boundary replacement).
+    // Scope-aware compile-time globals; preserve maps through replacements.
     if !request.define.is_empty() {
-        code = apply_define(&code, &request.define);
+        let unchanged = code.clone();
+        let (defined, define_map) =
+            crate::apply_defines_mapped(&request.id, &code, &request.define, request.sourcemap)?;
+        map = match (define_map, map) {
+            (Some(outer), Some(inner)) => Some(SourceMap::external(crate::chain_source_maps(
+                &outer,
+                &inner.mappings,
+            )?)),
+            (Some(outer), None) => Some(SourceMap::external(outer)),
+            (None, inner) if defined == unchanged => inner,
+            (None, _) => None,
+        };
+        code = defined;
     }
     if request.minify {
         let minified = minify_module(&MinifyRequest {
@@ -200,6 +211,19 @@ pub fn drop_unused_exports(
                 if decl.specifiers.is_empty() {
                     Action::DropStatement
                 } else if decl.specifiers.len() != before {
+                    Action::DropSpecifiers
+                } else {
+                    Action::Keep
+                }
+            }
+            // Named re-exports must lose unused names as well: retaining the
+            // syntax after pruning the dependency produces invalid ESM links.
+            // An empty export-from still executes the dependency's effects.
+            Statement::ExportFromDeclaration(decl) => {
+                let before = decl.specifiers.len();
+                decl.specifiers
+                    .retain(|spec| used.contains(&module_export_name(&spec.exported)));
+                if decl.specifiers.len() != before {
                     Action::DropSpecifiers
                 } else {
                     Action::Keep

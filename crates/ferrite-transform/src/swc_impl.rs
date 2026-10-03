@@ -276,7 +276,19 @@ pub fn transform_module_swc(request: TransformRequest) -> Result<TransformResult
         (request.code.clone(), None)
     };
     if !request.define.is_empty() {
-        code = crate::apply_define(&code, &request.define);
+        let unchanged = code.clone();
+        let (defined, define_map) =
+            crate::apply_defines_mapped(&request.id, &code, &request.define, request.sourcemap)?;
+        map = match (define_map, map) {
+            (Some(outer), Some(inner)) => Some(SourceMap::external(crate::chain_source_maps(
+                &outer,
+                &inner.mappings,
+            )?)),
+            (Some(outer), None) => Some(SourceMap::external(outer)),
+            (None, inner) if defined == unchanged => inner,
+            (None, _) => None,
+        };
+        code = defined;
     }
     if request.minify {
         let minified = minify_module_swc(&MinifyRequest {

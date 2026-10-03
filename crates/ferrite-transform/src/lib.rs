@@ -9,6 +9,7 @@ mod swc_impl;
 
 mod commonjs;
 mod compiler;
+mod defines;
 pub use commonjs::{
     analyze_commonjs, commonjs_facade, commonjs_factory, commonjs_factory_id, commonjs_inline,
     commonjs_json_factory, validate_commonjs, CommonJsAnalysis, CJS_FACTORY_QUERY,
@@ -24,6 +25,7 @@ mod types;
 pub use compiler::{
     compiler_for_engine, CompilerEngine, JsCompiler, OxcCompiler, OxcOptions, SwcCompiler,
 };
+pub use defines::apply_defines_mapped;
 pub use minify::chain_source_maps;
 pub use rewrite::{
     apply_define, apply_text_edits, inject_hmr_mapped, rewrite_import_meta_hot, rewrite_specifiers,
@@ -44,6 +46,25 @@ mod tests {
 
     fn compiler() -> OxcCompiler {
         OxcCompiler::new(OxcOptions::default())
+    }
+
+    #[test]
+    fn named_reexports_prune_unused_aliases_and_preserve_dependency_effects() {
+        let source = "export { ref, TrackOpTypes as Tracking } from './reactivity.js';";
+        let kept = std::collections::HashSet::from(["ref".to_string()]);
+        let code = drop_unused_exports("/barrel.js", source, &kept)
+            .unwrap()
+            .unwrap();
+        assert!(code.contains("ref"));
+        assert!(!code.contains("Tracking"));
+        assert!(!code.contains("TrackOpTypes"));
+        let empty = drop_unused_exports("/barrel.js", source, &std::collections::HashSet::new())
+            .unwrap()
+            .unwrap();
+        let parsed = parse_module("/barrel.js", &empty, &ModuleType::Js).unwrap();
+        assert!(parsed.exports.is_empty());
+        assert_eq!(parsed.imports.len(), 1);
+        assert_eq!(parsed.imports[0].specifier, "./reactivity.js");
     }
 
     #[test]
@@ -521,5 +542,43 @@ mod tests {
         )
         .unwrap();
         assert!(!prose.uses_import_meta_hot);
+    }
+    #[test]
+    fn source_map_chain_handles_dense_minified_lines_and_unmapped_barriers() {
+        let mut inner = oxc_sourcemap::SourceMapBuilder::default();
+        let source = inner.set_source_and_content("original.ts", "source");
+        let mut outer = oxc_sourcemap::SourceMapBuilder::default();
+        let intermediate = outer.set_source_and_content("intermediate.js", "code");
+        for index in 0..10_000 {
+            inner.add_token(
+                0,
+                index * 2,
+                index,
+                0,
+                if index == 5_000 { None } else { Some(source) },
+                None,
+            );
+            for column in [index * 2, index * 2 + 1] {
+                outer.add_token(0, column, 0, column, Some(intermediate), None);
+            }
+        }
+        let json = chain_source_maps(
+            &outer.into_sourcemap().to_json_string(),
+            &inner.into_sourcemap().to_json_string(),
+        )
+        .unwrap();
+        let chained = oxc_sourcemap::SourceMap::from_json_string(&json).unwrap();
+        assert_eq!(chained.get_tokens().count(), 20_000);
+        for token in chained.get_tokens() {
+            if token.get_dst_col() / 2 == 5_000 {
+                assert!(
+                    token.get_source_id().is_none(),
+                    "unmapped helper barriers must stop lookups"
+                );
+            } else {
+                assert_eq!(token.get_source_id(), Some(0));
+                assert_eq!(token.get_src_line(), token.get_dst_col() / 2);
+            }
+        }
     }
 }

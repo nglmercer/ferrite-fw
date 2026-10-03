@@ -212,7 +212,42 @@ pub fn shake_statements(
             sourcemap: request.sourcemap,
             input_map: module.map.clone().map(ferrite_core::SourceMap::external),
         })?;
+        let parsed = compiler.parse(ferrite_transform::ParseRequest {
+            id: module.id.0.clone(),
+            code: minified.code.clone(),
+            module_type: ferrite_core::ModuleType::Js,
+        })?;
+        let mut imports = Vec::new();
+        let mut import_bindings = Vec::new();
+        for import in parsed.imports {
+            let edge = module
+                .imports
+                .iter()
+                .find(|(specifier, _, _)| specifier == &import.specifier)
+                .ok_or_else(|| {
+                    ferrite_core::FerriteError::Other(format!(
+                        "statement shaking introduced unresolved import `{}` in `{}`",
+                        import.specifier, module.id.0
+                    ))
+                })?;
+            imports.push(edge.clone());
+            import_bindings.push(import.bindings);
+        }
+        let mut exports = parsed.export_details;
+        for export in &mut exports {
+            if let Some(from) = &export.from {
+                export.target = imports
+                    .iter()
+                    .find(|(specifier, _, _)| specifier == from)
+                    .map(|(_, id, _)| id.clone());
+            }
+        }
         if let Some(module) = modules.get_mut(id) {
+            module.imports = imports;
+            module.shake = Some(ShakeInfo {
+                import_bindings,
+                exports,
+            });
             module.code = minified.code;
             module.map = minified.map.map(|chained| chained.mappings);
         }

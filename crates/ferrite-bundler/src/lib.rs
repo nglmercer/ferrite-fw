@@ -631,6 +631,61 @@ mod tests {
     }
 
     #[test]
+    fn named_barrel_shaking_keeps_emitted_links_and_facts_consistent() {
+        let entry = ModuleId::new("/entry.js");
+        let barrel = ModuleId::new("/barrel.js");
+        let leaf = ModuleId::new("/leaf.js");
+        let mut modules = HashMap::from([
+            (
+                entry.clone(),
+                shaken_module(
+                    "/entry.js",
+                    "import {ref} from '/barrel.js'; console.log(ref);",
+                    vec![("/barrel.js".into(), barrel.clone(), ImportKind::Static)],
+                    vec![named("ref")],
+                    vec![],
+                ),
+            ),
+            (
+                barrel.clone(),
+                shaken_module(
+                    "/barrel.js",
+                    "export {ref, TrackOpTypes} from '/leaf.js';",
+                    vec![("/leaf.js".into(), leaf.clone(), ImportKind::Static)],
+                    vec![vec![ImportBinding::Reexport]],
+                    vec![
+                        reexport("ref", "ref", "/leaf.js"),
+                        reexport("TrackOpTypes", "TrackOpTypes", "/leaf.js"),
+                    ],
+                ),
+            ),
+            (
+                leaf.clone(),
+                shaken_module(
+                    "/leaf.js",
+                    "export const ref = 1; export const TrackOpTypes = {GET:'get'};",
+                    vec![],
+                    vec![],
+                    vec![local_export("ref"), local_export("TrackOpTypes")],
+                ),
+            ),
+        ]);
+        let live = modules.keys().cloned().collect();
+        shake_statements(&mut modules, &live, &shake_request(vec![entry])).unwrap();
+        for id in [&barrel, &leaf] {
+            let module = &modules[id];
+            assert!(!module.code.contains("TrackOpTypes"), "{}", module.code);
+            let facts = module.shake.as_ref().unwrap();
+            assert_eq!(facts.exports.len(), 1);
+            assert_eq!(facts.exports[0].exported, "ref");
+        }
+        assert_eq!(
+            modules[&barrel].shake.as_ref().unwrap().exports[0].target,
+            Some(leaf)
+        );
+    }
+
+    #[test]
     fn statements_drop_unused_and_reminify() {
         let entry = ModuleId::new("/e.js");
         let leaf = ModuleId::new("/leaf.js");
@@ -929,8 +984,7 @@ mod tests {
     #[async_trait::async_trait]
     impl BundleHooks for RecordingHooks {
         async fn render_start(&self, entries: &[ModuleId]) -> Result<()> {
-            *self.started.lock().unwrap() =
-                entries.iter().map(|id| id.0.clone()).collect();
+            *self.started.lock().unwrap() = entries.iter().map(|id| id.0.clone()).collect();
             Ok(())
         }
 
@@ -996,8 +1050,7 @@ mod tests {
             .unwrap();
         assert_eq!(*hooks.started.lock().unwrap(), vec!["/main.js"]);
         let entry = output.manifest.entries.get("/main.js").expect("entry");
-        let code =
-            String::from_utf8(output.bundle.files[&entry.file].contents.clone()).unwrap();
+        let code = String::from_utf8(output.bundle.files[&entry.file].contents.clone()).unwrap();
         assert!(code.starts_with("/* banner */\n"), "{code}");
         assert!(code.contains("// rendered"), "{code}");
 
