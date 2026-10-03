@@ -28,10 +28,10 @@ pub(crate) async fn inspect(
         .map(|p| p.name().to_string())
         .collect();
     if let Some(profile) = &resolved.framework {
+        plugins.retain(|plugin| plugin != ferrite::frameworks::ReactPlugin::NAME);
         for name in &profile.enabled {
             if name == "react" {
-                plugins.retain(|plugin| plugin != "ferrite:react");
-                plugins.push("ferrite:react".into());
+                plugins.push(ferrite::frameworks::ReactPlugin::NAME.into());
                 continue;
             }
             plugins.retain(|plugin| plugin != &format!("ferrite:{name}"));

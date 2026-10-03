@@ -1,4 +1,4 @@
-//! Vite compat: source maps, CJS, node compat, TS/JSX, errors.
+//! Shared pipeline source maps, CJS, node shims, TS/JSX and diagnostics.
 
 use ferrite::ModuleId;
 use ferrite::ModuleType;
@@ -30,10 +30,10 @@ fn source_maps_produced_on_request() {
 #[tokio::test]
 async fn cjs_converted_to_esm_wrapper() {
     let project = TempProject::new(&[
-        ("dep.js", "export default 41;\n"),
+        ("dep.cjs", "module.exports = 41;\n"),
         (
             "legacy.cjs",
-            "const dep = require(\"./dep\");\nmodule.exports = { dep };\n",
+            "const dep = require(\"./dep.cjs\");\nmodule.exports = { dep };\n",
         ),
     ]);
     let server = dev_server(&project).await;
@@ -43,11 +43,62 @@ async fn cjs_converted_to_esm_wrapper() {
         .unwrap();
     assert_contains_all(
         &module.code,
-        &["__ferrite_interop__", "module.exports", "export default"],
+        &[
+            "__ferrite_cjs_require__",
+            "?ferrite-cjs-factory",
+            "module.exports",
+            "export default",
+            "__ferrite_value[\"dep\"]",
+        ],
+    );
+    let factory = server
+        .pipeline_module(
+            &ModuleId::new("/legacy.cjs?ferrite-cjs-factory"),
+            None,
+            "client",
+        )
+        .await
+        .unwrap();
+    assert!(
+        factory
+            .imports
+            .iter()
+            .any(|(_, dependency, _)| dependency.0.contains("dep.cjs?ferrite-cjs-factory")),
+        "{:?}",
+        factory.imports
     );
 }
 
 // --- node compat ---------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn synchronous_require_of_esm_fails_with_import_hint() {
+    let project = TempProject::new(&[
+        ("dep.js", "export default 41;\n"),
+        ("legacy.cjs", "module.exports = require('./dep.js');\n"),
+    ]);
+    let server = dev_server(&project).await;
+    let factory = server
+        .pipeline_module(
+            &ModuleId::new("/legacy.cjs?ferrite-cjs-factory"),
+            None,
+            "client",
+        )
+        .await
+        .unwrap();
+    let dependency = factory
+        .imports
+        .iter()
+        .find(|(_, dependency, _)| dependency.0.starts_with("/dep.js?"))
+        .expect("literal require must resolve its actual dependency factory");
+    let message = server
+        .pipeline_module(&dependency.1, None, "client")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(message.contains("synchronous require(ESM)"), "{message}");
+    assert!(message.contains("use ESM imports"), "{message}");
+}
 
 #[tokio::test]
 async fn node_builtin_shims_in_browser() {

@@ -33,6 +33,7 @@ pub struct ReactPlugin {
 }
 
 impl ReactPlugin {
+    pub const NAME: &'static str = "ferrite:react-refresh";
     /// Create with refresh enabled (corrected by `config_resolved`).
     #[must_use]
     pub fn new() -> Self {
@@ -221,7 +222,7 @@ pub fn is_jsx_id(id: &str) -> bool {
 #[async_trait::async_trait]
 impl Plugin for ReactPlugin {
     fn name(&self) -> &'static str {
-        "ferrite:react-refresh"
+        Self::NAME
     }
 
     fn cache_key(&self) -> String {

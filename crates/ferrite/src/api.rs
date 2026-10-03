@@ -112,8 +112,10 @@ impl Config {
             ).map_err(|error| ferrite_core::FerriteError::Config(format!("foreign plugin {} at {} failed registration: {error}; check entry/options and the supported hook subset", profile.name, entry.display())))?));
         }
         if let Some(profile) = &resolved.framework {
+            // Explicit ownership overrides the default/detected React adapter,
+            // including an empty framework selection.
+            plugins.retain(|plugin| plugin.name() != crate::frameworks::ReactPlugin::NAME);
             if profile.enabled.iter().any(|name| name == "react") {
-                plugins.retain(|plugin| plugin.name() != "ferrite:react");
                 plugins.push(Arc::new(crate::frameworks::ReactPlugin::with_enabled(
                     resolved.react.refresh,
                 )));
@@ -195,6 +197,51 @@ pub async fn preview(config: Config) -> Result<()> {
 #[cfg(test)]
 mod foreign_profile_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn explicit_framework_selection_controls_default_react_refresh() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("package.json"),
+            r#"{"dependencies":{"react":"19.2.0"}}"#,
+        )
+        .unwrap();
+        for selection in [Some(vec!["react".to_string()]), None, Some(Vec::new())] {
+            let user = UserConfig {
+                framework: selection
+                    .clone()
+                    .map(|enabled| ferrite_config::FrameworkConfig {
+                        compiler_host: if enabled.is_empty() {
+                            None
+                        } else {
+                            Some("native".into())
+                        },
+                        enabled,
+                        ..Default::default()
+                    }),
+                ..Default::default()
+            };
+            let config = Config {
+                root: Some(root.path().into()),
+                user,
+                ..Default::default()
+            }
+            .plugin(crate::frameworks::ReactPlugin::new());
+            let (_, plugins) = config.resolve().await.unwrap();
+            let count = plugins
+                .iter()
+                .filter(|plugin| plugin.name() == crate::frameworks::ReactPlugin::NAME)
+                .count();
+            assert_eq!(
+                count,
+                usize::from(
+                    selection
+                        .as_ref()
+                        .is_none_or(|names| names.iter().any(|name| name == "react"))
+                )
+            );
+        }
+    }
 
     #[tokio::test]
     async fn foreign_profiles_require_opt_in_and_do_not_fallback_from_missing_node() {

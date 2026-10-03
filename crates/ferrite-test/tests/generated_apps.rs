@@ -10,7 +10,7 @@ fn cli() -> PathBuf {
         .canonicalize()
         .unwrap()
 }
-async fn command(binary: &Path, root: &Path, args: &[&str], node_enabled: bool) {
+async fn command(binary: &Path, root: &Path, args: &[&str], node_enabled: bool) -> String {
     let output = tokio::process::Command::new(binary)
         .args(args)
         .current_dir(root)
@@ -32,6 +32,83 @@ async fn command(binary: &Path, root: &Path, args: &[&str], node_enabled: bool) 
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+    String::from_utf8(output.stdout).unwrap()
+}
+
+#[tokio::test]
+#[ignore = "requires freshly built CLI and registry packages"]
+async fn configured_react_selection_matches_inspect_and_transform() {
+    let binary = cli();
+    let project = ferrite_test::TempProject::new(&[]);
+    let destination = project.root.join("app");
+    command(
+        &binary,
+        &project.root,
+        &[
+            "create",
+            destination.to_str().unwrap(),
+            "--framework",
+            "react",
+            "--language",
+            "js",
+        ],
+        false,
+    )
+    .await;
+    let config_path = destination.join("ferrite.toml");
+    let config = std::fs::read_to_string(&config_path).unwrap();
+    let inspected: serde_json::Value =
+        serde_json::from_str(&command(&binary, &destination, &["inspect", "--json"], false).await)
+            .unwrap();
+    let names = inspected["plugins"].as_array().unwrap();
+    assert_eq!(
+        names
+            .iter()
+            .filter(|name| **name == "ferrite:react-refresh")
+            .count(),
+        1
+    );
+    assert!(!names.iter().any(|name| *name == "ferrite:react"));
+    let transformed = command(&binary, &destination, &["transform", "src/App.jsx"], false).await;
+    assert_eq!(
+        transformed
+            .matches("createSignatureFunctionForTransform")
+            .count(),
+        1,
+        "configured React must run one instrumentation pass"
+    );
+    std::fs::write(
+        &config_path,
+        config.replace("refresh = true", "refresh = false"),
+    )
+    .unwrap();
+    let report: serde_json::Value =
+        serde_json::from_str(&command(&binary, &destination, &["doctor", "--json"], false).await)
+            .unwrap();
+    let react = report["frameworks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["framework"] == "react")
+        .unwrap();
+    assert_eq!(react["updates"], "full-reload");
+    let transformed = command(&binary, &destination, &["transform", "src/App.jsx"], false).await;
+    assert!(!transformed.contains("createSignatureFunctionForTransform"));
+    std::fs::write(
+        &config_path,
+        config.replace("enabled = [\"react\"]", "enabled = []"),
+    )
+    .unwrap();
+    let inspected: serde_json::Value =
+        serde_json::from_str(&command(&binary, &destination, &["inspect", "--json"], false).await)
+            .unwrap();
+    assert!(!inspected["plugins"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|name| *name == "ferrite:react-refresh"));
+    let transformed = command(&binary, &destination, &["transform", "src/App.jsx"], false).await;
+    assert!(!transformed.contains("createSignatureFunctionForTransform"));
 }
 async fn server(
     binary: &Path,

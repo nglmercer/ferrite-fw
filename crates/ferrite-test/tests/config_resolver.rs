@@ -1,4 +1,4 @@
-//! Vite compat: config and resolver.
+//! Shared configuration and resolver conformance.
 
 use ferrite::server::DevServer;
 use ferrite::ModuleId;
@@ -113,21 +113,20 @@ async fn resolver_missing_bare_package_fails_loudly() {
 }
 
 #[tokio::test]
-async fn resolver_absolute_url_failure_keeps_passthrough() {
-    // Remote imports with `[remote]` disabled (the default) are left for
-    // the browser to fetch directly — only bare specifiers fail loudly.
+async fn resolver_disabled_remote_import_fails_with_opt_in_hint() {
+    // Disabled remote loading must fail in the shared pipeline rather than
+    // bypassing its explicit configuration through browser passthrough.
     let project = TempProject::new(&[(
         "src/main.ts",
         "import x from \"https://esm.example/mod.js\";\nconsole.log(x);\n",
     )]);
     let server = dev_server(&project).await;
-    let main = server
+    let error = server
         .pipeline_module(&ModuleId::new("/src/main.ts"), None, "client")
         .await
-        .unwrap();
-    assert!(
-        main.code.contains("https://esm.example/mod.js"),
-        "{}",
-        main.code
-    );
+        .unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("https://esm.example/mod.js"), "{message}");
+    assert!(message.contains("disabled"), "{message}");
+    assert!(message.contains("enable `[remote]`"), "{message}");
 }

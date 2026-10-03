@@ -1,4 +1,4 @@
-//! Vite compat: framework plugins.
+//! Structural framework pipeline conformance; runtime support is verified separately.
 
 use ferrite::server::DevServer;
 use ferrite::ModuleId;
@@ -26,23 +26,23 @@ async fn react_dev_appends_refresh_footer() {
             "export function App() { return <div>hi</div>; }\n",
         ),
         (
-            ".ferrite/npm/packages/react@18.0.0/package.json",
-            r#"{"name":"react","version":"18.0.0","exports":{".":"./index.js","./jsx-runtime":"./jsx-runtime.js","./jsx-dev-runtime":"./jsx-dev-runtime.js"}}"#,
+            ".ferrite/npm/packages/react@19.2.0/package.json",
+            r#"{"name":"react","version":"19.2.0","exports":{".":"./index.js","./jsx-runtime":"./jsx-runtime.js","./jsx-dev-runtime":"./jsx-dev-runtime.js"}}"#,
         ),
         (
-            ".ferrite/npm/packages/react@18.0.0/jsx-runtime.js",
+            ".ferrite/npm/packages/react@19.2.0/jsx-runtime.js",
             "export function jsx() {}\n",
         ),
         (
-            ".ferrite/npm/packages/react@18.0.0/jsx-dev-runtime.js",
+            ".ferrite/npm/packages/react@19.2.0/jsx-dev-runtime.js",
             "export function jsxDEV() {}\n",
         ),
         (
-            ".ferrite/npm/packages/react-refresh@0.14.0/package.json",
-            r#"{"name":"react-refresh","version":"0.14.0","exports":{".":"./runtime.js","./runtime":"./runtime.js"}}"#,
+            ".ferrite/npm/packages/react-refresh@0.17.0/package.json",
+            r#"{"name":"react-refresh","version":"0.17.0","exports":{".":"./runtime.js","./runtime":"./runtime.js"}}"#,
         ),
         (
-            ".ferrite/npm/packages/react-refresh@0.14.0/runtime.js",
+            ".ferrite/npm/packages/react-refresh@0.17.0/runtime.js",
             "export function injectIntoGlobalHook() {}\n",
         ),
     ]);
@@ -54,7 +54,24 @@ async fn react_dev_appends_refresh_footer() {
         .pipeline_module(&ModuleId::new("/src/App.tsx"), None, "client")
         .await
         .unwrap();
-    assert!(module.code.contains("$RefreshReg$(App"), "{}", module.code);
+    assert!(
+        module.code.contains("__ferrite_refresh_reg__(_c, \"App\")"),
+        "{}",
+        module.code
+    );
+    assert!(
+        module
+            .code
+            .contains("__ferrite_refresh_runtime__.register(type"),
+        "{}",
+        module.code
+    );
+    assert!(!module.code.contains("$RefreshReg$("), "{}", module.code);
+    assert!(
+        module.code.contains("createSignatureFunctionForTransform"),
+        "{}",
+        module.code
+    );
     assert!(
         module.code.contains("performReactRefresh"),
         "{}",
@@ -89,11 +106,11 @@ async fn react_production_build_has_no_footer() {
             "export function App() { return <div>hi</div>; }\n",
         ),
         (
-            ".ferrite/npm/packages/react@18.0.0/package.json",
-            r#"{"name":"react","version":"18.0.0","exports":{".":"./index.js","./jsx-runtime":"./jsx-runtime.js"}}"#,
+            ".ferrite/npm/packages/react@19.2.0/package.json",
+            r#"{"name":"react","version":"19.2.0","exports":{".":"./index.js","./jsx-runtime":"./jsx-runtime.js"}}"#,
         ),
         (
-            ".ferrite/npm/packages/react@18.0.0/jsx-runtime.js",
+            ".ferrite/npm/packages/react@19.2.0/jsx-runtime.js",
             "export function jsx() {}\n",
         ),
     ]);
@@ -117,7 +134,7 @@ async fn react_production_build_has_no_footer() {
 }
 
 #[tokio::test]
-async fn vue_sfc_splits_through_pipeline() {
+async fn vue_component_requires_explicit_official_compiler_host() {
     let project = TempProject::new(&[
         (
             "src/App.vue",
@@ -138,33 +155,24 @@ async fn vue_sfc_splits_through_pipeline() {
         DevServer::new_without_watcher(dev_config(&project), framework_plugins(&project.root))
             .await
             .unwrap();
-    let main = server
-        .pipeline_module(&ModuleId::new("/src/App.vue"), None, "client")
-        .await
-        .unwrap();
-    assert!(main.code.contains("?vue&type=script"), "{}", main.code);
-    assert!(main.code.contains("?vue&type=template"), "{}", main.code);
-    assert!(main.code.contains("?vue&type=style"), "{}", main.code);
-    let script = server
-        .pipeline_module(
-            &ModuleId::new("/src/App.vue?vue&type=script&lang=ts"),
-            None,
-            "client",
-        )
-        .await
-        .unwrap();
-    assert!(!script.code.contains(": string"), "{}", script.code);
-    assert!(script.code.contains("ref(\"hi\")"), "{}", script.code);
-    let template = server
-        .pipeline_module(
-            &ModuleId::new("/src/App.vue?vue&type=template"),
-            None,
-            "client",
-        )
-        .await
-        .unwrap();
-    assert!(template.code.contains("render"), "{}", template.code);
-    assert!(template.code.contains("button"), "{}", template.code);
+    for id in [
+        "/src/App.vue",
+        "/src/App.vue?vue&type=script&lang=ts",
+        "/src/App.vue?vue&type=template",
+        "/src/App.vue?vue&type=style",
+    ] {
+        let error = server
+            .pipeline_module(&ModuleId::new(id), None, "client")
+            .await
+            .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("vue/compiler-sfc"), "{message}");
+        assert!(message.contains("validated compiler host"), "{message}");
+        assert!(
+            message.contains("no compiler host has been explicitly configured"),
+            "{message}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -176,11 +184,11 @@ async fn react_dev_html_includes_preamble() {
              <script type=\"module\" src=\"/src/App.tsx\"></script></body></html>",
         ),
         (
-            ".ferrite/npm/packages/react-refresh@0.14.0/package.json",
-            r#"{"name":"react-refresh","version":"0.14.0","exports":{".":"./runtime.js","./runtime":"./runtime.js"}}"#,
+            ".ferrite/npm/packages/react-refresh@0.17.0/package.json",
+            r#"{"name":"react-refresh","version":"0.17.0","exports":{".":"./runtime.js","./runtime":"./runtime.js"}}"#,
         ),
         (
-            ".ferrite/npm/packages/react-refresh@0.14.0/runtime.js",
+            ".ferrite/npm/packages/react-refresh@0.17.0/runtime.js",
             "export function injectIntoGlobalHook() {}\n",
         ),
     ]);
@@ -211,7 +219,7 @@ async fn react_dev_html_skips_preamble_without_refresh_package() {
 }
 
 #[tokio::test]
-async fn svelte_splits_through_pipeline() {
+async fn svelte_component_requires_explicit_official_compiler_host() {
     let project = TempProject::new(&[(
         "src/App.svelte",
         "<script>\nlet count = 0;\n</script>\n<button>{count}</button>\n",
@@ -220,19 +228,17 @@ async fn svelte_splits_through_pipeline() {
         DevServer::new_without_watcher(dev_config(&project), framework_plugins(&project.root))
             .await
             .unwrap();
-    let main = server
-        .pipeline_module(&ModuleId::new("/src/App.svelte"), None, "client")
-        .await
-        .unwrap();
-    assert!(main.code.contains("?svelte&type=script"), "{}", main.code);
-    assert!(main.code.contains("?svelte&type=markup"), "{}", main.code);
-    let markup = server
-        .pipeline_module(
-            &ModuleId::new("/src/App.svelte?svelte&type=markup"),
-            None,
-            "client",
-        )
-        .await
-        .unwrap();
-    assert!(markup.code.contains("{count}"), "{}", markup.code);
+    for id in ["/src/App.svelte", "/src/App.svelte?svelte&type=markup"] {
+        let error = server
+            .pipeline_module(&ModuleId::new(id), None, "client")
+            .await
+            .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("svelte/compiler"), "{message}");
+        assert!(message.contains("validated compiler host"), "{message}");
+        assert!(
+            message.contains("no compiler host has been explicitly configured"),
+            "{message}"
+        );
+    }
 }

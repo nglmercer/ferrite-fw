@@ -212,7 +212,7 @@ pub fn inspect(config: &ResolvedConfig) -> Result<DoctorReport> {
             version: package.map(|package| package.version.clone()), identity: package.map(|package| package.id()),
             compiler_host: host, compiler_support: if available { "experimental" } else { "unavailable" },
             client: if available { descriptor.client.label() } else { "unavailable" }, ssr: descriptor.ssr.label(),
-            updates: if !available { "unavailable" } else if name == "react" { "experimental-refresh-incomplete" } else { "full-reload" }, checker: "unavailable",
+            updates: if !available { "unavailable" } else if name == "react" && config.react.refresh { "experimental-refresh-incomplete" } else { "full-reload" }, checker: "unavailable",
             compiler_profiles: descriptor.compiler_profiles.iter().map(|profile| serde_json::json!({
                 "host": profile.host, "framework_version": profile.framework_version,
                 "client_compilation": profile.client.label(), "server_compilation": profile.server.label(),
@@ -428,6 +428,20 @@ mod tests {
             "unavailable"
         );
         assert!(report
+            .issues
+            .iter()
+            .any(|issue| issue.message.contains("installed react-refresh@0.17.0")));
+        let mut without_refresh = resolved.clone();
+        without_refresh.react.refresh = false;
+        let report = inspect(&without_refresh).unwrap();
+        let react = report
+            .frameworks
+            .iter()
+            .find(|row| row.framework == "react")
+            .unwrap();
+        assert_eq!(react.client, "experimental");
+        assert_eq!(react.updates, "full-reload");
+        assert!(!report
             .issues
             .iter()
             .any(|issue| issue.message.contains("installed react-refresh@0.17.0")));

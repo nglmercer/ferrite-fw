@@ -2220,3 +2220,75 @@ Resume its live process and inspect its terminal result before claiming the
 workspace gate passed. No assertions, time budgets or capability guards were
 weakened, and no compiler/rendering support promotion or lock migration occurs.
 The full remaining framework mission stays assigned and active.
+
+### Honor explicit React selection and remove duplicate Refresh instrumentation
+
+The configured native React path attempted to remove ferrite:react, whereas
+the actual adapter identifies itself as ferrite:react-refresh. Consequently the
+CLI default instance remained alongside the configured instance. ReactPlugin
+now exposes one shared NAME used by library selection and CLI inspect.
+An explicit framework selection first removes the default React adapter; selecting
+React adds exactly one configured instance, and selecting no frameworks leaves
+none. An absent framework selection preserves the supplied default adapter.
+Doctor now reports full-reload when React Refresh is explicitly disabled, and
+does not require react-refresh for that disabled profile.
+
+The new library regression checks exact adapter counts, and a Node-free CLI
+regression creates/installs a real React project, compares inspect with transformed
+output, requires exactly one createSignatureFunctionForTransform occurrence,
+toggles refresh off and requires zero occurrences plus full-reload reporting,
+then disables framework selection and checks both inspect and transform again.
+The ordered plugin cache identity includes instance count, so removal of duplicate
+instances changes compilation cache keys; no manual cache or lock migration is
+needed. Inspect now exposes only the actual ferrite:react-refresh identifier.
+
+Workspace validation also exposed outdated conformance expectations left behind
+by earlier implementation changes. Tests now enforce the existing pipeline's
+disabled-remote rejection with the explicit opt-in hint; Vue/Svelte without a
+configured official compiler host reject main and legacy split-query requests
+with actionable compiler-package/host errors. React structural tests require
+local native registration/signature helpers and prohibit ambient registration
+calls. Their resolver-only package fixtures do not establish runtime support.
+The old CommonJS test expected the removed interop helper and used require(ESM)
+as a positive fixture. It now checks a real CommonJS dependency's lazy factory
+edge and named/default facade; a separate negative regression follows the actual
+require(ESM) dependency factory and requires the unsupported-operation/import
+hint. No runtime fallback, compiler stub or weakened success assertion was added.
+
+Validation:
+- Facade (15) and framework (30) unit tests passed; the unrelated opt-in Node
+  fixture remains ignored by default. Output:
+  /tmp/ferrite-react-selection-unit-final.log.
+- The explicit CLI selection/inspect/transform/doctor regression passed in 4.82
+  seconds. Output: /tmp/ferrite-react-selection-cli.log.
+- Both generated React browser tests passed all four browser/language flows in
+  94.10 seconds, including state preservation, syntax recovery, frozen install,
+  build and preview, with Node absent from CLI PATH. Output:
+  /tmp/ferrite-react-selection-browsers.log.
+- Configuration/resolver (5), structural framework (6) and transform (6) tests
+  passed. Outputs: /tmp/ferrite-react-selection-config-resolver.log,
+  /tmp/ferrite-react-selection-framework-conformance.log,
+  /tmp/ferrite-react-selection-transforms-final.log.
+- The previous full serial workspace run verified all unchanged E2E crate
+  unit/integration targets: 585 passed, zero failures/ignored in 52 targets,
+  including the formerly timing-sensitive runner test. That run later stopped
+  at the obsolete remote expectation. Output:
+  /tmp/ferrite-auth-cancellation-workspace-serial.log.
+- Current remaining workspace validation, with E2E excluded because its unchanged
+  unit/integration targets were already executed above, passed 465 tests, zero
+  failures, 52 ignored in 87 targets. Exact command:
+  FERRITE_CHROMIUM_PATH=/home/meme/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome FERRITE_FIREFOX_PATH=/usr/bin/firefox FERRITE_E2E_REQUIRE_BOTH_BROWSERS=1 cargo test --workspace --exclude ferrite-e2e --locked -- --test-threads=1
+  Output: /tmp/ferrite-react-selection-workspace-complete.log. Ignored/unexecuted
+  feature/external-tool profiles do not establish support.
+- All four E2E documentation tests passed separately. Output:
+  /tmp/ferrite-react-selection-e2e-doc.log.
+- CLI rebuild, affected facade/framework/CLI and test all-target Clippy with
+  --locked -- -D warnings, formatting and diff checks passed. Outputs:
+  /tmp/ferrite-react-selection-build.log,
+  /tmp/ferrite-react-selection-clippy-final.log,
+  /tmp/ferrite-react-selection-test-clippy-final.log.
+
+This fixes standard adapter selection and reporting, not complete per-file/
+package JSX ownership or ambiguity enforcement. Experimental support labels,
+SSR/checker unavailability and the full remaining framework mission remain
+unchanged and active.
