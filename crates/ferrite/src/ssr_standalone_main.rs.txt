@@ -1,0 +1,49 @@
+//! Generated embedded renderer server. SDK sources are build-time only.
+mod assets;
+use axum::{extract::State, http::{HeaderMap, Method, StatusCode, Uri}, response::{IntoResponse, Response}};
+use std::sync::Arc;
+#[derive(Clone)]
+struct AppState { renderer: Arc<dyn ferrite::ssr::SsrAdapter>, base: String }
+#[tokio::main]
+async fn main() {
+    let runtime: ferrite::config::RuntimeConfig = serde_json::from_str(__RUNTIME_JSON__).expect("embedded runtime configuration");
+    let engine = Arc::new(ferrite::runtime::napi_vm::NapiVmRuntime::new(ferrite::runtime::napi_vm::NapiVmOptions {
+        queue_capacity: runtime.queue_capacity, max_request_bytes: runtime.max_request_bytes,
+        fuel_budget: runtime.fuel_budget, loop_budget: runtime.loop_budget,
+        max_call_depth: runtime.max_call_depth, max_jobs_per_drain: runtime.max_jobs_per_drain,
+        ..Default::default()
+    }));
+    let artifact = ferrite::SsrRendererArtifact::from_bytes(include_bytes!("renderer.json")).expect("embedded renderer artifact");
+    let (_, shell) = assets::get("/index.html").expect("embedded shell");
+    let base = format!("{}/", __BASE__.trim_end_matches('/'));
+    let renderer = artifact.into_adapter(engine, String::from_utf8(shell).expect("UTF-8 shell"), &base).expect("embedded renderer");
+    let app = axum::Router::new().fallback(handler).with_state(AppState { renderer, base });
+    let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".into());
+    let port = std::env::var("PORT").ok().and_then(|value| value.parse::<u16>().ok()).unwrap_or(8080);
+    let listener = tokio::net::TcpListener::bind(format!("{host}:{port}")).await.expect("bind standalone server");
+    println!("listening on http://{}", listener.local_addr().unwrap());
+    axum::serve(listener, app).await.expect("serve standalone app");
+}
+async fn handler(State(state): State<AppState>, method: Method, uri: Uri, headers: HeaderMap, body: axum::body::Bytes) -> Response {
+    let path = uri.path();
+    if state.base != "/" && (path == "/" || path == state.base.trim_end_matches('/')) {
+        let location = match uri.query() { Some(query) => format!("{}?{query}", state.base), None => state.base.clone() };
+        return (StatusCode::TEMPORARY_REDIRECT, [(axum::http::header::LOCATION, location)]).into_response();
+    }
+    let Some(relative) = path.strip_prefix(&state.base) else { return StatusCode::NOT_FOUND.into_response(); };
+    if relative == "server" || relative.starts_with("server/") { return StatusCode::NOT_FOUND.into_response(); }
+    if std::path::Path::new(relative).extension().is_none() {
+        let request_headers: Vec<_> = headers.iter().filter_map(|(name, value)| value.to_str().ok().map(|value| (name.to_string(), value.to_string()))).collect();
+        let request = ferrite::ssr::SsrHttpRequest { method: method.to_string(), uri: uri.to_string(), headers: request_headers.clone(), body: body.to_vec() };
+        let context = ferrite::ssr::SsrContext { url: uri.to_string(), headers: request_headers.into_iter().collect(), ..Default::default() };
+        return match state.renderer.render(request, context).await {
+            Ok(response) => ferrite::server::ssr_http_response(response, method == Method::HEAD),
+            Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+        };
+    }
+    if method != Method::GET && method != Method::HEAD { return (StatusCode::METHOD_NOT_ALLOWED, [(axum::http::header::ALLOW, "GET, HEAD")]).into_response(); }
+    match assets::get(&format!("/{relative}")) {
+        Some((mime, bytes)) => ([(axum::http::header::CONTENT_TYPE, mime)], if method == Method::HEAD { Vec::new() } else { bytes }).into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}

@@ -1,5 +1,34 @@
 # Framework support implementation status
 
+## Embedded standalone SSR scaffold with an explicit SDK
+
+The new library API `package::write_ssr_standalone` validates a versioned renderer
+artifact, shell, published styles, explicit SDK crate directory, embedded-assets
+selection, URL base, and explicitly selected napi-vm runtime before generating a
+Rust application. It embeds renderer bytes and public assets, reuses the existing
+rootless artifact adapter and HTTP response conversion, and forwards request
+metadata to the real renderer. SDK sources are build-time inputs only. Native
+addons and nonembedded SSR profiles fail explicitly. Existing CLI/build guards
+remain: this API is experimental and has not yet been wired to a configured SDK
+source in standalone CLI packaging. No installed-tool SDK path is inferred.
+
+Generated manifests now declare an independent workspace. Uncompressed embedding
+also resolves asset paths from `standalone/src` to the actual output directory.
+No configuration or lockfile migration is required by this library addition.
+
+Validation: `cargo test -p ferrite --lib --locked` passed 23 tests with one ignored;
+`cargo clippy -p ferrite --all-targets --locked -- -D warnings` passed. The fixture
+was generated with `FERRITE_STANDALONE_SSR_FIXTURE` set, then its independent Cargo
+manifest was built with `cargo build --offline`. The resulting Linux debug binary
+ran from an empty temporary directory with PATH empty. HTTP checks passed for
+meaningful GET/POST renderer HTML, status 202 and custom headers, empty HEAD body,
+embedded client JavaScript, base redirect, private renderer/outside-base 404s,
+and asset POST rejection. This tested a custom compiled renderer, not framework
+hydration. Release/cross-platform builds, SDK version/provenance validation,
+transactional scaffold replacement, automated generated-binary acceptance,
+CLI packaging, and framework SSR/hydration remain unfinished. The complete
+framework-support mission remains unfinished.
+
 ## Replacement compiled graphs remove omitted module registrations
 
 The embedded graph worker now records supplied graph IDs and removes all prior

@@ -398,15 +398,98 @@ pub fn write_standalone(out_dir: &Path, opts: &StandaloneOptions) -> Result<Stan
     {
         return Err(unsupported_ssr_standalone());
     }
+    write_standalone_scaffold(out_dir, opts, None)
+}
+
+struct SsrScaffold {
+    main: String,
+    dependency: String,
+    artifact: Vec<u8>,
+}
+
+/// Generate an embedded SSR standalone scaffold using an explicitly supplied
+/// Ferrite SDK crate checkout. SDK sources are needed only when building it.
+/// The resulting executable embeds the renderer and public assets.
+pub fn write_ssr_standalone(
+    out_dir: &Path,
+    opts: &StandaloneOptions,
+    sdk: &Path,
+    runtime: &ferrite_config::RuntimeConfig,
+    base: &str,
+) -> Result<StandaloneReport> {
+    if !opts.embed_assets {
+        return Err(FerriteError::Build(
+            "SSR standalone currently requires embed_assets = true".into(),
+        ));
+    }
+    if runtime.backend != "napi-vm" || !runtime.native_allow.is_empty() {
+        return Err(FerriteError::Build(
+            "SSR standalone requires an explicit napi-vm runtime without native addons".into(),
+        ));
+    }
+    if !base.starts_with('/')
+        || base.contains(['?', '#'])
+        || base.split('/').any(|part| matches!(part, "." | ".."))
+    {
+        return Err(FerriteError::Build(
+            "SSR standalone base must be an absolute URL path without traversal/query/fragment"
+                .into(),
+        ));
+    }
+    let sdk = sdk.canonicalize().map_err(|error| {
+        FerriteError::Build(format!(
+            "cannot locate explicit Ferrite SDK {}: {error}",
+            sdk.display()
+        ))
+    })?;
+    if !sdk.join("Cargo.toml").is_file() || !sdk.join("src/lib.rs").is_file() {
+        return Err(FerriteError::Build("explicit Ferrite SDK must be a crate source directory containing Cargo.toml and src/lib.rs".into()));
+    }
+    let artifact = crate::SsrRendererArtifact::read(&out_dir.join("server"))?;
+    let _ = std::fs::read_to_string(out_dir.join("index.html"))?;
+    for style in &artifact.stylesheets {
+        if !out_dir.join("ssr-assets").join(style).is_file() {
+            return Err(FerriteError::Build(format!(
+                "missing published SSR style `{style}`; rebuild SSR output"
+            )));
+        }
+    }
+    let runtime_json = serde_json::to_string(runtime).map_err(FerriteError::Json)?;
+    let main = include_str!("ssr_standalone_main.rs.txt")
+        .replace("__BASE__", &format!("{base:?}"))
+        .replace("__RUNTIME_JSON__", &format!("{runtime_json:?}"));
+    let dependency = format!(
+        "ferrite = {{ path = {}, features = [\"napi-vm\"] }}\nserde_json = \"1\"\n",
+        serde_json::to_string(&sdk.to_string_lossy()).map_err(FerriteError::Json)?
+    );
+    write_standalone_scaffold(
+        out_dir,
+        opts,
+        Some(SsrScaffold {
+            main,
+            dependency,
+            artifact: serde_json::to_vec(&artifact).map_err(FerriteError::Json)?,
+        }),
+    )
+}
+
+fn write_standalone_scaffold(
+    out_dir: &Path,
+    opts: &StandaloneOptions,
+    ssr: Option<SsrScaffold>,
+) -> Result<StandaloneReport> {
     let dir = out_dir.join(SCAFFOLD_DIR);
     // Never embed a previous scaffold into the next one.
+    let ssr_bytes = ssr.as_ref().map_or(0, |ssr| ssr.artifact.len() as u64);
+    let ssr_files = usize::from(ssr.is_some());
     let assets = collect_assets(out_dir)?;
     let bytes: u64 = assets
         .values()
         .map(|path| path.metadata().map(|meta| meta.len()).unwrap_or(0))
-        .sum();
+        .sum::<u64>()
+        + ssr_bytes;
     std::fs::create_dir_all(dir.join("src"))?;
-    let mut embedded_bytes = 0u64;
+    let mut embedded_bytes = ssr_bytes;
     if opts.embed_assets {
         let embed_dir = dir.join(".embed");
         if opts.compress_assets {
@@ -437,7 +520,7 @@ pub fn write_standalone(out_dir: &Path, opts: &StandaloneOptions) -> Result<Stan
                     })?
                     .to_string_lossy()
                     .replace('\\', "/");
-                entries.push((web.clone(), format!("../{rel}"), false));
+                entries.push((web.clone(), format!("../../{rel}"), false));
             }
         }
         std::fs::write(
@@ -445,11 +528,17 @@ pub fn write_standalone(out_dir: &Path, opts: &StandaloneOptions) -> Result<Stan
             render_assets_rs(&entries, opts.compress_assets),
         )?;
     }
-    std::fs::write(
-        dir.join("Cargo.toml"),
-        render_cargo_toml(opts.embed_assets, opts.embed_assets && opts.compress_assets),
-    )?;
-    std::fs::write(dir.join("src/main.rs"), render_main_rs(opts.embed_assets))?;
+    let mut cargo = render_cargo_toml(opts.embed_assets, opts.embed_assets && opts.compress_assets);
+    let main = if let Some(ssr) = ssr {
+        cargo.push_str(&ssr.dependency);
+        std::fs::write(dir.join("src/renderer.json"), &ssr.artifact)?;
+        ssr.main
+    } else {
+        render_main_rs(opts.embed_assets)
+    };
+    cargo.push_str("\n[workspace]\n");
+    std::fs::write(dir.join("Cargo.toml"), cargo)?;
+    std::fs::write(dir.join("src/main.rs"), main)?;
     let binary = match opts.target.as_deref() {
         Some(target) => {
             let built = cargo_build(&dir, target, opts.cargo.as_deref())?;
@@ -467,7 +556,7 @@ pub fn write_standalone(out_dir: &Path, opts: &StandaloneOptions) -> Result<Stan
     std::fs::write(dir.join("Dockerfile"), render_dockerfile(opts))?;
     Ok(StandaloneReport {
         dir,
-        files: assets.len(),
+        files: assets.len() + ssr_files,
         bytes,
         embedded_bytes,
         binary,
@@ -637,6 +726,55 @@ mod tests {
             error.to_string().contains("invalid target triple"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn ssr_scaffold_embeds_validated_artifact_with_explicit_sdk() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = std::env::var_os("FERRITE_STANDALONE_SSR_FIXTURE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| temp.path().to_path_buf());
+        std::fs::create_dir_all(fixture.join("server")).unwrap();
+        std::fs::write(
+            fixture.join("index.html"),
+            "<html><head></head><body><!--ssr-outlet--></body></html>",
+        )
+        .unwrap();
+        std::fs::write(fixture.join("client.js"), "globalThis.client = true;").unwrap();
+        let artifact = crate::SsrRendererArtifact {
+            version: 1, graph: ferrite_runtime::CompiledModuleGraph { entry: "/entry.js".into(), modules: vec![ferrite_runtime::CompiledModule {
+                id: "/entry.js".into(), code: "export function render(url, request) { return { html: `<h1>standalone ${request.method} ${url}</h1>`, status: 202, headers: [['x-renderer','standalone']] }; }".into(), url: None,
+            }] }, stylesheets: Vec::new(),
+        };
+        std::fs::write(
+            fixture.join("server/renderer.json"),
+            serde_json::to_vec(&artifact).unwrap(),
+        )
+        .unwrap();
+        let runtime = ferrite_config::RuntimeConfig {
+            backend: "napi-vm".into(),
+            ..Default::default()
+        };
+        let report = write_ssr_standalone(
+            &fixture,
+            &options(),
+            Path::new(env!("CARGO_MANIFEST_DIR")),
+            &runtime,
+            "/app/",
+        )
+        .unwrap();
+        assert_eq!(report.files, 3);
+        let main = std::fs::read_to_string(report.dir.join("src/main.rs")).unwrap();
+        assert!(
+            main.contains("include_bytes!(\"renderer.json\")") && main.contains("into_adapter")
+        );
+        assert!(!main.contains("__BASE__") && !main.contains("__RUNTIME_JSON__"));
+        let embedded = std::fs::read(report.dir.join("src/renderer.json")).unwrap();
+        crate::SsrRendererArtifact::from_bytes(&embedded).unwrap();
+        let assets = std::fs::read_to_string(report.dir.join("src/assets.rs")).unwrap();
+        assert!(!assets.contains("/server/"), "{assets}");
+        let cargo = std::fs::read_to_string(report.dir.join("Cargo.toml")).unwrap();
+        assert!(cargo.contains("features = [\"napi-vm\"]") && cargo.contains("[workspace]"));
     }
 
     #[test]
