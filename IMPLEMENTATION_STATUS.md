@@ -1414,3 +1414,35 @@ transforms and actual React DOM renderer/browser state tests remain assigned.
 Other ignored compiler/browser fixtures were not executed for this change and
 do not add evidence. React remains unavailable as a complete advertised create
 profile; no support status is promoted. The full mission remains active.
+
+### Validate an explicit foreign factory/hook subset
+
+`NodeAdapterHost::register_hook_plugin` now evaluates one default factory/object
+or named-hook module with explicit JSON factory options. It validates supported
+`resolveId`, `load` and `transform` declarations, including unordered `{handler}`
+objects. Resolve calls preserve importer/options, and load/transform preserve
+options. Missing optional hooks return null, while malformed hooks, required
+unsupported properties/lifecycle hooks, arrays, order/filter metadata and plugin
+context access fail with actionable errors. Calling an unconfigured default
+factory through the old named-export hook path now fails rather than silently
+skipping it. Separate typed-export compiler registration is preserved.
+
+Validation: plugin tests passed 15 default tests; all three explicitly executed
+real-Node tests passed, including async factory/options, persistent state,
+importer/options, hook objects, context failure, unsupported lifecycle/metadata,
+typed compiler calls, protocol/log isolation, timeout and cancellation. Commands:
+`cargo test -p ferrite-plugin --locked` and
+`cargo test -p ferrite-plugin --locked real_node -- --ignored --nocapture`.
+Outputs: `/tmp/ferrite-hook-subset.log` and
+`/tmp/ferrite-hook-subset-node.log`. Plugin all-target Clippy with
+`--locked -- -D warnings`, formatting and diff checks passed.
+The actual project-matched Vue/Svelte client/server/runes compiler fixture also
+passed through the same transport: `FERRITE_COMPILER_FIXTURE=/tmp/ferrite-real-install-45z_otrh
+cargo test -p ferrite-frameworks --test compiler_host --locked -- --ignored --nocapture`.
+Output: `/tmp/ferrite-hook-subset-compilers.log`.
+
+README documents this bounded contract. This is not complete Vite/Rollup support
+or a Node sandbox. Ordered hooks, host context resolution/watch/asset methods,
+configuration/server/HMR lifecycle integration and registration through CLI
+configuration remain assigned. No lock/config/cache migration or framework
+support promotion; the full mission remains active.

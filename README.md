@@ -204,14 +204,22 @@ imports — plus the items below.
   module with `$f{index}$`-prefixed locals, bailing out to chunked
   output for graphs it cannot prove safe (namespaces, `eval`, etc.).
 - **React / Vue / Svelte.** `ferrite-frameworks` ships a React plugin
-  (dev-only refresh preamble/footer) plus experimental Vue/Svelte
-  single-file-component splitting (script/style blocks; template
-  compilation is an explicit stub). Enabled by default in the CLI.
+  with partial dev-only Refresh instrumentation. Experimental Vue 3.5.22 and
+  Svelte 5.39.6 compilation uses their official project-matched compilers on
+  the explicitly enabled Node compiler host. Client templates are exercised
+  in Chromium/Firefox; server compilation alone does not establish SSR rendering.
+  Complete React Refresh and framework SSR profiles remain unavailable.
 - **Tier-3 Node adapter.** `ferrite_plugin::NodeAdapterHost` hosts
   foreign ESM plugins in a real Node.js over JSON-lines stdio
-  (`resolveId`/`load`/`transform(code, id)` Vite-like signatures, `null`
-  = skip). Node is never spawned unless configured; guest throws,
-  unknown plugins, and missing binaries all fail loudly.
+  (`null` = skip). `register_hook_plugin` validates an explicit subset:
+  one factory/object with JSON options, `resolveId(id, importer, options)`,
+  `load(id, options)` and `transform(code, id, options)`, including unordered
+  `{handler}` hooks. Unsupported hooks, ordering/filter metadata and plugin
+  context methods fail loudly. `register_plugin`/`call_export` remains the
+  separate typed-export worker contract used by compilers. This bridge does
+  not provide complete Vite/Rollup compatibility or a Node sandbox. Node is
+  never spawned unless configured; guest throws, unknown plugins and missing
+  binaries fail loudly.
 - **Markdown docs + vendored utility CSS.** `ferrite-docs` turns `.md`
   files into JS modules exporting rendered HTML; `ferrite-tailwind`
   compiles `ferrite:tailwind.css` from project content using the

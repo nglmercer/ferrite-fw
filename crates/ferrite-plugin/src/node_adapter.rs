@@ -138,9 +138,30 @@ impl NodeAdapterHost {
 
     /// Register `entry` (file path or `file://` URL) under `name`.
     pub fn register_plugin(&self, name: &str, entry: &str) -> Result<()> {
+        self.register(name, entry, None)
+    }
+
+    /// Register one default factory/object or named-hook module in the validated
+    /// resolveId/load/transform subset. Factories receive explicit JSON options once. Required
+    /// unsupported hooks/metadata fail registration; no Vite compatibility claim.
+    pub fn register_hook_plugin(
+        &self,
+        name: &str,
+        entry: &str,
+        options: serde_json::Value,
+    ) -> Result<()> {
+        self.register(name, entry, Some(options))
+    }
+
+    fn register(&self, name: &str, entry: &str, options: Option<serde_json::Value>) -> Result<()> {
+        let profile = if options.is_some() {
+            "hooks"
+        } else {
+            "exports"
+        };
         let response = self
             .inner
-            .request(serde_json::json!({"cmd": "register", "name": name, "entry": entry}))?;
+            .request(serde_json::json!({"cmd": "register", "name": name, "entry": entry, "profile": profile, "options": options}))?;
         if !response.ok {
             return Err(FerriteError::Build(format!(
                 "tier-3 node adapter: cannot register `{name}`: {}",
@@ -644,6 +665,131 @@ mod tests {
             .unwrap();
         assert_eq!(miss, serde_json::Value::Null);
     }
+    #[tokio::test]
+    #[ignore = "requires real Node; executed explicitly"]
+    async fn real_node_validates_factory_hooks_and_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = dir.path().join("factory.mjs");
+        std::fs::write(&entry, r#"
+export default async function(options) {
+  let calls = 0;
+  return {
+    name: 'factory',
+    resolveId: {handler(id, importer, context) { return {id, importer, context, prefix: options.prefix, calls: ++calls}; }},
+    load(id, context) { return {id, context}; },
+    transform(code, id, context) { if (code === 'watch') return this.addWatchFile('dependency'); return {code: options.prefix + code, id, context, calls: ++calls}; }
+  };
+}
+"#).unwrap();
+        let host = NodeAdapterHost::spawn(None).unwrap();
+        host.register_hook_plugin(
+            "factory",
+            &entry.to_string_lossy(),
+            serde_json::json!({"prefix": "prefix:"}),
+        )
+        .unwrap();
+        let handle = PluginHandle {
+            name: "factory".into(),
+            host: "node-adapter".into(),
+        };
+        let result = host
+            .call_hook(
+                &handle,
+                HookName::ResolveId,
+                serde_json::json!({"id":"child", "importer":"/parent.js", "options":{"ssr":true}}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            result,
+            serde_json::json!({"id":"child", "importer":"/parent.js", "context":{"ssr":true}, "prefix":"prefix:", "calls":1})
+        );
+        let result = host
+            .call_hook(
+                &handle,
+                HookName::Transform,
+                serde_json::json!({"code":"source", "id":"/parent.js", "options":{"ssr":false}}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            result,
+            serde_json::json!({"code":"prefix:source", "id":"/parent.js", "context":{"ssr":false}, "calls":2})
+        );
+        let result = host
+            .call_hook(
+                &handle,
+                HookName::Load,
+                serde_json::json!({"id":"/parent.js", "options":{"ssr":true}}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            result,
+            serde_json::json!({"id":"/parent.js", "context":{"ssr":true}})
+        );
+        let error = host
+            .call_hook(
+                &handle,
+                HookName::Transform,
+                serde_json::json!({"code":"watch", "id":"/parent.js"}),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("this.addWatchFile"), "{error}");
+        assert_eq!(
+            host.call_hook(&handle, HookName::GenerateBundle, serde_json::Value::Null)
+                .await
+                .unwrap(),
+            serde_json::Value::Null
+        );
+        for (index, source, expected) in [
+            (
+                0,
+                "export default () => ({transform: {order: 'pre', handler() {}}});",
+                "order",
+            ),
+            (1, "export default {buildStart() {}};", "buildStart"),
+            (2, "export default {transform: 42};", "invalid hook"),
+            (3, "export default () => [];", "arrays"),
+            (
+                4,
+                "export default {transform: {filter: {}, handler() {}}};",
+                "filter",
+            ),
+            (
+                5,
+                "export default {configureServer() {}};",
+                "configureServer",
+            ),
+        ] {
+            let bad = dir.path().join(format!("bad-{index}.mjs"));
+            std::fs::write(&bad, source).unwrap();
+            let error = host
+                .register_hook_plugin("bad", &bad.to_string_lossy(), serde_json::Value::Null)
+                .unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+        host.register_plugin("unconfigured", &entry.to_string_lossy())
+            .unwrap();
+        let error = host
+            .call_hook(
+                &PluginHandle {
+                    name: "unconfigured".into(),
+                    host: "node-adapter".into(),
+                },
+                HookName::Transform,
+                serde_json::Value::Null,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("register_hook_plugin"),
+            "{error}"
+        );
+        host.shutdown();
+    }
+
     #[tokio::test]
     #[ignore = "requires real Node; executed explicitly"]
     async fn real_node_typed_exports_logs_timeout_and_cancellation() {
