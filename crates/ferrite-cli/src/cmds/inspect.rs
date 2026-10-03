@@ -46,6 +46,7 @@ pub(crate) async fn inspect(
                 "build": { "outDir": resolved.build.out_dir, "minify": resolved.build.minify, "target": resolved.build.target },
                 "compiler": resolved.compiler.engine,
                 "framework": resolved.framework,
+                "react": resolved.react,
                 "ssrRuntime": resolved.runtime.backend,
                 "plugins": plugins,
                 "lockfileVersion": lock.version,

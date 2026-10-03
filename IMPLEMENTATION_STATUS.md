@@ -805,3 +805,40 @@ programmatic reset to automatic/Refresh-enabled from an unset default; complete
 presence-aware configuration remains assigned. Per-file/package JSX ownership,
 complete React Refresh, adapter runtime/browser conformance, framework HMR,
 checkers and real SSR remain unfinished. The complete goal remains active.
+
+### Explicit default React configuration overrides
+
+React configuration now retains whether runtime and Refresh were explicitly set.
+A local/programmatic overlay selecting automatic JSX or enabling Refresh overrides
+inherited classic/disabled settings; an unset default overlay still inherits.
+Changing runtime clears inherited factory/fragment or import-source settings for
+the other runtime, while contradictory options explicitly supplied in the same
+profile still fail validation. JSON serialization/deserialization preserves
+explicit resets without making unset defaults explicit. Unknown React fields now
+fail parsing rather than silently losing misspelled settings.
+
+Rust callers can use `react.set_runtime("automatic")` and
+`react.set_refresh(true)` to express resets to defaults; existing nondefault
+field assignments continue to merge. `inspect --json` includes React configuration
+so selected JSX settings are reviewable.
+
+Validation:
+
+- `cargo test -p ferrite-config -p ferrite-cli --locked`: 25 configuration and
+  15 CLI tests passed, plus the config documentation test. Final config rerun
+  passed after test initializer cleanup. Regression covers explicit default
+  overrides, unset inheritance, both runtime switches, JSON round trips, Rust
+  setters and unknown-field rejection.
+- `cargo clippy -p ferrite-cli --all-targets --locked -- -D warnings`: passed
+  after final changes. Formatting/diff checks passed.
+- Fresh actual CLI build: main classic/Refresh-disabled config plus explicit
+  automatic/Refresh-enabled local config reported the reset and cleared inherited
+  classic options; an empty local React section preserved main settings.
+
+Migration: external ReactConfig struct literals now need default construction
+and public field assignments/setters because presence metadata is private.
+Serialized unset React defaults may be omitted; deserialization retains their
+existing automatic/Refresh-enabled effective values. This resolves the recorded
+runtime/Refresh reset limitation, not complete presence handling for other config
+sections or React Refresh conformance. SSR, JSX ownership, HMR, checkers and the
+remaining framework mission are still unfinished and active.

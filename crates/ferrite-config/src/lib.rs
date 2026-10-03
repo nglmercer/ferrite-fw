@@ -389,9 +389,8 @@ impl Default for PackageConfig {
     }
 }
 
-/// React plugin options (§69).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
+/// React plugin options (§69). Setters record explicit resets to default values.
+#[derive(Debug, Clone)]
 pub struct ReactConfig {
     /// Enable React Refresh.
     pub refresh: bool,
@@ -403,16 +402,78 @@ pub struct ReactConfig {
     pub factory: Option<String>,
     /// Classic JSX fragment factory.
     pub fragment: Option<String>,
+    explicit_runtime: bool,
+    explicit_refresh: bool,
 }
 
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct ReactConfigFields {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refresh: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    runtime: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    import_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    factory: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fragment: Option<String>,
+}
+impl<'de> serde::Deserialize<'de> for ReactConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let fields = ReactConfigFields::deserialize(deserializer)?;
+        Ok(Self {
+            explicit_runtime: fields.runtime.is_some(),
+            explicit_refresh: fields.refresh.is_some(),
+            runtime: fields.runtime.unwrap_or_else(|| "automatic".into()),
+            refresh: fields.refresh.unwrap_or(true),
+            import_source: fields.import_source,
+            factory: fields.factory,
+            fragment: fields.fragment,
+        })
+    }
+}
+impl serde::Serialize for ReactConfig {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        ReactConfigFields {
+            runtime: (self.explicit_runtime || self.runtime != "automatic")
+                .then(|| self.runtime.clone()),
+            refresh: (self.explicit_refresh || !self.refresh).then_some(self.refresh),
+            import_source: self.import_source.clone(),
+            factory: self.factory.clone(),
+            fragment: self.fragment.clone(),
+        }
+        .serialize(serializer)
+    }
+}
+impl ReactConfig {
+    /// Select a runtime explicitly, including resetting an inherited classic runtime.
+    pub fn set_runtime(&mut self, runtime: impl Into<String>) {
+        self.runtime = runtime.into();
+        self.explicit_runtime = true;
+    }
+    /// Select Refresh explicitly, including re-enabling an inherited disabled setting.
+    pub fn set_refresh(&mut self, refresh: bool) {
+        self.refresh = refresh;
+        self.explicit_refresh = true;
+    }
+}
 impl Default for ReactConfig {
     fn default() -> Self {
         Self {
             refresh: true,
-            runtime: "automatic".to_string(),
+            runtime: "automatic".into(),
             import_source: None,
             factory: None,
             fragment: None,
+            explicit_runtime: false,
+            explicit_refresh: false,
         }
     }
 }
@@ -902,10 +963,22 @@ pub fn merge_user_config(mut base: UserConfig, over: UserConfig) -> UserConfig {
     base.node_compat = over.node_compat;
     base.remote = over.remote;
     base.package = over.package;
-    if over.react.runtime != ReactConfig::default().runtime {
+    if over.react.explicit_runtime || over.react.runtime != ReactConfig::default().runtime {
+        if base.react.runtime != over.react.runtime {
+            if over.react.runtime == "automatic" {
+                base.react.factory = None;
+                base.react.fragment = None;
+            } else if over.react.runtime == "classic" {
+                base.react.import_source = None;
+            }
+        }
         base.react.runtime = over.react.runtime;
+        base.react.explicit_runtime = true;
     }
-    base.react.refresh &= over.react.refresh;
+    if over.react.explicit_refresh || !over.react.refresh {
+        base.react.refresh = over.react.refresh;
+        base.react.explicit_refresh = true;
+    }
     if over.react.import_source.is_some() {
         base.react.import_source = over.react.import_source;
     }
@@ -1282,6 +1355,58 @@ pub fn resolve_config(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn explicit_default_jsx_values_override_inheritance_and_survive_roundtrips() {
+        let base: UserConfig = toml::from_str("[react]\nruntime = 'classic'\nfactory = 'UI.h'\nfragment = 'UI.Fragment'\nrefresh = false").unwrap();
+        let overlay: UserConfig = toml::from_str(
+            "[react]\nruntime = 'automatic'\nrefresh = true\nimport_source = 'selected-runtime'",
+        )
+        .unwrap();
+        let merged = merge_user_config(base.clone(), overlay);
+        assert_eq!(merged.react.runtime, "automatic");
+        assert!(merged.react.refresh);
+        assert!(merged.react.factory.is_none() && merged.react.fragment.is_none());
+        assert_eq!(
+            merged.react.import_source.as_deref(),
+            Some("selected-runtime")
+        );
+        let inherited = merge_user_config(merged, UserConfig::default());
+        assert_eq!(inherited.react.runtime, "automatic");
+        assert!(inherited.react.refresh);
+        let explicit: ReactConfig =
+            serde_json::from_str(r#"{"runtime":"automatic","refresh":true}"#).unwrap();
+        let explicit: ReactConfig =
+            serde_json::from_str(&serde_json::to_string(&explicit).unwrap()).unwrap();
+        let overlay = UserConfig {
+            react: explicit,
+            ..Default::default()
+        };
+        let merged = merge_user_config(base.clone(), overlay);
+        assert_eq!(merged.react.runtime, "automatic");
+        assert!(merged.react.refresh);
+        let unset: ReactConfig =
+            serde_json::from_str(&serde_json::to_string(&ReactConfig::default()).unwrap()).unwrap();
+        let overlay = UserConfig {
+            react: unset,
+            ..Default::default()
+        };
+        let merged = merge_user_config(base.clone(), overlay);
+        assert_eq!(merged.react.runtime, "classic");
+        assert!(!merged.react.refresh);
+        let mut overlay = UserConfig::default();
+        overlay.react.set_runtime("automatic");
+        overlay.react.set_refresh(true);
+        let merged = merge_user_config(base, overlay);
+        assert_eq!(merged.react.runtime, "automatic");
+        assert!(merged.react.refresh);
+        let base: UserConfig = toml::from_str("[react]\nimport_source = 'other'").unwrap();
+        let overlay: UserConfig = toml::from_str("[react]\nruntime = 'classic'").unwrap();
+        let merged = merge_user_config(base, overlay);
+        assert!(merged.react.import_source.is_none());
+        assert!(resolve_config(merged, None, Default::default()).is_ok());
+        assert!(toml::from_str::<UserConfig>("[react]\nmisspelled = true").is_err());
+    }
+
     #[test]
     fn jsx_file_settings_survive_default_overlay_and_invalid_profiles_fail() {
         let file: UserConfig = toml::from_str("[react]\nruntime = 'classic'\nfactory = 'UI.h'\nfragment = 'UI.Fragment'\nrefresh = false").unwrap();
