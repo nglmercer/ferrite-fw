@@ -9,12 +9,14 @@ pub mod node_adapter;
 
 mod builtin;
 mod container;
+mod foreign;
 mod host;
 mod plugin;
 mod types;
 
 pub use builtin::RawTextPlugin;
 pub use container::PluginContainer;
+pub use foreign::ForeignHookPlugin;
 pub use host::{is_virtual_id, to_virtual_id, ForeignPluginHost, HookName, PluginHandle};
 pub use plugin::Plugin;
 pub use types::{

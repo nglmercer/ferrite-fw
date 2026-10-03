@@ -220,6 +220,15 @@ imports — plus the items below.
   not provide complete Vite/Rollup compatibility or a Node sandbox. Node is
   never spawned unless configured; guest throws, unknown plugins and missing
   binaries fail loudly.
+  For library pipelines, `ForeignHookPlugin::register(Arc<NodeAdapterHost>,
+  name, entry_path, json_options)` returns a native `Plugin` adapter. Resolve
+  results accept a string or `{id, external, sideEffects, moduleType, meta}`;
+  load/transform accept code strings or `{code, map, dependencies, moduleType}`
+  (load also accepts `sideEffects`). `moduleType` uses Ferrite enum names such
+  as `Js`/`Ts`; dependencies are filesystem paths. Unknown result fields and
+  invalid maps fail. Transform side-effect overrides are currently unsupported.
+  Changing the entry requires recreating its host/registration; transitive
+  plugin imports are not yet tracked automatically.
 - **Markdown docs + vendored utility CSS.** `ferrite-docs` turns `.md`
   files into JS modules exporting rendered HTML; `ferrite-tailwind`
   compiles `ferrite:tailwind.css` from project content using the

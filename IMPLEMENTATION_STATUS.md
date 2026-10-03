@@ -1446,3 +1446,48 @@ or a Node sandbox. Ordered hooks, host context resolution/watch/asset methods,
 configuration/server/HMR lifecycle integration and registration through CLI
 configuration remain assigned. No lock/config/cache migration or framework
 support promotion; the full mission remains active.
+
+### Connect validated foreign hooks to the shared pipeline
+
+The public `ForeignHookPlugin` adapter now implements native resolve/load/
+transform hooks on an explicitly supplied persistent Node host. It preserves
+importer/environment/options context, code, source maps, filesystem dependencies,
+module types, resolution metadata and load/resolution side effects. Result
+decoding rejects unknown fields and invalid maps. Transform side-effect overrides
+are explicitly unavailable because the native transform result cannot preserve
+them. There is no implicit Node startup or host substitution.
+
+Cache identity includes the entry source and factory options. Entry changes cause
+a cache miss and an actionable worker/registration restart error. Re-registering
+an already loaded hook entry or replacing an active hook registration on the same
+worker fails, avoiding Node module-cache reuse with changed code. The README
+documents result fields and current limitations.
+
+Validation:
+
+- `cargo test -p ferrite-plugin -p ferrite-server --locked`: 17 plugin and
+  44 server tests passed. New decoder tests require unknown metadata and invalid
+  maps to fail; object and string maps retain equivalent content. Output:
+  `/tmp/ferrite-foreign-pipeline-unit.log`.
+- Explicit real-Node `foreign_factory_hooks_participate_in_the_shared_pipeline`
+  passed with both default and SWC builds. Each test exercises dev and production
+  configurations, a generated module, importer/options, final dependency graph,
+  chained original source maps, watched dependencies, side effects, entry-change
+  cache invalidation and explicit failure on stale worker reuse. Commands:
+  `cargo test -p ferrite-server --locked foreign_factory_hooks -- --ignored --nocapture`
+  and the same command with `--features swc`. Outputs:
+  `/tmp/ferrite-foreign-pipeline.log` and `/tmp/ferrite-foreign-pipeline-swc.log`.
+- All three explicitly executed real-Node transport tests passed
+  (`/tmp/ferrite-foreign-pipeline-node.log`). Plugin/server all-target Clippy
+  with `--locked -- -D warnings`, formatting and diff checks passed.
+- The actual project-matched Vue/Svelte client/server/runes compiler fixture
+  passed through the changed worker transport using `FERRITE_COMPILER_FIXTURE`
+  and the ignored `compiler_host` test (`/tmp/ferrite-foreign-pipeline-compilers.log`).
+
+Cargo.lock adds the plugin crate's edge to the existing pinned source-map crate;
+no package versions, Ferrite lock/config schemas or global pipeline cache version
+change. CLI plugin configuration, transitive plugin-import tracking, path-alias
+registration deduplication, automatic worker reload, context methods and lifecycle
+integration remain assigned. These Rust pipeline fixtures do not establish browser,
+bundled-output or SSR rendering compatibility. No framework status is promoted;
+the full mission remains active.

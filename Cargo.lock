@@ -1084,6 +1084,7 @@ dependencies = [
  "ferrite-resolver",
  "ferrite-runtime",
  "ferrite-transform",
+ "oxc_sourcemap",
  "regex",
  "serde",
  "serde_json",

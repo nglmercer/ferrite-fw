@@ -12,6 +12,7 @@ const protocolWrite = process.stdout.write.bind(process.stdout);
 process.stdout.write = process.stderr.write.bind(process.stderr);
 const plugins = new Map();
 const hookPlugins = new Map();
+const registeredEntries = new Set();
 const supportedHooks = new Set(['resolveId', 'load', 'transform']);
 function hookHandler(value, name) {
   if (value == null) return null;
@@ -37,6 +38,10 @@ function respond(id, ok, result, error) {
 }
 
 async function register(id, name, entry, profile, options) {
+  if (hookPlugins.has(name) || (profile === 'hooks' && registeredEntries.has(entry))) {
+    throw new Error(`hook plugin ${name} is already registered or its entry was loaded; recreate the explicit Node host to change registrations`);
+  }
+  registeredEntries.add(entry);
   const module = await import(entry);
   let plugin;
   if (profile === 'hooks') {

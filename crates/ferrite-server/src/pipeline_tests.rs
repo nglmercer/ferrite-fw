@@ -1107,3 +1107,128 @@ source = "npm"
         server.close();
     }
 }
+
+#[tokio::test]
+#[ignore = "requires explicit real Node hook host; executed separately"]
+async fn foreign_factory_hooks_participate_in_the_shared_pipeline() {
+    for production in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("entry.js"),
+            "import { value } from 'generated'; console.log(value);",
+        )
+        .unwrap();
+        std::fs::write(
+            root.path().join("dependency.js"),
+            "export const dependency = 42;",
+        )
+        .unwrap();
+        let entry = root.path().join("plugin.mjs");
+        std::fs::write(&entry, r#"
+export default options => ({
+  name: 'pipeline-fixture',
+  resolveId(id, importer, context) {
+    if (id !== 'generated' && id !== '/generated.js') return null;
+    if ((id === 'generated' && importer !== '/entry.js') || context.ssr !== false) throw new Error('missing resolution context');
+    return {id: '/generated.js', moduleType: 'Js', sideEffects: false, meta: {fixture: true}};
+  },
+  load(id, context) {
+    if (id !== '/generated.js') return null;
+    if (context.ssr !== false) throw new Error('missing load context');
+    return {code: "import { dependency } from './dependency.js'; export const value = dependency;", moduleType: 'Js', dependencies: ['dependency.js'], sideEffects: false,
+      map: {version: 3, sources: ['original.js'], sourcesContent: ['export const value = 42;'], names: [], mappings: 'AAAA'}};
+  },
+  transform: {handler(code, id, context) {
+    if (id !== '/generated.js') return null;
+    if (context.ssr !== false) throw new Error('missing transform context');
+    return {code: code + '\nexport const profile = ' + JSON.stringify(options.profile) + ';', dependencies: ['plugin.mjs'],
+      map: {version: 3, sources: [id], sourcesContent: [code], names: [], mappings: 'AAAA'}};
+  }}
+});
+"#).unwrap();
+        let host = std::sync::Arc::new(
+            ferrite_plugin::node_adapter::NodeAdapterHost::spawn(None).unwrap(),
+        );
+        let plugin = ferrite_plugin::ForeignHookPlugin::register(
+            host.clone(),
+            "fixture",
+            &entry,
+            serde_json::json!({"profile":"official-hook-subset"}),
+        )
+        .unwrap();
+        let mut config = ferrite_config::resolve_config(
+            Default::default(),
+            Some(root.path().into()),
+            Default::default(),
+        )
+        .unwrap();
+        config.is_production = production;
+        let server = DevServer::new(config, vec![std::sync::Arc::new(plugin)])
+            .await
+            .unwrap();
+        let result = server
+            .pipeline_module(&ModuleId::new("/entry.js"), None, "client")
+            .await
+            .unwrap();
+        assert!(result.code.contains("/generated.js"));
+        let generated = server
+            .pipeline_module(&ModuleId::new("/generated.js"), None, "client")
+            .await
+            .unwrap();
+        assert!(generated.code.contains("official-hook-subset"));
+        assert!(generated.code.contains("/dependency.js"));
+        assert!(generated
+            .dependencies
+            .iter()
+            .any(|path| path.ends_with("dependency.js")));
+        assert!(generated
+            .dependencies
+            .iter()
+            .any(|path| path.ends_with("plugin.mjs")));
+        assert!(generated.map.is_some());
+        let map =
+            oxc_sourcemap::SourceMap::from_json_string(generated.map.as_ref().unwrap()).unwrap();
+        assert!(map
+            .get_sources()
+            .any(|source| source.ends_with("original.js")));
+        assert_eq!(generated.side_effects, Some(false));
+        let node = server
+            .inner
+            .graph
+            .get(&ModuleId::new("/generated.js"))
+            .unwrap();
+        assert!(node
+            .imports
+            .iter()
+            .any(|edge| edge.resolved == ModuleId::new("/dependency.js")));
+        let cache_identity = server.inner.plugins.cache_key();
+        std::fs::write(
+            &entry,
+            "export default {transform() { return 'changed'; }};",
+        )
+        .unwrap();
+        assert_ne!(cache_identity, server.inner.plugins.cache_key());
+        let replacement = ferrite_plugin::ForeignHookPlugin::register(
+            host.clone(),
+            "replacement",
+            &entry,
+            serde_json::Value::Null,
+        );
+        assert!(
+            replacement.is_err(),
+            "re-registering the entry must not reuse Node's cached module"
+        );
+        let error = server
+            .pipeline_module(&ModuleId::new("/generated.js"), None, "client")
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("recreate its explicit Node host"),
+            "{error}"
+        );
+        server.close();
+        host.shutdown();
+    }
+}
