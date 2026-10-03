@@ -3,7 +3,100 @@ use ferrite_config::ResolvedConfig;
 use ferrite_core::Result;
 use ferrite_npm::{JsPackageJson, Lockfile};
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+
+pub const JSX_SCAN_SCOPE: &str = "ownership only for project JSX/TSX files; excludes symlink sources and generated/public directories; package/host execution and custom plugin lowering are unverified";
+
+#[derive(Debug, Serialize)]
+pub struct JsxOwnershipReport {
+    pub manifest: Option<PathBuf>,
+    pub files: Vec<PathBuf>,
+    pub manifest_error: Option<String>,
+    #[serde(flatten)]
+    pub ownership: crate::registry::JsxOwnership,
+}
+
+/// Read source-file ownership without loading any compiler or executing plugins.
+pub fn inspect_jsx_ownership(config: &ResolvedConfig) -> Result<Vec<JsxOwnershipReport>> {
+    let mut queue = vec![config.root.clone()];
+    let output = config.root.join(&config.build.out_dir);
+    let mut groups: BTreeMap<Option<PathBuf>, Vec<PathBuf>> = BTreeMap::new();
+    while let Some(directory) = queue.pop() {
+        for entry in std::fs::read_dir(&directory)? {
+            let entry = entry?;
+            let kind = entry.file_type()?;
+            let path = entry.path();
+            if kind.is_symlink() {
+                continue;
+            }
+            if kind.is_dir() {
+                if path == output
+                    || matches!(
+                        entry.file_name().to_str(),
+                        Some(".git" | ".ferrite" | "node_modules" | "target" | "dist" | "public")
+                    )
+                {
+                    continue;
+                }
+                queue.push(path);
+            } else if kind.is_file()
+                && matches!(
+                    path.extension().and_then(|extension| extension.to_str()),
+                    Some("jsx" | "tsx")
+                )
+            {
+                let manifest = crate::registry::jsx_manifest_candidates(&config.root, &path)
+                    .into_iter()
+                    .find(|manifest| manifest.exists());
+                groups.entry(manifest).or_default().push(
+                    path.strip_prefix(&config.root)
+                        .unwrap_or(&path)
+                        .to_path_buf(),
+                );
+            }
+        }
+    }
+    let mut reports = Vec::new();
+    for (manifest, mut files) in groups {
+        files.sort();
+        let mut manifest_error = None;
+        let value = match &manifest {
+            Some(path) => {
+                let parsed = std::fs::read_to_string(path)
+                    .map_err(ferrite_core::FerriteError::from)
+                    .and_then(|source| {
+                        serde_json::from_str(&source).map_err(|error| {
+                            ferrite_core::FerriteError::Config(format!(
+                                "cannot inspect JSX owner in {}: {error}",
+                                path.display()
+                            ))
+                        })
+                    });
+                match parsed {
+                    Ok(value) => value,
+                    Err(error)
+                        if config.framework.is_some()
+                            || config.react.import_source.is_some()
+                            || config.react.factory.is_some() =>
+                    {
+                        manifest_error = Some(error.to_string());
+                        serde_json::Value::Null
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            None => serde_json::Value::Null,
+        };
+        reports.push(JsxOwnershipReport {
+            manifest,
+            files,
+            manifest_error,
+            ownership: crate::registry::jsx_ownership(config, &value),
+        });
+    }
+    Ok(reports)
+}
 
 #[derive(Debug, Serialize)]
 pub struct Issue {
@@ -38,6 +131,8 @@ pub struct DoctorReport {
     pub editor_view: &'static str,
     pub frameworks: Vec<FrameworkReport>,
     pub foreign_plugins: Vec<serde_json::Value>,
+    pub jsx_ownership_scope: &'static str,
+    pub jsx_ownership: Vec<JsxOwnershipReport>,
     pub issues: Vec<Issue>,
 }
 
@@ -57,6 +152,22 @@ pub fn inspect(config: &ResolvedConfig) -> Result<DoctorReport> {
         explicit.and_then(|profile| profile.node.as_deref()),
     );
     let mut issues = Vec::new();
+    let jsx_ownership = inspect_jsx_ownership(config)?;
+    for report in &jsx_ownership {
+        if let Some(error) = &report.manifest_error {
+            issues.push(Issue { severity: "warning", message: format!("JSX owner manifest could not be inspected: {error}; explicit selection governs lowering"), action: "correct the manifest before dependency installation; explicit JSX selection does not validate dependency manifests".into() });
+        }
+        if matches!(
+            report.ownership.status,
+            "unowned" | "ambiguous" | "unavailable"
+        ) {
+            issues.push(Issue {
+                severity: if config.foreign_plugins.iter().flatten().next().is_some() { "warning" } else { "error" },
+                message: format!("{} native JSX ownership for {} source files in {} ({})", report.ownership.status, report.files.len(), report.manifest.as_ref().map(|path| path.display().to_string()).unwrap_or_else(|| config.root.display().to_string()), report.ownership.declared_owners.join(", ")),
+                action: "select framework.enabled = [\"react\"] with compiler_host = \"native\", or provide and execute a framework plugin that lowers JSX to JavaScript; custom lowering is not validated by doctor".into(),
+            });
+        }
+    }
     let mut foreign_plugins = Vec::new();
     for profile in config.foreign_plugins.iter().flatten() {
         let entry = config.root.join(&profile.entry);
@@ -273,6 +384,8 @@ pub fn inspect(config: &ResolvedConfig) -> Result<DoctorReport> {
         editor_view,
         frameworks,
         foreign_plugins,
+        jsx_ownership_scope: JSX_SCAN_SCOPE,
+        jsx_ownership,
         issues,
     })
 }
@@ -326,6 +439,103 @@ mod tests {
             });
         }
         resolve_config(user, Some(root.to_path_buf()), CliOverrides::default()).unwrap()
+    }
+    #[test]
+    fn jsx_scan_reports_nearest_packages_and_explicit_overrides() {
+        let root = tempfile::tempdir().unwrap();
+        for file in [
+            "src/b.tsx",
+            "src/a.jsx",
+            "packages/widget/view.tsx",
+            "node_modules/fake/view.jsx",
+            "dist/view.jsx",
+            "public/view.jsx",
+            "release/view.jsx",
+        ] {
+            let file = root.path().join(file);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, "export const View = () => <div />;").unwrap();
+        }
+        std::fs::write(
+            root.path().join("package.json"),
+            r#"{"dependencies":{"react":"19","solid-js":"1"}}"#,
+        )
+        .unwrap();
+        let widget = root.path().join("packages/widget/package.json");
+        std::fs::write(&widget, r#"{"peerDependencies":{"preact":"10"}}"#).unwrap();
+        let mut resolved = config(root.path(), false);
+        resolved.build.out_dir = "release".into();
+        let reports = inspect_jsx_ownership(&resolved).unwrap();
+        assert_eq!(reports.len(), 2);
+        let project = reports
+            .iter()
+            .find(|row| row.manifest == Some(root.path().join("package.json")))
+            .unwrap();
+        assert_eq!(
+            project.files,
+            [PathBuf::from("src/a.jsx"), PathBuf::from("src/b.tsx")]
+        );
+        assert_eq!(project.ownership.status, "ambiguous");
+        let nested = reports
+            .iter()
+            .find(|row| row.manifest == Some(widget.clone()))
+            .unwrap();
+        assert_eq!(nested.ownership.status, "unavailable");
+        assert_eq!(nested.ownership.declared_owners, ["preact"]);
+        let report = inspect(&resolved).unwrap();
+        assert!(report.issues.iter().any(|issue| issue.severity == "error"
+            && issue.message.contains("ambiguous native JSX ownership")));
+        assert!(report.issues.iter().any(|issue| issue.severity == "error"
+            && issue.message.contains("unavailable native JSX ownership")));
+        resolved.framework = Some(FrameworkConfig {
+            enabled: vec!["react".into()],
+            compiler_host: Some("native".into()),
+            ..Default::default()
+        });
+        assert!(inspect_jsx_ownership(&resolved)
+            .unwrap()
+            .iter()
+            .all(|row| row.ownership.status == "selected"
+                && row.ownership.selection == "explicit-framework"));
+        // Explicit ownership must not fall back to inference on a malformed nested manifest.
+        std::fs::write(&widget, "{").unwrap();
+        let reports = inspect_jsx_ownership(&resolved).unwrap();
+        assert!(reports
+            .iter()
+            .any(|row| row.manifest_error.is_some() && row.ownership.status == "selected"));
+        resolved.framework = Some(FrameworkConfig::default());
+        assert!(inspect_jsx_ownership(&resolved)
+            .unwrap()
+            .iter()
+            .all(|row| row.ownership.status == "unowned"));
+        resolved.framework = None;
+        resolved.react.import_source = Some("custom-runtime".into());
+        assert!(inspect_jsx_ownership(&resolved)
+            .unwrap()
+            .iter()
+            .all(|row| row.ownership.status == "configured-lowering-unverified"));
+        resolved.react.import_source = None;
+        assert!(inspect_jsx_ownership(&resolved)
+            .unwrap_err()
+            .to_string()
+            .contains("packages/widget/package.json"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn jsx_scan_does_not_follow_source_symlinks() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("view.jsx"), "export default <div />;").unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.path().join("linked")).unwrap();
+        std::os::unix::fs::symlink(
+            outside.path().join("view.jsx"),
+            root.path().join("view.jsx"),
+        )
+        .unwrap();
+        assert!(inspect_jsx_ownership(&config(root.path(), false))
+            .unwrap()
+            .is_empty());
     }
     #[test]
     fn detected_components_require_explicit_host_and_do_not_spawn_or_write() {

@@ -1,7 +1,77 @@
 //! Versioned, evidence-based framework capabilities shared by adapters.
 
 /// Registry schema version; independent of framework package versions.
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
+
+/// Shared package-boundary search for physical JSX/TSX source files.
+pub fn jsx_manifest_candidates(
+    root: &std::path::Path,
+    file: &std::path::Path,
+) -> Vec<std::path::PathBuf> {
+    let Some(parent) = file.parent() else {
+        return Vec::new();
+    };
+    let mut candidates = Vec::new();
+    for directory in parent.ancestors() {
+        let manifest = directory.join("package.json");
+        let exists = manifest.exists();
+        candidates.push(manifest);
+        if exists || directory == root {
+            break;
+        }
+    }
+    candidates
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct JsxOwnership {
+    pub selection: &'static str,
+    pub status: &'static str,
+    pub declared_owners: Vec<&'static str>,
+    /// A lowering choice is not proof of a functioning framework adapter.
+    pub lowering: Option<String>,
+}
+
+pub fn jsx_ownership(
+    config: &ferrite_config::ResolvedConfig,
+    manifest: &serde_json::Value,
+) -> JsxOwnership {
+    let declared_owners = jsx_owners(manifest);
+    let (selection, status, lowering) = if let Some(framework) = &config.framework {
+        if framework.enabled.iter().any(|name| name == "react") {
+            ("explicit-framework", "selected", Some("react".into()))
+        } else {
+            ("explicit-framework", "unowned", None)
+        }
+    } else if config.react.import_source.is_some() || config.react.factory.is_some() {
+        (
+            "explicit-jsx-settings",
+            "configured-lowering-unverified",
+            config
+                .react
+                .import_source
+                .clone()
+                .or_else(|| config.react.factory.clone()),
+        )
+    } else if declared_owners.len() > 1 {
+        ("manifest", "ambiguous", None)
+    } else if declared_owners
+        .first()
+        .is_some_and(|owner| *owner != "react")
+    {
+        ("manifest", "unavailable", None)
+    } else if declared_owners.is_empty() {
+        ("legacy-default", "selected", Some("react".into()))
+    } else {
+        ("manifest", "selected", Some("react".into()))
+    };
+    JsxOwnership {
+        selection,
+        status,
+        declared_owners,
+        lowering,
+    }
+}
 
 /// Direct package markers for JSX ownership detection, including unavailable
 /// adapters. Detection is not evidence of framework/compiler support.

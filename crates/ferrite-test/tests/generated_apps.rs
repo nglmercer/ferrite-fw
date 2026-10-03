@@ -69,6 +69,11 @@ async fn configured_react_selection_matches_inspect_and_transform() {
         1
     );
     assert!(!names.iter().any(|name| *name == "ferrite:react"));
+    assert_eq!(inspected["jsxOwnership"][0]["status"], "selected");
+    assert_eq!(
+        inspected["jsxOwnership"][0]["selection"],
+        "explicit-framework"
+    );
     let transformed = command(&binary, &destination, &["transform", "src/App.jsx"], false).await;
     assert_eq!(
         transformed
@@ -92,6 +97,7 @@ async fn configured_react_selection_matches_inspect_and_transform() {
         .find(|row| row["framework"] == "react")
         .unwrap();
     assert_eq!(react["updates"], "full-reload");
+    assert_eq!(report["jsx_ownership"][0]["status"], "selected");
     let transformed = command(&binary, &destination, &["transform", "src/App.jsx"], false).await;
     assert!(!transformed.contains("createSignatureFunctionForTransform"));
     std::fs::write(
@@ -107,6 +113,7 @@ async fn configured_react_selection_matches_inspect_and_transform() {
         .unwrap()
         .iter()
         .any(|name| *name == "ferrite:react-refresh"));
+    assert_eq!(inspected["jsxOwnership"][0]["status"], "unowned");
     let output = tokio::process::Command::new(&binary)
         .args(["transform", "src/App.jsx"])
         .current_dir(&destination)
@@ -120,6 +127,85 @@ async fn configured_react_selection_matches_inspect_and_transform() {
         diagnostic.contains("JSX has no enabled framework owner"),
         "{diagnostic}"
     );
+}
+
+#[tokio::test]
+#[ignore = "requires freshly built FERRITE_CLI_PATH"]
+async fn jsx_ownership_cli_reports_package_conflicts() {
+    let binary = cli();
+    let project = ferrite_test::TempProject::new(&[
+        (
+            "package.json",
+            r#"{"dependencies":{"react":"19","solid-js":"1"}}"#,
+        ),
+        (
+            "ferrite.toml",
+            "[react]\nruntime = 'classic'\nrefresh = false\n",
+        ),
+        ("src/App.jsx", "export const App = () => <div />;"),
+        (
+            "packages/widget/package.json",
+            r#"{"peerDependencies":{"preact":"10"}}"#,
+        ),
+        (
+            "packages/widget/view.tsx",
+            "export const View = () => <div />;",
+        ),
+    ]);
+    let inspected: serde_json::Value =
+        serde_json::from_str(&command(&binary, &project.root, &["inspect", "--json"], false).await)
+            .unwrap();
+    assert_eq!(inspected["frameworkRegistrySchema"], 5);
+    let rows = inspected["jsxOwnership"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().any(|row| row["status"] == "ambiguous"
+        && row["declared_owners"] == serde_json::json!(["react", "solid-js"])));
+    assert!(rows.iter().any(|row| row["status"] == "unavailable"
+        && row["declared_owners"] == serde_json::json!(["preact"])));
+    let output = tokio::process::Command::new(&binary)
+        .args(["doctor", "--json"])
+        .current_dir(&project.root)
+        .env("PATH", "")
+        .output()
+        .await
+        .unwrap();
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["schema_version"], 5);
+    assert_eq!(report["jsx_ownership"], inspected["jsxOwnership"]);
+    assert!(report["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|issue| issue["severity"] == "error"
+            && issue["message"]
+                .as_str()
+                .unwrap()
+                .contains("ambiguous native JSX ownership")));
+    for (file, expected) in [
+        ("src/App.jsx", "ambiguous"),
+        ("packages/widget/view.tsx", "unavailable"),
+    ] {
+        let output = tokio::process::Command::new(&binary)
+            .args(["transform", file])
+            .current_dir(&project.root)
+            .env("PATH", "")
+            .output()
+            .await
+            .unwrap();
+        assert!(!output.status.success());
+        let diagnostic = String::from_utf8(output.stderr).unwrap();
+        assert!(diagnostic.contains(expected), "{diagnostic}");
+    }
+    std::fs::write(project.root.join("ferrite.toml"), "[framework]\nenabled = ['react']\ncompiler_host = 'native'\n[react]\nruntime = 'classic'\nrefresh = false\n").unwrap();
+    let inspected: serde_json::Value =
+        serde_json::from_str(&command(&binary, &project.root, &["inspect", "--json"], false).await)
+            .unwrap();
+    assert!(inspected["jsxOwnership"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|row| row["status"] == "selected" && row["selection"] == "explicit-framework"));
 }
 async fn server(
     binary: &Path,

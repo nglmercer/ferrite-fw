@@ -26,18 +26,10 @@ impl DevServer {
         let Ok(file) = self.id_to_file(id) else {
             return Vec::new();
         };
-        let mut candidates = Vec::new();
-        let Some(parent) = file.parent() else {
-            return candidates;
-        };
-        for directory in parent.ancestors() {
-            let manifest = directory.join("package.json");
-            candidates.push(manifest.to_string_lossy().into_owned());
-            if manifest.exists() || directory == self.inner.config.root {
-                break;
-            }
-        }
-        candidates
+        ferrite_frameworks::registry::jsx_manifest_candidates(&self.inner.config.root, &file)
+            .into_iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect()
     }
 
     fn validate_inferred_jsx_owner(&self, id: &ModuleId) -> Result<()> {
@@ -63,11 +55,12 @@ impl DevServer {
                     "cannot inspect JSX owner in {candidate}: {error}"
                 ))
             })?;
-            let owners = ferrite_frameworks::registry::jsx_owners(&manifest);
-            if owners.len() > 1 || owners.first().is_some_and(|owner| *owner != "react") {
+            let ownership =
+                ferrite_frameworks::registry::jsx_ownership(&self.inner.config, &manifest);
+            if matches!(ownership.status, "ambiguous" | "unavailable") {
                 return Err(ferrite_core::FerriteError::Transform {
                     id: id.0.clone(),
-                    message: format!("JSX ownership in {candidate} is {} ({}); select an explicit framework/compiler profile or provide a JSX-lowering plugin. Native Preact, Solid and Qwik framework adapters are unavailable", if owners.len() > 1 { "ambiguous" } else { "unavailable" }, owners.join(", ")),
+                    message: format!("JSX ownership in {candidate} is {} ({}); select an explicit framework/compiler profile or provide a JSX-lowering plugin. Native Preact, Solid and Qwik framework adapters are unavailable", ownership.status, ownership.declared_owners.join(", ")),
                 });
             }
             break;

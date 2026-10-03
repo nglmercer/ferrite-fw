@@ -2452,3 +2452,55 @@ PATH and Vue/Svelte use explicitly enabled Node compiler hosts. Output:
 /tmp/ferrite-pipeline-failure-inputs-browsers.log. No full-workspace or
 cross-platform rerun and no promotion from experimental support in this
 increment.
+
+
+### JSX ownership parity in inspect/doctor (2026-10-03)
+
+Implemented shared registry ownership classification and package-manifest
+search used by the compilation pipeline and developer tooling. Doctor/inspect
+scan physical project JSX/TSX files, group them by nearest package manifest,
+report declared markers, selected lowering and explicit/inferred ownership,
+and distinguish ambiguous/unavailable/unowned input from custom unverified
+lowering. The scan excludes source symlinks, package stores, node_modules,
+generated output and public directories; its limited scope and unverified
+package/host/plugin execution are included in the output. No compiler, Node
+worker or plugin executes during the ownership scan.
+
+Doctor emits actionable errors for standard native ownership conflicts.
+Configured foreign-plugin lowering remains unverified and changes those
+conditional native conflicts to warnings rather than claiming a working
+adapter. Explicit framework/JSX settings override dependency inference;
+malformed nested manifests are separately reported when explicit selection
+applies, matching the pipeline's precedence without hiding the manifest
+problem. Inspector exposes the same per-package ownership rows.
+
+Migration: registry/report schema is now 5. Doctor JSON adds
+jsx_ownership_scope/ jsx_ownership; inspector JSON adds
+frameworkRegistrySchema/ jsxOwnershipScope/ jsxOwnership. Ownership rows
+contain manifest, files, manifest_error, selection, status, declared_owners
+and lowering. Consumers must recognize schema 5 and keep ownership selection
+separate from tested compiler/rendering capability. No lockfile migration or
+support promotion.
+
+Validation: 33 framework and 47 server unit tests passed, including nested
+peer-marker ownership, deterministic file grouping, generated-output exclusion,
+symlink exclusion, explicit disabled/selected/custom policies and malformed
+manifest precedence. Two server external-tool tests remained ignored and
+establish no support. Nineteen config/framework/transform integration tests
+passed. Two real CLI tests were explicitly executed with Node absent from CLI
+PATH: inspect/doctor/transform conflict parity, and generated React
+create/install/configured selection parity. Both passed. Fresh CLI build,
+affected framework/server/CLI/test all-target Clippy with `--locked --
+-D warnings`, changed-file formatting and diff checks passed. Outputs:
+/tmp/ferrite-jsx-doctor-tests.log,
+/tmp/ferrite-jsx-doctor-integrations.log,
+/tmp/ferrite-jsx-doctor-cli-conflicts.log,
+/tmp/ferrite-jsx-doctor-cli-selection.log,
+/tmp/ferrite-jsx-doctor-build.log,
+/tmp/ferrite-jsx-doctor-clippy.log.
+
+No browser or full-workspace rerun in this tooling increment. Source pragmas,
+per-file explicit mappings, virtual/linked source ownership, unrecognized
+ecosystems, graph-reachable-file scanning and complete package-specific
+installed/compiler capability checks remain incomplete. SSR/checkers, all
+additional/upstream adapters and the broader framework mission remain active.

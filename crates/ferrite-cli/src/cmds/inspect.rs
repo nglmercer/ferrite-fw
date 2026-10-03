@@ -39,6 +39,7 @@ pub(crate) async fn inspect(
         }
     }
     let lock = ferrite::npm::Lockfile::read(&resolved.lockfile())?;
+    let jsx_ownership = ferrite::frameworks::doctor::inspect_jsx_ownership(&resolved)?;
     for _ in resolved.foreign_plugins.iter().flatten() {
         plugins.push("ferrite:foreign-hook".into());
     }
@@ -47,6 +48,7 @@ pub(crate) async fn inspect(
             "{}",
             serde_json::json!({
                 "version": ferrite::VERSION,
+                "frameworkRegistrySchema": ferrite::frameworks::registry::SCHEMA_VERSION,
                 "root": resolved.root,
                 "mode": resolved.mode,
                 "base": resolved.base,
@@ -54,6 +56,8 @@ pub(crate) async fn inspect(
                 "build": { "outDir": resolved.build.out_dir, "minify": resolved.build.minify, "target": resolved.build.target },
                 "compiler": resolved.compiler.engine,
                 "framework": resolved.framework,
+                "jsxOwnershipScope": ferrite::frameworks::doctor::JSX_SCAN_SCOPE,
+                "jsxOwnership": jsx_ownership,
                 "foreignPlugins": resolved.foreign_plugins.iter().flatten().map(|profile| serde_json::json!({"name":profile.name, "entry":profile.entry, "host":profile.host, "node":profile.node, "timeoutMs":profile.timeout_ms.unwrap_or(10000), "support":"experimental", "executed":false})).collect::<Vec<_>>(),
                 "react": resolved.react,
                 "ssrRuntime": resolved.runtime.backend,
@@ -67,6 +71,14 @@ pub(crate) async fn inspect(
         println!("ferrite v{}", ferrite::VERSION);
         println!("root:     {}", resolved.root.display());
         println!("mode:     {}", resolved.mode);
+        for report in &jsx_ownership {
+            println!(
+                "JSX: {} ({}, {} files)",
+                report.ownership.status,
+                report.ownership.selection,
+                report.files.len()
+            );
+        }
         println!(
             "server:   {}:{}",
             resolved.server.host, resolved.server.port
@@ -177,6 +189,20 @@ pub(crate) async fn doctor(
             report.node_probe
         );
         println!("editor packages: {}", report.editor_view);
+        println!("JSX scope: {}", report.jsx_ownership_scope);
+        for ownership in &report.jsx_ownership {
+            println!(
+                "JSX: {} ({}, {} files, lowering {})",
+                ownership.ownership.status,
+                ownership.ownership.selection,
+                ownership.files.len(),
+                ownership
+                    .ownership
+                    .lowering
+                    .as_deref()
+                    .unwrap_or("unavailable")
+            );
+        }
         for profile in &report.foreign_plugins {
             println!("foreign plugin: {profile}");
         }
