@@ -1008,3 +1008,32 @@ prune emission and generated-resource ownership matrices, dependency acceptance,
 syntax recovery, complete Refresh, SSR/checkers and remaining adapters/acceptance
 work are still assigned. No support profile is promoted; the full mission remains
 active.
+
+### HMR planning covers all importer branches
+
+Added `ModuleGraph::hmr_accepting_boundaries` and routed HMR planning through it.
+It traverses every reachable importer branch, collects/deduplicates all accepting
+boundaries, and sorts output deterministically. An unaccepted root or unknown
+module forces full reload; a cycle with no accepting boundary terminates with
+reload rather than looping. Explicit accepted-dependency edges stop their branch.
+The existing nearest-chain query remains available for inspection, but no longer
+controls actual HMR plans. Each planned update retains the changed path/timestamp
+and identifies its accepting boundary.
+
+Validation:
+
+- `cargo test -p ferrite-graph -p ferrite-hmr --locked`: seven graph and three
+  HMR tests passed. New assertions verify both accepting branches are emitted in
+  sorted order, adding an unaccepted root changes the actual plan to full reload,
+  and boundary-free cycles terminate.
+- `cargo test -p ferrite-server --locked`: 32 server tests passed.
+  Output: `/tmp/ferrite-all-boundaries-server.log`.
+- `cargo clippy -p ferrite-graph -p ferrite-hmr --all-targets --locked -- -D warnings`:
+  passed after final changes; formatting/diff checks passed.
+
+This establishes graph/planner coverage, not complete dependency HMR. Precise
+accept-call metadata (instead of generic import.meta.hot usage), dependency
+callback path/array semantics and browser module-cache re-execution of importer
+chains still require implementation and acceptance tests. Complete Refresh,
+framework HMR, SSR/checkers and remaining framework mission stay active; no new
+support profile is advertised.

@@ -85,24 +85,28 @@ pub enum HmrPlan {
 
 /// Plan an HMR action for `changed` using the graph boundary walk (§34).
 pub fn plan_update(graph: &ModuleGraph, changed: &ModuleId, timestamp: u64) -> HmrPlan {
-    match graph.hmr_boundaries(changed) {
-        Some(chain) => {
-            let accepted = chain.first().cloned().unwrap_or_else(|| changed.clone());
+    match graph.hmr_accepting_boundaries(changed) {
+        Some(boundaries) => {
             let node = graph.get(changed);
             let is_css = node
                 .as_ref()
                 .is_some_and(|node| node.module_type == ferrite_core::ModuleType::Css);
-            HmrPlan::Update(vec![HmrUpdate {
-                kind: if is_css {
-                    "css-update".to_string()
-                } else {
-                    "js-update".to_string()
-                },
-                path: changed.0.clone(),
-                accepted_path: accepted.0,
-                timestamp,
-                css_only: is_css,
-            }])
+            HmrPlan::Update(
+                boundaries
+                    .into_iter()
+                    .map(|accepted| HmrUpdate {
+                        kind: if is_css {
+                            "css-update".to_string()
+                        } else {
+                            "js-update".to_string()
+                        },
+                        path: changed.0.clone(),
+                        accepted_path: accepted.0,
+                        timestamp,
+                        css_only: is_css,
+                    })
+                    .collect(),
+            )
         }
         None => HmrPlan::FullReload,
     }
@@ -213,6 +217,54 @@ mod tests {
         let text = serde_json::to_string(&message).unwrap();
         assert!(text.contains("\"type\":\"update\""));
         assert!(text.contains("acceptedPath"));
+    }
+
+    #[test]
+    fn updates_cover_all_boundaries_and_unaccepted_roots_reload() {
+        let graph = ModuleGraph::new();
+        for name in ["/b.ts", "/a.ts"] {
+            let id = ModuleId::new(name);
+            let mut node = ferrite_graph::ModuleNode::new(
+                id.clone(),
+                name.into(),
+                ferrite_core::ModuleType::Ts,
+            );
+            node.hmr.self_accepting = true;
+            graph.upsert(node);
+            graph.add_edge(
+                &id,
+                ferrite_graph::ImportEdge {
+                    specifier: "/leaf.ts".into(),
+                    resolved: ModuleId::new("/leaf.ts"),
+                    kind: ferrite_graph::ImportKind::Static,
+                },
+            );
+        }
+        let HmrPlan::Update(updates) = plan_update(&graph, &ModuleId::new("/leaf.ts"), 42) else {
+            panic!("both branches accept");
+        };
+        assert_eq!(
+            updates
+                .iter()
+                .map(|update| update.accepted_path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["/a.ts", "/b.ts"]
+        );
+        assert!(updates
+            .iter()
+            .all(|update| update.path == "/leaf.ts" && update.timestamp == 42));
+        graph.add_edge(
+            &ModuleId::new("/entry.ts"),
+            ferrite_graph::ImportEdge {
+                specifier: "/leaf.ts".into(),
+                resolved: ModuleId::new("/leaf.ts"),
+                kind: ferrite_graph::ImportKind::Static,
+            },
+        );
+        assert!(matches!(
+            plan_update(&graph, &ModuleId::new("/leaf.ts"), 43),
+            HmrPlan::FullReload
+        ));
     }
 
     #[test]

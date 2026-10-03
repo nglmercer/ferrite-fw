@@ -335,6 +335,41 @@ impl ModuleGraph {
         None
     }
 
+    /// Collect every accepting boundary. An unaccepted root forces a reload.
+    /// Unlike the legacy nearest-chain query, this checks all importer branches.
+    pub fn hmr_accepting_boundaries(&self, changed: &ModuleId) -> Option<Vec<ModuleId>> {
+        let mut queue = VecDeque::from([changed.clone()]);
+        let mut seen = HashSet::new();
+        let mut boundaries = HashSet::new();
+        while let Some(current) = queue.pop_front() {
+            if !seen.insert(current.clone()) {
+                continue;
+            }
+            let node = self.get(&current)?;
+            if node.hmr.self_accepting || node.module_type == ModuleType::Css {
+                boundaries.insert(current);
+                continue;
+            }
+            if node.importers.is_empty() {
+                return None;
+            }
+            for importer_id in node.importers {
+                let importer = self.get(&importer_id)?;
+                if importer.hmr.accepted_deps.contains(&current.0) {
+                    boundaries.insert(importer_id);
+                } else {
+                    queue.push_back(importer_id);
+                }
+            }
+        }
+        if boundaries.is_empty() {
+            return None;
+        }
+        let mut boundaries: Vec<_> = boundaries.into_iter().collect();
+        boundaries.sort_by(|a, b| a.0.cmp(&b.0));
+        Some(boundaries)
+    }
+
     /// Remove a module and detach its edges.
     pub fn remove(&self, id: &ModuleId) -> Option<ModuleNode> {
         let (_, node) = self.modules.remove(id)?;
@@ -426,6 +461,33 @@ mod tests {
         graph.add_edge(&ModuleId::new("/boundary.ts"), edge("/mid.ts"));
         let chain = graph.hmr_boundaries(&ModuleId::new("/leaf.ts")).unwrap();
         assert_eq!(chain.first(), Some(&ModuleId::new("/boundary.ts")));
+    }
+
+    #[test]
+    fn all_hmr_branches_must_accept_and_boundaries_are_deterministic() {
+        let graph = ModuleGraph::new();
+        for name in ["/b.ts", "/a.ts"] {
+            graph.add_edge(&ModuleId::new(name), edge("/leaf.ts"));
+            let mut node = graph.get(&ModuleId::new(name)).unwrap();
+            node.hmr.self_accepting = true;
+            graph.upsert(node);
+        }
+        assert_eq!(
+            graph
+                .hmr_accepting_boundaries(&ModuleId::new("/leaf.ts"))
+                .unwrap(),
+            vec![ModuleId::new("/a.ts"), ModuleId::new("/b.ts")]
+        );
+        graph.add_edge(&ModuleId::new("/unaccepted-root.ts"), edge("/leaf.ts"));
+        assert!(graph
+            .hmr_accepting_boundaries(&ModuleId::new("/leaf.ts"))
+            .is_none());
+        let cycle = ModuleGraph::new();
+        cycle.add_edge(&ModuleId::new("/a.ts"), edge("/b.ts"));
+        cycle.add_edge(&ModuleId::new("/b.ts"), edge("/a.ts"));
+        assert!(cycle
+            .hmr_accepting_boundaries(&ModuleId::new("/a.ts"))
+            .is_none());
     }
 
     #[test]
