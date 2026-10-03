@@ -193,7 +193,8 @@ async fn browser_interaction(kind: BrowserKind) {
     // Build the same graph and execute the emitted application through Ferrite preview.
     let mut config = project.resolve_config_mode("production");
     config.build.scope_hoist = true;
-    let report = ferrite::Builder::new(config, vec![])
+    config.base = "/app/".into();
+    let report = ferrite::Builder::new(config.clone(), vec![])
         .build("client")
         .await
         .unwrap();
@@ -208,9 +209,9 @@ async fn browser_interaction(kind: BrowserKind) {
             assert!(!code.contains("__ferrite_create_hot__"));
         }
     }
-    let out = report.out_dir;
+    config.server.port = port;
     let preview = tokio::spawn(async move {
-        ferrite::preview_dir(&out, port).await.unwrap();
+        ferrite::preview_with_plugins(&config, &[]).await.unwrap();
     });
     let mut ready = false;
     for _ in 0..100 {

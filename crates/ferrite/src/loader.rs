@@ -409,7 +409,7 @@ pub async fn preview_with_plugins(
 /// Plugin-less shorthand; use [`preview_with_plugins`] for hooks, proxy
 /// rules, mounts, and extra headers.
 pub async fn preview_dir(dir: &std::path::Path, port: u16) -> Result<()> {
-    preview_with_parts(dir, port, &[], &[], &[]).await
+    preview_with_parts(dir, port, "/", &[], &[], &[]).await
 }
 
 /// Serve `dir` with an explicit preview control surface.
@@ -421,6 +421,7 @@ async fn preview_with_control(
     preview_with_parts(
         dir,
         port,
+        &control.config.base,
         &control.headers,
         &control.mounts,
         &control.proxies,
@@ -432,6 +433,7 @@ async fn preview_with_control(
 async fn preview_with_parts(
     dir: &std::path::Path,
     port: u16,
+    base: &str,
     headers: &[(String, String)],
     mounts: &[ferrite_plugin::PreviewMount],
     proxies: &[ferrite_plugin::ProxyRule],
@@ -442,6 +444,7 @@ async fn preview_with_parts(
     #[derive(Clone)]
     struct PreviewState {
         dir: PathBuf,
+        base: String,
         headers: Vec<(HeaderName, HeaderValue)>,
         mounts: Vec<ferrite_plugin::PreviewMount>,
         proxies: Vec<ferrite_plugin::ProxyRule>,
@@ -546,8 +549,27 @@ async fn preview_with_parts(
                 return (StatusCode::NOT_FOUND, "mounted file not found").into_response();
             }
         }
-        // 3. Output dir with SPA fallback.
-        let file = state.dir.join(path.trim_start_matches('/'));
+        // 3. Built URLs are rooted at the configured base, while plugin
+        // mounts and proxies above keep their explicitly configured prefixes.
+        if state.base != "/" && (path == "/" || path == state.base.trim_end_matches('/')) {
+            let location = match uri.query() {
+                Some(query) => format!("{}?{query}", state.base),
+                None => state.base.clone(),
+            };
+            return (
+                StatusCode::TEMPORARY_REDIRECT,
+                [(axum::http::header::LOCATION, location)],
+            )
+                .into_response();
+        }
+        let Some(relative) = path.strip_prefix(&state.base) else {
+            return (
+                StatusCode::NOT_FOUND,
+                "request is outside the configured base",
+            )
+                .into_response();
+        };
+        let file = state.dir.join(relative);
         let file = if file.is_file() {
             file
         } else {
@@ -569,10 +591,36 @@ async fn preview_with_parts(
             dir.display()
         )));
     }
+    let base = if base.is_empty() || matches!(base, "." | "./") {
+        "/".to_string()
+    } else if base.starts_with("http://") || base.starts_with("https://") || base.starts_with("//")
+    {
+        let url = if base.starts_with("//") {
+            format!("https:{base}")
+        } else {
+            base.to_string()
+        };
+        reqwest::Url::parse(&url)
+            .map_err(|error| {
+                FerriteError::Config(format!("invalid preview base `{base}`: {error}"))
+            })?
+            .path()
+            .to_string()
+    } else {
+        base.to_string()
+    };
+    if !base.starts_with('/')
+        || base.split('/').any(|part| matches!(part, "." | ".."))
+        || base.contains(['?', '#'])
+    {
+        return Err(FerriteError::Config(format!("preview base `{base}` must be an absolute URL path without traversal, query, or fragment")));
+    }
+    let base = with_trailing_slash(&base);
     let router = axum::Router::new()
         .fallback(handler)
         .with_state(PreviewState {
             dir: dir.to_path_buf(),
+            base,
             headers: parsed_headers(headers),
             mounts: mounts.to_vec(),
             proxies: proxies.to_vec(),

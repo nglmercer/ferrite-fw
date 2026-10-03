@@ -1,5 +1,31 @@
 # Framework support implementation status
 
+## Preview serves build output beneath the configured base
+
+Configured preview now strips the build base path before resolving static output
+and SPA routes. Root/base-without-slash requests redirect to the trailing-slash
+base while preserving their query. Requests outside a non-root base return 404.
+Explicit plugin mount/proxy prefixes still run before base handling. Plugin-less
+`preview_dir` retains its root-path behavior. Empty/dot bases resolve at root;
+absolute URL bases use their URL path. Invalid relative/traversal/query bases
+and malformed URL bases fail before the listener starts.
+
+Real build/HTTP regressions cover `/app`, `/app/`, and `/nested/app/`, verifying
+generated HTML asset URLs, script/map serving, SPA routes, root redirects and
+outside-base rejection. Invalid-base tests verify no listener starts. Existing
+CommonJS Chromium/Firefox acceptance now builds at `/app/` and previews through
+resolved configuration, checking root redirect, emitted application execution,
+interaction, and console/page errors. Eight lifecycle/preview tests and three
+CommonJS tests passed. Affected all-target Clippy and the final changed-test
+Clippy check with `-D warnings`, formatting, and diff checks passed.
+
+Migration: configured preview is now mounted beneath its base, with a root
+redirect for non-root bases; assets outside that base no longer alias build
+files. No schema/lockfile migration is needed. CDN-origin/browser delegation,
+full relative-base routing, meaningful SSR, generated-profile browser matrices,
+full workspace, feature matrices, and releases remain unverified here. The
+full framework mission remains incomplete.
+
 ## Preview revalidates files that can change between builds
 
 Static preview responses now default to `Cache-Control: no-cache`. The previous

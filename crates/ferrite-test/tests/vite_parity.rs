@@ -469,6 +469,100 @@ async fn preview_serves_hooks_mounts_and_proxy() {
 }
 
 #[tokio::test]
+async fn preview_serves_built_assets_under_the_configured_base() {
+    for base in ["/app", "/app/", "/nested/app/"] {
+        let project = TempProject::new(&[
+            (
+                "index.html",
+                "<script type='module' src='/main.ts'></script>",
+            ),
+            (
+                "main.ts",
+                "const message: string = 'base-preview'; console.log(message);",
+            ),
+        ]);
+        let port = free_port();
+        let mut config = project.resolve_config_mode("production");
+        config.base = base.into();
+        config.server.port = port;
+        let report = ferrite::Builder::new(config.clone(), Vec::new())
+            .build("client")
+            .await
+            .unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(report.out_dir.join("manifest.json")).unwrap(),
+        )
+        .unwrap();
+        let file = manifest
+            .as_object()
+            .unwrap()
+            .values()
+            .find(|entry| entry["isEntry"] == true)
+            .unwrap()["file"]
+            .as_str()
+            .unwrap();
+        let prefix = format!("{}/", base.trim_end_matches('/'));
+        let asset_url = format!("{prefix}{file}");
+        let html = std::fs::read_to_string(report.out_dir.join("index.html")).unwrap();
+        assert!(html.contains(&asset_url), "{html}");
+        let task = tokio::spawn(async move { ferrite::preview_with_plugins(&config, &[]).await });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_err()
+        {
+            assert!(
+                !task.is_finished() && std::time::Instant::now() < deadline,
+                "preview failed to start"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let (head, body) = http_get(port, &asset_url).await;
+        assert!(
+            head.contains("200") && body.contains("base-preview"),
+            "{head}\n{body}"
+        );
+        let (head, body) = http_get(port, &format!("{asset_url}.map")).await;
+        assert!(head.contains("200"), "{head}");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap()["version"],
+            3
+        );
+        let (head, body) = http_get(port, &format!("{prefix}dashboard")).await;
+        assert!(head.contains("200") && body == html, "{head}\n{body}");
+        let (head, _) = http_get(port, "/?from=root").await;
+        assert!(
+            head.contains("307") && head.contains(&format!("location: {prefix}?from=root")),
+            "{head}"
+        );
+        let (head, _) = http_get(port, &format!("/{file}")).await;
+        assert!(head.contains("404"), "{head}");
+        let (head, _) = http_get(port, "/app-other/").await;
+        assert!(head.contains("404"), "{head}");
+        task.abort();
+    }
+}
+
+#[tokio::test]
+async fn preview_rejects_invalid_base_paths_before_listening() {
+    let project = TempProject::new(&[("dist/index.html", "app")]);
+    for base in ["app/", "/app/../", "/app?query", "http://["] {
+        let mut config = project.resolve_config_mode("production");
+        config.base = base.into();
+        config.server.port = free_port();
+        let error = ferrite::preview_with_plugins(&config, &[])
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("preview base"), "{error}");
+        assert!(
+            tokio::net::TcpStream::connect(("127.0.0.1", config.server.port))
+                .await
+                .is_err()
+        );
+    }
+}
+
+#[tokio::test]
 async fn facade_reexports_cover_parity_api() {
     assert_eq!(
         ferrite::normalize_path(std::path::Path::new("/a/./b/../c")),
