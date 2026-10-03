@@ -3,7 +3,7 @@ use ferrite_core::{FerriteError, Result};
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TemplateProfile {
     pub framework: &'static str,
     pub language: &'static str,
@@ -89,7 +89,15 @@ pub fn select(
 
 pub fn files(profile: &TemplateProfile, name: &str) -> Result<BTreeMap<String, String>> {
     // The public library API must validate, too; callers cannot invent profiles.
-    let profile = select(profile.framework, profile.language, profile.rendering)?;
+    let canonical = select(profile.framework, profile.language, profile.rendering)?;
+    if profile != canonical {
+        return Err(FerriteError::Config(format!(
+            "unsupported generation profile {}/{}/{}: requested host={}, version={:?}, support={}; available host={}, version={:?}, support={}; use scaffold::select to obtain the supported profile",
+            profile.framework, profile.language, profile.rendering,
+            profile.compiler_host, profile.framework_version, profile.support.label(),
+            canonical.compiler_host, canonical.framework_version, canonical.support.label(),
+        )));
+    }
     let extension = profile.language;
     let mut files = BTreeMap::new();
     let main = if extension == "ts" {
@@ -299,6 +307,29 @@ impl CreationTarget {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn public_generation_rejects_profile_substitution() {
+        for framework in ["vanilla", "vue", "svelte"] {
+            for language in ["js", "ts"] {
+                let canonical = select(framework, language, "client").unwrap();
+                for field in ["host", "version", "support"] {
+                    let mut requested = canonical.clone();
+                    match field {
+                        "host" => requested.compiler_host = "embedded",
+                        "version" => requested.framework_version = Some("0.0.0"),
+                        "support" => requested.support = crate::registry::Support::Tested,
+                        _ => unreachable!(),
+                    }
+                    let error = files(&requested, "app").unwrap_err().to_string();
+                    assert!(error.contains("unsupported generation profile"), "{error}");
+                    assert!(error.contains("scaffold::select"), "{error}");
+                    assert!(error.contains(canonical.compiler_host), "{error}");
+                }
+                assert!(files(&canonical.clone(), "app").is_ok());
+            }
+        }
+    }
+
     #[test]
     fn profiles_fail_before_writing() {
         for (framework, language, rendering) in [

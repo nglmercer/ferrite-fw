@@ -1101,3 +1101,19 @@ identity. This resolves the recorded per-access context lifecycle bug in exercis
 lowering/client execution; actual framework browser state/syntax recovery,
 dependency acceptance, complete Refresh, SSR/checkers and remaining mission work
 are still assigned. No profile is promoted and the full goal remains active.
+
+### Public scaffold profiles cannot silently change hosts or versions
+
+The public `scaffold::files` API now validates the entire requested profile against
+the registry, including compiler host, framework version and support status. It
+previously discarded those fields and generated the canonical profile silently.
+Mismatches now return an actionable configuration error directing callers to
+`scaffold::select`. Canonical profiles and equivalent cloned descriptors remain
+accepted. No configuration or lockfile migration is required.
+
+Validation: `cargo test -p ferrite-frameworks --lib --locked` passed all 25 tests,
+including host/version/support substitution checks across all six generation
+profiles and the existing publication/symlink protections. Framework all-targets
+Clippy with `--locked -- -D warnings` passed; formatting and diff checks passed.
+No additional browser acceptance or support promotion is claimed. Complete
+Refresh, framework HMR, SSR/checkers and the remaining mission remain assigned.
