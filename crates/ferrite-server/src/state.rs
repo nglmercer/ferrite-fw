@@ -37,6 +37,21 @@ pub struct DevServer {
     pub(crate) watcher: Arc<Mutex<Option<notify::RecommendedWatcher>>>,
 }
 
+impl DevServer {
+    /// A non-owning handle for callbacks stored on this server. Upgrading fails
+    /// after the owning server handles are dropped, avoiding callback cycles.
+    pub fn weak_handle(&self) -> impl Fn() -> Option<Self> + Send + Sync + 'static {
+        let inner = Arc::downgrade(&self.inner);
+        let watcher = Arc::downgrade(&self.watcher);
+        move || {
+            Some(Self {
+                inner: inner.upgrade()?,
+                watcher: watcher.upgrade()?,
+            })
+        }
+    }
+}
+
 /// Server control surface for plugins (§11 `configure_server`).
 impl ServerControl for DevServer {
     fn resolved_config(&self) -> &ResolvedConfig {

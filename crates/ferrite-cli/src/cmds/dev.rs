@@ -142,11 +142,30 @@ pub(crate) async fn js_ssr_adapter(
         .ssr_runtime_graph(&format!("/{}", entry.replace('\\', "/")))
         .await
         .map_err(|error| format!("cannot compile SSR graph {}: {error}", path.display()))?;
-    Ok(Arc::new(
-        ferrite::ssr::JsSsrAdapter::from_resolved_graph(resolved, graph)
-            .map_err(|error| error.to_string())?
-            .with_shell(shell.to_string()),
-    ))
+    let adapter = ferrite::ssr::JsSsrAdapter::from_resolved_graph(resolved, graph)
+        .map_err(|error| error.to_string())?
+        .with_shell(shell.to_string());
+    let adapter = Arc::new(tokio::sync::Mutex::new(adapter));
+    let server = Arc::new(server.weak_handle());
+    let entry_url = format!("/{}", entry.replace('\\', "/"));
+    Ok(Arc::new(ferrite::ssr::FnAdapter::new(
+        move |request: ferrite::ssr::SsrHttpRequest, context: ferrite::ssr::SsrContext| {
+            let server = server.clone();
+            let adapter = adapter.clone();
+            let entry_url = entry_url.clone();
+            async move {
+                let server = server().ok_or_else(|| {
+                    ferrite::FerriteError::Ssr("SSR dev server has closed".into())
+                })?;
+                // Keep graph replacement, evaluation, and invocation together: a
+                // persistent runtime must not interleave different request graphs.
+                let mut adapter = adapter.lock().await;
+                let graph = server.ssr_runtime_graph(&entry_url).await?;
+                adapter.replace_graph(graph)?;
+                ferrite::ssr::SsrAdapter::render(&*adapter, request, context).await
+            }
+        },
+    )))
 }
 
 #[cfg(all(test, feature = "napi-vm"))]
@@ -191,15 +210,21 @@ mod ssr_tests {
             "<h1>compiled /about</h1>"
         );
         std::fs::write(&dependency, "export const label: string = ;").unwrap();
-        let error = js_ssr_adapter(&server, &resolved, "<!--ssr-outlet-->")
+        let error = adapter
+            .render(
+                ferrite::ssr::SsrHttpRequest {
+                    method: "GET".into(),
+                    uri: "/".into(),
+                    headers: Vec::new(),
+                    body: Vec::new(),
+                },
+                Default::default(),
+            )
             .await
-            .err()
-            .expect("broken dependency must fail");
+            .expect_err("broken dependency must fail")
+            .to_string();
         assert!(error.contains("label.ts"), "{error}");
         std::fs::write(&dependency, "export const label: string = 'recovered';").unwrap();
-        let adapter = js_ssr_adapter(&server, &resolved, "<!--ssr-outlet-->")
-            .await
-            .unwrap();
         let response = adapter
             .render(
                 ferrite::ssr::SsrHttpRequest {
@@ -216,5 +241,19 @@ mod ssr_tests {
             response.into_string().await.unwrap(),
             "<h1>recovered /</h1>"
         );
+        drop(server);
+        let error = adapter
+            .render(
+                ferrite::ssr::SsrHttpRequest {
+                    method: "GET".into(),
+                    uri: "/".into(),
+                    headers: Vec::new(),
+                    body: Vec::new(),
+                },
+                Default::default(),
+            )
+            .await
+            .expect_err("adapter must not keep server alive");
+        assert!(error.to_string().contains("closed"), "{error}");
     }
 }

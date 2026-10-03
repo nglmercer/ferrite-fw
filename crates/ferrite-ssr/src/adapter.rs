@@ -161,6 +161,14 @@ impl JsSsrAdapter {
         Ok(adapter)
     }
 
+    /// Replace the compiled graph while retaining the explicitly selected runtime.
+    /// Callers must serialize replacement and rendering for a shared adapter.
+    pub fn replace_graph(&mut self, graph: CompiledModuleGraph) -> Result<()> {
+        graph.validate()?;
+        self.graph = Some(graph);
+        Ok(())
+    }
+
     /// Call a different export instead of `render`.
     #[must_use]
     pub fn with_export(mut self, export: impl Into<String>) -> Self {
