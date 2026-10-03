@@ -171,17 +171,30 @@ impl Plugin for ReactPlugin {
 
     async fn resolve_id(
         &self,
-        _ctx: &PluginContext,
+        ctx: &PluginContext,
         request: ResolveHookRequest<'_>,
     ) -> Result<Option<ferrite_resolver::ResolvedId>> {
         if request.specifier == REFRESH_SPEC {
+            if request.ssr
+                || request.environment.is_ssr()
+                || ctx.environment.kind.is_ssr()
+                || !self.is_enabled()
+            {
+                return Err(ferrite_core::FerriteError::Build("React Refresh is available only in enabled client development; remove its import from server/production entries".into()));
+            }
             return Ok(Some(ferrite_resolver::ResolvedId::new(REFRESH_VIRTUAL)));
         }
         Ok(None)
     }
 
-    async fn load(&self, _ctx: &PluginContext, request: LoadRequest) -> Result<Option<LoadResult>> {
+    async fn load(&self, ctx: &PluginContext, request: LoadRequest) -> Result<Option<LoadResult>> {
         if request.id == REFRESH_VIRTUAL {
+            if request.environment.is_ssr() || ctx.environment.kind.is_ssr() || !self.is_enabled() {
+                return Err(ferrite_core::FerriteError::Build(
+                    "React Refresh virtual module cannot load outside enabled client development"
+                        .into(),
+                ));
+            }
             return Ok(Some(LoadResult {
                 code: preamble_code(),
                 module_type: ModuleType::Js,
@@ -196,10 +209,15 @@ impl Plugin for ReactPlugin {
 
     async fn transform(
         &self,
-        _ctx: &PluginContext,
+        ctx: &PluginContext,
         request: TransformRequest,
     ) -> Result<Option<TransformResult>> {
-        if !self.is_enabled() || !is_jsx_id(&request.id) {
+        if !self.is_enabled()
+            || request.ssr
+            || request.environment.is_ssr()
+            || ctx.environment.kind.is_ssr()
+            || !is_jsx_id(&request.id)
+        {
             return Ok(None);
         }
         // Only files that actually used JSX (post-core output references
@@ -229,9 +247,9 @@ impl Plugin for ReactPlugin {
     async fn transform_index_html(
         &self,
         ctx: &PluginContext,
-        _html: HtmlTransformContext,
+        html: HtmlTransformContext,
     ) -> Result<Option<HtmlTransformResult>> {
-        if !self.is_enabled() {
+        if !self.is_enabled() || html.ssr || ctx.environment.kind.is_ssr() {
             return Ok(None);
         }
         // No refresh runtime installed → nothing to inject. Skipping keeps
@@ -256,6 +274,163 @@ impl Plugin for ReactPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn refresh_is_excluded_from_server_and_disabled_profiles() {
+        use ferrite_core::{Environment, EnvironmentKind};
+        let root = tempfile::tempdir().unwrap();
+        let resolver = ferrite_resolver::Resolver::new(root.path().into(), &Default::default());
+        let graph = Default::default();
+        let emitted = Mutex::new(HashMap::new());
+        let watches = Mutex::new(Vec::new());
+        let warnings = Mutex::new(Vec::new());
+        let plugin = ReactPlugin::new();
+        for (context_kind, request_kind, ssr) in [
+            (EnvironmentKind::Client, EnvironmentKind::Client, true),
+            (EnvironmentKind::Client, EnvironmentKind::Ssr, false),
+            (EnvironmentKind::Ssr, EnvironmentKind::Client, false),
+        ] {
+            let environment = Environment::new("fixture", context_kind);
+            let ctx = PluginContext {
+                graph: &graph,
+                resolver: &resolver,
+                environment: &environment,
+                emitted: &emitted,
+                watch_files: &watches,
+                warnings: &warnings,
+            };
+            assert!(plugin
+                .transform(
+                    &ctx,
+                    TransformRequest {
+                        id: "/App.jsx".into(),
+                        code: "export function App() { return React.createElement('div'); }".into(),
+                        module_type: ModuleType::Js,
+                        environment: request_kind.clone(),
+                        ssr
+                    }
+                )
+                .await
+                .unwrap()
+                .is_none());
+            let error = plugin
+                .resolve_id(
+                    &ctx,
+                    ResolveHookRequest {
+                        kind: ferrite_resolver::ResolveKind::Import,
+                        specifier: REFRESH_SPEC,
+                        importer: None,
+                        environment: request_kind,
+                        ssr,
+                    },
+                )
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("client development"));
+        }
+        let environment = Environment::new("client", EnvironmentKind::Client);
+        let ctx = PluginContext {
+            graph: &graph,
+            resolver: &resolver,
+            environment: &environment,
+            emitted: &emitted,
+            watch_files: &watches,
+            warnings: &warnings,
+        };
+        assert!(plugin
+            .load(
+                &ctx,
+                LoadRequest {
+                    id: REFRESH_VIRTUAL.into(),
+                    environment: EnvironmentKind::Ssr
+                }
+            )
+            .await
+            .is_err());
+        assert!(plugin
+            .transform_index_html(
+                &ctx,
+                HtmlTransformContext {
+                    html: "<html/>".into(),
+                    path: "/".into(),
+                    ssr: true
+                }
+            )
+            .await
+            .unwrap()
+            .is_none());
+        assert!(plugin
+            .load(
+                &ctx,
+                LoadRequest {
+                    id: REFRESH_VIRTUAL.into(),
+                    environment: EnvironmentKind::Client
+                }
+            )
+            .await
+            .unwrap()
+            .is_some());
+        let client = plugin
+            .transform(
+                &ctx,
+                TransformRequest {
+                    id: "/App.jsx".into(),
+                    code: "export function App() { return React.createElement('div'); }".into(),
+                    module_type: ModuleType::Js,
+                    environment: EnvironmentKind::Client,
+                    ssr: false,
+                },
+            )
+            .await
+            .unwrap()
+            .expect("enabled client transformation must still run");
+        assert!(client.code.contains("$RefreshReg$(App"));
+        for production in [false, true] {
+            let mut user = ferrite_config::UserConfig::default();
+            user.react.set_refresh(production);
+            let config = ferrite_config::resolve_config(
+                user,
+                Some(root.path().into()),
+                ferrite_config::CliOverrides {
+                    mode: Some(
+                        if production {
+                            "production"
+                        } else {
+                            "development"
+                        }
+                        .into(),
+                    ),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            plugin.config_resolved(&config).await.unwrap();
+            assert!(plugin
+                .load(
+                    &ctx,
+                    LoadRequest {
+                        id: REFRESH_VIRTUAL.into(),
+                        environment: EnvironmentKind::Client
+                    }
+                )
+                .await
+                .is_err());
+            assert!(plugin
+                .transform(
+                    &ctx,
+                    TransformRequest {
+                        id: "/App.jsx".into(),
+                        code: "export function App() { return React.createElement('div'); }".into(),
+                        module_type: ModuleType::Js,
+                        environment: EnvironmentKind::Client,
+                        ssr: false
+                    }
+                )
+                .await
+                .unwrap()
+                .is_none());
+        }
+    }
 
     #[test]
     fn detects_capitalized_and_default_components() {

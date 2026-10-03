@@ -842,3 +842,31 @@ existing automatic/Refresh-enabled effective values. This resolves the recorded
 runtime/Refresh reset limitation, not complete presence handling for other config
 sections or React Refresh conformance. SSR, JSX ownership, HMR, checkers and the
 remaining framework mission are still unfinished and active.
+
+### Keep React Refresh out of server and disabled profiles
+
+React plugin transform now checks both SSR request flags and environment/context
+kinds before adding development instrumentation. SSR HTML is never given the
+Refresh preamble. Explicit Refresh virtual imports/resolution and loads outside
+enabled client development fail with actionable errors, including production and
+`react.refresh = false`; they no longer silently return browser-only code.
+
+Validation:
+
+- `cargo test -p ferrite-frameworks --locked`: 24 unit tests passed. New hook
+  regression covers independent SSR flag/request-kind/context-kind signals,
+  SSR virtual loading/HTML, production and disabled Refresh. Final
+  `cargo test -p ferrite-frameworks react::tests --locked` passed all six React
+  tests after adding positive enabled-client loading/transformation assertions.
+  The ignored compiler fixture from the ordinary command is not execution evidence.
+- `cargo clippy -p ferrite-frameworks --all-targets --locked -- -D warnings`:
+  passed after final changes; formatting/diff checks passed.
+
+Official runtime revalidation against React v19.1.1
+(`https://raw.githubusercontent.com/facebook/react/v19.1.1/packages/react-refresh/src/ReactFreshRuntime.js`)
+confirmed the current footer's `isLikelyComponentModule` call is not an exported
+runtime API. Fixing boundary validation with actual pinned runtime execution,
+hook signatures/registration, mixed exports and syntax recovery remains assigned;
+these hook exclusion tests do not establish functioning Refresh or SSR rendering.
+React client conformance remains unavailable in Doctor. JSX ownership, checker,
+framework HMR, real SSR and the full mission remain active.
