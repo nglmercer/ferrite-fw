@@ -205,6 +205,25 @@ impl NodeAdapterHost {
         Ok(profile_cache_identity(&self.profile()?))
     }
 
+    /// Files actually loaded by this worker. No static import guessing.
+    pub fn loaded_dependencies(&self) -> Result<std::collections::BTreeMap<PathBuf, String>> {
+        let response = self
+            .inner
+            .request(serde_json::json!({"cmd":"dependencies"}))?;
+        if !response.ok {
+            return Err(FerriteError::Build(
+                response
+                    .error
+                    .unwrap_or_else(|| "Node dependency snapshot unavailable".into()),
+            ));
+        }
+        serde_json::from_value(response.result).map_err(|error| {
+            FerriteError::Build(format!(
+                "Node dependency snapshot protocol mismatch: {error}"
+            ))
+        })
+    }
+
     /// Register one default factory/object or named-hook module in the validated
     /// resolveId/load/transform subset. Factories receive explicit JSON options once. Required
     /// unsupported hooks/metadata fail registration; no Vite compatibility claim.
@@ -632,6 +651,96 @@ mod tests {
             assert!(error.to_string().contains("profile"), "{error}");
             host.shutdown();
         }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires real Node; executed explicitly"]
+    async fn real_node_transitive_plugin_files_invalidate_cache_and_reject_stale_modules() {
+        use crate::{ForeignHookPlugin, ForeignPluginHost, Plugin};
+        let dir = tempfile::tempdir().unwrap();
+        let entry = dir.path().join("plugin.mjs");
+        let helper = dir.path().join("helper.cjs");
+        std::fs::write(&helper, "exports.value = 'first';").unwrap();
+        std::fs::write(&entry, "import helper from './helper.cjs'; export default {transform() { return 'export default ' + JSON.stringify(helper.value); }};").unwrap();
+        let host = std::sync::Arc::new(NodeAdapterHost::spawn(None).unwrap());
+        let plugin =
+            ForeignHookPlugin::register(host.clone(), "transitive", &entry, serde_json::json!({}))
+                .unwrap();
+        let handle = PluginHandle {
+            name: "transitive".into(),
+            host: "node-adapter".into(),
+        };
+        let request = || serde_json::json!({"code":"export default 0","id":"/app.js"});
+        assert_eq!(
+            host.call_hook(&handle, HookName::Transform, request())
+                .await
+                .unwrap(),
+            "export default \"first\""
+        );
+        let key = plugin.cache_key();
+        assert!(host
+            .loaded_dependencies()
+            .unwrap()
+            .contains_key(&helper.canonicalize().unwrap()));
+        std::fs::write(&helper, "exports.value = 'second';").unwrap();
+        assert_ne!(key, plugin.cache_key());
+        let error = host
+            .call_hook(&handle, HookName::Transform, request())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("dependency changed"), "{error}");
+        host.shutdown();
+        let fresh = std::sync::Arc::new(NodeAdapterHost::spawn(None).unwrap());
+        let plugin =
+            ForeignHookPlugin::register(fresh.clone(), "transitive", &entry, serde_json::json!({}))
+                .unwrap();
+        assert_ne!(key, plugin.cache_key());
+        assert_eq!(
+            fresh
+                .call_hook(&handle, HookName::Transform, request())
+                .await
+                .unwrap(),
+            "export default \"second\""
+        );
+        std::fs::remove_file(&helper).unwrap();
+        let error = fresh
+            .call_hook(&handle, HookName::Transform, request())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("dependency changed"), "{error}");
+        fresh.shutdown();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires real Node; executed explicitly"]
+    async fn real_node_rejects_late_hook_dependencies_persistently() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = dir.path().join("plugin.mjs");
+        std::fs::write(dir.path().join("late.mjs"), "export const value = 'late';").unwrap();
+        std::fs::write(&entry, "export default {async transform() {const {value} = await import('./late.mjs'); return 'export default ' + JSON.stringify(value); }};").unwrap();
+        let host = NodeAdapterHost::spawn(None).unwrap();
+        host.register_hook_plugin("late", &entry.to_string_lossy(), serde_json::json!({}))
+            .unwrap();
+        let handle = PluginHandle {
+            name: "late".into(),
+            host: "node-adapter".into(),
+        };
+        for _ in 0..2 {
+            let error = host
+                .call_hook(
+                    &handle,
+                    HookName::Transform,
+                    serde_json::json!({"code":"", "id":"/app.js"}),
+                )
+                .await
+                .unwrap_err();
+            assert!(
+                error.to_string().contains("recreate the explicit host"),
+                "{error}"
+            );
+            assert!(error.to_string().contains("during"), "{error}");
+        }
+        host.shutdown();
     }
 
     #[tokio::test]

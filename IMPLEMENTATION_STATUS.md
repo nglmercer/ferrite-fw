@@ -1705,3 +1705,52 @@ Transient restored mutations, asynchronous changes after returning, arbitrary
 files, transitive guest imports, executable integrity and other host/platform
 versions remain unverified. No framework support status is promoted. Complete
 Refresh, framework HMR/checkers, real SSR/SSG and the remaining mission stay active.
+
+### Track loaded foreign-plugin module dependencies
+
+The explicit Node worker now installs synchronous `node:module.registerHooks`
+load observation before importing guests. It snapshots hashes of canonical file
+modules actually loaded by ESM/CommonJS, exposes a typed dependency snapshot,
+and rejects changed/deleted loaded files before protocol requests and after
+successful guest execution. Foreign registration identities include the loaded
+snapshot; `foreign-hooks-v3` keys also hash current file contents. Successful
+load/transform results preserve these module paths as watched dependencies.
+Hooks that first load new file dependencies while executing are persistently
+rejected with instructions to recreate the host and import during registration,
+including when guest execution throws. No stale-module reload or Node fallback.
+Hosts without the required loader API fail startup with a tested-version hint.
+
+The API contract was checked against the official
+[Node 26.10.0 synchronous loader documentation](https://nodejs.org/api/module.html#moduleregisterhooksoptions).
+This does not establish support on other Node releases.
+
+Validation on Linux/Node 26.10.0:
+
+- `cargo test -p ferrite-plugin -p ferrite-frameworks -p ferrite --locked` passed
+  19 plugin, 27 framework and 14 facade unit tests plus three doc tests.
+  Output: `/tmp/ferrite-transitive-unit.log`.
+- All ten explicitly executed real-Node tests passed. New regressions use an
+  actual imported CommonJS helper: edits change cache identity and reject the
+  original worker, a fresh worker executes changed output, and deletion rejects
+  execution. A late ESM import fails both first and subsequent hook calls.
+  Output: `/tmp/ferrite-transitive-real.log`.
+- Actual project-matched Vue/Svelte client/server/runes compiler fixture passed.
+  Shared foreign-hook development/production fixture now checks imported helper
+  watch metadata, cache-key invalidation and explicit stale-worker failure,
+  retaining entry-change/map/import/side-effect assertions. Outputs:
+  `/tmp/ferrite-transitive-compilers.log` and `/tmp/ferrite-transitive-pipeline.log`.
+- All 12 explicitly executed Chromium/Firefox generated-app acceptance tests
+  passed with `--test-threads=2` (104.24 seconds), covering the six existing
+  templates and foreign-hook/dependency/startup flows. Output:
+  `/tmp/ferrite-transitive-browsers.log`.
+- Workspace compilation, rebuilt CLI, plugin/framework/server all-target Clippy
+  with `--locked -- -D warnings`, formatting and diff checks passed.
+
+Existing foreign/Node-derived cache identities change automatically. No lock or
+configuration schema migration. This tracks loaded module files, not arbitrary
+filesystem reads, package-resolution metadata, preloaded modules, worker-thread
+imports, executable integrity or guest-created loader behavior. Whole-worker
+snapshots conservatively include dependencies of other registrations on that
+worker. File changes racing loading/checks, null-result watch ownership, automatic
+restart, late dependency discovery and broader cache/concurrency matrices remain
+assigned. No support status is promoted; the full framework mission remains active.

@@ -7,7 +7,8 @@
 // A hook returning `null`/`undefined` means "skip" (Rust keeps its default).
 import { createInterface } from "node:readline";
 import { createHash } from "node:crypto";
-import { realpathSync } from "node:fs";
+import * as nodeModule from "node:module";
+import { readFileSync, realpathSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -16,7 +17,21 @@ const protocolWrite = process.stdout.write.bind(process.stdout);
 process.stdout.write = process.stderr.write.bind(process.stderr);
 const plugins = new Map();
 const hookPlugins = new Map();
+const invalidHookPlugins = new Set();
 const registeredEntries = new Set();
+const loadedFiles = new Map();
+function fileHash(path) {
+  return createHash('sha256').update(readFileSync(path)).digest('hex');
+}
+if (typeof nodeModule.registerHooks !== 'function') throw new Error('Ferrite Node host requires node:module.registerHooks for dependency tracking; select a tested Node version (26.10.0) explicitly');
+nodeModule.registerHooks({load(url, context, nextLoad) {
+  const result = nextLoad(url, context);
+  if (url.startsWith('file:')) {
+    const path = realpathSync(fileURLToPath(url));
+    loadedFiles.set(path, fileHash(path));
+  }
+  return result;
+}});
 const supportedHooks = new Set(['resolveId', 'load', 'transform']);
 // Capture the running host before any guest is evaluated. This is capability
 // identity, not a promise of compatibility for every Node version.
@@ -35,6 +50,11 @@ const hostProfile = {
   environmentHash: environmentHash(),
 };
 function assertHostState(stage) {
+  for (const [path, hash] of loadedFiles) {
+    let current;
+    try { current = fileHash(path); } catch { current = null; }
+    if (current !== hash) throw new Error(`Node guest dependency changed: ${path}; recreate the explicit host before compiling`);
+  }
   if (realpathSync(process.cwd()) !== hostProfile.cwd || environmentHash() !== hostProfile.environmentHash) {
     throw new Error(`Node worker environment or cwd changed ${stage}; recreate the explicit host and avoid mutating process.env/process.chdir in compiler or plugin hooks`);
   }
@@ -99,6 +119,7 @@ async function register(id, name, entry, profile, options) {
 }
 
 async function hook(id, name, hook, input) {
+  if (invalidHookPlugins.has(name)) throw new Error(`foreign plugin ${name} discovered dependencies during a hook; recreate the explicit host and import dependencies during registration`);
   const module = hookPlugins.get(name) || plugins.get(name);
   if (!module) {
     respond(id, false, null, `unknown plugin \`${name}\``);
@@ -122,8 +143,17 @@ async function hook(id, name, hook, input) {
   } else {
     args = [input];
   }
-  const result = await hookFn.apply(hookContext, args);
-  assertHostState(`during ${name}.${hook}`);
+  const fileCount = loadedFiles.size;
+  let result;
+  try {
+    result = await hookFn.apply(hookContext, args);
+  } finally {
+    if (loadedFiles.size !== fileCount) {
+      invalidHookPlugins.add(name);
+      throw new Error(`foreign hook ${name}.${hook} loaded new file dependencies; recreate the explicit host and import them during registration before compiling`);
+    }
+    assertHostState(`during ${name}.${hook}`);
+  }
   respond(id, true, result === undefined ? null : result);
 }
 
@@ -143,7 +173,9 @@ rl.on("line", (line) => {
   tail = tail
     .then(async () => {
       assertHostState(`before ${message.cmd}`);
-      if (message.cmd === "profile") {
+      if (message.cmd === "dependencies") {
+        respond(message.id, true, Object.fromEntries(loadedFiles));
+      } else if (message.cmd === "profile") {
         respond(message.id, true, hostProfile);
       } else if (message.cmd === "register") {
         await register(message.id, message.name, message.entry, message.profile, message.options);

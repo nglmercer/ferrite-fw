@@ -264,6 +264,12 @@ imports — plus the items below.
   Persistent environment/cwd changes during registration or guest calls fail
   with an explicit host-restart error. This consistency check does not sandbox
   Node or track arbitrary files and asynchronous guest state.
+  The tested Node 26.10.0 host tracks module files loaded during registration
+  using synchronous loader hooks. Foreign-hook caches include those files and
+  successful load/transform results retain them as watched dependencies. Editing
+  or deleting loaded modules requires a new explicit host. Hooks that first load
+  file dependencies during execution fail persistently; import those dependencies
+  during registration. Hosts lacking `node:module.registerHooks` fail startup.
 - **Markdown docs + vendored utility CSS.** `ferrite-docs` turns `.md`
   files into JS modules exporting rendered HTML; `ferrite-tailwind`
   compiles `ferrite:tailwind.css` from project content using the

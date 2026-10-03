@@ -22,6 +22,7 @@ pub struct ForeignHookPlugin {
     identity: String,
     entry: PathBuf,
     source_hash: Hash,
+    dependencies: std::collections::BTreeMap<PathBuf, String>,
 }
 
 impl ForeignHookPlugin {
@@ -44,6 +45,11 @@ impl ForeignHookPlugin {
             FerriteError::Build("foreign plugin entry must be a UTF-8 path".into())
         })?;
         host.register_hook_plugin(name, path, options)?;
+        let dependencies = host.loaded_dependencies()?;
+        let identity = Hash::of_str(
+            &serde_json::json!({"registration":identity,"dependencies":dependencies}).to_string(),
+        )
+        .0;
         Ok(Self {
             host,
             handle: PluginHandle {
@@ -53,7 +59,19 @@ impl ForeignHookPlugin {
             identity,
             entry,
             source_hash,
+            dependencies,
         })
+    }
+
+    fn watched_dependencies(&self, mut dependencies: Vec<String>) -> Vec<String> {
+        dependencies.extend(
+            self.dependencies
+                .keys()
+                .filter_map(|path| path.to_str().map(str::to_owned)),
+        );
+        dependencies.sort();
+        dependencies.dedup();
+        dependencies
     }
 
     async fn call(&self, hook: HookName, input: Value) -> Result<Value> {
@@ -136,8 +154,24 @@ impl Plugin for ForeignHookPlugin {
         let entry_state = std::fs::read(&self.entry)
             .map(|source| Hash::of_bytes(&source).0)
             .unwrap_or_else(|_| "missing-entry".into());
+        let dependency_state: Vec<_> = self
+            .dependencies
+            .keys()
+            .map(|path| {
+                (
+                    path,
+                    std::fs::read(path)
+                        .map(|source| Hash::of_bytes(&source).0)
+                        .unwrap_or_else(|_| "missing-dependency".into()),
+                )
+            })
+            .collect();
+        let dependency_state = Hash::of_str(
+            &serde_json::to_string(&dependency_state).expect("serializable dependency paths"),
+        )
+        .0;
         format!(
-            "foreign-hooks-v2:{}:{}:{entry_state}",
+            "foreign-hooks-v3:{}:{}:{entry_state}:{dependency_state}",
             self.handle.name, self.identity
         )
     }
@@ -175,7 +209,7 @@ impl Plugin for ForeignHookPlugin {
             module_type: result
                 .module_type
                 .unwrap_or_else(|| ModuleType::from_path(&request.id)),
-            dependencies: result.dependencies,
+            dependencies: self.watched_dependencies(result.dependencies),
             map: source_map(result.map)?,
             side_effects: result.side_effects,
         }))
@@ -197,7 +231,7 @@ impl Plugin for ForeignHookPlugin {
         Ok(Some(TransformResult {
             code: result.code,
             map: source_map(result.map)?,
-            dependencies: result.dependencies,
+            dependencies: self.watched_dependencies(result.dependencies),
             module_type: result.module_type,
         }))
     }

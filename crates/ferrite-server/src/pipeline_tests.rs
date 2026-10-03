@@ -1123,8 +1123,11 @@ async fn foreign_factory_hooks_participate_in_the_shared_pipeline() {
             "export const dependency = 42;",
         )
         .unwrap();
+        let helper = root.path().join("helper.mjs");
+        std::fs::write(&helper, "export const suffix = ';';").unwrap();
         let entry = root.path().join("plugin.mjs");
         std::fs::write(&entry, r#"
+import {suffix} from "./helper.mjs";
 export default options => ({
   name: 'pipeline-fixture',
   resolveId(id, importer, context) {
@@ -1141,7 +1144,7 @@ export default options => ({
   transform: {handler(code, id, context) {
     if (id !== '/generated.js') return null;
     if (context.ssr !== false) throw new Error('missing transform context');
-    return {code: code + '\nexport const profile = ' + JSON.stringify(options.profile) + ';', dependencies: ['plugin.mjs'],
+    return {code: code + '\nexport const profile = ' + JSON.stringify(options.profile) + suffix, dependencies: ['plugin.mjs'],
       map: {version: 3, sources: [id], sourcesContent: [code], names: [], mappings: 'AAAA'}};
   }}
 });
@@ -1201,6 +1204,20 @@ export default options => ({
             .imports
             .iter()
             .any(|edge| edge.resolved == ModuleId::new("/dependency.js")));
+        assert!(generated
+            .dependencies
+            .iter()
+            .any(|path| path.ends_with("helper.mjs")));
+        let helper_identity = server.inner.plugins.cache_key();
+        std::fs::write(&helper, "export const suffix = 'changed';").unwrap();
+        assert_ne!(helper_identity, server.inner.plugins.cache_key());
+        let error = server
+            .pipeline_module(&ModuleId::new("/generated.js"), None, "client")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("dependency changed"), "{error}");
+        // Restore the dependency to exercise the separate entry-change guard.
+        std::fs::write(&helper, "export const suffix = ';';").unwrap();
         let cache_identity = server.inner.plugins.cache_key();
         std::fs::write(
             &entry,
