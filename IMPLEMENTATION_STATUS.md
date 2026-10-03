@@ -1,5 +1,25 @@
 # Framework support implementation status
 
+## ModuleRunner invalidates canonical graphs behind recorded aliases
+
+Successful runner URL records now retain their compiled canonical module ID.
+Invalidating an imported alias uses that ID, invalidates its importer tree, and
+removes every affected URL record, including other aliases and recorded importer
+roots. Canonical IDs without their own URL record retain direct invalidation.
+Unrelated records and graphs remain intact. Records store IDs, not independently
+cached compiled graphs, preserving shared-pipeline validation on every import.
+
+The regression imports two aliases, an importer and an unrelated module, then
+checks canonical/importer invalidation, removal of affected aliases/roots,
+preservation of the unrelated graph, fresh source through an alias after an edit,
+and direct canonical invalidation. All 56 server unit tests passed, with two
+explicit-host tests ignored. Server all-target Clippy with `-D warnings`, changed
+file formatting, and diff checks passed. No public signature, config, or lockfile
+migration is required. Synchronous invalidation of never-imported aliases still
+uses its supplied graph ID; async resolution and concurrent runner lifecycle
+semantics remain unfinished. Browser/full-workspace/host/release gates were not
+rerun. Real SSR/hydration and the full framework mission remain incomplete.
+
 ## ModuleRunner delegates cache validation to the shared pipeline
 
 Every ModuleRunner import now goes through `ssr_load_module` and the existing

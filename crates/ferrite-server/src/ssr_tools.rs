@@ -9,7 +9,7 @@ use ferrite_core::Result;
 use ferrite_graph::ImportKind;
 use ferrite_plugin::TransformRequest as HookTransformRequest;
 use ferrite_ssr::SsrModule;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -33,7 +33,7 @@ pub struct SsrTransformResult {
 /// without one the runner loads and tracks modules only.
 pub struct ModuleRunner {
     server: DevServer,
-    cache: Mutex<HashSet<String>>,
+    cache: Mutex<HashMap<String, String>>,
 }
 
 impl ModuleRunner {
@@ -42,7 +42,7 @@ impl ModuleRunner {
     pub fn new(server: DevServer) -> Self {
         Self {
             server,
-            cache: Mutex::new(HashSet::new()),
+            cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -57,17 +57,30 @@ impl ModuleRunner {
         }
         let module = self.server.ssr_load_module(url).await?;
         if let Ok(mut cache) = self.cache.lock() {
-            cache.insert(url.to_string());
+            cache.insert(url.to_string(), module.id.clone());
         }
         Ok(module)
     }
 
-    /// Drop one URL from the cache and invalidate its graph subtree.
+    /// Resolve a recorded alias to its canonical module, invalidate its importers,
+    /// and remove every affected recorded URL.
     pub fn invalidate(&self, url: &str) {
-        if let Ok(mut cache) = self.cache.lock() {
-            cache.remove(url);
+        let mut cache = self.cache.lock().ok();
+        let canonical = cache
+            .as_ref()
+            .and_then(|cache| cache.get(url))
+            .map_or(url, String::as_str);
+        let invalidated: HashSet<_> = self
+            .server
+            .inner
+            .graph
+            .invalidate_tree(&ModuleId::new(canonical))
+            .into_iter()
+            .map(|id| id.0)
+            .collect();
+        if let Some(cache) = &mut cache {
+            cache.retain(|_, canonical| !invalidated.contains(canonical));
         }
-        self.server.inner.graph.invalidate_tree(&ModuleId::new(url));
     }
 
     /// Drop the whole runner cache (the graph is untouched).
@@ -82,7 +95,7 @@ impl ModuleRunner {
     pub fn cached_urls(&self) -> Vec<String> {
         self.cache
             .lock()
-            .map(|cache| cache.iter().cloned().collect())
+            .map(|cache| cache.keys().cloned().collect())
             .unwrap_or_default()
     }
 

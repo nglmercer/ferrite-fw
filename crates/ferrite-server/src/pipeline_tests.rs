@@ -7,6 +7,81 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 #[tokio::test]
+async fn module_runner_invalidation_resolves_aliases_and_removes_affected_records() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(
+        root.path().join("dependency.js"),
+        "export const value = 41;",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("server.js"),
+        "import { value } from './dependency.js'; export { value };",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("unrelated.js"),
+        "export const separate = true;",
+    )
+    .unwrap();
+    let mut user = ferrite_config::UserConfig::default();
+    user.resolve
+        .alias
+        .insert("/first".into(), "/dependency.js".into());
+    user.resolve
+        .alias
+        .insert("/second".into(), "/dependency.js".into());
+    let config =
+        ferrite_config::resolve_config(user, Some(root.path().into()), Default::default()).unwrap();
+    let server = DevServer::new_without_watcher(config, Vec::new())
+        .await
+        .unwrap();
+    let runner = server.module_runner();
+    assert_eq!(runner.import("/first").await.unwrap().id, "/dependency.js");
+    runner.import("/second").await.unwrap();
+    runner.import("/server.js").await.unwrap();
+    runner.import("/unrelated.js").await.unwrap();
+    assert_eq!(runner.cached_urls().len(), 4);
+    runner.invalidate("/first");
+    assert!(
+        server
+            .inner
+            .graph
+            .get(&ModuleId::new("/dependency.js"))
+            .unwrap()
+            .ssr
+            .invalidated
+    );
+    assert!(
+        server
+            .inner
+            .graph
+            .get(&ModuleId::new("/server.js"))
+            .unwrap()
+            .ssr
+            .invalidated
+    );
+    assert!(
+        !server
+            .inner
+            .graph
+            .get(&ModuleId::new("/unrelated.js"))
+            .unwrap()
+            .ssr
+            .invalidated
+    );
+    assert_eq!(runner.cached_urls(), ["/unrelated.js"]);
+    std::fs::write(
+        root.path().join("dependency.js"),
+        "export const value = 42;",
+    )
+    .unwrap();
+    assert!(runner.import("/second").await.unwrap().code.contains("42"));
+    runner.invalidate("/dependency.js");
+    assert_eq!(runner.cached_urls(), ["/unrelated.js"]);
+}
+
+#[tokio::test]
 async fn module_runner_revalidates_source_and_transitive_failures_without_a_watcher() {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(
