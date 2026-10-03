@@ -242,6 +242,8 @@ impl Builder {
         container.hook_write_bundle(ctx, &output.bundle).await?;
         // Manifests (§40).
         if env == "ssr" {
+            // Keep output entry identities as well as the module-to-chunk map.
+            output.manifest.write(&out_dir.join("manifest.json"))?;
             output
                 .ssr_manifest
                 .write(&out_dir.join("ssr-manifest.json"))?;

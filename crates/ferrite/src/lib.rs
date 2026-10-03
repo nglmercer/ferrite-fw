@@ -46,6 +46,8 @@ pub use ferrite_transform as transform;
 pub use ferrite_wasm as wasm;
 
 pub mod package;
+mod ssr_build;
+pub use ssr_build::load_built_ssr_graph;
 
 // --- re-exported vocabulary --------------------------------------------------
 pub use ferrite_config::{
