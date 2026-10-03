@@ -37,8 +37,34 @@ pub use types::{
     ParsedImportKind, ParsedModule, ShakeInfo, TransformRequest, TransformResult,
 };
 
+pub use parse::self_accepts_hmr;
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hmr_context_reads_do_not_establish_self_acceptance() {
+        for code in [
+            "console.log(import.meta.hot.data);",
+            "globalThis.__ferrite_create_hot__('/other.js').accept(() => {});",
+            "function unused() { import.meta.hot.accept(); }",
+            "(import.meta.hot && unrelated).accept(() => {});",
+            "import.meta.hot.dispose(() => {});",
+            "import.meta.hot.accept('./dep.js', () => {});",
+            "const text = 'import.meta.hot.accept()';",
+            "// import.meta.hot.accept()",
+        ] {
+            assert!(!crate::parse::self_accepts_hmr("/test.js", code), "{code}");
+        }
+        for code in [
+            "if (import.meta.hot) import.meta.hot.accept();",
+            "globalThis.__ferrite_create_hot__('/test.js').accept(() => {});",
+            "import.meta.hot.accept(next => console.log(next));",
+            "(import.meta.hot || fallback).accept(function(next) {});",
+        ] {
+            assert!(crate::parse::self_accepts_hmr("/test.js", code), "{code}");
+        }
+    }
+
     use super::*;
     use crate::parse::parse_module;
     use ferrite_core::ModuleType;

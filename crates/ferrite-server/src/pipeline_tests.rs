@@ -273,3 +273,37 @@ async fn components_are_not_asset_shimmed_and_missing_compilers_fail_loudly() {
     }
     server.close();
 }
+
+#[tokio::test]
+async fn final_graph_requires_self_accept_call_not_context_read() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(
+        root.path().join("read-hot.js"),
+        "console.log(import.meta.hot.data); import.meta.hot.dispose(() => {});",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("accept-hot.js"),
+        "if (import.meta.hot) import.meta.hot.accept(next => console.log(next));",
+    )
+    .unwrap();
+    let config = ferrite_config::resolve_config(
+        Default::default(),
+        Some(root.path().into()),
+        Default::default(),
+    )
+    .unwrap();
+    let server = DevServer::new_without_watcher(config, vec![])
+        .await
+        .unwrap();
+    for (path, expected) in [("/read-hot.js", false), ("/accept-hot.js", true)] {
+        let id = ModuleId::new(path);
+        let module = server.pipeline_module(&id, None, "client").await.unwrap();
+        assert!(module.uses_import_meta_hot);
+        assert_eq!(
+            server.inner.graph.get(&id).unwrap().hmr.self_accepting,
+            expected,
+            "{}", module.code
+        );
+    }
+}

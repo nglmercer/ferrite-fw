@@ -152,7 +152,7 @@ impl DevServer {
         if let Ok(file) = self.id_to_file(&module.id) {
             node.file = Some(file);
         }
-        node.hmr.self_accepting = module.uses_import_meta_hot;
+        node.hmr.self_accepting = ferrite_transform::self_accepts_hmr(&module.id.0, &module.code);
         self.inner.graph.upsert(node);
         let mut edges: Vec<ImportEdge> = module
             .imports

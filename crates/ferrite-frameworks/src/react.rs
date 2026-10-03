@@ -128,7 +128,7 @@ pub fn refresh_footer(id: &str, registrations: &[Registration]) -> String {
     footer.push_str(&format!(
         "if (import.meta.hot || globalThis.__ferrite_create_hot__) {{\n\
          const __ferrite_hot__ = import.meta.hot || globalThis.__ferrite_create_hot__({id:?});\n\
-         __ferrite_hot__.accept((next) => {{\n\
+         (import.meta.hot || __ferrite_hot__).accept((next) => {{\n\
          if (next == null) return;\n\
          let valid = false;\n\
          try {{\n\

@@ -320,3 +320,65 @@ pub(crate) fn static_dynamic_specifier(
         (start + leading, start + leading + text.len()),
     ))
 }
+
+/// Distinguish explicit self-accept calls from merely reading the hot context.
+/// Opaque dependency/callback expressions do not establish a self boundary.
+pub fn self_accepts_hmr(id: &str, code: &str) -> bool {
+    use oxc_ast::ast::{Argument, CallExpression};
+    fn hot(expression: &Expression<'_>, id: &str) -> bool {
+        match expression.get_inner_expression() {
+            Expression::StaticMemberExpression(member) => {
+                member.property.name == "hot" && matches!(member.object, Expression::ImportMeta(_))
+            }
+            Expression::LogicalExpression(logical) => {
+                matches!(
+                    logical.operator,
+                    oxc_syntax::operator::LogicalOperator::Or
+                        | oxc_syntax::operator::LogicalOperator::Coalesce
+                ) && hot(&logical.left, id)
+            }
+            Expression::CallExpression(call) => {
+                matches!(call.callee.get_inner_expression(), Expression::StaticMemberExpression(member)
+                    if member.property.name == "__ferrite_create_hot__" && matches!(member.object.get_inner_expression(), Expression::Identifier(identifier) if identifier.name == "globalThis"))
+                    && call.arguments.len() == 1
+                    && matches!(call.arguments.first(), Some(Argument::StringLiteral(value)) if value.value == id)
+            }
+            _ => false,
+        }
+    }
+    struct Finder {
+        found: bool,
+        id: String,
+    }
+    impl<'a> Visit<'a> for Finder {
+        fn visit_function_body(&mut self, _: &oxc_ast::ast::FunctionBody<'a>) {}
+
+        fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+            if let Expression::StaticMemberExpression(member) = call.callee.get_inner_expression() {
+                if member.property.name == "accept"
+                    && hot(&member.object, &self.id)
+                    && matches!(
+                        call.arguments.first(),
+                        None | Some(
+                            Argument::ArrowFunctionExpression(_) | Argument::FunctionExpression(_)
+                        )
+                    )
+                {
+                    self.found = true;
+                }
+            }
+            oxc_ast_visit::walk::walk_call_expression(self, call);
+        }
+    }
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, code, source_type_for(id, &ModuleType::Js)).parse();
+    if parsed.fatal_error || !parsed.diagnostics.is_empty() {
+        return false;
+    }
+    let mut finder = Finder {
+        found: false,
+        id: id.into(),
+    };
+    finder.visit_program(&parsed.program);
+    finder.found
+}

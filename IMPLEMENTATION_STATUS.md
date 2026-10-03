@@ -1037,3 +1037,35 @@ callback path/array semantics and browser module-cache re-execution of importer
 chains still require implementation and acceptance tests. Complete Refresh,
 framework HMR, SSR/checkers and remaining framework mission stay active; no new
 support profile is advertised.
+
+### Self-accept metadata requires an accept call
+
+Graph self-acceptance is no longer inferred from generic `import.meta.hot` usage.
+Added AST-based analysis of explicit no-argument/function-callback self-accept
+calls in final JavaScript, including the pipeline's lowered factory form when its
+literal module identity matches. Data reads, dispose calls, dependency accepts,
+strings/comments, unrelated logical contexts and unused function bodies do not
+establish a boundary. Opaque aliases/callbacks are not treated as proven acceptance.
+React's footer exposes its hot-context receiver to this analysis while retaining
+actual-runtime fallback behavior.
+
+Validation:
+
+- `cargo test -p ferrite-transform -p ferrite-server --locked`: 46 transform and
+  33 server tests passed. New real-file pipeline regression distinguishes hot
+  usage from graph self-acceptance after lowering; parser regression covers false
+  positives and recognized explicit forms. Final parser rerun passed with
+  same-module versus other-module factory cases.
+  Output: `/tmp/ferrite-explicit-hmr-verified-final.log`.
+- `cargo test -p ferrite-frameworks --test react_refresh_runtime --locked -- --ignored --nocapture`:
+  actual pinned runtime fixture passed (1.70 seconds).
+- `cargo clippy -p ferrite-transform -p ferrite-server -p ferrite-frameworks --all-targets --locked -- -D warnings`:
+  passed after moving the public export before the test module; formatting/diff
+  checks passed.
+
+The pipeline regression exposed another required fix: hot lowering currently
+creates a context for each hot access, which can reset registrations during one
+module evaluation. Singleton per-evaluation lowering remains assigned. Explicit
+dependency/alias acceptance metadata, unsupported-form diagnostics, browser
+state/recovery, complete Refresh, framework HMR, SSR/checkers and remaining
+mission work stay active. No support profile is promoted by this analysis change.
