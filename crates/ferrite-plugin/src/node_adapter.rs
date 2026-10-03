@@ -57,6 +57,8 @@ pub struct NodeHostProfile {
     pub platform: String,
     pub arch: String,
     pub versions: std::collections::BTreeMap<String, String>,
+    pub exec_args: Vec<String>,
+    pub node_options: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -565,10 +567,20 @@ mod tests {
                 ("v8".into(), "tested".into()),
             ]
             .into(),
+            exec_args: vec!["--max-old-space-size=256".into()],
+            node_options: None,
         };
         let expected = profile_cache_identity(&profile);
         assert_eq!(expected, profile_cache_identity(&profile.clone()));
-        for field in ["version", "executable", "platform", "arch", "abi"] {
+        for field in [
+            "version",
+            "executable",
+            "platform",
+            "arch",
+            "abi",
+            "args",
+            "node-options",
+        ] {
             let mut changed = profile.clone();
             match field {
                 "version" => {
@@ -578,6 +590,8 @@ mod tests {
                 "executable" => changed.executable = "/different-node".into(),
                 "platform" => changed.platform = "darwin".into(),
                 "arch" => changed.arch = "arm64".into(),
+                "args" => changed.exec_args.push("--conditions=custom".into()),
+                "node-options" => changed.node_options = Some("--conditions=custom".into()),
                 _ => {
                     changed.versions.insert("v8".into(), "different".into());
                 }
@@ -592,7 +606,7 @@ mod tests {
         for profile in [
             serde_json::Value::Null,
             serde_json::json!({"nodeVersion":"v26.10.0"}),
-            serde_json::json!({"nodeVersion":"v26.10.0", "executable":"/node", "platform":"linux", "arch":"x64", "versions":{"node":"27.0.0"}}),
+            serde_json::json!({"nodeVersion":"v26.10.0", "executable":"/node", "platform":"linux", "arch":"x64", "versions":{"node":"27.0.0"}, "execArgs":[]}),
         ] {
             let dir = tempfile::tempdir().unwrap();
             fake_node_script(
@@ -611,7 +625,7 @@ mod tests {
     async fn real_node_reports_stable_running_host_identity() {
         let dir = tempfile::tempdir().unwrap();
         let entry = dir.path().join("probe.mjs");
-        std::fs::write(&entry, "export function probe() { return {nodeVersion:process.version, executable:process.execPath, platform:process.platform, arch:process.arch, versions:process.versions}; }").unwrap();
+        std::fs::write(&entry, "export function probe() { return {nodeVersion:process.version, executable:process.execPath, platform:process.platform, arch:process.arch, versions:process.versions, execArgs:process.execArgv, nodeOptions:process.env.NODE_OPTIONS ?? null}; }").unwrap();
         let host = NodeAdapterHost::spawn(None).unwrap();
         let profile = host.profile().unwrap();
         let identity = host.cache_identity().unwrap();
@@ -625,6 +639,8 @@ mod tests {
         .unwrap();
         assert_eq!(profile.node_version, observed.node_version);
         assert_eq!(profile.versions, observed.versions);
+        assert_eq!(profile.exec_args, observed.exec_args);
+        assert_eq!(profile.node_options, observed.node_options);
         assert_eq!(
             profile.executable,
             observed.executable.canonicalize().unwrap()
@@ -635,6 +651,82 @@ mod tests {
         assert_eq!(identity, other.cache_identity().unwrap());
         host.shutdown();
         other.shutdown();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires real Node; executed explicitly"]
+    async fn real_node_conditions_isolate_foreign_transform_cache_keys() {
+        use crate::Plugin;
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let package = dir.path().join("node_modules/conditional-fixture");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(package.join("package.json"), r#"{"name":"conditional-fixture","type":"module","exports":{"ferrite-identity-test":"./custom.js","default":"./default.js"}}"#).unwrap();
+        std::fs::write(package.join("default.js"), "export default 'default';").unwrap();
+        std::fs::write(package.join("custom.js"), "export default 'custom';").unwrap();
+        let entry = dir.path().join("plugin.mjs");
+        std::fs::write(&entry, "import selected from 'conditional-fixture'; export function probe() { return selected; } export default () => ({transform(code) { return {code: code.replace(\"'original'\", JSON.stringify(selected))}; }});").unwrap();
+        let node = find_on_path("node")
+            .expect("real Node required")
+            .canonicalize()
+            .unwrap();
+        let quoted_node = format!("'{}'", node.to_string_lossy().replace('\'', "'\\''"));
+        let mut keys = Vec::new();
+        let mut profiles = Vec::new();
+        for (index, flags, selected) in [
+            (0, "", "default"),
+            (1, "--conditions=ferrite-identity-test", "custom"),
+        ] {
+            let wrapper = dir.path().join(format!("node-{index}"));
+            std::fs::write(
+                &wrapper,
+                format!("#!/bin/sh\nNODE_OPTIONS='{flags}' exec {quoted_node} \"$@\"\n"),
+            )
+            .unwrap();
+            std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let host = Arc::new(NodeAdapterHost::spawn(Some(wrapper)).unwrap());
+            let profile = host.profile().unwrap();
+            assert_eq!(profile.node_options.as_deref(), Some(flags));
+            profiles.push(profile);
+            let plugin = crate::ForeignHookPlugin::register(
+                host.clone(),
+                "fixture",
+                &entry,
+                serde_json::json!({}),
+            )
+            .unwrap();
+            keys.push(plugin.cache_key());
+            assert_eq!(
+                host.call_export("fixture", "probe", serde_json::Value::Null)
+                    .await
+                    .unwrap(),
+                selected
+            );
+            let result = crate::ForeignPluginHost::call_hook(
+                host.as_ref(),
+                &PluginHandle {
+                    name: "fixture".into(),
+                    host: "node-adapter".into(),
+                },
+                HookName::Transform,
+                serde_json::json!({"code":"export const source = 'original';", "id":"/source.js"}),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                result["code"],
+                format!("export const source = \"{selected}\";")
+            );
+            host.shutdown();
+        }
+        assert_eq!(profiles[0].executable, profiles[1].executable);
+        assert_eq!(profiles[0].versions, profiles[1].versions);
+        assert_eq!(profiles[0].exec_args, profiles[1].exec_args);
+        assert_ne!(
+            keys[0], keys[1],
+            "conditional package code must not share a transform key"
+        );
     }
 
     /// Fake `node`: replays canned responses for `register`/`hook`.

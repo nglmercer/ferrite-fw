@@ -1622,3 +1622,47 @@ binary integrity, execution flags/environment inputs, transitive plugin imports,
 additional Node versions/platforms and the wider cache matrix remain unverified.
 No framework support status is promoted. SSR/renderers, complete Refresh,
 framework HMR/checkers and the full remaining mission stay assigned and active.
+
+### Isolate Node execution flags in compiler/plugin cache identities
+
+The captured running-host profile now includes explicit execution arguments and
+`NODE_OPTIONS`. Both foreign-hook and official Vue/Svelte cache identities
+already consume this profile, so flags that change conditional package resolution
+cannot reuse output from a differently configured worker. Profiles missing the
+required execution-argument metadata fail instead of assuming default flags.
+No additional worker is started to obtain this metadata.
+
+Validation on Linux/Node 26.10.0:
+
+- `cargo test -p ferrite-plugin -p ferrite-frameworks -p ferrite --locked` passed
+  19 plugin, 27 framework and 14 facade tests plus three facade doc tests.
+  Key-isolation tests cover explicit arguments and `NODE_OPTIONS`; the real
+  process-profile probe checks those fields against the running guest. Output:
+  `/tmp/ferrite-node-options-all-unit.log`.
+- All six explicitly executed real-Node transport tests passed. The new Unix
+  fixture launches the same actual Node executable with isolated wrapper
+  environments, loads a real local conditional-exports package, transforms valid
+  JavaScript and requires default/custom selections and different adapter keys.
+  Node executable, ABI versions and explicit arguments remain equal while
+  `NODE_OPTIONS` differs; no process-global test environment mutation is used.
+  Output: `/tmp/ferrite-node-options-real.log`.
+- Actual project-matched Vue/Svelte client/server/runes compiler and shared
+  foreign-hook dev/production pipeline fixtures passed. Outputs:
+  `/tmp/ferrite-node-options-compilers.log` and `/tmp/ferrite-node-options-pipeline.log`.
+- Rebuilt CLI; all 12 explicitly executed Chromium/Firefox acceptance tests
+  passed with `--test-threads=2` (95.27 seconds), retaining the six existing
+  templates and foreign-hook/dependency/startup flows. Output:
+  `/tmp/ferrite-node-options-browsers.log`.
+- Workspace compilation, plugin/framework all-target Clippy with
+  `--locked -- -D warnings`, formatting and diff checks passed.
+
+The tested flag behavior matches Node 26.10.0's documented
+[user conditions](https://nodejs.org/api/packages.html#resolving-user-conditions) and
+[NODE_OPTIONS](https://nodejs.org/api/cli.html#node_optionsoptions) contracts.
+Prior Node-derived cache identities change automatically;
+no Ferrite lock/config/global cache schema migration. Other environment values,
+working-directory inputs, executable integrity, transitive plugin state and
+additional host/platform versions remain unverified. This fixture proves host
+conditional resolution and key isolation, not Ferrite installer/browser support
+for arbitrary custom-condition packages. No framework support status is promoted;
+the full remaining mission stays active.

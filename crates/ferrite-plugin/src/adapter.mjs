@@ -25,6 +25,8 @@ const hostProfile = {
   platform: process.platform,
   arch: process.arch,
   versions: {...process.versions},
+  execArgs: [...process.execArgv],
+  nodeOptions: process.env.NODE_OPTIONS ?? null,
 };
 function hookHandler(value, name) {
   if (value == null) return null;

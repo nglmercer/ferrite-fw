@@ -255,7 +255,8 @@ imports — plus the items below.
   entries/executables and reports execution as unverified; dev/build validate
   the required hook contract. Inspect omits factory options from its report.
   Running Node hosts expose `profile()` with their actual executable, Node/V8
-  and ABI versions, platform and architecture. Foreign-hook and official
+  and ABI versions, platform, architecture, execution arguments and `NODE_OPTIONS`.
+  Foreign-hook and official
   Vue/Svelte compiler cache identities include this profile and the bridge/
   compiler-wrapper implementation. This is cache identity, not a compatibility
   claim for untested Node versions; doctor still does not start a host.
