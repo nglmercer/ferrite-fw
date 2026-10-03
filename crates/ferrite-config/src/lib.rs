@@ -897,6 +897,10 @@ pub struct CliOverrides {
     pub root: Option<PathBuf>,
     /// Override mode.
     pub mode: Option<String>,
+    /// Command default used only when no explicit mode is selected.
+    pub default_mode: Option<String>,
+    /// Compilation behavior, separate from the environment-file mode name.
+    pub is_production: Option<bool>,
     /// Override host.
     pub host: Option<String>,
     /// Override port.
@@ -1336,8 +1340,9 @@ pub fn resolve_config(
     let mode = overrides
         .mode
         .or(user.mode.clone())
+        .or(overrides.default_mode)
         .unwrap_or_else(|| "development".to_string());
-    let is_production = mode == "production";
+    let is_production = overrides.is_production.unwrap_or(mode == "production");
     let mut server = user.server.clone();
     if let Some(host) = overrides.host {
         server.host = host;

@@ -2,6 +2,39 @@
 
 use ferrite_test::TempProject;
 
+#[tokio::test]
+async fn named_build_modes_load_their_env_and_remove_development_hooks() {
+    let project = TempProject::new(&[
+        ("ferrite.toml", "mode = 'staging'\n[build]\nminify = false\n"),
+        (".env.staging", "FERRITE_PROFILE=named-staging\n"),
+        ("index.html", "<script type='module' src='/main.js'></script>"),
+        ("main.js", "import './style.css'; globalThis.profile = {mode: import.meta.env.MODE, prod: import.meta.env.PROD, dev: import.meta.env.DEV, value: import.meta.env.FERRITE_PROFILE, nodeEnv: process.env.NODE_ENV}; if (import.meta.hot) import.meta.hot.accept();"),
+        ("style.css", "body { color: blue; }"),
+    ]);
+    let builder = ferrite::create_builder(ferrite::Config {
+        root: Some(project.root.clone()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    assert_eq!(builder.config.mode, "staging");
+    assert!(builder.config.is_production);
+    let report = builder.build("client").await.unwrap();
+    let mut code = String::new();
+    for entry in std::fs::read_dir(report.out_dir.join("assets")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_some_and(|extension| extension == "js") {
+            code.push_str(&std::fs::read_to_string(path).unwrap());
+        }
+    }
+    assert!(code.contains("named-staging"), "{code}");
+    assert!(code.contains("staging"), "{code}");
+    assert!(code.contains("production"), "{code}");
+    assert!(!code.contains("/@ferrite/client"), "{code}");
+    assert!(!code.contains("import.meta.hot"), "{code}");
+    assert!(!code.contains("import.meta.env"), "{code}");
+}
+
 /// Production build through the SWC engine: TS strip, JSX, minify,
 /// and shake re-minification all run on SWC.
 #[cfg(feature = "swc")]

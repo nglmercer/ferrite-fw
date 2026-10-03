@@ -1,5 +1,44 @@
 # Framework support implementation status
 
+## Named build modes use production compilation
+
+Builds now separate the environment-file mode from production compilation.
+`--mode staging build` loads staging environment values while setting `PROD=true`,
+`DEV=false`, and the default `process.env.NODE_ENV` to production. Explicit
+CLI, programmatic, and file modes retain their precedence; an unspecified build
+mode defaults to production. Production and server transforms lower
+`import.meta.hot` to undefined. Both the facade and direct builder enforce
+production compilation, including after mutation of the public builder config.
+
+Migration: `CliOverrides` gains `default_mode` and `is_production` fields.
+Rust callers using exhaustive struct literals must supply these fields.
+`create_builder` rejects an explicit nonproduction compilation request; use
+`create_server` for development. Direct-builder compiler adapters must support
+production configuration. Existing explicit environment defines retain their
+precedence. No lockfile migration is needed.
+
+Validation for this increment:
+
+- Config/facade/build regression command: 45 tests passed, one unrelated real-Node
+  test ignored. Tests cover mode precedence, production flags, staging environment
+  values, and production removal of development hooks.
+- Non-E2E workspace command, `cargo test --workspace --exclude ferrite-e2e
+  --locked -- --test-threads=1`: 478 passed, zero failed, 53 ignored across 87
+  targets. Ignored tests do not establish support.
+- Fresh CLI build and affected config/facade/server/test all-target Clippy with
+  `-D warnings` passed. Changed-file rustfmt and diff checks passed.
+- Six explicit generated-profile tests passed: 16 Chromium/Firefox flows across
+  Vanilla, React, Vue, and Svelte JavaScript/TypeScript profiles. Each now builds
+  with staging mode and verifies staging environment values and production flags
+  in preview, alongside existing interaction, source-edit/HMR, syntax recovery,
+  reinstall, CSS, and development-code exclusion assertions. Native profiles use
+  Node-free CLI PATH; Vue/Svelte use their explicitly enabled Node compiler host.
+
+This does not promote any compatibility profile to tested. Framework semantic
+coverage, real SSR/hydration, checkers, additional adapters, upstream integration,
+and cross-platform release gates remain unfinished. The SDK test suite and
+feature matrix were not rerun for this increment.
+
 Status: incomplete. No new framework/version/host/rendering profile has passed
 clean-directory browser acceptance. Unit tests alone do not establish support.
 

@@ -43,6 +43,9 @@ impl DevServer {
             self.inner.config.is_production.to_string(),
         );
         defines.insert("import.meta.env.SSR".to_string(), ssr.to_string());
+        if self.inner.config.is_production || ssr {
+            defines.insert("import.meta.hot".to_string(), "undefined".to_string());
+        }
         defines
     }
 

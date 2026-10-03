@@ -174,10 +174,15 @@ pub async fn create_server(config: Config) -> Result<DevServer> {
 /// Create a builder (spec §9).
 pub async fn create_builder(config: Config) -> Result<Builder> {
     let mut config = config;
-    // Builds default to production mode unless explicitly set.
-    if config.overrides.mode.is_none() && config.user.mode.is_none() {
-        config.overrides.mode = Some("production".to_string());
+    if config.overrides.is_production == Some(false) {
+        return Err(ferrite_core::FerriteError::Config("build requires production compilation; use mode to select environment files, or create_server for development".into()));
     }
+    // Named modes select environment files; every build uses production compilation.
+    config
+        .overrides
+        .default_mode
+        .get_or_insert_with(|| "production".to_string());
+    config.overrides.is_production = Some(true);
     let (resolved, plugins) = config.resolve().await?;
     Ok(Builder::new(resolved, plugins))
 }
@@ -197,6 +202,58 @@ pub async fn preview(config: Config) -> Result<()> {
 #[cfg(test)]
 mod foreign_profile_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn build_mode_precedence_preserves_named_modes_with_production_behavior() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("ferrite.toml"), "mode = 'file-mode'\n").unwrap();
+        for (user_mode, cli_mode, expected) in [
+            (None, None, "file-mode"),
+            (Some("programmatic"), None, "programmatic"),
+            (Some("programmatic"), Some("cli-mode"), "cli-mode"),
+        ] {
+            let builder = create_builder(Config {
+                root: Some(root.path().into()),
+                user: UserConfig {
+                    mode: user_mode.map(String::from),
+                    ..Default::default()
+                },
+                overrides: CliOverrides {
+                    mode: cli_mode.map(String::from),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+            assert_eq!(builder.config.mode, expected);
+            assert!(builder.config.is_production);
+            assert_eq!(
+                builder.config.client_env().define["process.env.NODE_ENV"],
+                "\"production\""
+            );
+        }
+        std::fs::write(root.path().join("ferrite.toml"), "").unwrap();
+        let builder = create_builder(Config {
+            root: Some(root.path().into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        assert_eq!(builder.config.mode, "production");
+        let result = create_builder(Config {
+            root: Some(root.path().into()),
+            overrides: CliOverrides {
+                is_production: Some(false),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .await;
+        assert!(
+            matches!(result, Err(ferrite_core::FerriteError::Config(message)) if message.contains("build requires production compilation"))
+        );
+    }
 
     #[tokio::test]
     async fn explicit_framework_selection_controls_default_react_refresh() {

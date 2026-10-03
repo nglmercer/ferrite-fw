@@ -30,7 +30,8 @@ pub struct Builder {
 impl Builder {
     /// Create a builder.
     #[must_use]
-    pub fn new(config: ResolvedConfig, plugins: Vec<Arc<dyn Plugin>>) -> Self {
+    pub fn new(mut config: ResolvedConfig, plugins: Vec<Arc<dyn Plugin>>) -> Self {
+        config.is_production = true;
         Self { config, plugins }
     }
 
@@ -53,7 +54,8 @@ impl Builder {
     /// `buildEnd` runs with the error, then `closeBundle`, and the original
     /// error is returned.
     pub async fn build(&self, env: &str) -> Result<BuildReport> {
-        let config = self.config.clone();
+        let mut config = self.config.clone();
+        config.is_production = true;
         let server = DevServer::new_without_watcher(config.clone(), self.plugins.clone()).await?;
         let environment = if env == "ssr" {
             config.ssr_env()
@@ -90,7 +92,15 @@ impl Builder {
         // Lifecycle: buildStart (§78).
         container.hook_build_start(&ctx).await?;
         match self
-            .build_inner(&server, &container, &ctx, &config, env, &options, &output_options)
+            .build_inner(
+                &server,
+                &container,
+                &ctx,
+                &config,
+                env,
+                &options,
+                &output_options,
+            )
             .await
         {
             Ok(report) => {
@@ -103,9 +113,12 @@ impl Builder {
             Err(error) => {
                 let message = error.to_string();
                 if let Err(hook_error) = container
-                    .hook_build_end(&ctx, ferrite_plugin::BuildEnd {
-                        error: Some(message),
-                    })
+                    .hook_build_end(
+                        &ctx,
+                        ferrite_plugin::BuildEnd {
+                            error: Some(message),
+                        },
+                    )
                     .await
                 {
                     tracing::warn!("build_end hook failed on the error path: {hook_error}");
@@ -438,12 +451,7 @@ impl BundleHooks for ContainerRenderHooks<'_> {
             .await
     }
 
-    async fn render_chunk(
-        &self,
-        id: &str,
-        code: String,
-        is_entry: bool,
-    ) -> Result<Option<String>> {
+    async fn render_chunk(&self, id: &str, code: String, is_entry: bool) -> Result<Option<String>> {
         if self.container.is_empty() {
             return Ok(None);
         }

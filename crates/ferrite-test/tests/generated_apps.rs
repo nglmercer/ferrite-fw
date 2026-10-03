@@ -450,10 +450,25 @@ async fn acceptance(kind: BrowserKind, frameworks: &[&str]) {
             }
             dev.kill().await.unwrap();
             dev.wait().await.unwrap();
+            let extension = match (react, language) {
+                (true, "ts") => "tsx",
+                (true, _) => "jsx",
+                (_, "ts") => "ts",
+                _ => "js",
+            };
+            let entry = destination.join(format!("src/main.{extension}"));
+            let mut source = std::fs::read_to_string(&entry).unwrap();
+            source.push_str("\nObject.assign(globalThis, {__ferrite_build_profile__: {mode: import.meta.env.MODE, prod: import.meta.env.PROD, dev: import.meta.env.DEV, value: import.meta.env.FERRITE_BUILD_PROFILE}});\n");
+            std::fs::write(&entry, source).unwrap();
+            std::fs::write(
+                destination.join(".env.staging"),
+                "FERRITE_BUILD_PROFILE=staging-env\n",
+            )
+            .unwrap();
             command(
                 &binary,
                 &destination,
-                &["build", "--scope-hoist"],
+                &["--mode", "staging", "build", "--scope-hoist"],
                 node_enabled,
             )
             .await;
@@ -477,6 +492,14 @@ async fn acceptance(kind: BrowserKind, frameworks: &[&str]) {
             )
             .await
             .unwrap();
+            let profile: serde_json::Value = page
+                .evaluate("globalThis.__ferrite_build_profile__")
+                .await
+                .unwrap();
+            assert_eq!(
+                profile,
+                serde_json::json!({"mode":"staging", "prod":true, "dev":false, "value":"staging-env"})
+            );
             page.locator("#counter").click().await.unwrap();
             page.wait_for_function(
                 &format!("document.querySelector('#counter')?.textContent === '{prefix}: 2'"),
