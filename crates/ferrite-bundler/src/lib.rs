@@ -86,6 +86,7 @@ mod tests {
             css: Some(CssExtract {
                 text: text.to_string(),
                 is_modules,
+                keep_js: false,
             }),
             shake: None,
         }

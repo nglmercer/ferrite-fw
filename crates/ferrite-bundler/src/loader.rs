@@ -13,6 +13,8 @@ pub struct CssExtract {
     /// True for CSS modules (the JS stub holds the exports map and is a
     /// real chunk; plain CSS stubs are dropped after extraction).
     pub is_modules: bool,
+    /// Preserve JavaScript transforms and imports on a stylesheet wrapper.
+    pub keep_js: bool,
 }
 
 /// A module loaded for bundling.

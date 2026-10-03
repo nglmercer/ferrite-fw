@@ -28,6 +28,25 @@ impl DevServer {
         importer: Option<&ModuleId>,
         env: &str,
     ) -> Result<PipelineModule> {
+        self.pipeline_module_output(id, importer, env, false).await
+    }
+
+    /// Run the shared pipeline with a JavaScript export wrapper for CSS extraction.
+    pub async fn pipeline_stylesheet_module(
+        &self,
+        id: &ModuleId,
+        env: &str,
+    ) -> Result<PipelineModule> {
+        self.pipeline_module_output(id, None, env, true).await
+    }
+
+    async fn pipeline_module_output(
+        &self,
+        id: &ModuleId,
+        importer: Option<&ModuleId>,
+        env: &str,
+        extract_css: bool,
+    ) -> Result<PipelineModule> {
         let ssr = env == "ssr";
         let environment = self.environment_for(env);
         let mut ctx = self.plugin_context(&environment);
@@ -47,7 +66,7 @@ impl DevServer {
         let resolved = self.resolve_id(&ctx, &id.0, importer, &environment).await?;
         let failed_id = resolved.id.clone();
         let result = self
-            .pipeline_resolved_module(&ctx, resolved, env, &environment)
+            .pipeline_resolved_module(&ctx, resolved, env, &environment, extract_css)
             .await;
         if result.is_err() {
             let inputs = module_watches
@@ -67,6 +86,7 @@ impl DevServer {
         resolved: ResolvedId,
         env: &str,
         environment: &ferrite_core::Environment,
+        extract_css: bool,
     ) -> Result<PipelineModule> {
         let ssr = env == "ssr";
         if resolved.external {
@@ -131,7 +151,7 @@ impl DevServer {
         //    re-transform; by default the cached entry wins).
         let defines = self.transform_defines(environment);
         let source_identity = format!(
-            "{source}\0{module_type:?}\0{:?}\0{:?}\0{:?}\0{:?}",
+            "{source}\0{module_type:?}\0{extract_css}\0{:?}\0{:?}\0{:?}\0{:?}",
             loaded.dependencies, loaded.map, loaded.side_effects, resolved.side_effects
         );
         let cache_key = self.cache_key(&resolved_id, &source_identity, env, &defines);
@@ -180,7 +200,14 @@ impl DevServer {
             pre.code == source,
         )?;
         let mut module = self
-            .core_transform(ctx, &resolved_id, &pre.code, &module_type, environment)
+            .core_transform(
+                ctx,
+                &resolved_id,
+                &pre.code,
+                &module_type,
+                environment,
+                extract_css,
+            )
             .await?;
         if let Some(stylesheet) = &mut module.stylesheet {
             stylesheet.input_map = pre_map.clone();

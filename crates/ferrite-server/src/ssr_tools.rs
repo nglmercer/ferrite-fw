@@ -131,6 +131,7 @@ impl DevServer {
                 &pre.code,
                 &pre.module_type.unwrap_or(module_type),
                 &environment,
+                false,
             )
             .await?;
         module.map = crate::loader::merge_maps(

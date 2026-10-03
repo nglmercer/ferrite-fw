@@ -72,7 +72,7 @@ impl<L: ModuleLoader + 'static> Bundler for FerriteBundler<L> {
             modules
                 .get(id)
                 .and_then(|module| module.css.as_ref())
-                .is_some_and(|css| !css.is_modules)
+                .is_some_and(|css| !css.is_modules && !css.keep_js)
         };
         // 3. Chunk: one file per module, or one scope-hoisted file per
         // entry closure (§91; shared/ineligible modules stay separate).
@@ -168,10 +168,7 @@ impl<L: ModuleLoader + 'static> Bundler for FerriteBundler<L> {
                 material.push('\0');
                 material.push_str(hash);
             }
-            if let Some(text) = wrappers
-                .get(&chunk.id)
-                .and_then(wrapper_hash_text)
-            {
+            if let Some(text) = wrappers.get(&chunk.id).and_then(wrapper_hash_text) {
                 material.push('\0');
                 material.push_str(&text);
             }
@@ -257,7 +254,7 @@ impl<L: ModuleLoader + 'static> Bundler for FerriteBundler<L> {
                         && modules
                             .get(dep)
                             .and_then(|dep| dep.css.as_ref())
-                            .is_some_and(|css| !css.is_modules)
+                            .is_some_and(|css| !css.is_modules && !css.keep_js)
                     {
                         // Static bare import of extracted plain CSS: dropped.
                         stripped_css.push(specifier.as_str());

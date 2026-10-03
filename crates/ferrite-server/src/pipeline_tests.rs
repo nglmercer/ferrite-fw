@@ -120,6 +120,21 @@ async fn stylesheet_payload_survives_hooks_cache_and_dependency_changes() {
             serde_json::to_value(&first.stylesheet).unwrap(),
             serde_json::to_value(&cached.stylesheet).unwrap()
         );
+        if production {
+            let extracted = server
+                .pipeline_stylesheet_module(&id, "client")
+                .await
+                .unwrap();
+            assert!(extracted.code.contains("stylesheetPost"));
+            assert!(!extracted.code.contains("document.createElement"));
+            assert_eq!(
+                serde_json::to_value(&first.stylesheet).unwrap(),
+                serde_json::to_value(&extracted.stylesheet).unwrap()
+            );
+            // Browser wrappers and extraction wrappers cannot share cached code.
+            let browser = server.pipeline_module(&id, None, "client").await.unwrap();
+            assert_eq!(browser.code, first.code);
+        }
         std::fs::write(&input, "blue").unwrap();
         let changed = server.pipeline_module(&id, None, "client").await.unwrap();
         assert!(changed.stylesheet.unwrap().code.contains("blue"));

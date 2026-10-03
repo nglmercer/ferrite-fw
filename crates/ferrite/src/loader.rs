@@ -89,13 +89,14 @@ impl BuildLoader {
     /// into hashed `.css` files. Absolute `/` refs point at `public/` and
     /// pass through; remote refs stay untouched.
     async fn load_css(&self, id: &ModuleId, env: &str) -> Result<LoadedModule> {
-        let (source, _) = self.server.load_raw_source(id, env).await?;
-        let is_modules = id.0.contains(".module.css");
+        let module = self.server.pipeline_stylesheet_module(id, env).await?;
+        let stylesheet = module.stylesheet.as_ref().ok_or_else(|| FerriteError::Build(format!("CSS extraction for `{id}` requires stylesheet output; the configured transform changed its type")))?;
+        let is_modules = stylesheet.is_modules;
         let result = ferrite_css::transform_css(
             &id.0,
-            &source,
+            &stylesheet.code,
             &ferrite_css::CssOptions {
-                modules: is_modules,
+                modules: false,
                 minify: self.minify,
                 dev: false,
             },
@@ -145,41 +146,34 @@ impl BuildLoader {
                 })?;
             imports.push((spec.clone(), dep, ferrite_graph::ImportKind::Static));
         }
-        // Deterministic stub (sorted export map — content-hashed downstream).
-        let code = if is_modules {
-            let exports: std::collections::BTreeMap<&String, &String> =
-                result.exports.iter().collect();
-            format!(
-                "export default {};\n",
-                serde_json::to_string(&exports).unwrap_or_else(|_| "{}".to_string())
-            )
-        } else {
-            "export default undefined;\n".to_string()
-        };
-        // CSS `@import` edges pull styles, not JS bindings; the stub exports
-        // only `default`.
-        let shake = ferrite_transform::ShakeInfo {
-            import_bindings: imports
-                .iter()
-                .map(|_| vec![ferrite_transform::ImportBinding::SideEffect])
-                .collect(),
-            exports: vec![ferrite_transform::ParsedExport {
-                exported: "default".to_string(),
-                local: None,
-                from: None,
-                imported: None,
-                target: None,
-            }],
-        };
+        let css_import_count = imports.len();
+        let mut js_imports: Vec<_> = module
+            .imports
+            .iter()
+            .map(|(_, dep, kind)| (dep.0.clone(), dep.clone(), kind.clone()))
+            .collect();
+        js_imports.append(&mut imports);
+        let shake = module.shake.map(|mut shake| {
+            shake.import_bindings.extend(
+                (0..css_import_count).map(|_| vec![ferrite_transform::ImportBinding::SideEffect]),
+            );
+            shake
+        });
+        let keep_js =
+            module.code.trim() != "export default undefined;" || !module.imports.is_empty();
         Ok(LoadedModule {
             id: id.clone(),
-            code,
-            imports,
-            side_effects: None,
-            module_type: ModuleType::Js,
-            map: None,
-            css: Some(CssExtract { text, is_modules }),
-            shake: Some(shake),
+            code: module.code,
+            imports: js_imports,
+            side_effects: module.side_effects,
+            module_type: module.module_type,
+            map: module.map,
+            css: Some(CssExtract {
+                text,
+                is_modules,
+                keep_js,
+            }),
+            shake,
         })
     }
 

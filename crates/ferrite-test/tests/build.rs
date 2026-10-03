@@ -3,6 +3,93 @@
 use ferrite_test::TempProject;
 
 #[tokio::test]
+async fn production_css_uses_shared_pre_and_post_transforms() {
+    struct CssPlugin(bool);
+    #[async_trait::async_trait]
+    impl ferrite::plugin::Plugin for CssPlugin {
+        fn name(&self) -> &'static str {
+            if self.0 {
+                "css-pre"
+            } else {
+                "css-post"
+            }
+        }
+        fn enforce(&self) -> ferrite::plugin::Enforce {
+            if self.0 {
+                ferrite::plugin::Enforce::Pre
+            } else {
+                ferrite::plugin::Enforce::Post
+            }
+        }
+        async fn transform(
+            &self,
+            _: &ferrite::plugin::PluginContext,
+            request: ferrite::plugin::TransformRequest,
+        ) -> ferrite::Result<Option<ferrite::plugin::TransformResult>> {
+            if request.id != "/style.css" {
+                return Ok(None);
+            }
+            let code = if self.0 {
+                assert_eq!(request.module_type, ferrite::core::ModuleType::Css);
+                request.code.replace("COLOR", "purple")
+            } else {
+                assert_eq!(request.module_type, ferrite::core::ModuleType::Js);
+                format!(
+                    "import {{ flag }} from './extra.js'; {}\nglobalThis.cssPost = flag;",
+                    request.code
+                )
+            };
+            Ok(Some(ferrite::plugin::TransformResult {
+                code,
+                map: None,
+                dependencies: Vec::new(),
+                module_type: None,
+            }))
+        }
+    }
+    let project = TempProject::new(&[
+        (
+            "index.html",
+            "<script type='module' src='/main.js'></script>",
+        ),
+        ("main.js", "import './style.css'; console.log('ready');"),
+        ("style.css", "body { color: COLOR; }"),
+        ("extra.js", "export const flag = 'post-transform-retained';"),
+    ]);
+    let builder = ferrite::create_builder(
+        ferrite::Config {
+            root: Some(project.root.clone()),
+            ..Default::default()
+        }
+        .plugin(CssPlugin(true))
+        .plugin(CssPlugin(false)),
+    )
+    .await
+    .unwrap();
+    let report = builder.build("client").await.unwrap();
+    let mut javascript = String::new();
+    let mut css = String::new();
+    for entry in std::fs::read_dir(report.out_dir.join("assets")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_some_and(|extension| extension == "js") {
+            javascript.push_str(&std::fs::read_to_string(&path).unwrap());
+        } else if path.extension().is_some_and(|extension| extension == "css") {
+            css.push_str(&std::fs::read_to_string(&path).unwrap());
+        }
+    }
+    assert!(css.contains("purple") && !css.contains("COLOR"), "{css}");
+    assert!(
+        javascript.contains("cssPost") && javascript.contains("post-transform-retained"),
+        "{javascript}"
+    );
+    assert!(
+        !javascript.contains("document.createElement"),
+        "{javascript}"
+    );
+    assert!(!javascript.contains("/@ferrite/client"), "{javascript}");
+}
+
+#[tokio::test]
 async fn missing_relative_css_inputs_fail_build_and_recover_when_created() {
     for (css, missing, contents, diagnostic) in [
         (
@@ -62,10 +149,12 @@ async fn missing_relative_css_inputs_fail_build_and_recover_when_created() {
         let stylesheet = outputs
             .iter()
             .find(|path| {
-                path.file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .starts_with("style-")
+                path.extension().is_some_and(|extension| extension == "css")
+                    && path
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with("style-")
             })
             .expect("the importing stylesheet must be emitted");
         let stylesheet = std::fs::read_to_string(stylesheet).unwrap();

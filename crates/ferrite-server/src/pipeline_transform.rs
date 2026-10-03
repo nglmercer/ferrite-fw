@@ -76,6 +76,7 @@ impl DevServer {
         source: &str,
         module_type: &ModuleType,
         environment: &ferrite_core::Environment,
+        extract_css: bool,
     ) -> Result<PipelineModule> {
         match module_type {
             &ModuleType::Css => {
@@ -133,7 +134,15 @@ impl DevServer {
                 // Production builds emit self-contained JS (no /@ferrite/client
                 // import); file extraction is the bundler roadmap (§29).
                 let production = self.inner.config.is_production;
-                let js = if production {
+                let js = if extract_css {
+                    if css_id.contains(".module.css") {
+                        let exports: std::collections::BTreeMap<_, _> =
+                            result.exports.iter().collect();
+                        format!("export default {};\n", serde_json::to_string(&exports)?)
+                    } else {
+                        "export default undefined;\n".to_string()
+                    }
+                } else if production {
                     production_css_js(&id.0, &code, &result.exports)
                 } else {
                     ferrite_css::css_to_js(&id.0, &code, &result.exports)
@@ -145,7 +154,7 @@ impl DevServer {
                     is_modules: css_id.contains(".module.css"),
                     input_map: None,
                 });
-                if !production {
+                if !production && !extract_css {
                     module.imports = vec![(
                         "/@ferrite/client".to_string(),
                         ModuleId::new("/@ferrite/client"),

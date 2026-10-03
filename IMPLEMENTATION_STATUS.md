@@ -1,5 +1,43 @@
 # Framework support implementation status
 
+## Production CSS extraction consumes the shared pipeline
+
+Build CSS loading now uses `pipeline_stylesheet_module` instead of reloading raw
+source. This runs the same resolve/load, pre transforms, CSS lowering, JavaScript
+post transforms, final analysis, graph/watch metadata, and cache stages as module
+compilation. Extraction emits the retained stylesheet text and avoids a second
+CSS-module scoping pass; its production minification and asset/import rewriting
+remain in the existing extractor. Wrapper maps and declared side effects are
+retained. The extraction wrapper contains exports rather than runtime style
+injection. Its cache identity is separate from the browser wrapper identity.
+
+The bundler retains JavaScript added by stylesheet transforms and its resolved
+imports through a new `CssExtract.keep_js` flag. Untouched plain-CSS export
+wrappers still produce no JS chunk. A regression checks preprocessing to purple
+CSS, a post-hook JS side effect and imported dependency in output, and no browser
+style injection/dev-client imports. Existing missing-input recovery assertions
+now select the emitted CSS extension explicitly because transformed stylesheets
+can also produce JS. The shared-pipeline test verifies extraction/browser cache
+isolation while preserving stylesheet metadata.
+
+Validation: server/bundler library tests passed (69 passed, two ignored).
+Facade/integration tests passed (72 passed, 36 ignored across 20 targets) with
+explicit Chromium/Firefox paths and both browsers required. Six explicit
+generated-profile tests passed: 16 Chromium/Firefox flows across Vanilla, React,
+Vue, and Svelte JS/TS, preserving staging-mode checks, CSS, interaction, edits/HMR,
+syntax recovery, reinstall, build, and Node-free preview. A fresh CLI build,
+affected all-target Clippy with `-D warnings`, changed-file formatting, and diff
+checks passed. Early regression failures exposed an unwanted plain-CSS JS chunk;
+the implementation was corrected to retain only changed/import-bearing wrappers
+without relaxing the existing no-chunk assertion.
+
+Migration: direct Rust `CssExtract` literals must provide `keep_js`; choose false
+only for wrappers intentionally safe to discard. The shared pipeline now supplies
+production extraction, superseding the intermediate limitation below. Final CSS
+source-map generation, full stylesheet graph/import metadata parity, SSR rendering,
+additional adapters, and the broader mission remain incomplete. Full workspace,
+SDK feature matrices, and cross-platform releases were not rerun in this increment.
+
 ## Shared pipeline retains compiled stylesheet output
 
 `PipelineModule` now carries a typed `PipelineStylesheet` separately from the
