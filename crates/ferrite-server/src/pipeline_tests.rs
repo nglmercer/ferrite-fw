@@ -1043,3 +1043,67 @@ async fn creating_missing_import_candidates_recovers_the_importer_and_prunes_wat
         server.close();
     }
 }
+
+#[tokio::test]
+async fn writing_a_configured_lock_recovers_a_missing_bare_import() {
+    for lockfile in ["selected.lock", ".ferrite/selected.lock"] {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join(".ferrite")).unwrap();
+        let source = "import value from 'cold-package'; console.log(value);";
+        std::fs::write(root.path().join("entry.js"), source).unwrap();
+        let mut user = ferrite_config::UserConfig::default();
+        user.npm.lockfile = lockfile.into();
+        let config =
+            ferrite_config::resolve_config(user, Some(root.path().into()), Default::default())
+                .unwrap();
+        let server = DevServer::new(config, vec![]).await.unwrap();
+        let id = ModuleId::new("/entry.js");
+        assert!(server.pipeline_module(&id, None, "client").await.is_err());
+        let package = root.path().join(".ferrite/npm/packages/cold-package@1.0.0");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(
+            package.join("package.json"),
+            r#"{"name":"cold-package","version":"1.0.0","type":"module","exports":"./index.js"}"#,
+        )
+        .unwrap();
+        std::fs::write(package.join("index.js"), "export default 42;").unwrap();
+        let mut messages = server.inner.hmr.subscribe();
+        std::fs::write(
+            root.path().join(lockfile),
+            r#"version = 2
+[importers.".".specifiers]
+cold-package = "1.0.0"
+[importers.".".dependencies]
+cold-package = "cold-package@1.0.0"
+[[package]]
+name = "cold-package"
+version = "1.0.0"
+source = "npm"
+"#,
+        )
+        .unwrap();
+        let message = tokio::time::timeout(std::time::Duration::from_secs(10), messages.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(
+                serde_json::from_str::<ferrite_hmr::HmrMessage>(&message).unwrap(),
+                ferrite_hmr::HmrMessage::FullReload { .. }
+            ),
+            "{lockfile}: {message}"
+        );
+        assert!(server.inner.graph.get(&id).unwrap().client.code.is_some());
+        assert!(!server
+            .inner
+            .missing_imports
+            .lock()
+            .unwrap()
+            .contains_key(&id));
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("entry.js")).unwrap(),
+            source
+        );
+        server.close();
+    }
+}

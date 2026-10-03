@@ -1365,3 +1365,23 @@ lock/config schemas are unchanged. Bare-package installation recovery, cold CJS
 and virtual resources, external watched dependencies, broader component startup
 and multiple simultaneous diagnostics remain unverified. No framework support
 profile is promoted. The rest of the implementation mission remains active.
+
+### Observe configured lockfiles for cold package recovery
+
+The watcher now observes the explicitly configured lockfile even when it lives
+inside an otherwise ignored directory such as `.ferrite`. Failed bare imports
+already retain a dependency edge to that lockfile. Publishing installed package
+files followed by the concrete importer lock edge now revalidates the failed
+importer without editing its source.
+
+The new real-notify regression covers `selected.lock` and
+`.ferrite/selected.lock`, concrete v2 importer/package records, successful reload,
+compiled importer output, candidate cleanup and byte-identical importer source.
+Default server tests passed all 44 tests (`/tmp/ferrite-cold-package.log`).
+The SWC-enabled server run also passed all 44 tests
+(`/tmp/ferrite-cold-package-swc.log`). Server all-target Clippy with
+`--locked -- -D warnings`, formatting and diff checks passed.
+This fixture writes installed package files and the lock directly; it does not
+establish live installer/browser acceptance or frozen reinstall support beyond
+the previously recorded tests. No cache, configuration or lock schema migration
+and no framework support promotion. The full mission remains active.

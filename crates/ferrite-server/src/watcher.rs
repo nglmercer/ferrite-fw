@@ -50,12 +50,14 @@ impl DevServer {
                         debounce.insert(path.clone(), now);
                     }
                     // Skip output/cache dirs.
-                    if path.components().any(|component| {
-                        matches!(
-                            component.as_os_str().to_str(),
-                            Some("dist" | ".ferrite" | "node_modules" | "target")
-                        )
-                    }) {
+                    if path != inner.config.lockfile()
+                        && path.components().any(|component| {
+                            matches!(
+                                component.as_os_str().to_str(),
+                                Some("dist" | ".ferrite" | "node_modules" | "target")
+                            )
+                        })
+                    {
                         continue;
                     }
                     let url = ferrite_core::file_to_url(&inner.config.root, &path);
