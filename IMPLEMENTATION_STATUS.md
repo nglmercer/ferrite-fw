@@ -1,5 +1,27 @@
 # Framework support implementation status
 
+## Development and build share physical server-entry selection
+
+`ferrite-config::resolve_js_server_entry` now owns explicit entry validation and
+conventional JavaScript/TypeScript discovery. The builder and CLI SSR adapter
+both use it. Development therefore honors explicit `[ssr].entry` with the same
+errors as build, and build recognizes the same entry-server extensions as dev:
+ts/tsx/mts/cts/js/jsx/mjs/cjs. Historical server.ts/server.js discovery and the
+Rust-default sentinel remain. Selection identifies source only; it does not
+establish a renderer or runtime capability. The stale dev comment suggesting
+shell fallback was removed; explicit SSR initialization errors still propagate.
+
+Discovery tests cover each extension, explicit overrides, and missing explicit
+entries. Existing build tests retain override-over-invalid-conventional-entry
+and rejection-before-client-output checks. Validation: 28 config tests, 16 CLI
+tests, one config doctest, and eight build tests passed. Affected all-target
+Clippy with `-D warnings`, formatting, and diff checks passed. Migration: dev now
+honors configured physical entries previously ignored; more conventional script
+extensions can trigger app server-module compilation. No schema/lock migration.
+CLI SSR runtime execution, shared framework compilation in the CLI runtime
+adapter, renderers/hydration, full workspace, browser/host matrices, and releases
+remain unverified or incomplete. The full mission remains active.
+
 ## ModuleRunner invalidates canonical graphs behind recorded aliases
 
 Successful runner URL records now retain their compiled canonical module ID.

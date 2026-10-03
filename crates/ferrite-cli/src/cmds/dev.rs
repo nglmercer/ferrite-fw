@@ -45,10 +45,9 @@ pub(crate) async fn dev(
             )));
         }
         let shell = std::fs::read_to_string(root.join("index.html"))?;
-        let adapter =
-            js_ssr_adapter(&server, &resolved, &resolved.root, &shell).map_err(|note| {
-                ferrite::FerriteError::Other(format!("SSR initialization failed: {note}"))
-            })?;
+        let adapter = js_ssr_adapter(&server, &resolved, &shell).map_err(|note| {
+            ferrite::FerriteError::Other(format!("SSR initialization failed: {note}"))
+        })?;
         server.set_ssr_adapter(adapter).await;
         ssr_mode = String::from("enabled (napi-vm entry-server)");
     }
@@ -126,26 +125,17 @@ pub(crate) fn spawn_key_handler(server: ferrite::DevServer, port: u16) {
     });
 }
 
-/// Build a napi-vm SSR adapter from `src/entry-server.*` (§46).
-///
-/// Returns a human-readable reason (not a hard error) when no entry exists
-/// or cannot load, so the caller can fall back to the static shell.
+/// Build a napi-vm SSR adapter from the shared configured server-entry selection.
+/// The explicit SSR caller propagates selection/compilation failures.
 pub(crate) fn js_ssr_adapter(
     server: &ferrite::DevServer,
     resolved: &ferrite::ResolvedConfig,
-    root: &std::path::Path,
     shell: &str,
 ) -> Result<Arc<dyn ferrite::ssr::SsrAdapter>, String> {
-    const CANDIDATES: [&str; 8] = ["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"];
-    let mut found = None;
-    for ext in CANDIDATES {
-        let path = root.join(format!("src/entry-server.{ext}"));
-        if path.is_file() {
-            found = Some(path);
-            break;
-        }
-    }
-    let path = found.ok_or_else(|| "no src/entry-server.* found".to_string())?;
+    let entry = ferrite::config::resolve_js_server_entry(resolved)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "no JavaScript/TypeScript server entry found; configure [ssr].entry or create src/entry-server.js".to_string())?;
+    let path = resolved.root.join(entry);
     let code = std::fs::read_to_string(&path)
         .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
     let ssr_env = resolved.ssr_env();

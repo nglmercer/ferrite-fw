@@ -351,41 +351,7 @@ impl Builder {
 
     /// JS SSR entry candidate, when present.
     fn ssr_entry(&self) -> Result<Option<String>> {
-        if let Some(entry) = self
-            .config
-            .ssr
-            .entry
-            .as_deref()
-            .filter(|entry| *entry != "src/server.rs")
-        {
-            let path = std::path::Path::new(entry);
-            if path.is_absolute()
-                || path
-                    .components()
-                    .any(|part| matches!(part, std::path::Component::ParentDir))
-            {
-                return Err(FerriteError::Build(format!("SSR entry `{entry}` must be a project-relative module path without parent traversal")));
-            }
-            if !self.config.root.join(path).is_file() {
-                return Err(FerriteError::Build(format!("configured SSR entry `{entry}` is not a file; create it or correct [ssr].entry")));
-            }
-            if !ferrite_core::ModuleType::from_path(entry).is_js_like() {
-                return Err(FerriteError::Build(format!("configured SSR entry `{entry}` requires a JavaScript/TypeScript module; Rust and framework renderer execution are unavailable in this build path")));
-            }
-            return Ok(Some(entry.to_string()));
-        }
-        for candidate in [
-            "src/entry-server.ts",
-            "src/entry-server.tsx",
-            "src/entry-server.js",
-            "src/server.ts",
-            "src/server.js",
-        ] {
-            if self.config.root.join(candidate).is_file() {
-                return Ok(Some(candidate.to_string()));
-            }
-        }
-        Ok(None)
+        ferrite_config::resolve_js_server_entry(&self.config)
     }
 
     /// Rewrite HTML entries to hashed outputs and copy them to `out_dir`.

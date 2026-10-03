@@ -1922,3 +1922,87 @@ mod foreign_profile_tests {
         .is_err());
     }
 }
+
+/// Select a physical JavaScript/TypeScript server entry for development or build.
+/// Explicit configuration wins; the legacy Rust default selects conventional
+/// discovery. This selects source, not a renderer or runtime backend.
+pub fn resolve_js_server_entry(config: &ResolvedConfig) -> Result<Option<String>> {
+    if let Some(entry) = config
+        .ssr
+        .entry
+        .as_deref()
+        .filter(|entry| *entry != "src/server.rs")
+    {
+        let path = std::path::Path::new(entry);
+        if path.is_absolute()
+            || path
+                .components()
+                .any(|part| matches!(part, std::path::Component::ParentDir))
+        {
+            return Err(FerriteError::Build(format!("SSR entry `{entry}` must be a project-relative module path without parent traversal")));
+        }
+        if !config.root.join(path).is_file() {
+            return Err(FerriteError::Build(format!(
+                "configured SSR entry `{entry}` is not a file; create it or correct [ssr].entry"
+            )));
+        }
+        if !ferrite_core::ModuleType::from_path(entry).is_js_like() {
+            return Err(FerriteError::Build(format!("configured SSR entry `{entry}` requires a JavaScript/TypeScript module; Rust entries are unavailable in the JavaScript server pipeline")));
+        }
+        return Ok(Some(entry.to_string()));
+    }
+    for candidate in [
+        "src/entry-server.ts",
+        "src/entry-server.tsx",
+        "src/entry-server.mts",
+        "src/entry-server.cts",
+        "src/entry-server.js",
+        "src/entry-server.jsx",
+        "src/entry-server.mjs",
+        "src/entry-server.cjs",
+        "src/server.ts",
+        "src/server.js",
+    ] {
+        if config.root.join(candidate).is_file() {
+            return Ok(Some(candidate.to_string()));
+        }
+    }
+    Ok(None)
+}
+
+#[cfg(test)]
+mod server_entry_tests {
+    use super::*;
+
+    #[test]
+    fn server_entry_discovery_accepts_each_script_extension_and_explicit_override() {
+        for extension in ["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"] {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::create_dir(root.path().join("src")).unwrap();
+            let entry = format!("src/entry-server.{extension}");
+            std::fs::write(root.path().join(&entry), "export const value = 42;").unwrap();
+            let mut config = resolve_config(
+                Default::default(),
+                Some(root.path().into()),
+                Default::default(),
+            )
+            .unwrap();
+            assert_eq!(resolve_js_server_entry(&config).unwrap(), Some(entry));
+            std::fs::write(
+                root.path().join("custom.ts"),
+                "export const selected = true;",
+            )
+            .unwrap();
+            config.ssr.entry = Some("custom.ts".into());
+            assert_eq!(
+                resolve_js_server_entry(&config).unwrap(),
+                Some("custom.ts".into())
+            );
+            config.ssr.entry = Some("missing.ts".into());
+            assert!(resolve_js_server_entry(&config)
+                .unwrap_err()
+                .to_string()
+                .contains("missing.ts"));
+        }
+    }
+}
