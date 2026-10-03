@@ -1,5 +1,32 @@
 # Framework support implementation status
 
+## SSR SDK identity and exact-version requirements
+
+Standalone SSR preflight now parses the explicitly supplied SDK Cargo manifest and
+requires package `ferrite`, the generating tool's exact package version, and a
+nonempty `napi-vm` feature. Unsupported/inherited/missing package versions fail
+with an actionable error before packaging; `build_app` runs this preflight before
+client output. Generated Cargo dependencies carry the same exact version along
+with the explicit SDK path. The facade reuses the existing workspace TOML library;
+Cargo.lock changes only to record that dependency, without package upgrades.
+
+Validation: feature-enabled facade library tests passed 29 with one ignored;
+all-target feature-enabled Clippy with `-D warnings` and offline cargo check
+passed. The SDK rejection and scaffold generation tests passed from the current
+built test binary with PATH empty. A broader initial package-test invocation used
+an older binary and failed its fake Cargo shell fixture because `mkdir` was absent
+from PATH; this does not establish whole-package Node-free support. The correctly
+selected current binary was used for the two Node-free SDK tests. Regenerated
+exact-version scaffold Cargo built offline, then the actual binary passed GET,
+POST, HEAD, embedded JavaScript and private-file rejection checks from an empty
+working directory with PATH empty. Formatting and diff checks passed.
+
+Matching manifest identity/version is not source provenance or API compatibility
+proof for arbitrary modified checkouts. Inherited workspace package versions are
+currently unavailable with an explicit-version error. SDK provenance, transactional
+scaffold replacement, automated generated-binary/CLI acceptance, release/platform
+matrices, framework SSR/hydration, and the rest of the mission remain unfinished.
+
 ## Standalone app builds select the embedded SSR scaffold
 
 `package.ssr_sdk` is an optional explicit SDK crate path (relative paths resolve

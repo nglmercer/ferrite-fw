@@ -432,8 +432,9 @@ pub fn write_ssr_standalone(
         .replace("__BASE__", &format!("{base:?}"))
         .replace("__RUNTIME_JSON__", &format!("{runtime_json:?}"));
     let dependency = format!(
-        "ferrite = {{ path = {}, features = [\"napi-vm\"] }}\nserde_json = \"1\"\n",
-        serde_json::to_string(&sdk.to_string_lossy()).map_err(FerriteError::Json)?
+        "ferrite = {{ path = {}, version = \"={}\", features = [\"napi-vm\"] }}\nserde_json = \"1\"\n",
+        serde_json::to_string(&sdk.to_string_lossy()).map_err(FerriteError::Json)?,
+        env!("CARGO_PKG_VERSION")
     );
     write_standalone_scaffold(
         out_dir,
@@ -479,6 +480,39 @@ pub(crate) fn validate_ssr_standalone_inputs(
     })?;
     if !sdk.join("Cargo.toml").is_file() || !sdk.join("src/lib.rs").is_file() {
         return Err(FerriteError::Build("explicit Ferrite SDK must be a crate source directory containing Cargo.toml and src/lib.rs".into()));
+    }
+    let manifest_path = sdk.join("Cargo.toml");
+    let text = std::fs::read_to_string(&manifest_path)?;
+    let manifest: toml::Value = toml::from_str(&text).map_err(|error| {
+        FerriteError::Build(format!(
+            "invalid Ferrite SDK manifest {}: {error}",
+            manifest_path.display()
+        ))
+    })?;
+    let name = manifest
+        .get("package")
+        .and_then(|package| package.get("name"))
+        .and_then(toml::Value::as_str);
+    let version = manifest
+        .get("package")
+        .and_then(|package| package.get("version"))
+        .and_then(toml::Value::as_str);
+    if name != Some("ferrite") || version != Some(env!("CARGO_PKG_VERSION")) {
+        return Err(FerriteError::Build(format!(
+            "incompatible Ferrite SDK {}: expected package ferrite version {}; found name {name:?}, version {version:?}. Select the matching SDK crate with an explicit package version",
+            sdk.display(), env!("CARGO_PKG_VERSION")
+        )));
+    }
+    if manifest
+        .get("features")
+        .and_then(|features| features.get("napi-vm"))
+        .and_then(toml::Value::as_array)
+        .is_none_or(Vec::is_empty)
+    {
+        return Err(FerriteError::Build(format!(
+            "Ferrite SDK {} must expose a nonempty napi-vm feature for embedded SSR",
+            sdk.display()
+        )));
     }
     Ok(sdk)
 }
@@ -736,6 +770,39 @@ mod tests {
             error.to_string().contains("invalid target triple"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn incompatible_sdk_fails_without_writing_scaffold() {
+        for (manifest, expected) in [
+            (
+                "[package]\nname='other'\nversion='0.1.0'",
+                "incompatible Ferrite SDK",
+            ),
+            (
+                "[package]\nname='ferrite'\nversion='999.0.0'",
+                "incompatible Ferrite SDK",
+            ),
+            (
+                "[package]\nname='ferrite'\nversion='0.1.0'",
+                "nonempty napi-vm feature",
+            ),
+            ("not a valid manifest = [", "invalid Ferrite SDK manifest"),
+        ] {
+            let sdk = tempfile::tempdir().unwrap();
+            std::fs::create_dir(sdk.path().join("src")).unwrap();
+            std::fs::write(sdk.path().join("src/lib.rs"), "").unwrap();
+            std::fs::write(sdk.path().join("Cargo.toml"), manifest).unwrap();
+            let output = tempfile::tempdir().unwrap();
+            let runtime = ferrite_config::RuntimeConfig {
+                backend: "napi-vm".into(),
+                ..Default::default()
+            };
+            let error = write_ssr_standalone(output.path(), &options(), sdk.path(), &runtime, "/")
+                .unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+            assert!(!output.path().join(SCAFFOLD_DIR).exists());
+        }
     }
 
     #[test]
