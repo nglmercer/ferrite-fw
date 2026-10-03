@@ -660,3 +660,41 @@ Migration: callers constructing every public `Config` field explicitly must add
 Selecting a file now uses that exact file, so callers relying on unintended
 neighbor-file discovery must select the directory instead. Full framework work,
 SSR, checkers, host/package matrices and remaining acceptance gates stay active.
+
+### Package-command configuration and compiler lock parity
+
+Install/add/remove/update now consume global `--config` and `--mode`, using the
+same exact-file/directory semantics and root selection as compiler commands.
+Registry, metadata cache, package store, manifest and selected lockfile stay in
+one project context. Project creation retains its existing shared installer
+context. Configuration is validated before editor-view or install mutations;
+package commands do not start framework compiler workers. Frozen missing-lock
+errors now name the actual selected path.
+
+Fixed the official compiler host independently hardcoding `ferrite.lock`: it now
+receives `ResolvedConfig::lockfile()`, matching installation, doctor and resolver.
+Generated Vue/Svelte TS acceptance fixtures now rename the resolved lock to
+`selected.lock` and configure it, with no default lock left to hide fallback.
+
+Validation:
+
+- `cargo test -p ferrite-cli --locked`: 15 tests passed. New regression checks
+  selected registry/cache/store/manifest/lock paths, unrelated-root preservation,
+  custom-lock frozen replay, malformed selection without lock mutation, and
+  installation despite an unavailable configured compiler executable.
+- Actual CLI temporary project: custom-config install/frozen replay/update/remove
+  succeeded despite malformed default config; malformed selected config failed
+  for all four package commands before resolving requested packages.
+- Fresh CLI build, then
+  `FERRITE_CLI_PATH=/home/meme/Documentos/challenges/ferrite-fw/target/debug/ferrite FERRITE_CHROMIUM_PATH=/home/meme/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome cargo test -p ferrite-test --test generated_apps --locked -- --ignored --nocapture`:
+  four tests passed in 74.12 seconds. All six client profiles passed real Chromium
+  and Firefox create/install/dev/interaction/edit/CSS/build/preview checks;
+  Vue/Svelte TS passed against only the configured custom lock. Native profiles
+  ran with Node absent from PATH. Output: `/tmp/ferrite-selected-lock-acceptance.log`.
+- `cargo clippy -p ferrite-test -p ferrite-cli --all-targets --locked -- -D warnings`:
+  passed; formatting and diff checks passed.
+
+No lockfile schema migration. Existing commands without explicit configuration
+retain directory discovery. Full Refresh/framework HMR, checkers, real SSR/SSG,
+remaining host/package capabilities, adapters and acceptance matrices remain
+unfinished; the complete mission remains active.

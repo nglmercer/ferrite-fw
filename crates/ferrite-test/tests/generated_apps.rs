@@ -102,14 +102,29 @@ async fn acceptance(kind: BrowserKind, frameworks: &[&str]) {
                 node_enabled,
             )
             .await;
-            let lock = std::fs::read(destination.join("ferrite.lock")).unwrap();
+            // Exercise a non-default lock across installer, compiler host,
+            // resolver and production pipeline, with no fallback lock present.
+            let lock_path = destination.join(if node_enabled && language == "ts" {
+                let config = destination.join("ferrite.toml");
+                let mut source = std::fs::read_to_string(&config).unwrap();
+                source.push_str("\n[npm]\nlockfile = 'selected.lock'\n");
+                std::fs::write(config, source).unwrap();
+                std::fs::rename(
+                    destination.join("ferrite.lock"),
+                    destination.join("selected.lock"),
+                )
+                .unwrap();
+                "selected.lock"
+            } else {
+                "ferrite.lock"
+            });
+            let lock = std::fs::read(&lock_path).unwrap();
             assert_eq!(
                 std::fs::read_link(destination.join("node_modules")).unwrap(),
                 PathBuf::from(".ferrite/npm/node_modules")
             );
             if node_enabled {
-                let graph =
-                    ferrite::npm::Lockfile::read(&destination.join("ferrite.lock")).unwrap();
+                let graph = ferrite::npm::Lockfile::read(&lock_path).unwrap();
                 let identity = &graph.importers["."].dependencies[*framework];
                 let actual = destination
                     .join("node_modules")
@@ -134,10 +149,7 @@ async fn acceptance(kind: BrowserKind, frameworks: &[&str]) {
                 node_enabled,
             )
             .await;
-            assert_eq!(
-                std::fs::read(destination.join("ferrite.lock")).unwrap(),
-                lock
-            );
+            assert_eq!(std::fs::read(&lock_path).unwrap(), lock);
             let (mut dev, url) = server(&binary, &destination, "dev", node_enabled).await;
             let page = browser.new_page().await.unwrap();
             page.goto(&url).await.unwrap();

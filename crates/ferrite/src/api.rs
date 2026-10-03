@@ -116,7 +116,7 @@ impl Config {
                 let host = Arc::new(
                     crate::frameworks::compiler_host::NodeCompilerHost::new(
                         resolved.root.clone(),
-                        resolved.root.join("ferrite.lock"),
+                        resolved.lockfile(),
                         node,
                         std::time::Duration::from_millis(profile.timeout_ms),
                     )
