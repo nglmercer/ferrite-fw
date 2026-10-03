@@ -49,8 +49,13 @@ impl DevServer {
                     if let Ok(mut debounce) = inner.debounce.lock() {
                         debounce.insert(path.clone(), now);
                     }
-                    // Skip output/cache dirs.
-                    if path != inner.config.lockfile()
+                    let url = ferrite_core::file_to_url(&inner.config.root, &path);
+                    let id = ModuleId::new(url.clone());
+                    let tracked = inner.graph.contains(&id);
+                    // Ignore incidental output/store writes, but retained module
+                    // dependencies (including plugin packages) must invalidate.
+                    if !tracked
+                        && path != inner.config.lockfile()
                         && path.components().any(|component| {
                             matches!(
                                 component.as_os_str().to_str(),
@@ -60,9 +65,6 @@ impl DevServer {
                     {
                         continue;
                     }
-                    let url = ferrite_core::file_to_url(&inner.config.root, &path);
-                    let id = ModuleId::new(url.clone());
-                    let tracked = inner.graph.contains(&id);
                     if tracked {
                         inner.graph.invalidate_tree(&id);
                     }

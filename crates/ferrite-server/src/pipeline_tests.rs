@@ -1269,3 +1269,70 @@ export default options => ({
         host.shutdown();
     }
 }
+
+#[tokio::test]
+#[ignore = "requires real Node; executed explicitly"]
+async fn foreign_dependency_watcher_rejects_stale_imports_inside_and_outside_root() {
+    for external in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let helper_dir = if external {
+            outside.path()
+        } else {
+            root.path()
+        }
+        .join("node_modules/plugin-helper");
+        std::fs::create_dir_all(&helper_dir).unwrap();
+        let helper = helper_dir.join("index.mjs");
+        std::fs::write(&helper, "export const value = 'first';").unwrap();
+        let entry = root.path().join("plugin.mjs");
+        std::fs::write(&entry, format!("import {{value}} from {}; export default {{transform() {{ if (!value) throw new Error('missing helper'); return null; }} }};", serde_json::to_string(&helper.to_string_lossy()).unwrap())).unwrap();
+        std::fs::write(
+            root.path().join("entry.js"),
+            "export const count = 1; if(import.meta.hot) import.meta.hot.accept();",
+        )
+        .unwrap();
+        let host = Arc::new(ferrite_plugin::node_adapter::NodeAdapterHost::spawn(None).unwrap());
+        let plugin = ferrite_plugin::ForeignHookPlugin::register(
+            host.clone(),
+            "watch-fixture",
+            &entry,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        let config = ferrite_config::resolve_config(
+            Default::default(),
+            Some(root.path().into()),
+            Default::default(),
+        )
+        .unwrap();
+        let server = DevServer::new(config, vec![Arc::new(plugin)])
+            .await
+            .unwrap();
+        server
+            .pipeline_module(&ModuleId::new("/entry.js"), None, "client")
+            .await
+            .unwrap();
+        let mut messages = server.inner.hmr.subscribe();
+        std::fs::write(&helper, "export const value = 'second';").unwrap();
+        let next = tokio::time::timeout(std::time::Duration::from_secs(10), messages.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let ferrite_hmr::HmrMessage::Error { err } = serde_json::from_str(&next).unwrap() else {
+            panic!("stale plugin must produce a diagnostic: {next}")
+        };
+        assert!(
+            err.message.contains("dependency changed"),
+            "{}",
+            err.message
+        );
+        assert!(
+            err.message.contains("recreate the explicit host"),
+            "{}",
+            err.message
+        );
+        server.close();
+        host.shutdown();
+    }
+}

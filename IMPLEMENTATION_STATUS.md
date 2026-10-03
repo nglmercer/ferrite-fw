@@ -1777,3 +1777,38 @@ passed, using the actual Node host. Plugin/server all-target Clippy with
 No migration or support promotion. Browser notification timing, watches outside
 project roots, load races, late imports and the broader remaining mission remain
 assigned; this regression proves pipeline/cache/graph ownership only.
+
+### Invalidate explicitly tracked files in package/output directories
+
+A real Node/notify regression reproduced a stale-plugin bug: the watcher
+unconditionally discarded `node_modules` events, including retained foreign
+compiler/plugin dependencies. Before the fix the new test timed out with no
+HMR diagnostic (`/tmp/ferrite-foreign-watch.log`). The filter now checks graph
+ownership first. Tracked dependencies in `node_modules`, `.ferrite`, `dist` or
+`target` invalidate normally; unrelated output/store writes remain ignored.
+The configured lockfile exception remains intact.
+
+The regression loads an actual plugin importing an ESM helper under
+`node_modules`, lets all hooks decline the application module, changes the
+helper through the filesystem and requires a stale-dependency diagnostic with
+explicit host-restart instructions. Both project-local and separately watched
+outside-root helpers pass; no Node fallback or silent stale output is accepted.
+
+Validation on Linux/Node 26.10.0:
+
+- `cargo test -p ferrite-server --locked` and the `--features swc` matrix each
+  passed 44 unit tests. Their two ignored Node fixtures are not support evidence.
+- The new ignored real-Node watcher test was explicitly executed and passed
+  under default and SWC lowering; outputs `/tmp/ferrite-foreign-watch-fixed.log`
+  and `/tmp/ferrite-foreign-watch-swc-real.log`.
+- Rebuilt CLI, server all-target Clippy with `--locked -- -D warnings`, formatting
+  and diff checks passed. Outputs `/tmp/ferrite-foreign-watch-build.log` and
+  `/tmp/ferrite-foreign-watch-clippy.log`.
+- All 12 explicitly executed Chromium/Firefox generated-app acceptance tests
+  passed with `--test-threads=2` (87.93 seconds); output
+  `/tmp/ferrite-foreign-watch-browsers.log`. These retain the existing template,
+  plugin, dependency HMR and startup-recovery assertions.
+
+No migration or support promotion. Automatic plugin restart, stale-state recovery
+without restart, browser overlay assertion for this precise helper-edit case,
+other notify backends/platforms and the broader remaining mission stay assigned.
