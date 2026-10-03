@@ -1997,6 +1997,30 @@ matrices, other namespace/default hook shapes, mixed exports, anonymous default
 components, ownership rules, generated React profiles and the full remaining
 framework mission stay assigned and active.
 
+### Verify mixed component and constant exports in browsers
+
+A new React fixture exports a component and a constant consumed by its mounting
+entrypoint. Compatible component edits with the constant unchanged preserve
+counter and document state. Changing the constant from 1 to 2 invalidates the
+boundary: the current client reloads the document, the entrypoint observes 2,
+and the reset component remains interactive. The same fixture retains signature
+reset, syntax-error recovery, scope-hoisted build/preview interactions,
+production Refresh exclusion and strict page/console error assertions. Existing
+instrumentation handles this case without implementation changes.
+
+Validation: explicitly executed both new Chromium/Firefox tests with
+`--test-threads=2`; 2 passed, 0 failed in 43.62 seconds. Output
+`/tmp/ferrite-mixed-exports-browsers.log`. Test-target Clippy with
+`--locked -- -D warnings` passed; output
+`/tmp/ferrite-mixed-exports-clippy.log`. Fixtures use React/React DOM 19.2.0 and
+react-refresh 0.17.0 installed by Ferrite, with install/dev/build/preview CLI
+processes running without Node on PATH. Formatting and diff checks passed.
+
+This proves unchanged and changed primitive constant behavior for this fixture;
+arbitrary mutable exports and broader boundary shapes remain unverified. No
+migration or full-profile support promotion. React generation/checking,
+ownership rules and the remaining framework mission stay assigned and active.
+
 ### Keep React footer bindings local and collision-free
 
 React's plugin footer previously redeclared fixed `RefreshRuntime` and

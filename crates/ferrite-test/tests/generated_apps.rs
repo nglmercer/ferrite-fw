@@ -849,6 +849,7 @@ enum ReactFixture {
     HookBarrel,
     NamedDefault,
     AnonymousMemoDefault,
+    MixedExports,
 }
 
 async fn react_refresh_dom_acceptance(kind: BrowserKind, fixture: ReactFixture) {
@@ -904,6 +905,7 @@ async fn react_refresh_dom_acceptance(kind: BrowserKind, fixture: ReactFixture) 
             "export const App = memo(function Counter()",
             "export default memo(function()",
         ),
+        ReactFixture::MixedExports => format!("{source_variant}\nexport const step = 1;"),
         _ => source_variant,
     };
     if matches!(
@@ -913,6 +915,16 @@ async fn react_refresh_dom_acceptance(kind: BrowserKind, fixture: ReactFixture) 
         let main = std::fs::read_to_string(project.root.join("main.jsx"))
             .unwrap()
             .replace("import {App}", "import App");
+        std::fs::write(project.root.join("main.jsx"), main).unwrap();
+    }
+    if matches!(fixture, ReactFixture::MixedExports) {
+        let main = std::fs::read_to_string(project.root.join("main.jsx"))
+            .unwrap()
+            .replace("import {App}", "import {App, step}")
+            .replace(
+                "globalThis.session =",
+                "globalThis.exportedStep = step; globalThis.session =",
+            );
         std::fs::write(project.root.join("main.jsx"), main).unwrap();
     }
     let source_variant = format!("const RefreshRuntime = 'application'; const __ferrite_refresh_exports__ = 1; const $RefreshReg$ = () => {{throw new Error('application binding was called');}};\n{source_variant}");
@@ -1101,7 +1113,7 @@ async fn react_refresh_dom_acceptance(kind: BrowserKind, fixture: ReactFixture) 
         )
     }
     .replace("first:", "reset:");
-    std::fs::write(project.root.join("App.jsx"), changed_signature).unwrap();
+    std::fs::write(project.root.join("App.jsx"), &changed_signature).unwrap();
     page.wait_for_function(
         "document.querySelector('#counter')?.textContent === 'reset: 0'",
         Duration::from_secs(15),
@@ -1125,6 +1137,28 @@ async fn react_refresh_dom_acceptance(kind: BrowserKind, fixture: ReactFixture) 
     )
     .await
     .unwrap();
+    if matches!(fixture, ReactFixture::MixedExports) {
+        assert_eq!(
+            page.evaluate::<u32>("globalThis.exportedStep")
+                .await
+                .unwrap(),
+            1
+        );
+        std::fs::write(
+            project.root.join("App.jsx"),
+            changed_signature.replace("export const step = 1", "export const step = 2"),
+        )
+        .unwrap();
+        page.wait_for_function("globalThis.exportedStep === 2 && document.querySelector('#counter')?.textContent === 'reset: 0'", Duration::from_secs(15)).await.unwrap_or_else(|error| panic!("mixed-export invalidation failed: {error}; errors={:?}", page.page_errors()));
+        assert_ne!(page.evaluate::<f64>("globalThis.session").await.unwrap(), session, "changed non-component exports must reach the non-accepting importer through invalidation");
+        page.locator("#counter").click().await.unwrap();
+        page.wait_for_function(
+            "document.querySelector('#counter')?.textContent === 'reset: 1'",
+            Duration::from_secs(10),
+        )
+        .await
+        .unwrap();
+    }
     assert!(page.page_errors().is_empty(), "{:?}", page.page_errors());
     assert!(
         page.console_messages()
@@ -1255,4 +1289,15 @@ async fn chromium_react_refresh_default_anonymous_memo() {
 #[ignore = "requires freshly built CLI, registry packages and Firefox"]
 async fn firefox_react_refresh_default_anonymous_memo() {
     react_refresh_dom_acceptance(BrowserKind::Firefox, ReactFixture::AnonymousMemoDefault).await;
+}
+
+#[tokio::test]
+#[ignore = "requires freshly built CLI, registry packages and Chromium"]
+async fn chromium_react_refresh_mixed_exports() {
+    react_refresh_dom_acceptance(BrowserKind::Chromium, ReactFixture::MixedExports).await;
+}
+#[tokio::test]
+#[ignore = "requires freshly built CLI, registry packages and Firefox"]
+async fn firefox_react_refresh_mixed_exports() {
+    react_refresh_dom_acceptance(BrowserKind::Firefox, ReactFixture::MixedExports).await;
 }
