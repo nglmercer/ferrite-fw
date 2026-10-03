@@ -20,6 +20,48 @@ use notify::Watcher as _;
 use std::time::Duration;
 use std::time::Instant;
 
+fn watch_event_targets(
+    inner: &crate::DevServerInner,
+    path: &std::path::Path,
+    kind: WatchKind,
+) -> Vec<std::path::PathBuf> {
+    let id = ModuleId::new(ferrite_core::file_to_url(&inner.config.root, path));
+    let watches = inner
+        .watch_files
+        .lock()
+        .map(|files| files.clone())
+        .unwrap_or_default();
+    let mut targets = Vec::new();
+    if path.starts_with(&inner.config.root)
+        || inner.graph.contains(&id)
+        || watches.iter().any(|watch| {
+            let watch = std::path::Path::new(watch);
+            path == watch || (watch.is_dir() && path.starts_with(watch))
+        })
+    {
+        targets.push(path.to_path_buf());
+    }
+    if matches!(kind, WatchKind::Create | WatchKind::Remove) {
+        for watch in watches {
+            let watch = std::path::PathBuf::from(watch);
+            if watch != path
+                && watch.starts_with(path)
+                && inner
+                    .graph
+                    .contains(&ModuleId::new(ferrite_core::file_to_url(
+                        &inner.config.root,
+                        &watch,
+                    )))
+            {
+                targets.push(watch);
+            }
+        }
+    }
+    targets.sort();
+    targets.dedup();
+    targets
+}
+
 impl DevServer {
     /// Start the file watcher (§60 HMR invalidation).
     pub(crate) fn start_watcher(&self) -> Result<()> {
@@ -42,7 +84,16 @@ impl DevServer {
                     EventKind::Remove(_) => WatchKind::Remove,
                     _ => WatchKind::Modify,
                 };
-                for path in event.paths {
+                let paths: Vec<_> = event
+                    .paths
+                    .into_iter()
+                    .flat_map(|path| {
+                        watch_event_targets(&inner, &path, watch_kind)
+                            .into_iter()
+                            .map(move |target| (target, path.clone()))
+                    })
+                    .collect();
+                for (path, event_path) in paths {
                     // Record the latest event; a trailing quiet window below
                     // coalesces saves without dropping their final correction.
                     let now = Instant::now();
@@ -74,7 +125,7 @@ impl DevServer {
                     // event (tracked or not); HMR planning only for tracked
                     // modules.
                     let inner_clone = inner.clone();
-                    let file = url.clone();
+                    let file = ferrite_core::file_to_url(&inner.config.root, &event_path);
                     let watch_path = path.clone();
                     let runtime = runtime.clone();
                     runtime.spawn(async move {
@@ -97,16 +148,13 @@ impl DevServer {
                             watch_files: &inner_clone.watch_files,
                             warnings: &inner_clone.warnings,
                         };
-                        let server = DevServer {
-                            inner: inner_clone.clone(),
-                            watcher: std::sync::Arc::new(std::sync::Mutex::new(None)),
-                        };
+                        let server = DevServer::from_inner(inner_clone.clone());
                         if let Err(error) = inner_clone
                             .plugins
                             .hook_watch_change(
                                 &ctx,
                                 WatchEvent {
-                                    path: watch_path,
+                                    path: event_path,
                                     kind: watch_kind,
                                 },
                             )
@@ -164,6 +212,9 @@ impl DevServer {
         watcher
             .watch(&self.inner.config.root, RecursiveMode::Recursive)
             .map_err(|error| FerriteError::Other(format!("watch failed: {error}")))?;
+        if let Ok(mut anchors) = self.inner.watch_anchors.lock() {
+            anchors.insert(self.inner.config.root.clone());
+        }
         if let Ok(mut slot) = self.watcher.lock() {
             *slot = Some(watcher);
         }

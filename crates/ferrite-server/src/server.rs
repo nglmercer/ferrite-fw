@@ -75,6 +75,9 @@ impl DevServer {
     pub fn close(&self) {
         if let Ok(mut watcher) = self.watcher.lock() {
             *watcher = None;
+            if let Ok(mut anchors) = self.inner.watch_anchors.lock() {
+                anchors.clear();
+            }
         }
     }
 
@@ -321,6 +324,14 @@ impl DevServer {
         let mut seen = std::collections::HashSet::new();
         while let Some(id) = queue.pop_front() {
             if id.0 == ferrite_hmr::CLIENT_ID || !seen.insert(id.clone()) {
+                continue;
+            }
+            if self
+                .inner
+                .graph
+                .get(&id)
+                .is_some_and(|node| node.watch_input)
+            {
                 continue;
             }
             let module = self.pipeline_module(&id, None, "client").await?;

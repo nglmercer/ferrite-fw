@@ -2504,3 +2504,62 @@ per-file explicit mappings, virtual/linked source ownership, unrecognized
 ecosystems, graph-reachable-file scanning and complete package-specific
 installed/compiler capability checks remain incomplete. SSR/checkers, all
 additional/upstream adapters and the broader framework mission remain active.
+
+
+### External compiler-input watch recovery and graph roles (2026-10-03)
+
+Implemented live watcher access for reconstructed HTTP/HMR handles through a
+weak shared reference, avoiding a watcher/callback/inner ownership cycle.
+Extra-file watches now attach to existing parent directories (or the nearest
+existing ancestor of a missing tree), survive file replacement, and deduplicate
+registered anchors. Relevant directory creation/removal events invalidate
+tracked descendant inputs; unrelated events outside the project are filtered.
+Actual filesystem paths remain the plugin watch-event payload. Closing the
+server clears watcher registrations.
+
+Added graph watch_input metadata so declared compiler/type/configuration inputs
+invalidate their owners without being lowered as runtime application modules.
+Actual imports and successful module compilation promote the same input to
+a runtime module, preserving syntax validation. External absolute paths now
+use distinct /@fs identities and round-trip through core URL helpers, including
+lexical dot-segment normalization; this does not enable external module serving.
+
+Migration: graph JSON adds default-false watch_input; older snapshots deserialize
+with existing runtime behavior. Pipeline cache identity advances from v10 to
+v11. External file_to_url results change from ambiguous project-looking paths
+to /@fs identities. No lockfile or framework registry schema change.
+
+Validation: real HTTP/notify tests begin with a failed first load and missing
+external file or directory tree, reject unrelated external notifications, then
+create only the declared input and verify reload, cleared diagnostics and valid
+output. Further tests prove shared watcher identity/no reference cycle and
+watch-only invalid JavaScript remaining data until an actual import, after
+which syntax errors correctly fail preflight. Core external URL/dot-segment
+round-trip tests passed. Scoped units passed 6 core, 7 graph and 50 server tests.
+
+The final non-E2E workspace gate passed 476 tests, zero failures, 53 ignored in
+87 targets using both browser paths and --test-threads=1. Those ignored tests
+establish no support. The 303 E2E unit tests passed separately; SDK browser
+integration tests were not rerun in this increment. All six explicitly run
+generated client browser tests passed 16 Vanilla/React/Vue/Svelte JS/TS flows
+in Chromium/Firefox in 159.91 seconds. Browser execution used the new watcher/
+graph implementation before final lexical path normalization; its ordinary
+project paths are unchanged, and final core/server/workspace tests were rerun
+after normalization. Native flows exclude Node from CLI PATH; official SFC
+flows explicitly enable their Node compiler. Fresh final CLI build and
+ownership parity regression passed. Affected all-target Clippy with
+--locked -- -D warnings, changed-file formatting and diff checks passed. Logs:
+/tmp/ferrite-missing-external-watch-recovery.log,
+/tmp/ferrite-missing-external-watch-tests.log,
+/tmp/ferrite-missing-external-watch-workspace.log,
+/tmp/ferrite-missing-external-watch-e2e-units.log,
+/tmp/ferrite-missing-external-watch-browsers.log,
+/tmp/ferrite-missing-external-watch-build.log,
+/tmp/ferrite-missing-external-watch-cli.log,
+/tmp/ferrite-missing-external-watch-clippy.log.
+
+Environment-specific graph roles, directory dependency snapshots/replacement,
+watch-registration failure propagation, stale/orphan watch cleanup, URL encoding
+and linked external runtime-module serving remain incomplete. Linux was
+executed; other-platform release checks were not. No support promotion; the
+full framework mission remains active.

@@ -770,6 +770,19 @@ impl DevServer {
         })?;
         for file in candidates {
             let id = ModuleId::new(ferrite_core::file_to_url(&self.inner.config.root, &file));
+            if id == *importer {
+                continue;
+            }
+            if !self.inner.graph.contains(&id) && specifier == "ferrite:failed-transform-input" {
+                let mut node = ferrite_graph::ModuleNode::new(
+                    id.clone(),
+                    id.0.clone(),
+                    ModuleType::from_path(&file),
+                );
+                node.file = Some(file.clone());
+                node.watch_input = true;
+                self.inner.graph.upsert(node);
+            }
             self.inner.graph.ensure(&id, ModuleType::from_path(&file));
             self.inner.graph.add_edge(
                 importer,

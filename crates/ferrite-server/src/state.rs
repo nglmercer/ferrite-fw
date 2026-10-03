@@ -20,6 +20,7 @@ use ferrite_transform::JsCompiler;
 use notify::Watcher as _;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::path::PathBuf;
@@ -122,6 +123,10 @@ pub struct DevServerInner {
     pub import_map: Mutex<BTreeMap<String, String>>,
     /// Extra watch files.
     pub watch_files: Mutex<Vec<String>>,
+    pub(crate) watch_anchors: Mutex<HashSet<PathBuf>>,
+    // Weak ownership lets HTTP/watcher tasks register inputs without a
+    // watcher -> callback -> inner -> watcher reference cycle.
+    pub(crate) watcher_handle: std::sync::Weak<Mutex<Option<notify::RecommendedWatcher>>>,
     /// Collected warnings.
     pub warnings: Mutex<Vec<String>>,
     /// Transform cache.
@@ -143,6 +148,11 @@ pub struct DevServerInner {
 }
 
 impl DevServer {
+    pub(crate) fn from_inner(inner: Arc<DevServerInner>) -> Self {
+        let watcher = inner.watcher_handle.upgrade().unwrap_or_default();
+        Self { inner, watcher }
+    }
+
     /// Create a dev server (runs `config_resolved`, starts the watcher).
     pub async fn new(config: ResolvedConfig, plugins: Vec<Arc<dyn Plugin>>) -> Result<Self> {
         Self::new_inner(config, plugins, true, None).await
@@ -194,6 +204,7 @@ impl DevServer {
         let mode_name = config.mode.clone();
         client_resolver.lockfile = config.lockfile();
         ssr_resolver.lockfile = config.lockfile();
+        let watcher = Arc::new(Mutex::new(None));
         let inner = Arc::new(DevServerInner {
             config,
             graph: ModuleGraph::new(),
@@ -208,6 +219,8 @@ impl DevServer {
             emitted: Mutex::new(HashMap::new()),
             import_map: Mutex::new(BTreeMap::new()),
             watch_files: Mutex::new(Vec::new()),
+            watch_anchors: Mutex::new(HashSet::new()),
+            watcher_handle: Arc::downgrade(&watcher),
             warnings: Mutex::new(Vec::new()),
             cache: MemoryCache::new(),
             env_vars,
@@ -221,10 +234,7 @@ impl DevServer {
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new()),
         });
-        let server = Self {
-            inner,
-            watcher: Arc::new(Mutex::new(None)),
-        };
+        let server = Self { inner, watcher };
         if watch {
             server.start_watcher()?;
         }
@@ -264,6 +274,11 @@ impl DevServer {
     /// The path is recorded in `watch_files` and, when the watcher is
     /// running, added to the notify watch so `watchChange` fires for it.
     pub fn watch_extra(&self, path: &Path) {
+        let path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.inner.config.root.join(path)
+        };
         let text = path.to_string_lossy().into_owned();
         if let Ok(mut watch) = self.inner.watch_files.lock() {
             if !watch.iter().any(|entry| entry == &text) {
@@ -272,8 +287,34 @@ impl DevServer {
         }
         if let Ok(mut slot) = self.watcher.lock() {
             if let Some(watcher) = slot.as_mut() {
-                if let Err(error) = watcher.watch(path, notify::RecursiveMode::Recursive) {
+                // Parent watches survive file creation, removal and atomic saves.
+                // For a missing directory tree, recursive coverage begins at its
+                // nearest existing ancestor; graph edges keep the precise input.
+                let anchor = if path.is_dir() {
+                    Some(path.as_path())
+                } else {
+                    path.parent()
+                        .and_then(|parent| parent.ancestors().find(|candidate| candidate.is_dir()))
+                };
+                let Some(anchor) = anchor else {
+                    tracing::warn!(
+                        "cannot watch extra path `{}`: no existing directory ancestor",
+                        path.display()
+                    );
+                    return;
+                };
+                if self
+                    .inner
+                    .watch_anchors
+                    .lock()
+                    .is_ok_and(|anchors| anchors.contains(anchor))
+                {
+                    return;
+                }
+                if let Err(error) = watcher.watch(anchor, notify::RecursiveMode::Recursive) {
                     tracing::warn!("cannot watch extra path `{}`: {error}", path.display());
+                } else if let Ok(mut anchors) = self.inner.watch_anchors.lock() {
+                    anchors.insert(anchor.to_path_buf());
                 }
             }
         }

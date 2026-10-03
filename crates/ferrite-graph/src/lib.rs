@@ -72,6 +72,10 @@ pub struct ModuleNode {
     pub file: Option<PathBuf>,
     /// Module type.
     pub module_type: ModuleType,
+    /// Compiler/watch input without a runtime import; invalidate owners but
+    /// do not lower this input as an application module during HMR preflight.
+    #[serde(default)]
+    pub watch_input: bool,
     /// Outgoing import edges.
     pub imports: Vec<ImportEdge>,
     /// Importer ids (reverse edges).
@@ -100,6 +104,7 @@ impl ModuleNode {
             url,
             file: None,
             module_type,
+            watch_input: false,
             imports: Vec::new(),
             importers: Vec::new(),
             transform_hash: String::new(),

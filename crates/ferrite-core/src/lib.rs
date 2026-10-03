@@ -535,18 +535,31 @@ pub fn read_to_string(root: &Path, file: &Path) -> Result<String> {
         .map_err(|source| FerriteError::Other(format!("cannot read {}: {source}", path.display())))
 }
 
-/// Convert a file path to a root-relative URL.
+/// Convert a file path to a project URL or an external `/@fs` identity.
 #[must_use]
 pub fn file_to_url(root: &Path, file: &Path) -> String {
-    let relative = file.strip_prefix(root).unwrap_or(file);
+    let root = PathBuf::from(normalize_path(root));
+    let file = PathBuf::from(normalize_path(file));
+    if file.is_absolute() && !file.starts_with(&root) {
+        return normalize_url_path(&format!(
+            "/@fs{}",
+            file.to_string_lossy().replace('\\', "/")
+        ));
+    }
+    let relative = file.strip_prefix(&root).unwrap_or(&file);
     let mut url = String::from("/");
     url.push_str(&relative.to_string_lossy().replace('\\', "/"));
     normalize_url_path(&url)
 }
 
-/// Convert a root-relative URL to a file path.
+/// Convert a project URL or external `/@fs` identity to a file path.
 #[must_use]
 pub fn url_to_file(root: &Path, url: &str) -> PathBuf {
+    if let Some(file) = url.strip_prefix("/@fs") {
+        if Path::new(file).is_absolute() {
+            return PathBuf::from(file);
+        }
+    }
     let trimmed = url.trim_start_matches('/');
     root.join(trimmed)
 }
@@ -566,9 +579,7 @@ pub fn normalize_path(path: &Path) -> String {
     let absolute = rest.starts_with('/');
     // Preserve a Windows drive prefix (`C:/...`) or UNC root (`//host/...`).
     let (drive, rest) = match rest.split_once('/') {
-        Some((head, tail)) if head.len() == 2 && head.ends_with(':') => {
-            (format!("{head}/"), tail)
-        }
+        Some((head, tail)) if head.len() == 2 && head.ends_with(':') => (format!("{head}/"), tail),
         _ if rest.starts_with("//") => (String::from("//"), &rest[2..]),
         _ => (String::new(), rest),
     };
@@ -605,7 +616,9 @@ pub fn search_for_workspace_root(start: &Path) -> PathBuf {
     let mut current = if start.is_absolute() {
         start.to_path_buf()
     } else {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(start)
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(start)
     };
     if current.is_file() {
         current.pop();
@@ -674,6 +687,32 @@ pub fn now() -> Instant {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn external_files_have_distinct_urls_and_round_trip() {
+        let project = std::env::temp_dir().join("ferrite-core-project");
+        let outside = std::env::temp_dir().join("ferrite-core-external");
+        let file = outside.join("input.js");
+        let url = file_to_url(&project, &file);
+        assert!(url.starts_with("/@fs"), "{url}");
+        assert_eq!(url_to_file(&project, &url), file);
+        assert_eq!(
+            file_to_url(&project, &project.join("../ferrite-core-external/input.js")),
+            url
+        );
+        assert_eq!(
+            file_to_url(&project, &project.join("src/app.js")),
+            "/src/app.js"
+        );
+        assert_eq!(
+            file_to_url(&project, Path::new("src/app.js")),
+            "/src/app.js"
+        );
+        assert_eq!(
+            url_to_file(&project, "/src/app.js"),
+            project.join("src/app.js")
+        );
+    }
+
     use super::*;
 
     #[test]
@@ -719,12 +758,13 @@ mod tests {
         std::fs::create_dir_all(&nested).unwrap();
         // Fallback: no markers anywhere up to / (or a real ancestor root).
         // With markers present, the nearest one wins.
-        std::fs::write(root.join("pnpm-workspace.yaml"), "packages:\n  - packages/*\n").unwrap();
+        std::fs::write(
+            root.join("pnpm-workspace.yaml"),
+            "packages:\n  - packages/*\n",
+        )
+        .unwrap();
         assert_eq!(search_for_workspace_root(&nested), root);
-        assert_eq!(
-            search_for_workspace_root(&nested.join("index.ts")),
-            root
-        );
+        assert_eq!(search_for_workspace_root(&nested.join("index.ts")), root);
         std::fs::write(
             root.join("packages/app/package.json"),
             "{\"name\": \"app\", \"workspaces\": [\"x\"]}",

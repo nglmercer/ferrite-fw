@@ -113,7 +113,7 @@ impl DevServer {
             None
         };
         let pipeline = format!(
-            "pipeline-v10:{invalidation:?}:{}:{:?}:{}:{}:{:?}:{lock_state:?}",
+            "pipeline-v11:{invalidation:?}:{}:{:?}:{}:{}:{:?}:{lock_state:?}",
             self.inner.plugins.cache_key(),
             self.inner.config.react,
             self.inner.config.is_production,
@@ -163,6 +163,7 @@ impl DevServer {
             )
         });
         node.module_type = module.module_type.clone();
+        node.watch_input = false;
         node.url = module.id.0.clone();
         if let Ok(file) = self.id_to_file(&module.id) {
             node.file = Some(file);
@@ -177,6 +178,12 @@ impl DevServer {
             Default::default()
         };
         self.inner.graph.upsert(node);
+        for (_, imported, _) in &module.imports {
+            if let Some(mut node) = self.inner.graph.get(imported) {
+                node.watch_input = false;
+                self.inner.graph.upsert(node);
+            }
+        }
         let mut edges: Vec<ImportEdge> = module
             .imports
             .iter()
@@ -199,6 +206,10 @@ impl DevServer {
                     ferrite_core::ModuleType::from_path(dependency),
                 );
                 node.file = Some(file);
+                node.watch_input = !module
+                    .imports
+                    .iter()
+                    .any(|(_, imported, _)| imported == &id);
                 self.inner.graph.upsert(node);
             }
             if !edges.iter().any(|edge| edge.resolved == id) {

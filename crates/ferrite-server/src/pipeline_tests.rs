@@ -889,6 +889,240 @@ async fn concurrent_validation_cannot_roll_back_a_later_successful_edit() {
 }
 
 #[tokio::test]
+async fn watched_compiler_inputs_are_not_runtime_modules_until_imported() {
+    struct MetadataInput(PathBuf);
+    #[async_trait::async_trait]
+    impl Plugin for MetadataInput {
+        fn name(&self) -> &'static str {
+            "metadata-input"
+        }
+        async fn transform(
+            &self,
+            _: &PluginContext,
+            request: TransformRequest,
+        ) -> Result<Option<TransformResult>> {
+            if request.id != "/metadata-owner.js" {
+                return Ok(None);
+            }
+            Ok(Some(TransformResult {
+                code: request.code,
+                map: None,
+                dependencies: vec![self.0.to_string_lossy().into_owned()],
+                module_type: None,
+            }))
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("helper.js");
+    std::fs::write(&input, "not JavaScript: ???").unwrap();
+    std::fs::write(
+        root.path().join("metadata-owner.js"),
+        "export const value = 42;",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("runtime-owner.js"),
+        "import {step} from './helper.js'; export const value = step;",
+    )
+    .unwrap();
+    let config = ferrite_config::resolve_config(
+        Default::default(),
+        Some(root.path().into()),
+        Default::default(),
+    )
+    .unwrap();
+    let server =
+        DevServer::new_without_watcher(config, vec![Arc::new(MetadataInput(input.clone()))])
+            .await
+            .unwrap();
+    let id = ModuleId::new("/helper.js");
+    server
+        .pipeline_module(&ModuleId::new("/metadata-owner.js"), None, "client")
+        .await
+        .unwrap();
+    assert!(server.inner.graph.get(&id).unwrap().watch_input);
+    let mut messages = server.inner.hmr.subscribe();
+    server.invalidate_module(&id).await;
+    let message = tokio::time::timeout(std::time::Duration::from_secs(5), messages.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(
+            serde_json::from_str::<ferrite_hmr::HmrMessage>(&message).unwrap(),
+            ferrite_hmr::HmrMessage::FullReload { .. }
+        ),
+        "{message}"
+    );
+    assert!(server.inner.hmr_error.lock().unwrap().is_none());
+    std::fs::write(&input, "export const step = 1;").unwrap();
+    server
+        .pipeline_module(&ModuleId::new("/runtime-owner.js"), None, "client")
+        .await
+        .unwrap();
+    assert!(!server.inner.graph.get(&id).unwrap().watch_input);
+    std::fs::write(&input, "export const step = ;").unwrap();
+    server.invalidate_module(&id).await;
+    let message = tokio::time::timeout(std::time::Duration::from_secs(5), messages.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(
+            serde_json::from_str::<ferrite_hmr::HmrMessage>(&message).unwrap(),
+            ferrite_hmr::HmrMessage::Error { .. }
+        ),
+        "{message}"
+    );
+    assert_eq!(
+        server
+            .inner
+            .hmr_error
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .code,
+        "FERRITE_PARSE_001"
+    );
+}
+
+#[tokio::test]
+async fn request_handles_share_watcher_without_a_reference_cycle() {
+    let root = tempfile::tempdir().unwrap();
+    let config = ferrite_config::resolve_config(
+        Default::default(),
+        Some(root.path().into()),
+        Default::default(),
+    )
+    .unwrap();
+    let server = DevServer::new(config, vec![]).await.unwrap();
+    let inner = server.inner.clone();
+    let request = DevServer::from_inner(inner.clone());
+    assert!(Arc::ptr_eq(&server.watcher, &request.watcher));
+    drop(server);
+    assert!(inner.watcher_handle.upgrade().is_some());
+    drop(request);
+    assert!(inner.watcher_handle.upgrade().is_none());
+}
+
+#[tokio::test]
+async fn creating_missing_external_inputs_recovers_without_unrelated_notifications() {
+    struct ExternalInput {
+        input: PathBuf,
+        events: Arc<Mutex<Vec<PathBuf>>>,
+    }
+    #[async_trait::async_trait]
+    impl Plugin for ExternalInput {
+        fn name(&self) -> &'static str {
+            "external-input"
+        }
+        async fn load(
+            &self,
+            ctx: &PluginContext,
+            request: LoadRequest,
+        ) -> Result<Option<LoadResult>> {
+            if request.id != "/entry.js" {
+                return Ok(None);
+            }
+            ctx.add_watch_file(&self.input.to_string_lossy());
+            let code = std::fs::read_to_string(&self.input).map_err(|error| {
+                ferrite_core::FerriteError::Other(format!(
+                    "external compiler input {} is missing: {error}",
+                    self.input.display()
+                ))
+            })?;
+            Ok(Some(LoadResult {
+                code,
+                module_type: ModuleType::Js,
+                dependencies: vec![],
+                side_effects: None,
+                map: None,
+            }))
+        }
+        async fn watch_change(
+            &self,
+            _: &PluginContext,
+            event: ferrite_plugin::WatchEvent,
+        ) -> Result<()> {
+            self.events.lock().unwrap().push(event.path);
+            Ok(())
+        }
+    }
+    for relative in ["fragment.js", "later/nested/fragment.js"] {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("entry.js"), "export const unused = true;").unwrap();
+        let input = outside.path().join(relative);
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let config = ferrite_config::resolve_config(
+            Default::default(),
+            Some(root.path().into()),
+            Default::default(),
+        )
+        .unwrap();
+        let server = DevServer::new(
+            config,
+            vec![Arc::new(ExternalInput {
+                input: input.clone(),
+                events: events.clone(),
+            })],
+        )
+        .await
+        .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let router = server.router();
+        let serving = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        let url = format!("http://{address}/entry.js");
+        assert_eq!(
+            reqwest::get(&url).await.unwrap().status(),
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR
+        );
+        let input_id = ModuleId::new(ferrite_core::file_to_url(root.path(), &input));
+        assert!(server
+            .inner
+            .graph
+            .get(&ModuleId::new("/entry.js"))
+            .unwrap()
+            .imports
+            .iter()
+            .any(|edge| edge.resolved == input_id));
+        let mut messages = server.inner.hmr.subscribe();
+        let unrelated = outside.path().join("unrelated.js");
+        std::fs::write(&unrelated, "export const unrelated = true;").unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(250), messages.recv())
+                .await
+                .is_err()
+        );
+        assert!(!events.lock().unwrap().contains(&unrelated));
+        std::fs::create_dir_all(input.parent().unwrap()).unwrap();
+        std::fs::write(&input, "export const answer = 42;").unwrap();
+        let message = tokio::time::timeout(std::time::Duration::from_secs(10), messages.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(
+                serde_json::from_str::<ferrite_hmr::HmrMessage>(&message).unwrap(),
+                ferrite_hmr::HmrMessage::FullReload { .. }
+            ),
+            "{relative}: {message}"
+        );
+        assert!(server.inner.hmr_error.lock().unwrap().is_none());
+        let response = reqwest::get(&url).await.unwrap();
+        assert!(response.status().is_success());
+        assert!(response.text().await.unwrap().contains("answer = 42"));
+        server.close();
+        assert!(server.inner.watch_anchors.lock().unwrap().is_empty());
+        serving.abort();
+    }
+}
+
+#[tokio::test]
 async fn failed_pipeline_stages_recover_from_declared_inputs() {
     struct DeclaredInput;
     #[async_trait::async_trait]

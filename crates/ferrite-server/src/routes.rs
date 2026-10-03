@@ -20,7 +20,6 @@ use ferrite_ssr::SsrContext;
 use ferrite_ssr::SsrHttpRequest;
 use ferrite_ssr::RPC_ROUTE_PREFIX;
 use std::sync::Arc;
-use std::sync::Mutex;
 
 // --- HTTP handlers -----------------------------------------------------------
 
@@ -238,10 +237,7 @@ pub(crate) async fn fallback_handler(
                 inner
                     .graph
                     .ensure(&id, ferrite_core::ModuleType::from_path(&path));
-                let handle = DevServer {
-                    inner: inner.clone(),
-                    watcher: Arc::new(Mutex::new(None)),
-                };
+                let handle = DevServer::from_inner(inner.clone());
                 handle.report_hmr_error(&id, &error);
             }
             error_response(&error)
@@ -249,7 +245,7 @@ pub(crate) async fn fallback_handler(
     }
 }
 
-/// Pipeline access without watcher ownership (HTTP handlers).
+/// Pipeline access through shared HTTP state.
 struct DevServerRef {
     inner: Arc<DevServerInner>,
 }
@@ -257,12 +253,8 @@ struct DevServerRef {
 impl DevServerRef {
     /// Mirror of [`DevServer::transform_request`] for borrowed state.
     async fn transform_request_owned(&self, url: &str) -> Result<PipelineResponse> {
-        // Reuse the same logic by constructing a temporary handle. The
-        // watcher field is unused on this path.
-        let server = DevServer {
-            inner: self.inner.clone(),
-            watcher: Arc::new(Mutex::new(None)),
-        };
+        // Reuse live watcher access for dependencies discovered by this request.
+        let server = DevServer::from_inner(self.inner.clone());
         // Avoid re-running watcher setup: call the pipeline directly.
         server.transform_request_inner(url).await
     }
