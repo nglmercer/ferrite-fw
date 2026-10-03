@@ -1754,3 +1754,26 @@ snapshots conservatively include dependencies of other registrations on that
 worker. File changes racing loading/checks, null-result watch ownership, automatic
 restart, late dependency discovery and broader cache/concurrency matrices remain
 assigned. No support status is promoted; the full framework mission remains active.
+
+### Preserve foreign module watches when hooks decline a request
+
+Foreign resolve/load/transform now use the native request-scoped watch context
+before executing the hook. Their registration-time loaded module dependencies
+therefore belong to the importer even when hooks return null or are absent,
+without synthesizing a transform or changing its code/map. Existing successful
+result metadata remains preserved. The shared pipeline fixture checks a real
+Node plugin whose hooks all decline `/entry.js`: helper ownership appears in
+returned dependencies and the graph, and remains present on a repeated cache
+lookup. Development and production fixture profiles both passed.
+
+Validation: `cargo test -p ferrite-plugin --locked` passed 19 unit tests; ignored
+Node fixtures in that command do not establish support. The explicitly executed
+`cargo test -p ferrite-server --locked foreign_factory_hooks -- --ignored --nocapture`
+passed, using the actual Node host. Plugin/server all-target Clippy with
+`--locked -- -D warnings`, formatting and diff checks passed. Logs:
+`/tmp/ferrite-null-watch-unit.log`, `/tmp/ferrite-null-watch-pipeline.log`,
+`/tmp/ferrite-null-watch-clippy.log`.
+
+No migration or support promotion. Browser notification timing, watches outside
+project roots, load races, late imports and the broader remaining mission remain
+assigned; this regression proves pipeline/cache/graph ownership only.

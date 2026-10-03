@@ -74,6 +74,14 @@ impl ForeignHookPlugin {
         dependencies
     }
 
+    fn register_watches(&self, ctx: &PluginContext) {
+        for path in self.dependencies.keys() {
+            if let Some(path) = path.to_str() {
+                ctx.add_watch_file(path);
+            }
+        }
+    }
+
     async fn call(&self, hook: HookName, input: Value) -> Result<Value> {
         if Hash::of_bytes(&std::fs::read(&self.entry)?) != self.source_hash {
             return Err(FerriteError::Build(format!("foreign plugin {} entry changed; recreate its explicit Node host and plugin registration before compiling", self.handle.name)));
@@ -178,9 +186,10 @@ impl Plugin for ForeignHookPlugin {
 
     async fn resolve_id(
         &self,
-        _ctx: &PluginContext,
+        ctx: &PluginContext,
         request: ResolveHookRequest<'_>,
     ) -> Result<Option<ResolvedId>> {
+        self.register_watches(ctx);
         let value = self.call(HookName::ResolveId, serde_json::json!({"id": request.specifier, "importer": request.importer.map(|id| id.0.as_str()), "options": {"ssr": request.ssr, "environment": request.environment, "kind": format!("{:?}", request.kind)}})).await?;
         if value.is_null() {
             return Ok(None);
@@ -198,7 +207,8 @@ impl Plugin for ForeignHookPlugin {
         }))
     }
 
-    async fn load(&self, _ctx: &PluginContext, request: LoadRequest) -> Result<Option<LoadResult>> {
+    async fn load(&self, ctx: &PluginContext, request: LoadRequest) -> Result<Option<LoadResult>> {
+        self.register_watches(ctx);
         let value = self.call(HookName::Load, serde_json::json!({"id": request.id, "options": {"ssr": request.environment.is_ssr(), "environment": request.environment}})).await?;
         if value.is_null() {
             return Ok(None);
@@ -217,9 +227,10 @@ impl Plugin for ForeignHookPlugin {
 
     async fn transform(
         &self,
-        _ctx: &PluginContext,
+        ctx: &PluginContext,
         request: TransformRequest,
     ) -> Result<Option<TransformResult>> {
+        self.register_watches(ctx);
         let value = self.call(HookName::Transform, serde_json::json!({"id": request.id, "code": request.code, "options": {"ssr": request.ssr, "environment": request.environment, "moduleType": request.module_type}})).await?;
         if value.is_null() {
             return Ok(None);

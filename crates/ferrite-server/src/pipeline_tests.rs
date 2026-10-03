@@ -1174,6 +1174,26 @@ export default options => ({
             .await
             .unwrap();
         assert!(result.code.contains("/generated.js"));
+        // All hooks return null for this importer; their loaded dependencies
+        // must still be owned by the resulting module.
+        assert!(result
+            .dependencies
+            .iter()
+            .any(|path| path.ends_with("helper.mjs")));
+        let importer_node = server.inner.graph.get(&ModuleId::new("/entry.js")).unwrap();
+        assert!(importer_node
+            .imports
+            .iter()
+            .any(|edge| edge.resolved.0.ends_with("helper.mjs")));
+
+        let cached_importer = server
+            .pipeline_module(&ModuleId::new("/entry.js"), None, "client")
+            .await
+            .unwrap();
+        assert!(cached_importer
+            .dependencies
+            .iter()
+            .any(|path| path.ends_with("helper.mjs")));
         let generated = server
             .pipeline_module(&ModuleId::new("/generated.js"), None, "client")
             .await
