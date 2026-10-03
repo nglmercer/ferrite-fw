@@ -46,10 +46,61 @@ pub struct UserConfig {
     pub package: PackageConfig,
     /// React plugin options.
     pub react: ReactConfig,
+    /// Explicit official framework compiler configuration, separate from SSR runtime.
+    pub framework: Option<FrameworkConfig>,
     /// Embedded runtime options.
     pub runtime: RuntimeConfig,
     /// End-to-end test options.
     pub e2e: E2eConfig,
+}
+
+/// Explicit opt-in to official framework compilation.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FrameworkConfig {
+    /// Component owners to enable (`vue`, `svelte`). An empty list disables this integration.
+    pub enabled: Vec<String>,
+    /// Compiler host. Currently only explicitly selected `node` is validated.
+    pub compiler_host: Option<String>,
+    /// Optional Node executable; never used for SSR runtime selection.
+    pub node: Option<PathBuf>,
+    /// Per compiler request deadline in milliseconds.
+    pub timeout_ms: u64,
+}
+impl Default for FrameworkConfig {
+    fn default() -> Self {
+        Self {
+            enabled: Vec::new(),
+            compiler_host: None,
+            node: None,
+            timeout_ms: 10_000,
+        }
+    }
+}
+impl FrameworkConfig {
+    /// Reject unavailable profiles before starting a worker or writing projections.
+    pub fn validate(&self) -> Result<()> {
+        let mut seen = std::collections::HashSet::new();
+        for name in &self.enabled {
+            if !matches!(name.as_str(), "vue" | "svelte") {
+                return Err(FerriteError::Config(format!("framework `{name}` has no configured official compiler adapter; available: vue, svelte")));
+            }
+            if !seen.insert(name) {
+                return Err(FerriteError::Config(format!(
+                    "framework `{name}` is configured twice"
+                )));
+            }
+        }
+        if !self.enabled.is_empty() && self.compiler_host.as_deref() != Some("node") {
+            return Err(FerriteError::Config("official framework compilation requires explicit framework.compiler_host = \"node\"; native and embedded compiler profiles are unavailable; SSR runtime is configured separately".into()));
+        }
+        if self.timeout_ms == 0 || self.timeout_ms > 300_000 {
+            return Err(FerriteError::Config(
+                "framework.timeout_ms must be between 1 and 300000".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Dev server options.
@@ -663,6 +714,8 @@ pub struct ResolvedConfig {
     pub package: PackageConfig,
     /// React options.
     pub react: ReactConfig,
+    /// Explicit framework compiler options.
+    pub framework: Option<FrameworkConfig>,
     /// Runtime options.
     pub runtime: RuntimeConfig,
     /// E2E options.
@@ -817,6 +870,9 @@ pub fn merge_user_config(mut base: UserConfig, over: UserConfig) -> UserConfig {
     base.remote = over.remote;
     base.package = over.package;
     base.react = over.react;
+    if over.framework.is_some() {
+        base.framework = over.framework;
+    }
     base.runtime = merge_runtime(base.runtime, over.runtime);
     base.e2e = merge_e2e(base.e2e, over.e2e);
     base
@@ -1061,6 +1117,9 @@ pub fn resolve_config(
     root_hint: Option<PathBuf>,
     overrides: CliOverrides,
 ) -> Result<ResolvedConfig> {
+    if let Some(framework) = &user.framework {
+        framework.validate()?;
+    }
     let mut root = root_hint
         .or_else(|| user.root.clone().map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from("."));
@@ -1135,6 +1194,7 @@ pub fn resolve_config(
         remote: user.remote.clone(),
         package,
         react: user.react.clone(),
+        framework: user.framework.clone(),
         runtime: {
             let mut runtime = user.runtime.clone();
             if let Some(backend) = overrides.runtime {
@@ -1150,6 +1210,37 @@ pub fn resolve_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn framework_host_requires_explicit_opt_in_and_validates_ownership() {
+        let parse = |text: &str| toml::from_str::<UserConfig>(text).unwrap();
+        for text in [
+            "[framework]\nenabled=['vue']",
+            "[framework]\nenabled=['vue']\ncompiler_host='embedded'",
+            "[framework]\nenabled=['angular']\ncompiler_host='node'",
+            "[framework]\nenabled=['vue','vue']\ncompiler_host='node'",
+            "[framework]\nenabled=['svelte']\ncompiler_host='node'\ntimeout_ms=0",
+        ] {
+            assert!(
+                resolve_config(parse(text), None, CliOverrides::default()).is_err(),
+                "{text}"
+            );
+        }
+        let enabled = parse(
+            "[framework]\nenabled=['vue','svelte']\ncompiler_host='node'\n[runtime]\nbackend='boa'",
+        );
+        let merged = merge_user_config(enabled.clone(), UserConfig::default());
+        assert_eq!(merged.framework.unwrap().enabled, ["vue", "svelte"]);
+        let disabled = merge_user_config(enabled.clone(), parse("[framework]\nenabled=[]"));
+        assert!(disabled.framework.unwrap().enabled.is_empty());
+        let resolved = resolve_config(enabled, None, CliOverrides::default()).unwrap();
+        assert_eq!(resolved.runtime.backend, "boa");
+        assert_eq!(
+            resolved.framework.unwrap().compiler_host.as_deref(),
+            Some("node")
+        );
+        assert!(toml::from_str::<UserConfig>("[framework]\ncompiler_hosts='node'").is_err());
+    }
 
     #[test]
     fn e2e_project_toml_roundtrip_and_old_json_defaults() {

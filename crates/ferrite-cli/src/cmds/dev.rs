@@ -60,6 +60,17 @@ pub(crate) async fn dev(
     );
     println!("  Network: use --host to expose");
     println!("  SSR:     {ssr_mode}");
+    if let Some(profile) = &resolved.framework {
+        if !profile.enabled.is_empty() {
+            println!(
+                "  Compiler host: {} ({}, experimental)",
+                profile.compiler_host.as_deref().unwrap_or("unavailable"),
+                profile.enabled.join(", ")
+            );
+        }
+    }
+    println!("  SSR runtime: {}", resolved.runtime.backend);
+
     println!(
         "  HMR:     {}",
         if resolved.server.hmr {

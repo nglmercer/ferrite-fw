@@ -374,3 +374,51 @@ coverage, React Refresh, additional adapters and all remaining mission work
 remain assigned. Rendering support in the public registry is not promoted by
 these narrower tests. No lockfile migration beyond the earlier v2 change is
 required by this integration. The complete mission remains active.
+
+## Declarative compiler-host startup (2026-10-02)
+
+CLI dev/build and library `Config::resolve` now consume the same explicit
+framework configuration. For the pinned installed compiler profiles:
+
+```toml
+[framework]
+enabled = ["vue", "svelte"]
+compiler_host = "node"
+timeout_ms = 10000
+# node = "/absolute/path/to/node" # optional; relative paths resolve from root
+
+[runtime]
+backend = "boa" # separate SSR runtime selection, not a renderer support claim
+```
+
+An omitted compiler host, unavailable host, unsupported framework, duplicate
+owner, invalid deadline or unknown framework setting errors before host startup.
+An explicit empty `enabled` list overrides inherited configuration and disables
+this integration. Programmatic official plugins and declarative ownership for
+the same framework conflict explicitly. Selected legacy disabled adapters are
+replaced with official adapters; unrelated plugins remain. Build mode selects
+production compilation. Configuration parse errors are propagated rather than
+silently replaced with defaults. CLI transform uses this same configuration;
+inspect reports framework settings and SSR runtime separately without starting
+compiler workers, and dev prints the distinction with experimental status.
+
+Validation:
+
+- `cargo test -p ferrite-config --locked`: 22 tests and one documentation test
+  passed, including explicit host validation, inherited settings, disabling,
+  unknown fields and separate SSR runtime configuration.
+- `cargo test -p ferrite-test --test framework_compilers official_components_resources_maps_cache_and_library_parity --locked -- --ignored --nocapture`:
+  passed (19.59 seconds), including clean Ferrite installation, configured
+  Vue/Svelte compilation, replacement of disabled adapters, unchanged runtime
+  selection and explicit failure on malformed configuration.
+- `cargo test -p ferrite-cli --locked`: all 11 existing CLI tests passed.
+- `cargo clippy -p ferrite-cli -p ferrite-test --all-targets --locked -- -D warnings`:
+  passed after the final CLI changes. Changed files formatted; diff check passed.
+- Actual `ferrite transform CliCounter.vue` against the pinned installed fixture
+  produced official render code, stripped TypeScript and generated CSS imports.
+  Actual `ferrite inspect --json` reported compiler host `node`, SSR runtime
+  `boa` and the selected official adapters; assertions passed.
+
+No new advertised template or SSR rendering capability is established here.
+Doctor, full version/host diagnostics, arbitrary explicit config-file selection,
+scaffolds, framework HMR/checkers and the remaining mission remain unfinished.

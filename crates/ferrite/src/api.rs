@@ -73,10 +73,54 @@ impl Config {
         container.hook_config(&mut user).await?;
         // Merge file config under programmatic config.
         let root_hint = self.root.clone().unwrap_or_else(|| PathBuf::from("."));
-        let file_config = load_user_config(&root_hint).unwrap_or_default();
+        let file_config = load_user_config(&root_hint)?;
         let merged = merge_user_config(file_config, user);
         let resolved = resolve_config(merged, Some(root_hint), self.overrides)?;
-        Ok((resolved, self.plugins))
+        let mut plugins = self.plugins;
+        if let Some(profile) = &resolved.framework {
+            if !profile.enabled.is_empty() {
+                // Only an explicit validated host selection can reach this constructor.
+                for name in &profile.enabled {
+                    let official = format!("ferrite:{name}-official");
+                    if plugins.iter().any(|plugin| plugin.name() == official) {
+                        return Err(ferrite_core::FerriteError::Config(format!(
+                            "framework `{name}` is configured both through framework.enabled and an explicit official plugin; select one"
+                        )));
+                    }
+                }
+                let node = profile.node.as_ref().map(|path| {
+                    if path.is_absolute() {
+                        path.clone()
+                    } else {
+                        resolved.root.join(path)
+                    }
+                });
+                let host = Arc::new(
+                    crate::frameworks::compiler_host::NodeCompilerHost::new(
+                        resolved.root.clone(),
+                        resolved.root.join("ferrite.lock"),
+                        node,
+                        std::time::Duration::from_millis(profile.timeout_ms),
+                    )
+                    .await?,
+                );
+                for name in &profile.enabled {
+                    let legacy = format!("ferrite:{name}");
+                    plugins.retain(|plugin| plugin.name() != legacy);
+                    let framework = match name.as_str() {
+                        "vue" => crate::frameworks::compiler_host::Framework::Vue,
+                        "svelte" => crate::frameworks::compiler_host::Framework::Svelte,
+                        _ => unreachable!("validated framework profile"),
+                    };
+                    plugins.push(Arc::new(crate::frameworks::HostedFrameworkPlugin::new(
+                        framework,
+                        host.clone(),
+                        !resolved.is_production,
+                    )));
+                }
+            }
+        }
+        Ok((resolved, plugins))
     }
 }
 

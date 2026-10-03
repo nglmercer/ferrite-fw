@@ -163,6 +163,57 @@ async fn official_components_resources_maps_cache_and_library_parity() {
         .await
         .unwrap_err();
     assert!(error.to_string().contains("no longer exists"), "{error}");
+    // The same declarative opt-in is resolved by CLI and library entrypoints.
+    std::fs::write(
+        project.root.join("ferrite.toml"),
+        "[framework]\nenabled=['vue','svelte']\ncompiler_host='node'\n[runtime]\nbackend='boa'\n",
+    )
+    .unwrap();
+    let (configured, plugins) = ferrite::Config {
+        root: Some(project.root.clone()),
+        plugins: vec![
+            Arc::new(VuePlugin::new(project.root.clone())),
+            Arc::new(SveltePlugin::new(project.root.clone())),
+        ],
+        ..Default::default()
+    }
+    .resolve()
+    .await
+    .unwrap();
+    assert_eq!(configured.runtime.backend, "boa");
+    assert!(plugins
+        .iter()
+        .any(|plugin| plugin.name() == "ferrite:vue-official"));
+    assert!(plugins
+        .iter()
+        .any(|plugin| plugin.name() == "ferrite:svelte-official"));
+    assert!(!plugins.iter().any(|plugin| plugin.name() == "ferrite:vue"));
+    let configured_server = DevServer::new_without_watcher(configured, plugins)
+        .await
+        .unwrap();
+    for component in ["/Counter.vue", "/Counter.svelte"] {
+        let module = configured_server
+            .pipeline_module(&ModuleId::new(component), None, "client")
+            .await
+            .unwrap();
+        assert_eq!(module.module_type, ferrite::ModuleType::Js);
+    }
+    std::fs::write(
+        project.root.join("ferrite.toml"),
+        "[framework]\nenabled = [",
+    )
+    .unwrap();
+    let error = match (ferrite::Config {
+        root: Some(project.root.clone()),
+        ..Default::default()
+    })
+    .resolve()
+    .await
+    {
+        Ok(_) => panic!("malformed explicit framework configuration was silently ignored"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("ferrite.toml"), "{error}");
 }
 
 // Test-only progress hooks locate production failures without changing output.
