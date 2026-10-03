@@ -95,6 +95,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ssr_evaluation_retires_previous_guest_function_handles() {
+        let runtime = NapiVmRuntime::with_defaults();
+        let module = CompiledModule {
+            id: "isolated-handles".into(),
+            code: "export function render() { return 'fresh'; }".into(),
+            url: None,
+        };
+        let first = runtime
+            .evaluate_module(
+                module.clone(),
+                RuntimeEnvironment {
+                    ssr: true,
+                    request_id: Some("first".into()),
+                },
+            )
+            .await
+            .unwrap();
+        let old = first.get_function("render").unwrap().clone();
+        assert!(
+            matches!(runtime.call(&old, Vec::new()).await.unwrap(), JsValue::String(value) if value == "fresh")
+        );
+        let second = runtime
+            .evaluate_module(
+                module,
+                RuntimeEnvironment {
+                    ssr: true,
+                    request_id: Some("second".into()),
+                },
+            )
+            .await
+            .unwrap();
+        let fresh = second.get_function("render").unwrap().clone();
+        assert_ne!(old.id, fresh.id);
+        assert!(
+            runtime.call(&old, Vec::new()).await.is_err(),
+            "retired handle must not invoke the next request's function"
+        );
+        assert!(
+            matches!(runtime.call(&fresh, Vec::new()).await.unwrap(), JsValue::String(value) if value == "fresh")
+        );
+    }
+
+    #[tokio::test]
     async fn evaluates_explicit_compiled_dependency_graph_without_filesystem_sources() {
         let runtime = NapiVmRuntime::with_defaults();
         let graph = crate::CompiledModuleGraph {

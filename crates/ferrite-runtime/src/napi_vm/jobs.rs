@@ -10,11 +10,13 @@ pub(crate) enum Job {
     EvalModule {
         id: String,
         code: String,
+        ssr: bool,
         reply: tokio::sync::oneshot::Sender<std::result::Result<serde_json::Value, String>>,
     },
     /// Register a complete compiled graph before evaluating its entry.
     EvalGraph {
         graph: crate::CompiledModuleGraph,
+        ssr: bool,
         reply: tokio::sync::oneshot::Sender<std::result::Result<serde_json::Value, String>>,
     },
     /// Call a guest function handle with JSON args; reply with JSON result.

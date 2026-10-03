@@ -80,12 +80,13 @@ impl JsRuntime for NapiVmRuntime {
     async fn evaluate_module(
         &self,
         module: CompiledModule,
-        _env: RuntimeEnvironment,
+        env: RuntimeEnvironment,
     ) -> Result<ModuleNamespace> {
         let (reply, receive) = tokio::sync::oneshot::channel();
         self.send(Job::EvalModule {
             id: module.id,
             code: module.code,
+            ssr: env.ssr,
             reply,
         })?;
         let json = receive
@@ -98,11 +99,15 @@ impl JsRuntime for NapiVmRuntime {
     async fn evaluate_module_graph(
         &self,
         graph: crate::CompiledModuleGraph,
-        _env: RuntimeEnvironment,
+        env: RuntimeEnvironment,
     ) -> Result<ModuleNamespace> {
         graph.validate()?;
         let (reply, receive) = tokio::sync::oneshot::channel();
-        self.send(Job::EvalGraph { graph, reply })?;
+        self.send(Job::EvalGraph {
+            graph,
+            ssr: env.ssr,
+            reply,
+        })?;
         let json = receive
             .await
             .map_err(|_| FerriteError::Runtime("napi-vm worker stopped".into()))?

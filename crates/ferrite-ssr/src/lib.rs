@@ -245,6 +245,43 @@ mod tests {
 
     #[cfg(feature = "napi-vm")]
     #[tokio::test]
+    async fn repeated_and_concurrent_renders_isolate_guest_globals_and_prototypes() {
+        let mut resolved = test_resolved();
+        resolved.runtime.backend = "napi-vm".into();
+        let adapter = std::sync::Arc::new(JsSsrAdapter::from_resolved(&resolved, CompiledModule {
+            id: "isolated-renderer".into(),
+            code: "globalThis.counter = (globalThis.counter || 0) + 1; export function render(url) { const previous = Object.prototype.previousRequest || 'empty'; Object.prototype.previousRequest = url; return `${globalThis.counter}|${previous}|${url}`; }".into(), url: None,
+        }));
+        let mut tasks = Vec::new();
+        for index in 0..12 {
+            let adapter = adapter.clone();
+            tasks.push(tokio::spawn(async move {
+                let uri = format!("/request-{index}");
+                let response = adapter
+                    .render(
+                        SsrHttpRequest {
+                            method: "GET".into(),
+                            uri: uri.clone(),
+                            headers: Vec::new(),
+                            body: Vec::new(),
+                        },
+                        Default::default(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    response.into_string().await.unwrap(),
+                    format!("1|empty|{uri}")
+                );
+            }));
+        }
+        for task in tasks {
+            task.await.unwrap();
+        }
+    }
+
+    #[cfg(feature = "napi-vm")]
+    #[tokio::test]
     async fn javascript_renderer_receives_request_and_returns_http_metadata() {
         let mut resolved = test_resolved();
         resolved.runtime.backend = "napi-vm".into();

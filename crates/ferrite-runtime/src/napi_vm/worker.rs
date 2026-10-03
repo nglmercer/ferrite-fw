@@ -8,7 +8,7 @@ use std::sync::mpsc::Receiver;
 
 /// Dedicated-thread event loop; owns the `!Send` interpreter.
 pub(crate) fn worker_loop(options: NapiVmOptions, rx: Receiver<Job>) {
-    let mut state = match WorkerState::new(options) {
+    let mut state = match WorkerState::new(options.clone()) {
         Ok(state) => state,
         Err(error) => {
             // Fatal init error: fail every job loudly.
@@ -27,13 +27,22 @@ pub(crate) fn worker_loop(options: NapiVmOptions, rx: Receiver<Job>) {
     };
     for job in rx {
         match job {
-            Job::EvalModule { id, code, reply } => {
-                let _ = reply.send(state.eval_module(&id, &code));
+            Job::EvalModule {
+                id,
+                code,
+                ssr,
+                reply,
+            } => {
+                let result = state
+                    .prepare_evaluation(&options, ssr)
+                    .and_then(|()| state.eval_module(&id, &code));
+                let _ = reply.send(result);
             }
-            Job::EvalGraph { graph, reply } => {
+            Job::EvalGraph { graph, ssr, reply } => {
                 let result = graph
                     .validate()
                     .map_err(|error| error.to_string())
+                    .and_then(|()| state.prepare_evaluation(&options, ssr))
                     .and_then(|()| {
                         for id in state.graph_modules.drain(..) {
                             state.interp.remove_module(&id);
@@ -90,6 +99,25 @@ pub(crate) struct WorkerState {
 }
 
 impl WorkerState {
+    fn prepare_evaluation(
+        &mut self,
+        options: &NapiVmOptions,
+        ssr: bool,
+    ) -> std::result::Result<(), String> {
+        if !ssr {
+            return Ok(());
+        }
+        if !options.native_allow.is_empty() {
+            return Err("isolated SSR evaluation does not support native addons; use a runtime profile with a validated native request-isolation contract".into());
+        }
+        // Keep the worker thread, but retire all guest state and module caches.
+        // Monotonic handles ensure old references cannot alias new functions.
+        let mut fresh = Self::new(options.clone())?;
+        fresh.next_handle = self.next_handle;
+        *self = fresh;
+        Ok(())
+    }
+
     fn new(options: NapiVmOptions) -> std::result::Result<Self, String> {
         let mut interp = napi_vm::Interpreter::with_builtins();
         if options.fuel_budget > 0 {

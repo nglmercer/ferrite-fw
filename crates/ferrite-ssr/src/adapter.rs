@@ -96,6 +96,7 @@ pub(crate) fn inject_shell(shell: &str, body: &str, preload_files: &[String]) ->
 /// `[runtime]` backend, budgets, and native allowlist are honored.
 pub struct JsSsrAdapter {
     runtime: Arc<dyn JsRuntime>,
+    render_lock: tokio::sync::Mutex<()>,
     module: CompiledModule,
     graph: Option<CompiledModuleGraph>,
     export: String,
@@ -108,6 +109,7 @@ impl JsSsrAdapter {
     pub fn new(runtime: Arc<dyn JsRuntime>, module: CompiledModule) -> Self {
         Self {
             runtime,
+            render_lock: tokio::sync::Mutex::new(()),
             module,
             graph: None,
             export: "render".to_string(),
@@ -143,6 +145,7 @@ impl JsSsrAdapter {
                 Arc::new(ferrite_runtime::napi_vm::NapiVmRuntime::new(options));
             return Self {
                 runtime,
+                render_lock: tokio::sync::Mutex::new(()),
                 module,
                 graph: None,
                 export: "render".to_string(),
@@ -196,6 +199,7 @@ impl JsSsrAdapter {
 #[async_trait::async_trait]
 impl SsrAdapter for JsSsrAdapter {
     async fn render(&self, request: SsrHttpRequest, context: SsrContext) -> Result<SsrResponse> {
+        let _render = self.render_lock.lock().await;
         let url = if context.url.is_empty() {
             request.uri.clone()
         } else {
