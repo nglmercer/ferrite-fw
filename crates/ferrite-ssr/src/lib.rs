@@ -144,15 +144,24 @@ mod tests {
     async fn renders_through_napi_vm() {
         let mut resolved = test_resolved();
         resolved.runtime.backend = "napi-vm".to_string();
-        let adapter = JsSsrAdapter::from_resolved(
+        let adapter = JsSsrAdapter::from_resolved_graph(
             &resolved,
-            CompiledModule {
-                id: "entry".to_string(),
-                code: "export function render(url) { return `<h1>hello from ${url}</h1>`; }\n"
-                    .to_string(),
-                url: None,
+            ferrite_runtime::CompiledModuleGraph {
+                entry: "/compiled/server.js".into(),
+                modules: vec![
+                    CompiledModule {
+                        id: "/compiled/server.js".into(),
+                        code: "import { greeting } from '/compiled/greeting.js'; export function render(url) { return `<h1>${greeting} ${url}</h1>`; }".into(),
+                        url: None,
+                    },
+                    CompiledModule {
+                        id: "/compiled/greeting.js".into(),
+                        code: "export const greeting = 'hello from';".into(),
+                        url: None,
+                    },
+                ],
             },
-        )
+        ).expect("compiled graph adapter")
         .with_shell("<html><head></head><body><!--ssr-outlet--></body></html>");
         let response = adapter
             .render(

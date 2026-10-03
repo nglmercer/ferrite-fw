@@ -5,10 +5,10 @@ use ferrite_config::ResolvedConfig;
 use ferrite_core::FerriteError;
 use ferrite_core::Result;
 use ferrite_runtime::runtime_for_backend;
-use ferrite_runtime::CompiledModule;
 use ferrite_runtime::JsRuntime;
 use ferrite_runtime::JsValue;
 use ferrite_runtime::RuntimeEnvironment;
+use ferrite_runtime::{CompiledModule, CompiledModuleGraph};
 #[cfg(feature = "napi-vm")]
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -88,6 +88,7 @@ pub(crate) fn inject_shell(shell: &str, body: &str, preload_files: &[String]) ->
 pub struct JsSsrAdapter {
     runtime: Arc<dyn JsRuntime>,
     module: CompiledModule,
+    graph: Option<CompiledModuleGraph>,
     export: String,
     shell: Option<String>,
 }
@@ -99,6 +100,7 @@ impl JsSsrAdapter {
         Self {
             runtime,
             module,
+            graph: None,
             export: "render".to_string(),
             shell: None,
         }
@@ -133,11 +135,30 @@ impl JsSsrAdapter {
             return Self {
                 runtime,
                 module,
+                graph: None,
                 export: "render".to_string(),
                 shell: None,
             };
         }
         Self::new(runtime_for_backend(&resolved.runtime.backend), module)
+    }
+
+    /// Build from an explicitly compiled graph and the configured runtime.
+    /// No dependency is compiled or substituted by this adapter.
+    pub fn from_resolved_graph(
+        resolved: &ResolvedConfig,
+        graph: CompiledModuleGraph,
+    ) -> Result<Self> {
+        graph.validate()?;
+        let entry = graph
+            .modules
+            .iter()
+            .find(|module| module.id == graph.entry)
+            .expect("validated graph entry")
+            .clone();
+        let mut adapter = Self::from_resolved(resolved, entry);
+        adapter.graph = Some(graph);
+        Ok(adapter)
     }
 
     /// Call a different export instead of `render`.
@@ -163,16 +184,22 @@ impl SsrAdapter for JsSsrAdapter {
         } else {
             context.url.clone()
         };
-        let namespace = self
-            .runtime
-            .evaluate_module(
-                self.module.clone(),
-                RuntimeEnvironment {
-                    ssr: true,
-                    request_id: None,
-                },
-            )
-            .await?;
+        let environment = RuntimeEnvironment {
+            ssr: true,
+            request_id: None,
+        };
+        let namespace = match &self.graph {
+            Some(graph) => {
+                self.runtime
+                    .evaluate_module_graph(graph.clone(), environment)
+                    .await?
+            }
+            None => {
+                self.runtime
+                    .evaluate_module(self.module.clone(), environment)
+                    .await?
+            }
+        };
         let handle = namespace.get_function(&self.export)?.clone();
         let result = self
             .runtime

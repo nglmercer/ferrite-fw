@@ -223,18 +223,31 @@ impl DevServer {
 
     /// Load an SSR module graph (`ssrLoadModule`, §22).
     pub async fn ssr_load_module(&self, url: &str) -> Result<SsrModule> {
+        let mut modules = self.ssr_compile_graph(url).await?.into_iter();
+        let root = modules.next().expect("SSR compilation includes its entry");
+        Ok(SsrModule {
+            id: root.id.0,
+            code: root.code,
+            dependencies: modules.map(|module| module.id.0).collect(),
+        })
+    }
+
+    /// Compile the entry and every transitive dependency through the shared
+    /// SSR pipeline. The entry is first; dependency modules retain their code,
+    /// maps, stylesheets, watches, and final import metadata.
+    pub async fn ssr_compile_graph(&self, url: &str) -> Result<Vec<crate::PipelineModule>> {
         let root = self
             .pipeline_module(&ModuleId::new(url), None, "ssr")
             .await?;
-        let mut dependencies = Vec::new();
         let mut queue: std::collections::VecDeque<(ModuleId, ModuleId)> = root
             .imports
             .iter()
             .map(|(_, id, _)| (id.clone(), root.id.clone()))
             .collect();
         let mut seen = std::collections::HashSet::from([root.id.clone()]);
+        let mut modules = vec![root];
         while let Some((id, importer)) = queue.pop_front() {
-            if !seen.insert(id.clone()) {
+            if seen.contains(&id) {
                 continue;
             }
             let module = self
@@ -245,16 +258,20 @@ impl DevServer {
                         "SSR dependency `{id}` imported by `{importer}` failed: {error}"
                     ))
                 })?;
-            dependencies.push(module.id.0.clone());
+            // Resolve aliases before deduplication: cycles can refer to the
+            // same module through both a virtual URL and its canonical ID.
+            let already_compiled = seen.contains(&module.id);
+            seen.insert(id);
+            seen.insert(module.id.clone());
+            if already_compiled {
+                continue;
+            }
             for (_, dep, _) in &module.imports {
                 queue.push_back((dep.clone(), module.id.clone()));
             }
+            modules.push(module);
         }
-        Ok(SsrModule {
-            id: root.id.0,
-            code: root.code,
-            dependencies,
-        })
+        Ok(modules)
     }
 
     /// Invalidate a module and broadcast its HMR plan.

@@ -3040,3 +3040,10 @@ watch-registration failure propagation, stale/orphan watch cleanup, URL encoding
 and linked external runtime-module serving remain incomplete. Linux was
 executed; other-platform release checks were not. No support promotion; the
 full framework mission remains active.
+
+### Shared SSR graph payload and adapter consumption
+
+- Added `DevServer::ssr_compile_graph`: returns the entry and transitive compiled pipeline modules, retaining final imports, source maps, CSS, watched inputs, and diagnostics through the existing shared pipeline. `ssr_load_module` now delegates to this traversal; canonical-ID deduplication handles aliases in cycles.
+- Added `JsSsrAdapter::from_resolved_graph`, validating explicit compiled graphs and evaluating them through the selected runtime's graph API. Existing single-entry constructors remain available; no runtime substitution is introduced.
+- Validation: `cargo test -p ferrite-server --lib --locked`: 56 passed, two explicitly ignored. `cargo test -p ferrite-ssr --features napi-vm --locked`: 14 passed, none ignored. The actual embedded adapter test imports a compiled-only dependency and verifies rendered HTML and shell preload injection; the server CSS test verifies graph payload retention in development and production.
+- Remaining: CLI use of this graph, canonical/virtual runtime linking, dev revalidation, framework renderers/hydration, and request isolation. These API tests do not establish a framework SSR compatibility profile.

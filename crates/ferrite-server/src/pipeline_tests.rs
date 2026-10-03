@@ -284,10 +284,12 @@ async fn ssr_stylesheet_graph_contains_exports_without_browser_hmr_or_dom_code()
             .unwrap();
         let module = server.ssr_load_module("/server.js").await.unwrap();
         assert_eq!(module.dependencies, ["/style.module.css"]);
-        let css = server
-            .pipeline_module(&ModuleId::new("/style.module.css"), None, "ssr")
-            .await
-            .unwrap();
+        let mut graph = server.ssr_compile_graph("/server.js").await.unwrap();
+        assert_eq!(graph.len(), 2);
+        assert_eq!(graph[0].id.0, module.id);
+        assert_eq!(graph[0].code, module.code);
+        assert_eq!(graph[0].imports[0].1 .0, graph[1].id.0);
+        let css = graph.pop().unwrap();
         assert!(css.code.contains("button") && css.code.contains("export default"));
         assert!(
             !css.code.contains("document")
