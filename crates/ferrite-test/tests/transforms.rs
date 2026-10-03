@@ -149,6 +149,52 @@ async fn tsx_automatic_runtime() {
 // --- errors ------------------------------------------------------------------------------------------
 
 #[tokio::test]
+async fn explicit_framework_exclusion_rejects_unowned_jsx_in_all_targets() {
+    let project = TempProject::new(&[
+        ("src/app.jsx", "export const App = () => <div />;"),
+        ("src/app.tsx", "export const App = () => <div />;"),
+        ("src/plain.ts", "export const value: number = 1;"),
+    ]);
+    for (production, owners) in [
+        (false, vec![]),
+        (true, vec![]),
+        (false, vec!["vue".to_string()]),
+        (true, vec!["svelte".to_string()]),
+    ] {
+        let mut config = project.resolve_config();
+        config.framework = Some(ferrite::config::FrameworkConfig {
+            compiler_host: (!owners.is_empty()).then(|| "node".into()),
+            enabled: owners,
+            ..Default::default()
+        });
+        config.is_production = production;
+        let server = ferrite::server::DevServer::new_without_watcher(config, vec![])
+            .await
+            .unwrap();
+        for environment in ["client", "ssr"] {
+            for path in ["/src/app.jsx", "/src/app.tsx"] {
+                let error = server
+                    .pipeline_module(&ModuleId::new(path), None, environment)
+                    .await
+                    .unwrap_err();
+                let message = error.to_string();
+                assert!(
+                    message.contains("JSX has no enabled framework owner"),
+                    "{message}"
+                );
+                assert!(message.contains("compiler_host"), "{message}");
+                assert!(message.contains(path), "{message}");
+            }
+            let plain = server
+                .pipeline_module(&ModuleId::new("/src/plain.ts"), None, environment)
+                .await
+                .unwrap();
+            assert!(!plain.code.contains(": number"));
+        }
+    }
+}
+
+#[tokio::test]
 async fn parse_errors_carry_diagnostics() {
     let project = TempProject::new(&[("src/bad.ts", "const = ;;;\n")]);
     let server = dev_server(&project).await;

@@ -101,6 +101,21 @@ impl DevServer {
                 Ok(module)
             }
             _ if module_type.is_js_like() || *module_type == ModuleType::Json => {
+                if matches!(module_type, ModuleType::Jsx | ModuleType::Tsx)
+                    && self
+                        .inner
+                        .config
+                        .framework
+                        .as_ref()
+                        .is_some_and(|framework| {
+                            !framework.enabled.iter().any(|owner| owner == "react")
+                        })
+                {
+                    return Err(ferrite_core::FerriteError::Transform {
+                        id: id.0.clone(),
+                        message: "JSX has no enabled framework owner: explicit framework.enabled excludes React; select enabled = [\"react\"] with compiler_host = \"native\", or have a framework plugin lower this module to JavaScript before core lowering. Other JSX framework adapters are unavailable".into(),
+                    });
+                }
                 let define = self.transform_defines(environment);
                 let result = self.inner.compiler.transform(TransformRequest {
                     id: id.0.clone(),

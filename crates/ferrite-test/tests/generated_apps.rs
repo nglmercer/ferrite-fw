@@ -107,8 +107,19 @@ async fn configured_react_selection_matches_inspect_and_transform() {
         .unwrap()
         .iter()
         .any(|name| *name == "ferrite:react-refresh"));
-    let transformed = command(&binary, &destination, &["transform", "src/App.jsx"], false).await;
-    assert!(!transformed.contains("createSignatureFunctionForTransform"));
+    let output = tokio::process::Command::new(&binary)
+        .args(["transform", "src/App.jsx"])
+        .current_dir(&destination)
+        .env("PATH", "")
+        .output()
+        .await
+        .unwrap();
+    assert!(!output.status.success());
+    let diagnostic = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        diagnostic.contains("JSX has no enabled framework owner"),
+        "{diagnostic}"
+    );
 }
 async fn server(
     binary: &Path,

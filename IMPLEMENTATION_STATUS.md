@@ -2292,3 +2292,37 @@ This fixes standard adapter selection and reporting, not complete per-file/
 package JSX ownership or ambiguity enforcement. Experimental support labels,
 SSR/checker unavailability and the full remaining framework mission remain
 unchanged and active.
+
+
+### Explicit JSX ownership at shared lowering (2026-10-03)
+
+Implemented a shared-pipeline rejection for `.jsx`/`.tsx` modules when explicit
+`framework.enabled` excludes React. Empty, Vue-only and Svelte-only selections
+now produce a module-specific error with the native React configuration and
+plugin pre-lowering alternatives. They cannot silently receive React lowering.
+Framework plugins that supply JavaScript before core lowering remain valid;
+plain JS/TS continues to compile. This covers both client/server compilation
+and development/production. It does not establish an SSR rendering profile.
+
+Migration: projects explicitly disabling React while relying on implicit React
+JSX lowering must select `enabled = ["react"]`, `compiler_host = "native"`, or
+provide a plugin that lowers their JSX into JavaScript. Legacy projects without
+explicit framework selection keep their existing lowering behavior. No lockfile
+or registry schema migration. Per-package/file ownership, manifest ambiguity
+detection and other JSX framework adapters remain assigned work.
+
+Validation: seven shared transform tests passed, including the new multi-target
+ownership regression; 45 server unit tests passed, two external-tool tests were
+ignored and do not establish support. CLI create/install/inspect/transform
+selection regression passed with Node absent from CLI PATH. Fresh CLI build and
+affected server/test all-target Clippy with `--locked -- -D warnings` passed.
+Logs: /tmp/ferrite-jsx-owner-transforms.log, /tmp/ferrite-jsx-owner-server.log,
+/tmp/ferrite-jsx-owner-cli.log, /tmp/ferrite-jsx-owner-build.log,
+/tmp/ferrite-jsx-owner-clippy.log.
+
+Both generated React browser tests passed (Chromium and Firefox, JS and TS
+profiles, four complete flows). They exercise real interaction, state-preserving
+HMR, syntax-error recovery, build and preview with Node absent from Ferrite CLI
+PATH. Output: /tmp/ferrite-jsx-owner-browsers.log. Formatting of changed Rust
+files and diff checks passed. No full workspace rerun or new support promotion
+in this increment; the broader mission remains active.
