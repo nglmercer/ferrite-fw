@@ -302,6 +302,16 @@ impl DevServer {
         environment: &ferrite_core::Environment,
         kind: ResolveKind,
     ) -> Result<ResolvedId> {
+        if specifier == ferrite_hmr::CLIENT_ID {
+            if environment.kind.is_ssr() || self.inner.config.is_production {
+                return Err(FerriteError::Resolve(
+                    "Ferrite's HMR client is available only in client development output".into(),
+                ));
+            }
+            let mut resolved = ResolvedId::new(ferrite_hmr::CLIENT_ID);
+            resolved.module_type = Some(ModuleType::Js);
+            return Ok(resolved);
+        }
         // Plugin `resolveId` first.
         if let Some(resolved) = self
             .inner
@@ -435,6 +445,12 @@ impl DevServer {
         id: &ModuleId,
         environment: &ferrite_core::Environment,
     ) -> Result<ferrite_plugin::LoadResult> {
+        if id.0 == ferrite_hmr::CLIENT_ID {
+            return Ok(source_result(
+                ferrite_hmr::client_source().to_string(),
+                ModuleType::Js,
+            ));
+        }
         // Plugin `load` first.
         if let Some(loaded) = self
             .inner

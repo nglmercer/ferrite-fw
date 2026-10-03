@@ -250,24 +250,10 @@ impl DevServer {
                     import_bindings.push(import.bindings.clone());
                 }
                 Err(error) => {
-                    // Bare specifiers can never survive to the browser (no
-                    // import map entry exists for a failed resolve), so a
-                    // failure here is always a broken module: fail loudly
-                    // with the resolver's actionable hint (`ferrite add …`)
-                    // instead of serving it. Non-bare failures (absolute
-                    // URLs the browser fetches itself, missing files that
-                    // 404) keep warn-and-passthrough.
-                    if is_bare_specifier(&import.specifier) {
-                        return Err(ferrite_core::FerriteError::Resolve(format!(
-                            "cannot resolve `{}` from `{}`: {error}",
-                            import.specifier, module.id.0
-                        )));
-                    }
-                    tracing::warn!(
+                    return Err(ferrite_core::FerriteError::Resolve(format!(
                         "cannot resolve `{}` from `{}`: {error}",
-                        import.specifier,
-                        module.id.0
-                    );
+                        import.specifier, module.id.0
+                    )));
                 }
             }
         }

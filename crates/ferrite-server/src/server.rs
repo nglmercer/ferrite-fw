@@ -260,10 +260,75 @@ impl DevServer {
     pub async fn invalidate_module(&self, id: &ModuleId) {
         self.inner.graph.invalidate_tree(id);
         let timestamp = now_millis();
-        match plan_update(&self.inner.graph, id, timestamp) {
-            HmrPlan::Update(updates) => self.inner.hmr.send_update(updates),
-            HmrPlan::FullReload => self.inner.hmr.send_full_reload(Some(id.0.clone())),
+        self.publish_hmr_plan(id, plan_update(&self.inner.graph, id, timestamp))
+            .await;
+    }
+
+    /// Validate compiler output before browser disposal/import or full reload.
+    /// A failed edit retains the previous client and graph acceptance boundary.
+    pub(crate) async fn publish_hmr_plan(&self, changed: &ModuleId, plan: HmrPlan) {
+        let acceptance: std::collections::HashMap<_, _> = self
+            .inner
+            .graph
+            .module_ids()
+            .into_iter()
+            .filter_map(|id| self.inner.graph.get(&id).map(|node| (id, node.hmr)))
+            .collect();
+        if let Err(error) = self.validate_hmr_modules(changed).await {
+            // Compile-time graph edges track new dependencies for subsequent
+            // fixes, but only the previously executed client can accept HMR.
+            for id in self.inner.graph.module_ids() {
+                if let Some(mut node) = self.inner.graph.get(&id) {
+                    node.hmr = acceptance.get(&id).cloned().unwrap_or_default();
+                    self.inner.graph.upsert(node);
+                }
+            }
+            let mut diagnostic = error.diagnostic();
+            if diagnostic.id.is_none() {
+                diagnostic.id = Some(changed.0.clone());
+            }
+            self.inner.hmr.send_error(diagnostic);
+            return;
         }
+        match plan {
+            HmrPlan::Update(updates) => self.inner.hmr.send_update(updates),
+            HmrPlan::FullReload => self.inner.hmr.send_full_reload(Some(changed.0.clone())),
+        }
+    }
+
+    async fn validate_hmr_modules(&self, changed: &ModuleId) -> Result<()> {
+        let mut queue = std::collections::VecDeque::from([changed.clone()]);
+        // Watched preprocessor/type inputs can invalidate compiled owners too.
+        let mut affected = self.inner.graph.module_ids();
+        affected.sort_by(|a, b| a.0.cmp(&b.0));
+        queue.extend(affected.into_iter().filter(|id| {
+            self.inner
+                .graph
+                .get(id)
+                .is_some_and(|node| node.client.invalidated && node.client.code.is_some())
+        }));
+        let mut seen = std::collections::HashSet::new();
+        while let Some(id) = queue.pop_front() {
+            if id.0 == ferrite_hmr::CLIENT_ID || !seen.insert(id.clone()) {
+                continue;
+            }
+            let module = self.pipeline_module(&id, None, "client").await?;
+            for (_, dependency, _) in module.imports {
+                if self
+                    .inner
+                    .graph
+                    .get(&dependency)
+                    .is_none_or(|node| node.client.invalidated || node.client.code.is_none())
+                    && !self
+                        .resolve_module(&dependency.0, Some(&module.id), "client")
+                        .await?
+                        .external
+                {
+                    queue.push_back(dependency);
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Resolve an entry specifier to a module id (build entry discovery).

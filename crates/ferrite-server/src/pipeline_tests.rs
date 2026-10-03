@@ -446,3 +446,196 @@ async fn invalidated_transitive_import_urls_survive_cache_hits_without_graph_var
         server.close();
     }
 }
+
+#[tokio::test]
+async fn invalid_edits_emit_diagnostics_and_keep_previous_runtime_acceptance() {
+    let root = tempfile::tempdir().unwrap();
+    let file = root.path().join("entry.js");
+    std::fs::write(&file, "export const count = 1; if (import.meta.hot) import.meta.hot.accept(next => console.log(next));").unwrap();
+    let config = ferrite_config::resolve_config(
+        Default::default(),
+        Some(root.path().into()),
+        Default::default(),
+    )
+    .unwrap();
+    let server = DevServer::new_without_watcher(config, vec![])
+        .await
+        .unwrap();
+    let id = ModuleId::new("/entry.js");
+    server.pipeline_module(&id, None, "client").await.unwrap();
+    let mut messages = server.inner.hmr.subscribe();
+    std::fs::write(&file, "export const count = ;").unwrap();
+    server.invalidate_module(&id).await;
+    let message: ferrite_hmr::HmrMessage =
+        serde_json::from_str(&messages.recv().await.unwrap()).unwrap();
+    let ferrite_hmr::HmrMessage::Error { err } = message else {
+        panic!("invalid edit must not publish an update/reload");
+    };
+    assert_eq!(err.id.as_deref(), Some("/entry.js"));
+    assert!(!err.message.is_empty());
+    assert!(messages.try_recv().is_err());
+    assert!(server.inner.graph.get(&id).unwrap().hmr.self_accepting);
+    // A partially validated new graph cannot invent client-side boundaries.
+    std::fs::write(
+        &file,
+        "import './a-new.js'; import './z-broken.js'; export const count = 2;",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("a-new.js"),
+        "if (import.meta.hot) import.meta.hot.accept();",
+    )
+    .unwrap();
+    std::fs::write(root.path().join("z-broken.js"), "export const value = ;").unwrap();
+    server.invalidate_module(&id).await;
+    let message: ferrite_hmr::HmrMessage =
+        serde_json::from_str(&messages.recv().await.unwrap()).unwrap();
+    assert!(matches!(message, ferrite_hmr::HmrMessage::Error { .. }));
+    assert!(server.inner.graph.get(&id).unwrap().hmr.self_accepting);
+    assert!(
+        !server
+            .inner
+            .graph
+            .get(&ModuleId::new("/a-new.js"))
+            .unwrap()
+            .hmr
+            .self_accepting
+    );
+    std::fs::write(root.path().join("z-broken.js"), "export const value = 3;").unwrap();
+    server
+        .invalidate_module(&ModuleId::new("/z-broken.js"))
+        .await;
+    let message: ferrite_hmr::HmrMessage =
+        serde_json::from_str(&messages.recv().await.unwrap()).unwrap();
+    let ferrite_hmr::HmrMessage::Update { updates } = message else {
+        panic!("corrected dependency must reach old runtime boundary");
+    };
+    assert_eq!(updates[0].accepted_path, "/entry.js");
+    assert!(
+        !server.inner.graph.get(&id).unwrap().hmr.self_accepting,
+        "successful output replaces the old acceptance for subsequent edits"
+    );
+    server.close();
+}
+
+#[tokio::test]
+async fn watcher_coalesces_rapid_corrections_and_recovers_after_diagnostics() {
+    let root = tempfile::tempdir().unwrap();
+    let file = root.path().join("entry.js");
+    let source = |count| {
+        format!("export const count = {count}; if (import.meta.hot) import.meta.hot.accept(next => console.log(next));")
+    };
+    std::fs::write(&file, source(1)).unwrap();
+    let config = ferrite_config::resolve_config(
+        Default::default(),
+        Some(root.path().into()),
+        Default::default(),
+    )
+    .unwrap();
+    let server = DevServer::new(config, vec![]).await.unwrap();
+    let id = ModuleId::new("/entry.js");
+    server.pipeline_module(&id, None, "client").await.unwrap();
+    let mut messages = server.inner.hmr.subscribe();
+    std::fs::write(&file, "export const count = ;").unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    std::fs::write(&file, source(2)).unwrap();
+    let next = tokio::time::timeout(std::time::Duration::from_secs(10), messages.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(
+            serde_json::from_str::<ferrite_hmr::HmrMessage>(&next).unwrap(),
+            ferrite_hmr::HmrMessage::Update { .. }
+        ),
+        "{next}"
+    );
+    assert!(server
+        .inner
+        .graph
+        .get(&id)
+        .unwrap()
+        .client
+        .code
+        .unwrap()
+        .contains("= 2"));
+    std::fs::write(&file, "export const count = ;").unwrap();
+    let next = tokio::time::timeout(std::time::Duration::from_secs(10), messages.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(
+            serde_json::from_str::<ferrite_hmr::HmrMessage>(&next).unwrap(),
+            ferrite_hmr::HmrMessage::Error { .. }
+        ),
+        "{next}"
+    );
+    std::fs::write(&file, source(3)).unwrap();
+    let next = tokio::time::timeout(std::time::Duration::from_secs(10), messages.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(
+            serde_json::from_str::<ferrite_hmr::HmrMessage>(&next).unwrap(),
+            ferrite_hmr::HmrMessage::Update { .. }
+        ),
+        "{next}"
+    );
+    assert!(server
+        .inner
+        .graph
+        .get(&id)
+        .unwrap()
+        .client
+        .code
+        .unwrap()
+        .contains("= 3"));
+    server.close();
+}
+
+#[tokio::test]
+async fn css_resolves_the_real_dev_client_and_local_import_failures_are_loud() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("style.css"), "button { color: red; }").unwrap();
+    std::fs::write(root.path().join("bad.js"), "import './missing.js';").unwrap();
+    let config = ferrite_config::resolve_config(
+        Default::default(),
+        Some(root.path().into()),
+        Default::default(),
+    )
+    .unwrap();
+    let server = DevServer::new_without_watcher(config, vec![])
+        .await
+        .unwrap();
+    let css = server
+        .pipeline_module(&ModuleId::new("/style.css"), None, "client")
+        .await
+        .unwrap();
+    assert!(css
+        .imports
+        .iter()
+        .any(|(_, id, _)| id.0 == ferrite_hmr::CLIENT_ID), "imports={:?}; code={}", css.imports, css.code);
+    let client = server
+        .pipeline_module(&ModuleId::new(ferrite_hmr::CLIENT_ID), None, "client")
+        .await
+        .unwrap();
+    assert!(client.code.contains("new WebSocket"));
+    let error = server
+        .pipeline_module(&ModuleId::new("/bad.js"), None, "client")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("missing.js") && error.contains("bad.js"),
+        "{error}"
+    );
+    assert!(server
+        .pipeline_module(&ModuleId::new(ferrite_hmr::CLIENT_ID), None, "ssr")
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("only in client development"));
+    server.close();
+}

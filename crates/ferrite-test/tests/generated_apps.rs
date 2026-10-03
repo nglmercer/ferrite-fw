@@ -185,6 +185,40 @@ async fn acceptance(kind: BrowserKind, frameworks: &[&str]) {
                 format!("src/main.{language}")
             });
             let source = std::fs::read_to_string(&main).unwrap();
+            let invalid = match *framework {
+                "vue" => "<script setup>const broken = ;</script><template><button>broken</button></template>",
+                "svelte" => "<script>const broken = ;</script><button>broken</button>",
+                _ => "const broken = ;",
+            };
+            std::fs::write(&main, invalid).unwrap();
+            page.wait_for_function(
+                "document.querySelector('#ferrite-error-overlay')?.textContent.length > 0",
+                Duration::from_secs(15),
+            )
+            .await
+            .unwrap_or_else(|error| {
+                panic!(
+                    "{framework}/{language}: {error}; errors={:?}; console={:?}",
+                    page.page_errors(),
+                    page.console_messages()
+                )
+            });
+            let overlay: String = page
+                .evaluate("document.querySelector('#ferrite-error-overlay').textContent")
+                .await
+                .unwrap();
+            assert!(
+                overlay.contains(main.file_name().unwrap().to_str().unwrap()),
+                "{overlay}"
+            );
+            assert_eq!(
+                page.evaluate::<String>("document.querySelector('#counter').textContent")
+                    .await
+                    .unwrap(),
+                "count: 1",
+                "invalid source must keep the running application"
+            );
+
             let changed = source.replace("count += 1", "count += 2");
             let changed = if node_enabled {
                 changed
@@ -334,9 +368,44 @@ async fn dependency_acceptance(kind: BrowserKind) {
     let session: f64 = page.evaluate("globalThis.session").await.unwrap();
     page.locator("#counter").click().await.unwrap();
     let mut count = 1;
+    std::fs::write(project.root.join("dep.js"), "export const step = ;").unwrap();
+    page.wait_for_function(
+        "document.querySelector('#ferrite-error-overlay')?.textContent.includes('/dep.js')",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "{error}; errors={:?}; console={:?}",
+            page.page_errors(),
+            page.console_messages()
+        )
+    });
+    assert_eq!(
+        page.evaluate::<f64>("globalThis.session").await.unwrap(),
+        session
+    );
+    assert_eq!(
+        page.evaluate::<u32>("globalThis.disposals || 0")
+            .await
+            .unwrap(),
+        0,
+        "invalid compilation must not dispose live modules"
+    );
+    assert_eq!(
+        page.evaluate::<String>("document.querySelector('#counter').textContent")
+            .await
+            .unwrap(),
+        "count: 1, step: 1"
+    );
+
     for step in [2, 3] {
         std::fs::write(project.root.join("dep.js"), format!("export const step = {step}; if (import.meta.hot) import.meta.hot.dispose(() => {{ globalThis.disposals = (globalThis.disposals || 0) + 1; }});")).unwrap();
         page.wait_for_function(&format!("document.querySelector('#counter')?.textContent === 'count: {count}, step: {step}' && document.querySelector('#other')?.textContent === 'other: {step}'"), Duration::from_secs(10)).await.unwrap_or_else(|error| panic!("{error}: errors={:?}; console={:?}", page.page_errors(), page.console_messages()));
+        assert!(page
+            .evaluate::<bool>("!document.querySelector('#ferrite-error-overlay')")
+            .await
+            .unwrap());
         assert_eq!(
             page.evaluate::<f64>("globalThis.session").await.unwrap(),
             session,
@@ -423,6 +492,36 @@ async fn transitive_self_acceptance(kind: BrowserKind) {
     let session: f64 = page.evaluate("globalThis.session").await.unwrap();
     page.locator("#counter").click().await.unwrap();
     let mut count = 1;
+    std::fs::write(project.root.join("leaf.js"), "export const step = ;").unwrap();
+    page.wait_for_function(
+        "document.querySelector('#ferrite-error-overlay')?.textContent.includes('/leaf.js')",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "{error}; errors={:?}; console={:?}",
+            page.page_errors(),
+            page.console_messages()
+        )
+    });
+    assert_eq!(
+        page.evaluate::<f64>("globalThis.session").await.unwrap(),
+        session
+    );
+    assert_eq!(
+        page.evaluate::<u32>("globalThis.disposals || 0")
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        page.evaluate::<String>("document.querySelector('#counter').textContent")
+            .await
+            .unwrap(),
+        "count: 1"
+    );
+
     for step in [2, 3] {
         std::fs::write(
             project.root.join("leaf.js"),
@@ -432,6 +531,10 @@ async fn transitive_self_acceptance(kind: BrowserKind) {
         )
         .unwrap();
         page.wait_for_function(&format!("globalThis.factor === {step} && globalThis.callbacks === {} && document.querySelector('#factor')?.textContent === 'step: {step}'", step - 1), Duration::from_secs(10)).await.unwrap_or_else(|error| panic!("{error}; errors={:?}; console={:?}", page.page_errors(), page.console_messages()));
+        assert!(page
+            .evaluate::<bool>("!document.querySelector('#ferrite-error-overlay')")
+            .await
+            .unwrap());
         assert_eq!(
             page.evaluate::<f64>("globalThis.session").await.unwrap(),
             session

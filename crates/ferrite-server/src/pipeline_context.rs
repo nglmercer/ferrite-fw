@@ -108,7 +108,7 @@ impl DevServer {
             None
         };
         let pipeline = format!(
-            "pipeline-v8:{invalidation:?}:{}:{:?}:{}:{}:{:?}:{lock_state:?}",
+            "pipeline-v9:{invalidation:?}:{}:{:?}:{}:{}:{:?}:{lock_state:?}",
             self.inner.plugins.cache_key(),
             self.inner.config.react,
             self.inner.config.is_production,

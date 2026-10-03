@@ -1205,3 +1205,50 @@ The exercised transitive self-boundary cache-busting gap is resolved. This does
 not establish every virtual-resource/cycle shape or syntax-error recovery.
 Complete Refresh, component-specific HMR, SSR/checkers, further adapters and the
 rest of the full mission remain assigned; no framework support status is promoted.
+
+### Compile failed edits before browser updates and recover after correction
+
+Watcher and programmatic invalidation now validate changed modules, invalidated
+compiled owners and newly reached dependencies through the existing pipeline
+before publishing updates or full reloads. Compilation failure sends an actionable
+diagnostic with a source ID, keeping the running client undisposed. Failed partial
+validation restores previous HMR acceptance metadata and removes newly invented
+boundaries, while retaining dependency edges so a later correction is tracked.
+The watcher now coalesces to the latest event after a quiet window rather than
+dropping the final save within its debounce interval.
+
+Unresolved local imports now fail explicitly. This exposed CSS's formerly
+unresolved HMR runtime import: `/@ferrite/client` is now a real built-in JavaScript
+resolution/load result, unavailable to SSR/production imports. Explicit module
+type prevents accidentally wrapping the runtime as an asset. The existing
+overlay implementation required no change.
+
+Validation:
+
+- `cargo test -p ferrite-server -p ferrite --locked`: 39 server tests, 13 library
+  tests and 3 library doc tests passed. New regressions cover diagnostics without
+  update/reload, restoration after partial graph validation, correcting a new
+  dependency, real notify-driven rapid saves, CSS runtime resolution and loud
+  missing local imports. Output: `/tmp/ferrite-syntax-recovery-server.log`.
+- Explicitly executed `cargo test -p ferrite-test --test generated_apps --locked -- --ignored --nocapture`
+  with the rebuilt CLI, Chromium 153 and Firefox 157: all 8 tests passed
+  (81.68 seconds). Every generated JS/TS vanilla/Vue/Svelte profile now includes
+  an invalid edit, a source-named error overlay, retained running counter state,
+  and correction before build/preview. Vue/Svelte use their pinned official Node
+  compilers; vanilla and manual HMR fixtures run with Node absent from CLI PATH.
+  Dependency and cyclic self-boundary fixtures additionally require zero disposal
+  on failed edits, preserved document identity/state, cleared overlays and correct
+  subsequent updates. Existing page/console-error assertions remain intact.
+  Output: `/tmp/ferrite-syntax-recovery-browsers.log`.
+- `cargo test -p ferrite-server --features swc --locked`: 39 tests passed.
+- All-target server/test Clippy with `--locked -- -D warnings`, formatting and
+  diff checks passed. Earlier browser failures from strict CSS resolution were
+  fixed in implementation; assertions were retained.
+
+No lock/config schema migration. Pipeline cache identity advances to v9 so
+previously tolerated unresolved imports cannot survive as cached successes.
+Initial-load failures, runtime execution failures, overlapping validation races
+and the wider recovery matrix remain unproven; this establishes the exercised
+edit/correction paths only. Complete Refresh, component-specific HMR, SSR/checkers,
+additional adapters and the remaining full mission stay assigned. No support
+profile is promoted.

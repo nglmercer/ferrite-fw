@@ -43,14 +43,10 @@ impl DevServer {
                     _ => WatchKind::Modify,
                 };
                 for path in event.paths {
-                    // Debounce.
+                    // Record the latest event; a trailing quiet window below
+                    // coalesces saves without dropping their final correction.
                     let now = Instant::now();
                     if let Ok(mut debounce) = inner.debounce.lock() {
-                        if let Some(last) = debounce.get(&path) {
-                            if now.duration_since(*last) < debounce_window {
-                                continue;
-                            }
-                        }
                         debounce.insert(path.clone(), now);
                     }
                     // Skip output/cache dirs.
@@ -78,6 +74,16 @@ impl DevServer {
                     let watch_path = path.clone();
                     let runtime = runtime.clone();
                     runtime.spawn(async move {
+                        tokio::time::sleep(debounce_window).await;
+                        if inner_clone
+                            .debounce
+                            .lock()
+                            .ok()
+                            .and_then(|events| events.get(&watch_path).copied())
+                            != Some(now)
+                        {
+                            return;
+                        }
                         let environment = inner_clone.config.client_env();
                         let ctx = PluginContext {
                             graph: &inner_clone.graph,
@@ -111,13 +117,15 @@ impl DevServer {
                             modules,
                             timestamp,
                         };
-                        if let Ok(Some(custom)) = inner_clone
-                            .plugins
-                            .hook_hot_update(&ctx, event)
-                            .await
+                        let server = DevServer {
+                            inner: inner_clone.clone(),
+                            watcher: std::sync::Arc::new(std::sync::Mutex::new(None)),
+                        };
+                        if let Ok(Some(custom)) =
+                            inner_clone.plugins.hook_hot_update(&ctx, event).await
                         {
                             if custom.full_reload {
-                                inner_clone.hmr.send_full_reload(Some(id.0.clone()));
+                                server.publish_hmr_plan(&id, HmrPlan::FullReload).await;
                                 return;
                             }
                             if !custom.modules.is_empty() {
@@ -132,16 +140,12 @@ impl DevServer {
                                         css_only: false,
                                     })
                                     .collect();
-                                inner_clone.hmr.send_update(updates);
+                                server.publish_hmr_plan(&id, HmrPlan::Update(updates)).await;
                                 return;
                             }
                         }
-                        match plan_update(&inner_clone.graph, &id, timestamp) {
-                            HmrPlan::Update(updates) => inner_clone.hmr.send_update(updates),
-                            HmrPlan::FullReload => {
-                                inner_clone.hmr.send_full_reload(Some(id.0.clone()));
-                            }
-                        }
+                        let plan = plan_update(&inner_clone.graph, &id, timestamp);
+                        server.publish_hmr_plan(&id, plan).await;
                     });
                 }
             },
