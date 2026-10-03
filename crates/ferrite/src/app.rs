@@ -237,6 +237,9 @@ impl Ferrite {
                 sourcemap: self.config.build.sourcemap.enabled(),
                 define: defines,
                 jsx_runtime: self.config.react.runtime.clone(),
+                jsx_import_source: self.config.react.import_source.clone(),
+                jsx_factory: self.config.react.factory.clone(),
+                jsx_fragment: self.config.react.fragment.clone(),
                 development: !self.config.is_production,
             })?;
         let compiled_map = merge_maps(compiled.map, pre_map, compiled.code == pre.code)?;

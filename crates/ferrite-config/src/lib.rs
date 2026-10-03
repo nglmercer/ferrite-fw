@@ -397,6 +397,12 @@ pub struct ReactConfig {
     pub refresh: bool,
     /// JSX runtime (`automatic` or `classic`).
     pub runtime: String,
+    /// Automatic JSX runtime package (defaults to React).
+    pub import_source: Option<String>,
+    /// Classic JSX element factory.
+    pub factory: Option<String>,
+    /// Classic JSX fragment factory.
+    pub fragment: Option<String>,
 }
 
 impl Default for ReactConfig {
@@ -404,6 +410,9 @@ impl Default for ReactConfig {
         Self {
             refresh: true,
             runtime: "automatic".to_string(),
+            import_source: None,
+            factory: None,
+            fragment: None,
         }
     }
 }
@@ -893,7 +902,19 @@ pub fn merge_user_config(mut base: UserConfig, over: UserConfig) -> UserConfig {
     base.node_compat = over.node_compat;
     base.remote = over.remote;
     base.package = over.package;
-    base.react = over.react;
+    if over.react.runtime != ReactConfig::default().runtime {
+        base.react.runtime = over.react.runtime;
+    }
+    base.react.refresh &= over.react.refresh;
+    if over.react.import_source.is_some() {
+        base.react.import_source = over.react.import_source;
+    }
+    if over.react.factory.is_some() {
+        base.react.factory = over.react.factory;
+    }
+    if over.react.fragment.is_some() {
+        base.react.fragment = over.react.fragment;
+    }
     if over.framework.is_some() {
         base.framework = over.framework;
     }
@@ -1141,6 +1162,34 @@ pub fn resolve_config(
     root_hint: Option<PathBuf>,
     overrides: CliOverrides,
 ) -> Result<ResolvedConfig> {
+    if [
+        user.react.import_source.as_deref(),
+        user.react.factory.as_deref(),
+        user.react.fragment.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| value.trim().is_empty())
+    {
+        return Err(FerriteError::Config(
+            "react JSX settings must not be empty".into(),
+        ));
+    }
+    if !matches!(user.react.runtime.as_str(), "automatic" | "classic") {
+        return Err(FerriteError::Config(
+            "react.runtime must be automatic or classic".into(),
+        ));
+    }
+    if user.react.runtime == "classic" && user.react.import_source.is_some() {
+        return Err(FerriteError::Config("react.import_source requires automatic JSX runtime; use factory/fragment for classic JSX".into()));
+    }
+    if user.react.runtime == "automatic"
+        && (user.react.factory.is_some() || user.react.fragment.is_some())
+    {
+        return Err(FerriteError::Config(
+            "react.factory/fragment require classic JSX runtime".into(),
+        ));
+    }
     if let Some(framework) = &user.framework {
         framework.validate()?;
     }
@@ -1233,6 +1282,26 @@ pub fn resolve_config(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn jsx_file_settings_survive_default_overlay_and_invalid_profiles_fail() {
+        let file: UserConfig = toml::from_str("[react]\nruntime = 'classic'\nfactory = 'UI.h'\nfragment = 'UI.Fragment'\nrefresh = false").unwrap();
+        let merged = merge_user_config(file, UserConfig::default());
+        let resolved = resolve_config(merged, None, CliOverrides::default()).unwrap();
+        assert_eq!(resolved.react.runtime, "classic");
+        assert_eq!(resolved.react.factory.as_deref(), Some("UI.h"));
+        assert_eq!(resolved.react.fragment.as_deref(), Some("UI.Fragment"));
+        assert!(!resolved.react.refresh);
+        for text in [
+            "[react]\nruntime = 'unknown'",
+            "[react]\nruntime = 'classic'\nimport_source = 'react'",
+            "[react]\nfactory = 'h'",
+        ] {
+            assert!(
+                resolve_config(toml::from_str(text).unwrap(), None, Default::default()).is_err()
+            );
+        }
+    }
+
     #[test]
     fn explicit_config_selection_never_substitutes_discovered_files() {
         let dir =

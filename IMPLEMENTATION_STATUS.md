@@ -764,3 +764,44 @@ ownership selection and preserves the exercised compiler fixture; complete
 workspace installation, cross-package browser/version/peer matrices, linked
 external-package integration, SSR, HMR/checkers and remaining mission work are
 still unfinished. The full goal remains active.
+
+### JSX compiler settings through shared transforms
+
+Added `[react] import_source` for automatic runtime and `factory`/`fragment` for
+classic runtime. Shared transform requests carry these options through facade,
+dev/build pipeline and existing SSR entry lowering; Oxc 0.151.0 and SWC React
+transform 55.0.1 APIs were checked against their installed source and exercised.
+Unknown runtimes, incompatible combinations and empty settings produce explicit
+errors. No alternative framework adapter is claimed by changing JSX settings.
+The existing cache key includes the complete React configuration. Default
+programmatic overlays now preserve file-level JSX settings and disabled Refresh
+instead of unconditionally replacing the React configuration with defaults.
+
+Example classic TOML: `[react]`, `runtime = 'classic'`, `factory = 'UI.h'`,
+`fragment = 'UI.Fragment'`. Automatic: `runtime = 'automatic'`,
+`import_source = './selected-runtime'`. The selected runtime must exist and provide
+its actual JSX runtime; these settings do not install or implement a runtime.
+
+Validation:
+
+- `cargo test -p ferrite-transform -p ferrite-config -p ferrite --locked`:
+  45 transform, 24 config and 13 facade tests passed, plus four documentation
+  tests. Shared compiler regression checks automatic dev/production imports,
+  classic factory/fragment output and invalid request rejection. Final config
+  regression rerun passed after empty-setting validation was added.
+- `cargo test -p ferrite-transform --features swc --locked`: 53 tests passed;
+  the new regression exercises both real Oxc and SWC compilers. An initial SWC
+  borrowed-string lifetime compile failure was fixed with owned pragma strings.
+- `cargo clippy -p ferrite-cli -p ferrite-test --all-targets --locked -- -D warnings`
+  and `cargo clippy -p ferrite-transform --features swc --all-targets --locked -- -D warnings`:
+  passed; formatting/diff checks passed.
+- Fresh actual CLI: classic file configuration emitted `UI.h`/`UI.Fragment`
+  without default React factories; invalid runtime configuration failed loudly.
+
+API migration: explicit TransformRequest literals add the three optional JSX
+fields (None preserves defaults). ReactConfig literals add optional fields.
+Existing default-value merge semantics still cannot distinguish an intentional
+programmatic reset to automatic/Refresh-enabled from an unset default; complete
+presence-aware configuration remains assigned. Per-file/package JSX ownership,
+complete React Refresh, adapter runtime/browser conformance, framework HMR,
+checkers and real SSR remain unfinished. The complete goal remains active.

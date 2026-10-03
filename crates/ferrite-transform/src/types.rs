@@ -124,11 +124,46 @@ pub struct TransformRequest {
     pub define: HashMap<String, String>,
     /// JSX runtime (`automatic` or `classic`).
     pub jsx_runtime: String,
+    pub jsx_import_source: Option<String>,
+    pub jsx_factory: Option<String>,
+    pub jsx_fragment: Option<String>,
     /// Enable development helpers (JSX dev, refresh preamble hooks).
     pub development: bool,
 }
 
 impl TransformRequest {
+    /// Reject unsupported JSX combinations before compiler execution.
+    pub fn validate_jsx(&self) -> ferrite_core::Result<()> {
+        let problem = match self.jsx_runtime.as_str() {
+            "automatic" if self.jsx_factory.is_some() || self.jsx_fragment.is_some() => {
+                Some("JSX factory/fragment require classic runtime")
+            }
+            "classic" if self.jsx_import_source.is_some() => {
+                Some("JSX import source requires automatic runtime")
+            }
+            "automatic" | "classic" => None,
+            _ => Some("JSX runtime must be automatic or classic"),
+        };
+        let problem = problem.or_else(|| {
+            [
+                self.jsx_import_source.as_deref(),
+                self.jsx_factory.as_deref(),
+                self.jsx_fragment.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            .any(|value| value.trim().is_empty())
+            .then_some("JSX settings must not be empty")
+        });
+        if let Some(message) = problem {
+            return Err(ferrite_core::FerriteError::Transform {
+                id: self.id.clone(),
+                message: message.into(),
+            });
+        }
+        Ok(())
+    }
+
     /// Minimal request for tests and one-shot transforms.
     #[must_use]
     pub fn new(id: impl Into<String>, code: impl Into<String>, module_type: ModuleType) -> Self {
@@ -143,6 +178,9 @@ impl TransformRequest {
             sourcemap: false,
             define: HashMap::new(),
             jsx_runtime: "automatic".to_string(),
+            jsx_import_source: None,
+            jsx_factory: None,
+            jsx_fragment: None,
             development: true,
         }
     }

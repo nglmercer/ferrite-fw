@@ -19,6 +19,7 @@ use std::path::PathBuf;
 
 /// Transform a module: TS strip + JSX + defines + optional minify/map.
 pub(crate) fn transform_module(request: TransformRequest) -> Result<TransformResult> {
+    request.validate_jsx()?;
     // JSON modules become ESM.
     if request.module_type == ModuleType::Json {
         let value: serde_json::Value =
@@ -134,6 +135,9 @@ pub(crate) fn transform_js_like(request: &TransformRequest) -> Result<(String, O
     } else {
         JsxRuntime::Automatic
     };
+    options.jsx.import_source = request.jsx_import_source.clone();
+    options.jsx.pragma = request.jsx_factory.clone();
+    options.jsx.pragma_frag = request.jsx_fragment.clone();
     let path = PathBuf::from(request.id.split('?').next().unwrap_or(&request.id));
     let transform_return =
         Transformer::new(&allocator, &path, &options).build_with_scoping(scoping, &mut program);

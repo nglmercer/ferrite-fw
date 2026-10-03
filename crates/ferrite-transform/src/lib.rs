@@ -195,6 +195,55 @@ mod tests {
     }
 
     #[test]
+    fn jsx_settings_apply_to_automatic_and_classic_compilation() {
+        #[cfg(not(feature = "swc"))]
+        let engines = ["oxc"];
+        #[cfg(feature = "swc")]
+        let engines = ["oxc", "swc"];
+        for engine in engines {
+            let compiler = compiler_for_engine(engine).unwrap();
+            for development in [true, false] {
+                let mut request = TransformRequest::new(
+                    "/settings.tsx",
+                    "export const tree = <><button>hello</button></>;",
+                    ModuleType::Tsx,
+                );
+                request.jsx_import_source = Some("./selected-runtime".into());
+                request.development = development;
+                let code = compiler.transform(request).unwrap().code;
+                assert!(
+                    code.contains(if development {
+                        "./selected-runtime/jsx-dev-runtime"
+                    } else {
+                        "./selected-runtime/jsx-runtime"
+                    }),
+                    "{engine}: {code}"
+                );
+                assert!(!code.contains("react/jsx"), "{engine}: {code}");
+            }
+            let mut request = TransformRequest::new(
+                "/settings.jsx",
+                "export const tree = <><button>hello</button></>;",
+                ModuleType::Jsx,
+            );
+            request.jsx_runtime = "classic".into();
+            request.jsx_factory = Some("UI.h".into());
+            request.jsx_fragment = Some("UI.Fragment".into());
+            let code = compiler.transform(request.clone()).unwrap().code;
+            assert!(
+                code.contains("UI.h") && code.contains("UI.Fragment"),
+                "{engine}: {code}"
+            );
+            assert!(!code.contains("React.createElement"), "{engine}: {code}");
+            request.jsx_import_source = Some("forbidden".into());
+            assert!(compiler.transform(request).is_err());
+            let mut request = TransformRequest::new("/bad.jsx", "<div/>", ModuleType::Jsx);
+            request.jsx_runtime = "unknown".into();
+            assert!(compiler.transform(request).is_err());
+        }
+    }
+
+    #[test]
     fn minifies() {
         let result = compiler()
             .minify(MinifyRequest {

@@ -163,6 +163,9 @@ pub(crate) fn js_ssr_adapter(
             sourcemap: false,
             define: ssr_env.define.clone(),
             jsx_runtime: resolved.react.runtime.clone(),
+            jsx_import_source: resolved.react.import_source.clone(),
+            jsx_factory: resolved.react.factory.clone(),
+            jsx_fragment: resolved.react.fragment.clone(),
             development: !resolved.is_production,
         })
         .map_err(|error| format!("cannot transform {}: {error}", path.display()))?;

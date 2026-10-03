@@ -132,6 +132,9 @@ fn run_passes(
     code: &str,
     module_type: &ModuleType,
     jsx_runtime: &str,
+    jsx_import_source: Option<&str>,
+    jsx_factory: Option<&str>,
+    jsx_fragment: Option<&str>,
     development: bool,
     target: &Target,
     minify_print: bool,
@@ -147,6 +150,9 @@ fn run_passes(
         } else {
             Some(swc_core::ecma::transforms::react::jsx::Runtime::Automatic)
         },
+        import_source: jsx_import_source.map(Into::into),
+        pragma: jsx_factory.map(|value| value.to_owned().into()),
+        pragma_frag: jsx_fragment.map(|value| value.to_owned().into()),
         development: Some(development),
         ..Default::default()
     };
@@ -227,6 +233,7 @@ fn apply_compat(
 
 /// SWC transform: mirrors [`crate::transform_module`] stage for stage.
 pub fn transform_module_swc(request: TransformRequest) -> Result<TransformResult> {
+    request.validate_jsx()?;
     if request.module_type == ModuleType::Json {
         let value: serde_json::Value =
             serde_json::from_str(&request.code).map_err(|error| FerriteError::Parse {
@@ -265,6 +272,9 @@ pub fn transform_module_swc(request: TransformRequest) -> Result<TransformResult
             &request.code,
             &request.module_type,
             &request.jsx_runtime,
+            request.jsx_import_source.as_deref(),
+            request.jsx_factory.as_deref(),
+            request.jsx_fragment.as_deref(),
             request.development,
             &request.target,
             false,

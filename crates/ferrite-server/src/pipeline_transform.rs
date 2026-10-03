@@ -113,6 +113,9 @@ impl DevServer {
                     sourcemap: self.inner.config.build.sourcemap.enabled(),
                     define,
                     jsx_runtime: self.inner.config.react.runtime.clone(),
+                    jsx_import_source: self.inner.config.react.import_source.clone(),
+                    jsx_factory: self.inner.config.react.factory.clone(),
+                    jsx_fragment: self.inner.config.react.fragment.clone(),
                     development: !self.inner.config.is_production,
                 })?;
                 let parsed = self.inner.compiler.parse(ferrite_transform::ParseRequest {
