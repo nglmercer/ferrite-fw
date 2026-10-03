@@ -1996,3 +1996,45 @@ No lock/config migration or support promotion. Cyclic/conflicting re-export
 matrices, other namespace/default hook shapes, mixed exports, anonymous default
 components, ownership rules, generated React profiles and the full remaining
 framework mission stay assigned and active.
+
+### Keep React footer bindings local and collision-free
+
+React's plugin footer previously redeclared fixed `RefreshRuntime` and
+`__ferrite_refresh_exports__` imports and called the ambient `$RefreshReg$`.
+Valid application bindings with those names could conflict with generated imports
+or intercept component registration. The plugin now supplies fresh namespace and
+runtime bindings selected against the input source, registers via that runtime,
+and uses those bindings throughout boundary validation and refresh execution.
+Anonymous-default namespace expressions use the selected namespace while named
+application bindings are retained. Compiler instrumentation already uses fresh
+local registration/signature bindings; the footer now follows that ownership.
+The public legacy footer helper retains its preamble-global contract for existing
+callers. React cache identity advances to `oxc-0.151.0-local-bindings-v4`.
+
+Every React browser conformance variant now declares the colliding namespace,
+runtime name and a throwing local `$RefreshReg$`, requiring compilation, rendering
+and Refresh to succeed without invoking the application's binding. The initial
+plain Chromium/Firefox run passed the full state/syntax/reset/build/preview flow
+(42.90 seconds), output `/tmp/ferrite-refresh-bindings-browsers.log`.
+
+Validation:
+
+- 28 framework unit tests passed. New assertions cover selected anonymous
+  namespace expressions and retention of named application bindings. The old
+  global-registration string assertion was updated to require the new direct
+  runtime registration; browser bindings throw if ambient interception occurs.
+  Output `/tmp/ferrite-refresh-bindings-unit.log`.
+- The explicitly executed official react-refresh 0.17.0 runtime fixture passed,
+  retaining legacy helper export-boundary, signature and anonymous assertions.
+  Output `/tmp/ferrite-refresh-bindings-runtime.log`.
+- Rebuilt CLI, workspace compilation, framework/test all-target Clippy with
+  `--locked -- -D warnings`, formatting and diff checks passed.
+
+No lock/config migration or support promotion. Intrinsic/global shadowing,
+additional binding/anonymous component shapes, ownership, generated React
+profiles and the full remaining framework mission stay assigned and active.
+
+The complete explicit Chromium/Firefox acceptance run passed all 20 tests with
+`--test-threads=2` (275.47 seconds), retaining the existing template/plugin/HMR/
+startup flows and all eight React collision variants. Output:
+`/tmp/ferrite-refresh-bindings-all-browsers.log`.

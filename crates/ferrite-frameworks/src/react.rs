@@ -145,13 +145,43 @@ fn is_react_hook_module(id: &str, code: &str) -> Result<bool> {
 /// after `import.meta.hot` detection.
 #[must_use]
 pub fn refresh_footer(id: &str, registrations: &[Registration]) -> String {
+    refresh_footer_with_bindings(
+        id,
+        registrations,
+        "RefreshRuntime",
+        "__ferrite_refresh_exports__",
+        false,
+    )
+}
+
+fn refresh_footer_with_bindings(
+    id: &str,
+    registrations: &[Registration],
+    runtime_binding: &str,
+    exports_binding: &str,
+    local_runtime: bool,
+) -> String {
     let mut footer = format!(
-        "\nimport {spec:?};\nimport RefreshRuntime from {runtime:?};\nimport * as __ferrite_refresh_exports__ from {id:?};\n",
+        "\nimport {spec:?};\nimport {runtime_binding} from {runtime:?};\nimport * as {exports_binding} from {id:?};\n",
         spec = REFRESH_SPEC,
         runtime = REFRESH_RUNTIME_SPEC,
     );
+    if local_runtime {
+        footer = format!("\nimport * as {exports_binding} from {id:?};\n");
+    }
     for (local, debug_id) in registrations {
-        footer.push_str(&format!("$RefreshReg$({local}, {debug_id:?});\n"));
+        let local = if local == "__ferrite_refresh_exports__.default" {
+            format!("{exports_binding}.default")
+        } else {
+            local.clone()
+        };
+        if local_runtime {
+            footer.push_str(&format!(
+                "{runtime_binding}.register({local}, {debug_id:?});\n"
+            ));
+        } else {
+            footer.push_str(&format!("$RefreshReg$({local}, {debug_id:?});\n"));
+        }
     }
     footer.push_str(&format!(
         "if (import.meta.hot || globalThis.__ferrite_create_hot__) {{\n\
@@ -160,13 +190,13 @@ pub fn refresh_footer(id: &str, registrations: &[Registration]) -> String {
          if (next == null) return;\n\
          let valid = false;\n\
          try {{\n\
-         const previous = __ferrite_refresh_exports__;\n\
+         const previous = {exports_binding};\n\
          const keys = Object.keys(previous);\n\
          const nextKeys = Object.keys(next);\n\
          let components = 0;\n\
          valid = keys.length === nextKeys.length && keys.every((key) => {{\n\
          if (!Object.prototype.hasOwnProperty.call(next, key)) return false;\n\
-         if (RefreshRuntime.isLikelyComponentType(previous[key]) && RefreshRuntime.isLikelyComponentType(next[key])) {{ components++; return true; }}\n\
+         if ({runtime_binding}.isLikelyComponentType(previous[key]) && {runtime_binding}.isLikelyComponentType(next[key])) {{ components++; return true; }}\n\
          return previous[key] === next[key];\n\
          }}) && components > 0;\n\
          }} catch {{ valid = false; }}\n\
@@ -174,7 +204,7 @@ pub fn refresh_footer(id: &str, registrations: &[Registration]) -> String {
          __ferrite_hot__.invalidate();\n\
          return;\n\
          }}\n\
-         RefreshRuntime.performReactRefresh();\n\
+         {runtime_binding}.performReactRefresh();\n\
          }});\n\
          }}\n",
     ));
@@ -196,7 +226,7 @@ impl Plugin for ReactPlugin {
 
     fn cache_key(&self) -> String {
         format!(
-            "{}:oxc-0.151.0-imported-hooks-v3:{}",
+            "{}:oxc-0.151.0-local-bindings-v4:{}",
             self.name(),
             self.is_enabled()
         )
@@ -313,10 +343,20 @@ impl Plugin for ReactPlugin {
             runtime_binding.push('_');
         }
         let prefix = format!("import {spec:?};\nimport {runtime_binding} from {runtime:?};\nconst {reg} = (type, key) => {runtime_binding}.register(type, {id:?} + ' ' + key);\nconst {sig} = {runtime_binding}.createSignatureFunctionForTransform;\n", spec=REFRESH_SPEC, runtime=REFRESH_RUNTIME_SPEC, id=request.id);
+        let mut exports_binding = "__ferrite_refresh_exports__".to_string();
+        while request.code.contains(&exports_binding) {
+            exports_binding.push('_');
+        }
         let footer = if registrations.is_empty() {
             String::new()
         } else {
-            refresh_footer(&request.id, &registrations)
+            refresh_footer_with_bindings(
+                &request.id,
+                &registrations,
+                &runtime_binding,
+                &exports_binding,
+                true,
+            )
         };
         let (code, map) = ferrite_transform::apply_text_edits(
             &request.id,
@@ -475,7 +515,7 @@ mod tests {
             !entry.code.contains(".accept("),
             "entries without exports must not become Refresh boundaries"
         );
-        let source = "const __ferrite_refresh_runtime__ = 1; import {useState} from 'react'; export function App() { const [count] = useState(0); return React.createElement('div', null, count); }";
+        let source = "const RefreshRuntime = 1; const __ferrite_refresh_exports__ = 2; const $RefreshReg$ = () => {throw new Error('shadowed global helper');}; const __ferrite_refresh_runtime__ = 1; import {useState} from 'react'; export function App() { const [count] = useState(0); return React.createElement('div', null, count); }";
         let instrumented = plugin
             .transform(
                 &ctx,
@@ -558,7 +598,9 @@ mod tests {
             .await
             .unwrap()
             .expect("enabled client transformation must still run");
-        assert!(client.code.contains("$RefreshReg$(App"));
+        assert!(client
+            .code
+            .contains("__ferrite_refresh_runtime__.register(App"));
         for production in [false, true] {
             let mut user = ferrite_config::UserConfig::default();
             user.react.set_refresh(production);
@@ -650,8 +692,29 @@ mod tests {
     #[test]
     fn cache_identity_tracks_registration_version_and_enablement() {
         let enabled = ReactPlugin::with_enabled(true).cache_key();
-        assert!(enabled.contains("oxc-0.151.0-imported-hooks-v3"));
+        assert!(enabled.contains("oxc-0.151.0-local-bindings-v4"));
         assert_ne!(enabled, ReactPlugin::with_enabled(false).cache_key());
+    }
+
+    #[test]
+    fn anonymous_footer_uses_selected_namespace_without_touching_application_bindings() {
+        let footer = refresh_footer_with_bindings(
+            "/Anonymous.jsx",
+            &[
+                (
+                    "__ferrite_refresh_exports__.default".into(),
+                    "/Anonymous.jsx %default%".into(),
+                ),
+                ("RefreshRuntime".into(), "/Anonymous.jsx named".into()),
+            ],
+            "runtimeLocal",
+            "exportsLocal",
+            true,
+        );
+        assert!(footer.contains("runtimeLocal.register(exportsLocal.default"));
+        assert!(footer.contains("runtimeLocal.register(RefreshRuntime"));
+        assert!(!footer.contains("$RefreshReg$("));
+        assert!(!footer.contains("import RefreshRuntime"));
     }
 
     #[test]

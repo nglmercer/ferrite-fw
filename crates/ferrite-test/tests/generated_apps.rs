@@ -879,6 +879,7 @@ async fn react_refresh_dom_acceptance(
     } else {
         source.to_string()
     };
+    let source_variant = format!("const RefreshRuntime = 'application'; const __ferrite_refresh_exports__ = 1; const $RefreshReg$ = () => {{throw new Error('application binding was called');}};\n{source_variant}");
     let source = source_variant.as_str();
     std::fs::write(project.root.join("App.jsx"), source).unwrap();
     command(&binary, &project.root, &["install"], false).await;
