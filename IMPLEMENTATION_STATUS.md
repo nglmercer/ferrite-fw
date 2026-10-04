@@ -1,5 +1,23 @@
 # Framework support implementation status
 
+## Official Svelte server compilation conformance
+
+The real-package shared-pipeline test now checks server compilation of Svelte
+5.39.6 components and runes-bearing TypeScript modules alongside existing Vue
+3.5.22 server checks. It asserts the exact final server dependency identity,
+absence of client runtime imports/HMR/generated style imports, retained server
+maps, and removal of TypeScript/runes syntax. The official packages are installed
+through Ferrite and compiled on the explicitly selected persistent Node host.
+The expanded ignored-by-default test was explicitly executed and passed; final
+standalone compiler-test Clippy with warnings denied, formatting and diff checks
+passed. Its first run exposed an incorrect assertion expecting an unrewritten
+bare import; the final check uses final analyzed dependency identities instead.
+
+This proves server compiler output for these fixtures, not framework renderer
+execution, hydration, browser conformance, native compiler hosting or generated
+SSR template support. No compatibility profile was promoted. Those requirements
+and the full remaining framework-support mission remain unfinished.
+
 ## Embedded SSR asset HEAD headers
 
 Generated SSR servers now include the embedded asset length for GET and HEAD,

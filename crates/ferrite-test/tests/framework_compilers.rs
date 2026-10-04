@@ -149,6 +149,60 @@ async fn official_components_resources_maps_cache_and_library_parity() {
     assert!(server_module.code.contains("ssrRender"));
     assert!(!server_module.code.contains("ferrite-style="));
     assert!(!server_module.code.contains("import.meta.hot"));
+    let svelte_server = server
+        .pipeline_module(&ModuleId::new("/Counter.svelte"), None, "ssr")
+        .await
+        .unwrap();
+    assert!(
+        svelte_server
+            .imports
+            .iter()
+            .any(|(_, id, _)| id.0 == "/@npm/svelte@5.39.6/src/internal/server/index.js"),
+        "{}",
+        svelte_server.code
+    );
+    assert!(
+        !svelte_server
+            .imports
+            .iter()
+            .any(|(_, id, _)| id.0.contains("/internal/client/")),
+        "{}",
+        svelte_server.code
+    );
+    assert!(
+        !svelte_server.code.contains("import.meta.hot"),
+        "{}",
+        svelte_server.code
+    );
+    assert!(
+        !svelte_server.code.contains("ferrite-style="),
+        "{}",
+        svelte_server.code
+    );
+    assert!(
+        svelte_server.map.is_some(),
+        "server compiler maps must survive lowering"
+    );
+    let runes_server = server
+        .pipeline_module(&ModuleId::new("/counter.svelte.ts"), None, "ssr")
+        .await
+        .unwrap();
+    assert!(
+        !runes_server.code.contains("$state("),
+        "{}",
+        runes_server.code
+    );
+    assert!(
+        !runes_server.code.contains(": number"),
+        "{}",
+        runes_server.code
+    );
+    assert!(
+        !runes_server.code.contains("import.meta.hot"),
+        "{}",
+        runes_server.code
+    );
+
     std::fs::write(
         project.root.join("Counter.vue"),
         "<template><button>only one style</button></template><style>button{color:green}</style>",
