@@ -1,5 +1,24 @@
 # Framework support implementation status
 
+## Actual Vue renderer checks concurrent guest-global isolation
+
+The official Vue 3.5.22 server fixture now increments a guest-global request
+counter before awaiting renderToString and returns the counter through response
+headers. The compiled renderer case requires count one. The saved-artifact case
+now launches three concurrent requests on the same adapter and requires count
+one for each, alongside meaningful count-zero component HTML and scoped markers.
+This catches shared guest globals across actual framework renderer invocations,
+rather than inferring isolation from repeated component output.
+
+The real-package compile/build/render case was explicitly selected and passed.
+Its updated saved artifact was then tested from the current compiled test binary
+with PATH empty; all three concurrent requests passed. Final feature-enabled
+compiler-test Clippy with warnings denied, formatting and diff checks passed.
+This establishes this fixture's guest-global isolation, not arbitrary native
+state/filesystem isolation or complete framework support. Hydration, generated
+SSR profiles, browser interactions, the unresolved Svelte parser failure and the
+full remaining mission remain unfinished; no profile was promoted.
+
 ## Official Vue renderer executes with a rootless embedded runtime
 
 The new real-package Vue conformance case uses Vue 3.5.22 createSSRApp and

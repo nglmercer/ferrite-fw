@@ -531,7 +531,7 @@ async fn official_svelte_server_renderer_executes_emitted_graph() {
 async fn official_vue_server_renderer_executes_emitted_graph() {
     let project = fixture().await;
     std::fs::create_dir_all(project.root.join("src")).unwrap();
-    std::fs::write(project.root.join("src/entry-server.ts"), "import { createSSRApp } from 'vue'; import { renderToString } from 'vue/server-renderer'; import Counter from '../Counter.vue'; export async function render() { return await renderToString(createSSRApp(Counter)); }").unwrap();
+    std::fs::write(project.root.join("src/entry-server.ts"), "import { createSSRApp } from 'vue'; import { renderToString } from 'vue/server-renderer'; import Counter from '../Counter.vue'; export async function render() { globalThis.__ferrite_vue_requests = (globalThis.__ferrite_vue_requests || 0) + 1; const html = await renderToString(createSSRApp(Counter)); return { html, headers: [['x-request-count', String(globalThis.__ferrite_vue_requests)]] }; }").unwrap();
     let host = Arc::new(
         NodeCompilerHost::new(
             project.root.clone(),
@@ -570,6 +570,14 @@ async fn official_vue_server_renderer_executes_emitted_graph() {
         )
         .await
         .unwrap();
+    assert!(
+        response
+            .headers
+            .iter()
+            .any(|(name, value)| name == "x-request-count" && value == "1"),
+        "{:?}",
+        response.headers
+    );
     let html = response.into_string().await.unwrap();
     assert!(html.contains("<button"), "{html}");
     assert!(html.contains(">0</button>"), "{html}");
@@ -592,22 +600,37 @@ async fn official_vue_artifact_renders_without_compiler_host() {
             "/",
         )
         .unwrap();
+    let mut requests = Vec::new();
     for url in ["/first", "/second", "/third"] {
-        let response = adapter
-            .render(
-                ferrite::ssr::SsrHttpRequest {
-                    method: "GET".into(),
-                    uri: url.into(),
-                    headers: vec![],
-                    body: vec![],
-                },
-                Default::default(),
-            )
-            .await
-            .unwrap();
-        let html = response.into_string().await.unwrap();
-        assert!(html.contains("<button"), "{html}");
-        assert!(html.contains(">0</button>"), "{html}");
-        assert!(html.contains("data-v-"), "{html}");
+        let adapter = adapter.clone();
+        requests.push(tokio::spawn(async move {
+            let response = adapter
+                .render(
+                    ferrite::ssr::SsrHttpRequest {
+                        method: "GET".into(),
+                        uri: url.into(),
+                        headers: vec![],
+                        body: vec![],
+                    },
+                    Default::default(),
+                )
+                .await
+                .unwrap();
+            assert!(
+                response
+                    .headers
+                    .iter()
+                    .any(|(name, value)| name == "x-request-count" && value == "1"),
+                "{:?}",
+                response.headers
+            );
+            let html = response.into_string().await.unwrap();
+            assert!(html.contains("<button"), "{html}");
+            assert!(html.contains(">0</button>"), "{html}");
+            assert!(html.contains("data-v-"), "{html}");
+        }));
+    }
+    for request in requests {
+        request.await.unwrap();
     }
 }
