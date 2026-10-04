@@ -1,5 +1,41 @@
 # Framework support implementation status
 
+## Runtime-feature-aware doctor diagnostics
+
+The runtime exposes a metadata-only compiled-graph availability check which starts
+no worker or guest execution. The facade's new inspect_capabilities API combines
+that check with its own napi-vm feature and delegates to shared framework doctor
+reporting; CLI doctor now uses this same API. A configured backend alone no longer
+establishes framework SSR availability. Reports add ssr_runtime_probe with
+unverified, unavailable-in-build or compiled-not-executed states. Explicit or
+detected JS server entries with missing runtime availability receive actionable
+errors to select the supported backend/build feature, without substitution.
+
+Low-level frameworks::doctor::inspect now leaves runtime availability unverified;
+embedding applications may use inspect_with_runtime with explicit metadata or the
+facade API to resolve it. Framework SSR labels remain unavailable unless runtime,
+compiler and registered rendering-profile conditions agree. A compiled runtime is
+not an executed compatibility test. Node and unknown backend names remain
+unavailable. Existing compiler-host location probes remain separate and read-only.
+
+Validation: feature-enabled facade/CLI/framework/runtime tests passed 33 + 20 +
+36 + 22, with six existing resource-dependent cases ignored and three facade
+doctests passing. Feature-disabled facade/CLI/runtime tests passed 30 + 18 + 3,
+with one existing ignored case and three facade doctests. New regressions cover
+unverified callers, missing-feature errors, supported compiled metadata, unknown
+backends and no filesystem writes. Final all-target Clippy for the affected crates
+and test crate with warnings denied and formatting/diff checks passed. The fresh
+feature-enabled CLI's explicitly executed Vue JS/TS creation/clean frozen reinstall
+fixture also passed with its new doctor probe assertion. An initial test compile
+error from referencing another test module's helper was corrected to resolve its
+own configuration. Ignored cases do not establish support.
+
+No config or lock migration is needed. The JSON report field is additive; direct
+low-level doctor consumers needing runtime-aware SSR diagnostics should switch to
+ferrite::inspect_capabilities or supply explicit availability. Complete CLI-driven
+single-project acceptance, granular HMR, checkers, streaming/SSG, other frameworks
+and release matrices remain unfinished. The full mission remains active.
+
 ## Explicit experimental Vue SSR CLI profiles
 
 Shared template descriptors now include separate SSR runtime requirements and

@@ -307,6 +307,14 @@ impl JsRuntime for UnavailableRuntime {
     }
 }
 
+/// Whether this build contains a backend for compiled graph invocation.
+/// This metadata check starts no worker and executes no guest code. It does not
+/// establish compatibility with any particular framework or language feature.
+#[must_use]
+pub fn compiled_graph_backend_available(backend: &str) -> bool {
+    backend == "napi-vm" && cfg!(feature = "napi-vm")
+}
+
 /// Build the runtime for a backend name (`auto`/`none` need no engine).
 ///
 /// `napi-vm` requires the `napi-vm` cargo feature; without it the returned

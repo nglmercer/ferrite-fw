@@ -180,14 +180,14 @@ pub(crate) async fn doctor(
             ..Default::default()
         },
     )?;
-    let report = ferrite::frameworks::doctor::inspect(&config)?;
+    let report = ferrite::inspect_capabilities(&config)?;
     if args.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
         println!("framework registry schema {}", report.schema_version);
         println!(
-            "compiler: {}; SSR runtime: {}",
-            report.compiler, report.ssr_runtime
+            "compiler: {}; SSR runtime: {} ({})",
+            report.compiler, report.ssr_runtime, report.ssr_runtime_probe
         );
         println!(
             "runtime limits: queue_capacity={}, max_request_bytes={} (0 selects host defaults)",

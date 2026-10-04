@@ -1601,6 +1601,7 @@ async fn cli_vue_ssr_generation_and_clean_frozen_reinstall() {
         )
         .unwrap();
         assert_eq!(report["ssr_runtime"], "napi-vm");
+        assert_eq!(report["ssr_runtime_probe"], "compiled-not-executed");
         let vue = report["frameworks"]
             .as_array()
             .unwrap()

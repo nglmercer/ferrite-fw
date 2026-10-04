@@ -80,7 +80,7 @@ pub use app::{Ferrite, ModuleRequest};
 pub use builder::Builder;
 pub use loader::{preview_dir, preview_with_plugins, BuildLoader};
 pub use report::BuildReport;
-pub use ssr_dev::create_dev_ssr_adapter;
+pub use ssr_dev::{create_dev_ssr_adapter, inspect_capabilities};
 
 /// Prelude for framework and plugin authors.
 pub mod prelude {

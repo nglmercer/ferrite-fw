@@ -127,6 +127,7 @@ pub struct DoctorReport {
     pub compiler: String,
     pub compiler_version: Option<String>,
     pub ssr_runtime: String,
+    pub ssr_runtime_probe: &'static str,
     pub runtime_config: ferrite_config::RuntimeConfig,
     pub node_executable: Option<PathBuf>,
     pub node_probe: &'static str,
@@ -138,7 +139,18 @@ pub struct DoctorReport {
     pub issues: Vec<Issue>,
 }
 
+/// Inspect configuration without assuming a runtime is compiled into the caller.
 pub fn inspect(config: &ResolvedConfig) -> Result<DoctorReport> {
+    inspect_with_runtime(config, None)
+}
+
+/// Inspect with explicit compiled graph runtime availability from the embedding
+/// application. `None` means unverified; `Some(true)` means compiled, not executed.
+/// This function never starts a compiler host or rendering runtime.
+pub fn inspect_with_runtime(
+    config: &ResolvedConfig,
+    runtime_available: Option<bool>,
+) -> Result<DoctorReport> {
     let lock = Lockfile::read(&config.lockfile())?;
     lock.validate()?;
     let manifest = JsPackageJson::read(&config.root.join("package.json"))?;
@@ -324,7 +336,7 @@ pub fn inspect(config: &ResolvedConfig) -> Result<DoctorReport> {
             framework: name, active, selection: if explicit.is_some() { "configuration" } else { "manifest" },
             version: package.map(|package| package.version.clone()), identity: package.map(|package| package.id()),
             compiler_host: host, compiler_support: if available { "experimental" } else { "unavailable" },
-            client: if available { descriptor.client.label() } else { "unavailable" }, ssr: if available && descriptor.template_variants.iter().any(|profile| profile.ssr_runtime == Some(config.runtime.backend.as_str())) { descriptor.ssr.label() } else { "unavailable" },
+            client: if available { descriptor.client.label() } else { "unavailable" }, ssr: if runtime_available == Some(true) && available && descriptor.template_variants.iter().any(|profile| profile.ssr_runtime == Some(config.runtime.backend.as_str())) { descriptor.ssr.label() } else { "unavailable" },
             updates: if !available { "unavailable" } else if name == "react" && config.react.refresh { "experimental-refresh-incomplete" } else { "full-reload" }, checker: "unavailable",
             rendering_profiles: descriptor.template_variants.iter().map(|profile| serde_json::json!({
                 "language": profile.language, "rendering": profile.rendering,
@@ -377,12 +389,38 @@ pub fn inspect(config: &ResolvedConfig) -> Result<DoctorReport> {
             action: "run ferrite install (with --frozen-lockfile for an existing lock); move unmanaged node_modules aside explicitly first".into(),
         });
     }
+    let js_ssr_requested = config
+        .ssr
+        .entry
+        .as_deref()
+        .is_some_and(|entry| entry != "src/server.rs")
+        || ["src/entry-server.js", "src/entry-server.ts"]
+            .iter()
+            .any(|entry| config.root.join(entry).is_file());
+    if js_ssr_requested && runtime_available != Some(true) {
+        issues.push(Issue {
+            severity: if runtime_available == Some(false) { "error" } else { "warning" },
+            message: format!("selected SSR runtime `{}` is {}", config.runtime.backend, if runtime_available == Some(false) { "unavailable in this build" } else { "unverified by this embedding application" }),
+            action: if config.runtime.backend == "napi-vm" && runtime_available == Some(false) {
+                "rebuild Ferrite with --features napi-vm; the compiler host does not supply an SSR runtime".into()
+            } else if runtime_available.is_none() {
+                "use ferrite::inspect_capabilities or supply compiled graph runtime availability to inspect_with_runtime".into()
+            } else {
+                "select runtime.backend = 'napi-vm' and a Ferrite binary built with --features napi-vm; no runtime substitution is performed".into()
+            },
+        });
+    }
     Ok(DoctorReport {
         schema_version: crate::registry::SCHEMA_VERSION,
         root: config.root.clone(),
         compiler: config.compiler.engine.clone(),
         compiler_version,
         ssr_runtime: config.runtime.backend.clone(),
+        ssr_runtime_probe: match runtime_available {
+            Some(true) => "compiled-not-executed",
+            Some(false) => "unavailable-in-build",
+            None => "unverified",
+        },
         runtime_config: config.runtime.clone(),
         node_probe: if node_executable.is_some() {
             "located-not-executed"
@@ -806,5 +844,37 @@ mod foreign_profile_tests {
             .any(|issue| issue.severity == "error"
                 && issue.message.contains("foreign plugin fixture")));
         assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+    }
+    #[test]
+    fn runtime_probe_distinguishes_missing_features_from_unverified_callers() {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = ferrite_config::resolve_config(
+            Default::default(),
+            Some(root.path().into()),
+            Default::default(),
+        )
+        .unwrap();
+        config.runtime.backend = "napi-vm".into();
+        config.ssr.entry = Some("src/entry-server.ts".into());
+        for (availability, probe, severity) in [
+            (None, "unverified", Some("warning")),
+            (Some(false), "unavailable-in-build", Some("error")),
+            (Some(true), "compiled-not-executed", None),
+        ] {
+            let report = super::inspect_with_runtime(&config, availability).unwrap();
+            assert_eq!(report.ssr_runtime_probe, probe);
+            let issue = report
+                .issues
+                .iter()
+                .find(|issue| issue.message.contains("selected SSR runtime"));
+            assert_eq!(issue.map(|issue| issue.severity), severity);
+            if availability == Some(false) {
+                assert!(issue
+                    .unwrap()
+                    .action
+                    .contains("rebuild Ferrite with --features napi-vm"));
+            }
+            assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+        }
     }
 }

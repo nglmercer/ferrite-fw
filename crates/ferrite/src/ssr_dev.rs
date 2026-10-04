@@ -46,3 +46,66 @@ pub async fn create_dev_ssr_adapter(
         },
     )))
 }
+
+/// Read-only diagnostics using this build's compiled graph runtime capability.
+/// No compiler host, runtime worker or guest renderer is started.
+pub fn inspect_capabilities(
+    config: &crate::ResolvedConfig,
+) -> crate::Result<crate::frameworks::doctor::DoctorReport> {
+    crate::frameworks::doctor::inspect_with_runtime(
+        config,
+        Some(
+            cfg!(feature = "napi-vm")
+                && ferrite_runtime::compiled_graph_backend_available(&config.runtime.backend),
+        ),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn diagnostics_use_this_build_and_do_not_substitute_a_runtime() {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = crate::resolve_config(
+            Default::default(),
+            Some(root.path().into()),
+            Default::default(),
+        )
+        .unwrap();
+        config.ssr.entry = Some("src/entry-server.ts".into());
+        for backend in ["napi-vm", "node", "auto", "unknown"] {
+            config.runtime.backend = backend.into();
+            let report = super::inspect_capabilities(&config).unwrap();
+            let available = backend == "napi-vm" && cfg!(feature = "napi-vm");
+            assert_eq!(report.ssr_runtime, backend);
+            assert_eq!(
+                report.ssr_runtime_probe,
+                if available {
+                    "compiled-not-executed"
+                } else {
+                    "unavailable-in-build"
+                }
+            );
+            let issue = report
+                .issues
+                .iter()
+                .find(|issue| issue.message.contains("selected SSR runtime"));
+            if available {
+                assert!(issue.is_none());
+            } else {
+                let issue = issue.unwrap();
+                assert_eq!(issue.severity, "error");
+                assert!(issue.message.contains(backend));
+                assert!(issue.action.contains("--features napi-vm"));
+            }
+            assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+        }
+        let unverified = crate::frameworks::doctor::inspect(&config).unwrap();
+        assert_eq!(unverified.ssr_runtime_probe, "unverified");
+        assert!(unverified
+            .issues
+            .iter()
+            .any(|issue| issue.severity == "warning"
+                && issue.action.contains("inspect_capabilities")));
+    }
+}
