@@ -1,5 +1,29 @@
 # Framework support implementation status
 
+## Actual Svelte renderer exposes embedded-runtime failure
+
+A new explicitly selectable real-package test imports `svelte/server` render,
+compiles a Svelte 5.39.6 component through the production server pipeline, loads
+the emitted renderer artifact, and calls it through napi-vm. The meaningful HTML
+assertions remain mandatory. This test was executed twice and FAILED: embedded
+evaluation reported `SyntaxError: expected RBrace, found RParen at 137:20`.
+Compilation success therefore does not establish Svelte rendering support. The
+case remains ignored by default for its registry/Node compiler requirements;
+ignoring it does not convert this failure into support. No alternate runtime is
+spawned or substituted. `FERRITE_SVELTE_SSR_ARTIFACT` optionally retains emitted
+artifact bytes for diagnosis; a diagnostic run produced the actual graph.
+
+Graph evaluation errors now identify the napi-vm backend and graph entry and
+retain the original error with a runtime-compatibility diagnostic. A regression
+executes malformed graph syntax and verifies those fields. Final runtime tests
+passed 22, feature-enabled runtime/test all-target Clippy with warnings denied,
+formatting and diff checks passed. Initial test compilation mistakes involving
+RuntimeEnvironment construction were corrected before final verification.
+The real Svelte renderer failure remains unresolved and must be fixed before
+advertising this embedded rendering profile. Pinned official Svelte package exports
+were inspected alongside its documented server render API; no compatibility
+profile was promoted. Framework hydration and the full mission remain unfinished.
+
 ## Official Svelte server compilation conformance
 
 The real-package shared-pipeline test now checks server compilation of Svelte

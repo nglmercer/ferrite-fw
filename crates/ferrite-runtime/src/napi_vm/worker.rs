@@ -129,7 +129,7 @@ impl WorkerState {
             .iter()
             .find(|module| module.id == graph.entry)
             .expect("validated entry");
-        self.eval_module(&entry.id, &entry.code)
+        self.eval_module(&entry.id, &entry.code).map_err(|error| format!("napi-vm graph entry `{}` evaluation failed: {error}; inspect emitted module syntax and selected runtime compatibility", entry.id))
     }
 
     fn prepare_evaluation(

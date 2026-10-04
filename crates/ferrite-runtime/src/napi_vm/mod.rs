@@ -43,6 +43,36 @@ mod tests {
     use crate::{CompiledModule, JsRuntime, JsValue, RuntimeEnvironment};
     use std::path::PathBuf;
 
+    #[tokio::test]
+    async fn graph_syntax_errors_identify_entry_and_backend() {
+        let runtime = NapiVmRuntime::with_defaults();
+        let graph = crate::CompiledModuleGraph {
+            entry: "/broken.js".into(),
+            modules: vec![CompiledModule {
+                id: "/broken.js".into(),
+                code: "export function broken( {".into(),
+                url: None,
+            }],
+        };
+        let error = runtime
+            .evaluate_module_graph(
+                graph,
+                RuntimeEnvironment {
+                    ssr: true,
+                    request_id: None,
+                },
+            )
+            .await
+            .unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains("napi-vm graph entry `/broken.js`"),
+            "{message}"
+        );
+        assert!(message.contains("SyntaxError"), "{message}");
+        assert!(message.contains("runtime compatibility"), "{message}");
+    }
+
     #[test]
     fn js_string_escapes() {
         assert_eq!(js_string("a'b\\c"), "'a\\'b\\\\c'");

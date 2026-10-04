@@ -468,3 +468,59 @@ async fn chromium_framework_dev_edit_build_preview_interaction() {
 async fn firefox_framework_dev_edit_build_preview_interaction() {
     browser_interaction(ferrite_e2e::BrowserKind::Firefox).await;
 }
+
+#[cfg(feature = "napi-vm")]
+#[tokio::test]
+#[ignore = "requires official packages and explicit Node compiler host; embedded SSR conformance"]
+async fn official_svelte_server_renderer_executes_emitted_graph() {
+    let project = fixture().await;
+    std::fs::create_dir_all(project.root.join("src")).unwrap();
+    std::fs::write(project.root.join("src/entry-server.ts"), "import { render as renderComponent } from 'svelte/server'; import Counter from '../Counter.svelte'; export function render() { return renderComponent(Counter).body; }").unwrap();
+    let host = Arc::new(
+        NodeCompilerHost::new(
+            project.root.clone(),
+            project.root.join("ferrite.lock"),
+            None,
+            Duration::from_secs(10),
+        )
+        .await
+        .unwrap(),
+    );
+    let mut config = project.resolve_config_mode("production");
+    config.runtime.backend = "napi-vm".into();
+    config.build.minify = false;
+    let builder =
+        ferrite::Builder::new(config, vec![Arc::new(SveltePlugin::with_host(host, false))]);
+    let report = builder.build("ssr").await.unwrap();
+    let artifact = ferrite::SsrRendererArtifact::read(&report.out_dir).unwrap();
+    if let Some(path) = std::env::var_os("FERRITE_SVELTE_SSR_ARTIFACT") {
+        std::fs::write(path, serde_json::to_vec(&artifact).unwrap()).unwrap();
+    }
+
+    let adapter = artifact
+        .into_adapter(
+            Arc::new(ferrite::runtime::napi_vm::NapiVmRuntime::with_defaults()),
+            "<!--ssr-outlet-->".into(),
+            "/",
+        )
+        .unwrap();
+    let response = adapter
+        .render(
+            ferrite::ssr::SsrHttpRequest {
+                method: "GET".into(),
+                uri: "/".into(),
+                headers: vec![],
+                body: vec![],
+            },
+            Default::default(),
+        )
+        .await
+        .unwrap();
+    let html = response.into_string().await.unwrap();
+    assert!(html.contains("<button"), "{html}");
+    assert!(html.contains(">0</button>"), "{html}");
+    assert!(
+        !html.contains("<script"),
+        "renderer must return meaningful server HTML: {html}"
+    );
+}
