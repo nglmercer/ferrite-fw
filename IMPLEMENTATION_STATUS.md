@@ -1,5 +1,32 @@
 # Framework support implementation status
 
+## Official Vue renderer executes with a rootless embedded runtime
+
+The new real-package Vue conformance case uses Vue 3.5.22 createSSRApp and
+vue/server-renderer renderToString, compiles a script-setup TypeScript SFC with
+scoped/module styles through the explicitly selected Node compiler host, builds
+the actual server graph, and executes it through napi-vm. It was explicitly
+selected and PASSED, requiring a rendered button, initial count and scoped marker.
+`FERRITE_VUE_SSR_ARTIFACT` optionally saves that actual emitted artifact.
+A second case reads the saved artifact and invokes its rootless adapter for three
+requests. It was executed from the current compiled test binary with PATH empty
+and PASSED, after the original temporary source project had been removed. This
+separates Node compiler-host requirements from in-process runtime execution.
+Feature-enabled compiler-test Clippy with warnings denied, formatting and diff
+checks passed. Both cases are explicit slow/resource-dependent tests; their
+actual executions, not their ignored default status, supply this evidence.
+
+Upstream napi-vm HEAD was inspected at 881cc8f1cec262049b6d31fa499b0d601ba673c5;
+its parser statement implementation is identical to the pinned implementation
+for the Svelte failing assignment-form for-in loop. No ineffective pin update,
+vendored rewrite or runtime fallback was introduced. That Svelte failure remains.
+
+This proves Vue rendering for these fixtures only. It does not establish
+hydration, browser interaction, CSS HTTP delivery, complete request isolation,
+streaming, release matrices or generated SSR template acceptance. No complete
+framework profile was promoted; the full framework-support mission remains
+unfinished.
+
 ## Engine parser preflight identifies the actual Svelte module failure
 
 Before graph registration changes, napi-vm graph evaluation now lexes/parses each

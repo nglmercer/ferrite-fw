@@ -524,3 +524,90 @@ async fn official_svelte_server_renderer_executes_emitted_graph() {
         "renderer must return meaningful server HTML: {html}"
     );
 }
+
+#[cfg(feature = "napi-vm")]
+#[tokio::test]
+#[ignore = "requires official packages and explicit Node compiler host; embedded Vue SSR conformance"]
+async fn official_vue_server_renderer_executes_emitted_graph() {
+    let project = fixture().await;
+    std::fs::create_dir_all(project.root.join("src")).unwrap();
+    std::fs::write(project.root.join("src/entry-server.ts"), "import { createSSRApp } from 'vue'; import { renderToString } from 'vue/server-renderer'; import Counter from '../Counter.vue'; export async function render() { return await renderToString(createSSRApp(Counter)); }").unwrap();
+    let host = Arc::new(
+        NodeCompilerHost::new(
+            project.root.clone(),
+            project.root.join("ferrite.lock"),
+            None,
+            Duration::from_secs(10),
+        )
+        .await
+        .unwrap(),
+    );
+    let mut config = project.resolve_config_mode("production");
+    config.runtime.backend = "napi-vm".into();
+    config.build.minify = false;
+    let builder = ferrite::Builder::new(config, vec![Arc::new(VuePlugin::with_host(host, false))]);
+    let report = builder.build("ssr").await.unwrap();
+    let artifact = ferrite::SsrRendererArtifact::read(&report.out_dir).unwrap();
+    if let Some(path) = std::env::var_os("FERRITE_VUE_SSR_ARTIFACT") {
+        std::fs::write(path, serde_json::to_vec(&artifact).unwrap()).unwrap();
+    }
+    let adapter = artifact
+        .into_adapter(
+            Arc::new(ferrite::runtime::napi_vm::NapiVmRuntime::with_defaults()),
+            "<!--ssr-outlet-->".into(),
+            "/",
+        )
+        .unwrap();
+    let response = adapter
+        .render(
+            ferrite::ssr::SsrHttpRequest {
+                method: "GET".into(),
+                uri: "/".into(),
+                headers: vec![],
+                body: vec![],
+            },
+            Default::default(),
+        )
+        .await
+        .unwrap();
+    let html = response.into_string().await.unwrap();
+    assert!(html.contains("<button"), "{html}");
+    assert!(html.contains(">0</button>"), "{html}");
+    assert!(
+        html.contains("data-v-"),
+        "scoped styles must match server markup: {html}"
+    );
+}
+
+#[cfg(feature = "napi-vm")]
+#[tokio::test]
+#[ignore = "requires saved artifact from the official Vue renderer conformance case"]
+async fn official_vue_artifact_renders_without_compiler_host() {
+    let path = std::env::var_os("FERRITE_VUE_SSR_ARTIFACT").expect("set FERRITE_VUE_SSR_ARTIFACT to the artifact produced by official_vue_server_renderer_executes_emitted_graph");
+    let artifact = ferrite::SsrRendererArtifact::from_bytes(&std::fs::read(path).unwrap()).unwrap();
+    let adapter = artifact
+        .into_adapter(
+            Arc::new(ferrite::runtime::napi_vm::NapiVmRuntime::with_defaults()),
+            "<!--ssr-outlet-->".into(),
+            "/",
+        )
+        .unwrap();
+    for url in ["/first", "/second", "/third"] {
+        let response = adapter
+            .render(
+                ferrite::ssr::SsrHttpRequest {
+                    method: "GET".into(),
+                    uri: url.into(),
+                    headers: vec![],
+                    body: vec![],
+                },
+                Default::default(),
+            )
+            .await
+            .unwrap();
+        let html = response.into_string().await.unwrap();
+        assert!(html.contains("<button"), "{html}");
+        assert!(html.contains(">0</button>"), "{html}");
+        assert!(html.contains("data-v-"), "{html}");
+    }
+}
