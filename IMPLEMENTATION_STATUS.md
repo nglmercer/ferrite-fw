@@ -1,5 +1,39 @@
 # Framework support implementation status
 
+## Generated Vue development SSR watcher acceptance in both browsers
+
+New explicitly executed real-browser tests install the actual generated Vue SSR
+JavaScript and TypeScript projects through Ferrite, load declarative compiler and
+runtime configuration, start the shared development SSR adapter and real file
+watcher, and use the existing Rust Chromium/Firefox tooling. Each requires
+hydration to retain the original server button, correct scoped CSS and real
+counter clicks. A watched text/style edit must update both, reset state according
+to the current declared full-reload strategy, retain hydrated server DOM and
+support interaction again. Invalid component syntax must show an actionable
+App.vue error overlay while retaining the prior counter; restoring source must
+remove the overlay, render original text/styles and allow another real click.
+Successful phases require no page errors or unexpected console errors; no
+hydration diagnostics are accepted, and recovery may add no console errors beyond
+those recorded during the intentionally invalid edit. Only test observability
+snapshots/mount signals are added; component/rendering logic stays generated.
+
+Both initial browser runs failed: generated SSR stylesheet requests were rejected
+by the compiler plugin because its query parser treated `0&direct` as the numeric
+index. Diagnostic assertions identified the resulting error overlay covering the
+counter. The parser now accepts the exact optional direct flag in either order
+and rejects malformed indices, duplicate fields and unsupported query mixtures.
+No forced/scripted click, skipped step or relaxed application assertion was used.
+The final Chromium and Firefox runs PASSED both JS/TS cases. Framework unit tests
+passed 35 with five existing resource-dependent cases ignored. Final all-target
+framework/test Clippy with warnings denied, formatting and diff checks passed;
+a Clippy test-module-order error was corrected by moving the module, without a
+lint suppression. No configuration or lock migration is needed.
+
+This is evidence for the current experimental full-reload behavior, not granular
+Vue HMR/state preservation. CLI profile exposure, clean frozen reinstall, editor
+checking, streaming/SSG, remaining framework profiles and full release matrices
+remain unfinished. The complete mission remains active and unfinished.
+
 ## Generated Vue development HTTP SSR and generated stylesheet preloads
 
 The generated JS/TS development acceptance case now serves actual HTTP requests

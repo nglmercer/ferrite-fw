@@ -1136,3 +1136,234 @@ async fn generated_vue_ssr_dev_graph_updates_and_recovers() {
         assert!(response.contains("Hello Ferrite + Vue"));
     }
 }
+
+#[cfg(feature = "napi-vm")]
+async fn generated_vue_dev_browser(kind: ferrite_e2e::BrowserKind) {
+    for language in ["js", "ts"] {
+        let mut generated = ferrite::frameworks::scaffold::vue_ssr_files(
+            "generated-dev-browser",
+            language,
+            "node",
+            "napi-vm",
+        )
+        .unwrap();
+        let index = generated.get_mut("index.html").unwrap();
+        *index = index.replace("<script type=", "<script>globalThis.__ssrButton = document.querySelector('#app button');</script><script type=");
+        generated
+            .get_mut(&format!("src/main.{language}"))
+            .unwrap()
+            .push_str("\nglobalThis.__hydrated = true;\n");
+        let inputs: Vec<_> = generated
+            .iter()
+            .map(|(path, text)| (path.as_str(), text.as_str()))
+            .collect();
+        let project = TempProject::new(&inputs);
+        let manifest: ferrite::npm::JsPackageJson =
+            serde_json::from_str(&generated["package.json"]).unwrap();
+        let npm = project.root.join(".ferrite/npm");
+        let client =
+            ferrite::npm::RegistryClient::new(ferrite::npm::DEFAULT_REGISTRY, npm.join("metadata"))
+                .unwrap();
+        let installer = ferrite::npm::Installer::new(client, npm);
+        let mut lock = ferrite::npm::Lockfile::default();
+        installer
+            .install_manifest(&manifest, &mut lock, false)
+            .await
+            .unwrap();
+        lock.write(&project.root.join("ferrite.lock")).unwrap();
+        let (config, plugins) = ferrite::Config {
+            root: Some(project.root.clone()),
+            ..Default::default()
+        }
+        .resolve()
+        .await
+        .unwrap();
+        let server = DevServer::new(config.clone(), plugins).await.unwrap();
+        let shell = server.transform_index_html("/index.html").await.unwrap();
+        server
+            .set_ssr_adapter(
+                ferrite::create_dev_ssr_adapter(&server, &config, &shell)
+                    .await
+                    .unwrap(),
+            )
+            .await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let router = server.router();
+        struct Serving(tokio::task::JoinHandle<()>);
+        impl Drop for Serving {
+            fn drop(&mut self) {
+                self.0.abort();
+            }
+        }
+        let _serving = Serving(tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        }));
+        let executable = match kind {
+            ferrite_e2e::BrowserKind::Chromium => ferrite_e2e::find_chromium(None),
+            ferrite_e2e::BrowserKind::Firefox => ferrite_e2e::find_firefox(None),
+        }
+        .expect("generated development SSR requires the selected real browser");
+        let browser = ferrite_e2e::Browser::launch(
+            ferrite_e2e::LaunchOptions::default()
+                .browser(kind)
+                .executable(executable),
+        )
+        .await
+        .unwrap();
+        let page = browser.new_page().await.unwrap();
+        page.goto(&url).await.unwrap();
+        page.wait_for_function("globalThis.__hydrated === true", Duration::from_secs(15))
+            .await
+            .unwrap_or_else(|error| {
+                panic!(
+                    "{language}/{kind:?}: {error}; {:?}; {:?}",
+                    page.page_errors(),
+                    page.console_messages()
+                )
+            });
+        assert!(page
+            .evaluate::<bool>("globalThis.__ssrButton === document.querySelector('#counter')")
+            .await
+            .unwrap());
+        assert_eq!(
+            page.evaluate::<String>("getComputedStyle(document.querySelector('#counter')).color")
+                .await
+                .unwrap(),
+            "rgb(128, 0, 0)"
+        );
+        let state = page.evaluate::<serde_json::Value>("({overlay:document.querySelector('#ferrite-error-overlay')?.textContent,button:document.querySelector('#counter')?.outerHTML,body:document.body.innerHTML})").await.unwrap();
+        assert!(
+            page.page_errors().is_empty(),
+            "{state}; {:?}",
+            page.page_errors()
+        );
+        assert!(
+            page.console_messages()
+                .iter()
+                .all(|message| message.kind != "error"),
+            "{state}; {:?}",
+            page.console_messages()
+        );
+        page.locator("#counter")
+            .click()
+            .await
+            .unwrap_or_else(|error| {
+                panic!(
+                    "{language}/{kind:?}: {error}; {state}; {:?}; {:?}",
+                    page.page_errors(),
+                    page.console_messages()
+                )
+            });
+        page.wait_for_function(
+            "document.querySelector('#counter').textContent === 'count: 1'",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        assert!(page.page_errors().is_empty(), "{:?}", page.page_errors());
+        assert!(
+            page.console_messages()
+                .iter()
+                .all(|message| message.kind != "error"),
+            "{:?}",
+            page.console_messages()
+        );
+        let original = generated["src/App.vue"].clone();
+        let changed = original
+            .replace("Hello Ferrite + Vue", "Hello updated Vue")
+            .replace("rgb(128, 0, 0)", "rgb(0, 0, 128)");
+        std::fs::write(project.root.join("src/App.vue"), &changed).unwrap();
+        // The existing experimental adapter declares full reload, so an edit
+        // intentionally resets state. Do not claim component state preservation.
+        page.wait_for_function("document.querySelector('h1')?.textContent === 'Hello updated Vue' && document.querySelector('#counter')?.textContent === 'count: 0' && getComputedStyle(document.querySelector('#counter')).color === 'rgb(0, 0, 128)'", Duration::from_secs(20)).await.unwrap_or_else(|error| panic!("{language}/{kind:?}: {error}; {:?}; {:?}", page.page_errors(), page.console_messages()));
+        assert!(page
+            .evaluate::<bool>("globalThis.__ssrButton === document.querySelector('#counter')")
+            .await
+            .unwrap());
+        page.locator("#counter").click().await.unwrap();
+        page.wait_for_function(
+            "document.querySelector('#counter').textContent === 'count: 1'",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        assert!(page.page_errors().is_empty(), "{:?}", page.page_errors());
+        assert!(
+            page.console_messages()
+                .iter()
+                .all(|message| message.kind != "error"),
+            "{:?}",
+            page.console_messages()
+        );
+        std::fs::write(
+            project.root.join("src/App.vue"),
+            "<script setup>const broken = ;</script>",
+        )
+        .unwrap();
+        page.wait_for_function(
+            "document.querySelector('#ferrite-error-overlay')?.textContent.includes('App.vue')",
+            Duration::from_secs(15),
+        )
+        .await
+        .unwrap_or_else(|error| {
+            panic!(
+                "{language}/{kind:?}: {error}; {:?}; {:?}",
+                page.page_errors(),
+                page.console_messages()
+            )
+        });
+        assert_eq!(
+            page.evaluate::<String>("document.querySelector('#counter').textContent")
+                .await
+                .unwrap(),
+            "count: 1"
+        );
+        let expected_errors = page
+            .console_messages()
+            .iter()
+            .filter(|message| message.kind == "error")
+            .count();
+        std::fs::write(project.root.join("src/App.vue"), &original).unwrap();
+        page.wait_for_function("!document.querySelector('#ferrite-error-overlay') && document.querySelector('h1')?.textContent === 'Hello Ferrite + Vue' && document.querySelector('#counter')?.textContent === 'count: 0' && getComputedStyle(document.querySelector('#counter')).color === 'rgb(128, 0, 0)'", Duration::from_secs(20)).await.unwrap_or_else(|error| panic!("{language}/{kind:?}: {error}; {:?}; {:?}", page.page_errors(), page.console_messages()));
+        page.locator("#counter").click().await.unwrap();
+        page.wait_for_function(
+            "document.querySelector('#counter').textContent === 'count: 1'",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        assert!(page.page_errors().is_empty(), "{:?}", page.page_errors());
+        assert_eq!(
+            page.console_messages()
+                .iter()
+                .filter(|message| message.kind == "error")
+                .count(),
+            expected_errors,
+            "{:?}",
+            page.console_messages()
+        );
+        assert!(
+            page.console_messages()
+                .iter()
+                .all(|message| !message.text.to_lowercase().contains("hydration")),
+            "{:?}",
+            page.console_messages()
+        );
+        browser.close().await.unwrap();
+    }
+}
+
+#[cfg(feature = "napi-vm")]
+#[tokio::test]
+#[ignore = "real registry, Node compiler host and Chromium; generated SSR watcher acceptance"]
+async fn generated_vue_dev_ssr_chromium() {
+    generated_vue_dev_browser(ferrite_e2e::BrowserKind::Chromium).await;
+}
+
+#[cfg(feature = "napi-vm")]
+#[tokio::test]
+#[ignore = "real registry, Node compiler host and Firefox; generated SSR watcher acceptance"]
+async fn generated_vue_dev_ssr_firefox() {
+    generated_vue_dev_browser(ferrite_e2e::BrowserKind::Firefox).await;
+}

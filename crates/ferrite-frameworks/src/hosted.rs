@@ -32,14 +32,35 @@ impl HostedFrameworkPlugin {
 // CSS resource queries are exclusive and deliberately not framework legacy block
 // queries. A generated resource is always loaded from its owner's current source.
 fn style_query(query: &str) -> Result<Option<usize>> {
-    if let Some(index) = query.strip_prefix("ferrite-style=") {
-        return index
-            .parse()
-            .map(Some)
-            .map_err(|_| FerriteError::Build(format!("invalid generated style query {query}")));
+    if !query
+        .split('&')
+        .any(|part| part.starts_with("ferrite-style="))
+    {
+        return Ok(None);
     }
-    Ok(None)
+    let invalid = || {
+        FerriteError::Build(format!("invalid generated style query {query}; use ferrite-style=<index> with an optional direct flag"))
+    };
+    let mut index = None;
+    let mut direct = false;
+    for part in query.split('&') {
+        if part == "direct" && !direct {
+            direct = true;
+        } else if let Some(value) = part.strip_prefix("ferrite-style=") {
+            if index.is_some()
+                || value.is_empty()
+                || !value.bytes().all(|byte| byte.is_ascii_digit())
+            {
+                return Err(invalid());
+            }
+            index = Some(value.parse().map_err(|_| invalid())?);
+        } else {
+            return Err(invalid());
+        }
+    }
+    Ok(index)
 }
+
 #[async_trait::async_trait]
 impl Plugin for HostedFrameworkPlugin {
     fn name(&self) -> &'static str {
@@ -193,5 +214,35 @@ impl Plugin for HostedFrameworkPlugin {
             map: result.map,
             side_effects: Some(true),
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::style_query;
+
+    #[test]
+    fn generated_styles_accept_exact_direct_flag_in_either_order() {
+        for query in [
+            "ferrite-style=0",
+            "ferrite-style=0&direct",
+            "direct&ferrite-style=0",
+        ] {
+            assert_eq!(style_query(query).unwrap(), Some(0));
+        }
+        assert_eq!(style_query("raw").unwrap(), None);
+        assert_eq!(style_query("url").unwrap(), None);
+        for query in [
+            "ferrite-style=",
+            "ferrite-style=-1",
+            "ferrite-style=+1",
+            "ferrite-style=0&indirect",
+            "ferrite-style=0&direct&direct",
+            "ferrite-style=0&ferrite-style=1",
+            "raw&ferrite-style=0",
+            "ferrite-style=0&",
+        ] {
+            assert!(style_query(query).is_err(), "{query}");
+        }
     }
 }
