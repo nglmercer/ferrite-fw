@@ -1,5 +1,24 @@
 # Framework support implementation status
 
+## Generated Vue development SSR updates and syntax recovery
+
+The explicitly executed `generated_vue_ssr_dev_graph_updates_and_recovers` case
+installs the generated JavaScript and TypeScript manifests through Ferrite and
+loads their actual declarative development configuration. Both variants render
+through the shared development graph and one persistent napi-vm worker. A source
+edit changes rendered HTML, invalid syntax rejects graph construction rather
+than returning stale output, and restoring the component renders successfully
+on the same server and runtime. Component stylesheet URLs are retained.
+
+The selected real-registry/Node-compiler test passed both language cases; final
+feature-enabled compiler-test Clippy with warnings denied and formatting/diff
+checks passed. The test is ignored by default and was explicitly executed with
+`--ignored --exact`. This proves graph revalidation and recovery, not watcher,
+HTTP or browser HMR acceptance. No configuration or lock migration is required.
+Generated development HTTP/browser interaction, style edits, HMR state behavior,
+CLI exposure and the remaining framework/release matrices are still unfinished.
+The full mission remains active and unfinished.
+
 ## Generated Vue SSR JS/TS sources build and hydrate in both browsers
 
 A new real-package acceptance case generates each Vue SSR source variant into a

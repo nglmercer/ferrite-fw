@@ -968,3 +968,97 @@ async fn generated_vue_ssr_sources_install_build_and_render() {
         }
     }
 }
+
+#[cfg(feature = "napi-vm")]
+#[tokio::test]
+#[ignore = "real registry and Node compiler host; generated Vue SSR development invalidation"]
+async fn generated_vue_ssr_dev_graph_updates_and_recovers() {
+    use ferrite::ssr::SsrAdapter;
+    for language in ["js", "ts"] {
+        let generated = ferrite::frameworks::scaffold::vue_ssr_files(
+            "generated-dev",
+            language,
+            "node",
+            "napi-vm",
+        )
+        .unwrap();
+        let inputs: Vec<_> = generated
+            .iter()
+            .map(|(path, text)| (path.as_str(), text.as_str()))
+            .collect();
+        let project = TempProject::new(&inputs);
+        let manifest: ferrite::npm::JsPackageJson =
+            serde_json::from_str(&generated["package.json"]).unwrap();
+        let npm = project.root.join(".ferrite/npm");
+        let client =
+            ferrite::npm::RegistryClient::new(ferrite::npm::DEFAULT_REGISTRY, npm.join("metadata"))
+                .unwrap();
+        let installer = ferrite::npm::Installer::new(client, npm);
+        let mut lock = ferrite::npm::Lockfile::default();
+        installer
+            .install_manifest(&manifest, &mut lock, false)
+            .await
+            .unwrap();
+        lock.write(&project.root.join("ferrite.lock")).unwrap();
+        let (config, plugins) = ferrite::Config {
+            root: Some(project.root.clone()),
+            ..Default::default()
+        }
+        .resolve()
+        .await
+        .unwrap();
+        assert!(!config.is_production);
+        let server = DevServer::new_without_watcher(config, plugins)
+            .await
+            .unwrap();
+        let entry = format!("/src/entry-server.{language}");
+        let (graph, styles) = server.ssr_runtime_graph_with_styles(&entry).await.unwrap();
+        assert!(!styles.is_empty());
+        let runtime = Arc::new(ferrite::runtime::napi_vm::NapiVmRuntime::with_defaults());
+        let mut adapter = ferrite::ssr::JsSsrAdapter::new_graph(runtime, graph).unwrap();
+        async fn render(adapter: &ferrite::ssr::JsSsrAdapter) -> String {
+            adapter
+                .render(
+                    ferrite::ssr::SsrHttpRequest {
+                        method: "GET".into(),
+                        uri: "/".into(),
+                        headers: vec![],
+                        body: vec![],
+                    },
+                    Default::default(),
+                )
+                .await
+                .unwrap()
+                .into_string()
+                .await
+                .unwrap()
+        }
+        let original = generated["src/App.vue"].clone();
+        assert!(render(&adapter).await.contains("Hello Ferrite + Vue"));
+        std::fs::write(
+            project.root.join("src/App.vue"),
+            original.replace("Hello Ferrite + Vue", "Hello updated Vue"),
+        )
+        .unwrap();
+        adapter
+            .replace_graph(server.ssr_runtime_graph(&entry).await.unwrap())
+            .unwrap();
+        let updated = render(&adapter).await;
+        assert!(updated.contains("Hello updated Vue"), "{updated}");
+        assert!(!updated.contains("Hello Ferrite + Vue"));
+        std::fs::write(
+            project.root.join("src/App.vue"),
+            "<script setup>const broken = ;</script>",
+        )
+        .unwrap();
+        assert!(
+            server.ssr_runtime_graph(&entry).await.is_err(),
+            "broken component must not return stale graph"
+        );
+        std::fs::write(project.root.join("src/App.vue"), &original).unwrap();
+        adapter
+            .replace_graph(server.ssr_runtime_graph(&entry).await.unwrap())
+            .unwrap();
+        assert!(render(&adapter).await.contains("Hello Ferrite + Vue"));
+    }
+}
