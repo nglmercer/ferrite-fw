@@ -1008,9 +1008,51 @@ async fn generated_vue_ssr_dev_graph_updates_and_recovers() {
         .await
         .unwrap();
         assert!(!config.is_production);
-        let server = DevServer::new_without_watcher(config, plugins)
+        let server = DevServer::new_without_watcher(config.clone(), plugins)
             .await
             .unwrap();
+        let shell = server.transform_index_html("/index.html").await.unwrap();
+        assert!(shell.contains("/@ferrite/client"));
+        server
+            .set_ssr_adapter(
+                ferrite::create_dev_ssr_adapter(&server, &config, &shell)
+                    .await
+                    .unwrap(),
+            )
+            .await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let router = server.router();
+        struct Serving(tokio::task::JoinHandle<()>);
+        impl Drop for Serving {
+            fn drop(&mut self) {
+                self.0.abort();
+            }
+        }
+        let _serving = Serving(tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        }));
+        async fn get(port: u16) -> String {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let mut socket = tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .unwrap();
+            socket
+                .write_all(b"GET / HTTP/1.0\r\nHost: localhost\r\n\r\n")
+                .await
+                .unwrap();
+            let mut response = String::new();
+            socket.read_to_string(&mut response).await.unwrap();
+            response
+        }
+        let initial = get(port).await;
+        assert!(initial.starts_with("HTTP/1.0 200"), "{initial}");
+        assert!(initial.contains("Hello Ferrite + Vue"));
+        assert!(initial.contains("count: 0"));
+        assert!(
+            initial.contains("App.vue?ferrite-style=0&amp;direct")
+                || initial.contains("App.vue?ferrite-style=0&direct")
+        );
         let entry = format!("/src/entry-server.{language}");
         let (graph, styles) = server.ssr_runtime_graph_with_styles(&entry).await.unwrap();
         let style_id = ModuleId::new("/src/App.vue?ferrite-style=0");
@@ -1057,6 +1099,10 @@ async fn generated_vue_ssr_dev_graph_updates_and_recovers() {
         let updated = render(&adapter).await;
         assert!(updated.contains("Hello updated Vue"), "{updated}");
         assert!(!updated.contains("Hello Ferrite + Vue"));
+        let html = get(port).await;
+        assert!(html.starts_with("HTTP/1.0 200"), "{html}");
+        assert!(html.contains("Hello updated Vue"));
+        assert!(!html.contains("Hello Ferrite + Vue"));
         let updated_style = server
             .pipeline_module(&style_id, None, "client")
             .await
@@ -1072,6 +1118,9 @@ async fn generated_vue_ssr_dev_graph_updates_and_recovers() {
             server.ssr_runtime_graph(&entry).await.is_err(),
             "broken component must not return stale graph"
         );
+        let response = get(port).await;
+        assert!(response.starts_with("HTTP/1.0 500"), "{response}");
+        assert!(!response.contains("Hello updated Vue"));
         std::fs::write(project.root.join("src/App.vue"), &original).unwrap();
         adapter
             .replace_graph(server.ssr_runtime_graph(&entry).await.unwrap())
@@ -1082,5 +1131,8 @@ async fn generated_vue_ssr_dev_graph_updates_and_recovers() {
             .await
             .unwrap();
         assert_eq!(recovered_style.code, initial_style.code);
+        let response = get(port).await;
+        assert!(response.starts_with("HTTP/1.0 200"), "{response}");
+        assert!(response.contains("Hello Ferrite + Vue"));
     }
 }

@@ -140,6 +140,30 @@ mod tests {
         assert!(!html.contains("href=\"/unsafe\"onload="), "{html}");
     }
 
+    #[test]
+    fn generated_component_preloads_require_direct_style_queries() {
+        let html = inject_shell(
+            "<head></head>",
+            "",
+            &[
+                "/App.vue?ferrite-style=0&direct".into(),
+                "/App.svelte?direct&ferrite-style=1".into(),
+                "/App.vue?ferrite-style=0".into(),
+                "/Other.vue?ferrite-style=invalid&direct".into(),
+                "/Other.vue?ferrite-style=0&indirect".into(),
+            ],
+        );
+        assert!(
+            html.contains("rel=\"stylesheet\" href=\"/App.vue?ferrite-style=0&amp;direct\""),
+            "{html}"
+        );
+        assert!(
+            html.contains("rel=\"stylesheet\" href=\"/App.svelte?direct&amp;ferrite-style=1\""),
+            "{html}"
+        );
+        assert_eq!(html.matches("<link ").count(), 2, "{html}");
+    }
+
     #[tokio::test]
     async fn unknown_backend_errors_loudly() {
         let mut resolved = test_resolved();

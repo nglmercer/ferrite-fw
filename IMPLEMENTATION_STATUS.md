@@ -1,5 +1,35 @@
 # Framework support implementation status
 
+## Generated Vue development HTTP SSR and generated stylesheet preloads
+
+The generated JS/TS development acceptance case now serves actual HTTP requests
+through the same adapter used by CLI dev. `create_dev_ssr_adapter` exposes that
+existing wiring from the facade: explicit runtime selection, final compiler
+graph revalidation, stylesheet context, serialized graph replacement/invocation
+and a weak server reference. CLI delegates to it and applies the normal development
+HTML transforms before initializing SSR, preserving script rewrites and HMR client
+injection instead of reading an untransformed shell.
+
+The HTTP test exposed a real missing-style bug: shell injection recognized only
+`.css` paths and dropped component stylesheet resources such as
+`/src/App.vue?ferrite-style=0&direct`. Injection now recognizes the exact direct
+flag plus a numeric generated-style index, retains HTML attribute escaping and
+rejects incomplete/invalid lookalike queries. A focused unit regression failed
+before the fix and passed afterward. The generated acceptance assertion stayed
+unchanged. Both language cases now return meaningful initial HTML and generated
+style links, changed HTML after edits, HTTP 500 rather than stale successful HTML
+for invalid syntax, and successful original HTML after recovery.
+
+Validation: the explicitly executed real-registry/Node-compiler generated case
+passed both language variants; feature-enabled SSR tests passed 22, facade tests
+passed 32 with one existing ignored case, and CLI SSR tests passed two. Final
+all-target Clippy for facade/CLI/test/SSR with warnings denied, changed-file
+formatting and diff checks passed. An initial test compilation failure from an
+unavailable reqwest dependency was corrected to reuse existing TCP HTTP tooling.
+No lock or configuration migration is required. Browser hydration/interaction,
+watcher HMR/reset/recovery, frozen clean reinstall, CLI profile exposure and the
+remaining full mission remain unfinished; no complete profile is promoted.
+
 ## Generated Vue development SSR updates and syntax recovery
 
 The explicitly executed `generated_vue_ssr_dev_graph_updates_and_recovers` case

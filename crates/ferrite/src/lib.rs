@@ -73,12 +73,14 @@ mod app;
 mod builder;
 mod loader;
 mod report;
+mod ssr_dev;
 
 pub use api::{build, create_builder, create_server, preview, Config};
 pub use app::{Ferrite, ModuleRequest};
 pub use builder::Builder;
 pub use loader::{preview_dir, preview_with_plugins, BuildLoader};
 pub use report::BuildReport;
+pub use ssr_dev::create_dev_ssr_adapter;
 
 /// Prelude for framework and plugin authors.
 pub mod prelude {

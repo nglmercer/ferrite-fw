@@ -74,7 +74,22 @@ pub(crate) fn inject_shell(shell: &str, body: &str, preload_files: &[String]) ->
             .replace('<', "&lt;")
             .replace('>', "&gt;")
             .replace('\'', "&#39;");
-        if path.ends_with(".css") {
+        let query = file
+            .split('#')
+            .next()
+            .unwrap_or(file)
+            .split_once('?')
+            .map(|(_, query)| query)
+            .unwrap_or("");
+        let generated_style = query.split('&').any(|part| part == "direct")
+            && query.split('&').any(|part| {
+                part.strip_prefix("ferrite-style=").is_some_and(|index| {
+                    !index.is_empty()
+                        && index.bytes().all(|byte| byte.is_ascii_digit())
+                        && index.parse::<usize>().is_ok()
+                })
+            });
+        if path.ends_with(".css") || generated_style {
             preload.push_str(&format!("<link rel=\"stylesheet\" href=\"{escaped}\">\n"));
         } else if path.ends_with(".js") {
             preload.push_str(&format!(
