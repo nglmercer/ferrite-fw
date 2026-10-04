@@ -180,11 +180,11 @@ impl Plugin for HostedFrameworkPlugin {
             }));
         }
         let mut code = result.code;
-        if !server {
-            for index in 0..result.css.len() {
-                let resource = format!("{path}?ferrite-style={index}");
-                code.push_str(&format!("import {};\n", serde_json::to_string(&resource)?));
-            }
+        // Preserve stylesheet ownership in both graphs. The SSR CSS pipeline
+        // produces inert modules, and production extraction removes these imports.
+        for index in 0..result.css.len() {
+            let resource = format!("{path}?ferrite-style={index}");
+            code.push_str(&format!("import {};\n", serde_json::to_string(&resource)?));
         }
         Ok(Some(LoadResult {
             code,

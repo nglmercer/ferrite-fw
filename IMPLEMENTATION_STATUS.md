@@ -1,5 +1,33 @@
 # Framework support implementation status
 
+## Official component SSR styles survive through HTTP preview
+
+The hosted framework adapter previously appended generated stylesheet imports
+only for clients, dropping server stylesheet ownership. It now preserves CSS
+resource edges in both targets. The existing SSR CSS pipeline produces inert
+JavaScript shims; production extraction publishes CSS and removes those imports
+from executable output. The Vue server pipeline regression now requires the
+scoped style edge rather than incorrectly requiring it to disappear early.
+The Svelte server check still excludes browser DOM injection.
+
+The actual Vue 3.5.22 renderer conformance now builds both client and server with
+an actual createSSRApp mounting entry, starts Ferrite preview, and asserts
+meaningful HTML and isolated request headers over HTTP. It fetches each published
+SSR stylesheet, matches its scope identifier to rendered markup, requires the
+actual red declaration, and rejects private artifact access. The initial run
+FAILED because the artifact had no CSS; after the adapter fix, this exact test
+PASSED. The actual Vue/Svelte compiler pipeline test was also explicitly selected
+and passed. Framework unit tests passed 33; five other framework tests remain
+ignored and do not establish support. Feature-enabled framework/test all-target
+Clippy with warnings denied, formatting and diff checks passed.
+
+Migration: rebuild prior server output to capture component styles in renderer
+artifacts and publish ssr-assets; artifact schema/lockfile formats are unchanged.
+Client mounting code compiles here, but browser hydration/interaction is still
+unexecuted. Generated SSR profiles, the Svelte interpreter parser defect, release
+matrices and the complete remaining mission remain unfinished. No whole framework
+profile was promoted.
+
 ## Actual Vue renderer checks concurrent guest-global isolation
 
 The official Vue 3.5.22 server fixture now increments a guest-global request

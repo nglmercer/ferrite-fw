@@ -147,7 +147,13 @@ async fn official_components_resources_maps_cache_and_library_parity() {
         .await
         .unwrap();
     assert!(server_module.code.contains("ssrRender"));
-    assert!(!server_module.code.contains("ferrite-style="));
+    assert!(
+        server_module
+            .imports
+            .iter()
+            .any(|(_, id, _)| id.0 == "/Counter.vue?ferrite-style=0"),
+        "SSR must preserve scoped style graph edges"
+    );
     assert!(!server_module.code.contains("import.meta.hot"));
     let svelte_server = server
         .pipeline_module(&ModuleId::new("/Counter.svelte"), None, "ssr")
@@ -175,9 +181,8 @@ async fn official_components_resources_maps_cache_and_library_parity() {
         svelte_server.code
     );
     assert!(
-        !svelte_server.code.contains("ferrite-style="),
-        "{}",
-        svelte_server.code
+        !svelte_server.code.contains("document."),
+        "SSR styles must not inject into a browser DOM"
     );
     assert!(
         svelte_server.map.is_some(),
@@ -532,6 +537,8 @@ async fn official_vue_server_renderer_executes_emitted_graph() {
     let project = fixture().await;
     std::fs::create_dir_all(project.root.join("src")).unwrap();
     std::fs::write(project.root.join("src/entry-server.ts"), "import { createSSRApp } from 'vue'; import { renderToString } from 'vue/server-renderer'; import Counter from '../Counter.vue'; export async function render() { globalThis.__ferrite_vue_requests = (globalThis.__ferrite_vue_requests || 0) + 1; const html = await renderToString(createSSRApp(Counter)); return { html, headers: [['x-request-count', String(globalThis.__ferrite_vue_requests)]] }; }").unwrap();
+    std::fs::write(project.root.join("index.html"), "<html><head></head><body><div id=\"app\"><!--ssr-outlet--></div><script type=\"module\" src=\"/src/main.js\"></script></body></html>").unwrap();
+    std::fs::write(project.root.join("src/main.js"), "import { createSSRApp } from 'vue'; import Counter from '../Counter.vue'; createSSRApp(Counter).mount('#app');").unwrap();
     let host = Arc::new(
         NodeCompilerHost::new(
             project.root.clone(),
@@ -545,12 +552,17 @@ async fn official_vue_server_renderer_executes_emitted_graph() {
     let mut config = project.resolve_config_mode("production");
     config.runtime.backend = "napi-vm".into();
     config.build.minify = false;
-    let builder = ferrite::Builder::new(config, vec![Arc::new(VuePlugin::with_host(host, false))]);
-    let report = builder.build("ssr").await.unwrap();
+    let builder = ferrite::Builder::new(
+        config.clone(),
+        vec![Arc::new(VuePlugin::with_host(host, false))],
+    );
+    let reports = builder.build_app().await.unwrap();
+    let report = reports.iter().find(|report| report.env == "ssr").unwrap();
     let artifact = ferrite::SsrRendererArtifact::read(&report.out_dir).unwrap();
     if let Some(path) = std::env::var_os("FERRITE_VUE_SSR_ARTIFACT") {
         std::fs::write(path, serde_json::to_vec(&artifact).unwrap()).unwrap();
     }
+    let artifact_styles = artifact.stylesheets.clone();
     let adapter = artifact
         .into_adapter(
             Arc::new(ferrite::runtime::napi_vm::NapiVmRuntime::with_defaults()),
@@ -585,6 +597,76 @@ async fn official_vue_server_renderer_executes_emitted_graph() {
         html.contains("data-v-"),
         "scoped styles must match server markup: {html}"
     );
+    assert!(
+        !artifact_styles.is_empty(),
+        "SSR component styles must be published"
+    );
+    let scope = html
+        .split("data-v-")
+        .nth(1)
+        .unwrap()
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .next()
+        .unwrap()
+        .to_string();
+    let reservation = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    config.server.port = reservation.local_addr().unwrap().port();
+    drop(reservation);
+    let port = config.server.port;
+    let serving = tokio::spawn(async move { ferrite::preview_with_plugins(&config, &[]).await });
+    struct Preview(tokio::task::JoinHandle<ferrite::Result<()>>);
+    impl Drop for Preview {
+        fn drop(&mut self) {
+            self.0.abort();
+        }
+    }
+    let preview = Preview(serving);
+    async fn get(port: u16, path: &str) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut socket = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        socket
+            .write_all(format!("GET {path} HTTP/1.0\r\nHost: localhost\r\n\r\n").as_bytes())
+            .await
+            .unwrap();
+        let mut response = String::new();
+        socket.read_to_string(&mut response).await.unwrap();
+        response
+    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .is_ok()
+            {
+                break;
+            }
+            assert!(!preview.0.is_finished(), "preview stopped before listening");
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let response = get(port, "/").await;
+    assert!(response.starts_with("HTTP/1.0 200"), "{response}");
+    assert!(response.contains(">0</button>"), "{response}");
+    assert!(
+        response.to_lowercase().contains("x-request-count: 1"),
+        "{response}"
+    );
+    let mut css = String::new();
+    for stylesheet in artifact_styles {
+        let url = format!("/ssr-assets/{stylesheet}");
+        assert!(response.contains(&url), "{response}");
+        let style = get(port, &url).await;
+        assert!(style.starts_with("HTTP/1.0 200"), "{style}");
+        css.push_str(&style);
+    }
+    assert!(css.contains(&format!("data-v-{scope}")), "{css}");
+    assert!(css.contains("red"), "{css}");
+    let private = get(port, "/server/renderer.json").await;
+    assert!(private.starts_with("HTTP/1.0 404"), "{private}");
 }
 
 #[cfg(feature = "napi-vm")]
