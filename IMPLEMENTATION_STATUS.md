@@ -1,5 +1,31 @@
 # Framework support implementation status
 
+## Actual Vue SSR preview hydrates in Chromium and Firefox
+
+The real Vue 3.5.22 production SSR conformance fixture now shares its HTTP/CSS
+checks with two real-browser cases using Ferrite's existing Rust E2E tooling.
+The client entry uses createSSRApp mounting; an inline pre-module snapshot records
+the original server-rendered button. Each browser must hydrate while retaining
+that exact DOM node, update count zero to one on click, retain computed red scoped
+styles, and report no page errors, console errors or hydration diagnostics.
+The existing HTTP checks still require meaningful markup before client execution,
+isolated request headers, published matching CSS and private artifact rejection.
+
+Both new ignored-by-default cases were actually selected with `--ignored --exact`
+and PASSED: Chromium used the explicitly configured cached executable, Firefox
+used the installed executable. Final feature-enabled compiler-test Clippy with
+warnings denied, formatting and diff checks passed. An initial test compilation
+failure from an ambiguous evaluate generic was corrected with an explicit result
+type before executing the final cases. The HTTP-only entrypoint remains available
+without browser requirements. These fixtures install official pinned packages
+through Ferrite and explicitly use Node for compilation and napi-vm for rendering.
+
+This proves production hydration/interaction for this Vue fixture, not the entire
+generated-template acceptance cycle, dev SSR HMR, streaming/SSG or cross-platform
+release behavior. Full create/install/editor/type-checker flows, other frameworks,
+the Svelte parser defect and the remaining complete mission stay unfinished. No
+whole framework profile was promoted based on these partial acceptance cases.
+
 ## Official component SSR styles survive through HTTP preview
 
 The hosted framework adapter previously appended generated stylesheet imports

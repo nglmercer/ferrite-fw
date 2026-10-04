@@ -534,11 +534,16 @@ async fn official_svelte_server_renderer_executes_emitted_graph() {
 #[tokio::test]
 #[ignore = "requires official packages and explicit Node compiler host; embedded Vue SSR conformance"]
 async fn official_vue_server_renderer_executes_emitted_graph() {
+    vue_ssr_conformance(None).await;
+}
+
+#[cfg(feature = "napi-vm")]
+async fn vue_ssr_conformance(kind: Option<ferrite_e2e::BrowserKind>) {
     let project = fixture().await;
     std::fs::create_dir_all(project.root.join("src")).unwrap();
     std::fs::write(project.root.join("src/entry-server.ts"), "import { createSSRApp } from 'vue'; import { renderToString } from 'vue/server-renderer'; import Counter from '../Counter.vue'; export async function render() { globalThis.__ferrite_vue_requests = (globalThis.__ferrite_vue_requests || 0) + 1; const html = await renderToString(createSSRApp(Counter)); return { html, headers: [['x-request-count', String(globalThis.__ferrite_vue_requests)]] }; }").unwrap();
-    std::fs::write(project.root.join("index.html"), "<html><head></head><body><div id=\"app\"><!--ssr-outlet--></div><script type=\"module\" src=\"/src/main.js\"></script></body></html>").unwrap();
-    std::fs::write(project.root.join("src/main.js"), "import { createSSRApp } from 'vue'; import Counter from '../Counter.vue'; createSSRApp(Counter).mount('#app');").unwrap();
+    std::fs::write(project.root.join("index.html"), "<html><head><link rel=\"icon\" href=\"data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22/%3E\"></head><body><div id=\"app\"><!--ssr-outlet--></div><script>globalThis.__ssrButton = document.querySelector('#app button');</script><script type=\"module\" src=\"/src/main.js\"></script></body></html>").unwrap();
+    std::fs::write(project.root.join("src/main.js"), "import { createSSRApp } from 'vue'; import Counter from '../Counter.vue'; createSSRApp(Counter).mount('#app'); globalThis.__hydrated = true;").unwrap();
     let host = Arc::new(
         NodeCompilerHost::new(
             project.root.clone(),
@@ -667,6 +672,68 @@ async fn official_vue_server_renderer_executes_emitted_graph() {
     assert!(css.contains("red"), "{css}");
     let private = get(port, "/server/renderer.json").await;
     assert!(private.starts_with("HTTP/1.0 404"), "{private}");
+    if let Some(kind) = kind {
+        use ferrite_e2e::{Browser, BrowserKind, LaunchOptions};
+        let executable = match kind {
+            BrowserKind::Chromium => ferrite_e2e::find_chromium(None),
+            BrowserKind::Firefox => ferrite_e2e::find_firefox(None),
+        }
+        .expect("SSR hydration conformance requires the selected browser");
+        let browser = Browser::launch(
+            LaunchOptions::default()
+                .browser(kind)
+                .executable(executable),
+        )
+        .await
+        .unwrap();
+        let page = browser.new_page().await.unwrap();
+        page.goto(&format!("http://127.0.0.1:{port}/"))
+            .await
+            .unwrap();
+        page.wait_for_function("globalThis.__hydrated === true", Duration::from_secs(15))
+            .await
+            .unwrap_or_else(|error| {
+                panic!(
+                    "{error}; {:?}; {:?}",
+                    page.page_errors(),
+                    page.console_messages()
+                )
+            });
+        assert_eq!(
+            page.evaluate::<serde_json::Value>(
+                "globalThis.__ssrButton === document.querySelector('#app button')"
+            )
+            .await
+            .unwrap(),
+            serde_json::json!(true),
+            "hydration must retain the server-rendered button"
+        );
+        page.locator("#app button").click().await.unwrap();
+        page.wait_for_function(
+            "document.querySelector('#app button').textContent === '1'",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            page.evaluate::<serde_json::Value>(
+                "getComputedStyle(document.querySelector('#app button')).color"
+            )
+            .await
+            .unwrap(),
+            serde_json::json!("rgb(255, 0, 0)")
+        );
+        assert!(page.page_errors().is_empty(), "{:?}", page.page_errors());
+        assert!(
+            page.console_messages()
+                .iter()
+                .all(|message| message.kind != "error"
+                    && !message.text.to_lowercase().contains("hydration")),
+            "{:?}",
+            page.console_messages()
+        );
+        browser.close().await.unwrap();
+    }
 }
 
 #[cfg(feature = "napi-vm")]
@@ -715,4 +782,18 @@ async fn official_vue_artifact_renders_without_compiler_host() {
     for request in requests {
         request.await.unwrap();
     }
+}
+
+#[cfg(feature = "napi-vm")]
+#[tokio::test]
+#[ignore = "official packages, Node compiler host and Chromium; actual Vue SSR hydration"]
+async fn official_vue_ssr_hydrates_in_chromium() {
+    vue_ssr_conformance(Some(ferrite_e2e::BrowserKind::Chromium)).await;
+}
+
+#[cfg(feature = "napi-vm")]
+#[tokio::test]
+#[ignore = "official packages, Node compiler host and Firefox; actual Vue SSR hydration"]
+async fn official_vue_ssr_hydrates_in_firefox() {
+    vue_ssr_conformance(Some(ferrite_e2e::BrowserKind::Firefox)).await;
 }
