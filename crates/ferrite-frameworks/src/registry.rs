@@ -184,7 +184,7 @@ pub const FRAMEWORKS: &[FrameworkDescriptor] = &[
         compiler_profiles: &[VUE_NODE],
         compiler_package: Some("vue/compiler-sfc"),
         client: Support::Experimental,
-        ssr: Support::Unavailable,
+        ssr: Support::Experimental,
         tested_versions: &[],
     },
     FrameworkDescriptor {
@@ -261,7 +261,14 @@ mod tests {
             let error = compiler_unavailable(framework, "/App").to_string();
             assert!(error.contains(descriptor(framework).unwrap().compiler_package.unwrap()));
             assert!(error.contains("validated compiler host"));
-            assert_eq!(descriptor(framework).unwrap().ssr, Support::Unavailable);
+            assert_eq!(
+                descriptor(framework).unwrap().ssr,
+                if framework == "vue" {
+                    Support::Experimental
+                } else {
+                    Support::Unavailable
+                }
+            );
             assert_eq!(descriptor(framework).unwrap().client, Support::Experimental);
         }
     }

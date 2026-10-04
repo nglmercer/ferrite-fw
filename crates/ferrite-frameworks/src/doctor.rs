@@ -115,6 +115,7 @@ pub struct FrameworkReport {
     pub compiler_support: &'static str,
     pub client: &'static str,
     pub ssr: &'static str,
+    pub rendering_profiles: Vec<serde_json::Value>,
     pub updates: &'static str,
     pub checker: &'static str,
     pub compiler_profiles: Vec<serde_json::Value>,
@@ -323,8 +324,14 @@ pub fn inspect(config: &ResolvedConfig) -> Result<DoctorReport> {
             framework: name, active, selection: if explicit.is_some() { "configuration" } else { "manifest" },
             version: package.map(|package| package.version.clone()), identity: package.map(|package| package.id()),
             compiler_host: host, compiler_support: if available { "experimental" } else { "unavailable" },
-            client: if available { descriptor.client.label() } else { "unavailable" }, ssr: descriptor.ssr.label(),
+            client: if available { descriptor.client.label() } else { "unavailable" }, ssr: if available && descriptor.template_variants.iter().any(|profile| profile.ssr_runtime == Some(config.runtime.backend.as_str())) { descriptor.ssr.label() } else { "unavailable" },
             updates: if !available { "unavailable" } else if name == "react" && config.react.refresh { "experimental-refresh-incomplete" } else { "full-reload" }, checker: "unavailable",
+            rendering_profiles: descriptor.template_variants.iter().map(|profile| serde_json::json!({
+                "language": profile.language, "rendering": profile.rendering,
+                "framework_version": profile.framework_version,
+                "compiler_host": profile.compiler_host, "ssr_runtime": profile.ssr_runtime,
+                "support": profile.support.label(),
+            })).collect(),
             compiler_profiles: descriptor.compiler_profiles.iter().map(|profile| serde_json::json!({
                 "host": profile.host, "framework_version": profile.framework_version,
                 "client_compilation": profile.client.label(), "server_compilation": profile.server.label(),

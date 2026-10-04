@@ -208,10 +208,13 @@ pub(crate) struct CreateArgs {
     /// Explicit compiler host (`native` or `node`); required for Node profiles.
     #[arg(long)]
     pub(crate) compiler_host: Option<String>,
+    /// Explicit SSR runtime (`napi-vm`); separate from the compiler host.
+    #[arg(long)]
+    pub(crate) ssr_runtime: Option<String>,
     /// Source language (`js` or `ts`).
     #[arg(long, default_value = "ts")]
     pub(crate) language: String,
-    /// Rendering mode (`client`; SSR requires a validated renderer).
+    /// Rendering mode (`client` or experimental `ssr`; see --list-templates).
     #[arg(long, default_value = "client")]
     pub(crate) rendering: String,
     /// List available generation profiles.
@@ -354,6 +357,37 @@ mod tests {
         for environment in ["staging", "worker", "SSR", ""] {
             assert!(Cli::try_parse_from(["ferrite", "build", "--env", environment]).is_err());
         }
+    }
+
+    #[test]
+    fn create_separates_compiler_runtime_rendering_and_global_mode() {
+        let cli = Cli::try_parse_from([
+            "ferrite",
+            "--mode",
+            "staging",
+            "create",
+            "app",
+            "--framework",
+            "vue",
+            "--language",
+            "ts",
+            "--rendering",
+            "ssr",
+            "--compiler-host",
+            "node",
+            "--ssr-runtime",
+            "napi-vm",
+            "--dry-run",
+        ])
+        .unwrap();
+        assert_eq!(cli.mode.as_deref(), Some("staging"));
+        let Command::Create(args) = cli.command else {
+            panic!("expected create");
+        };
+        assert_eq!(args.compiler_host.as_deref(), Some("node"));
+        assert_eq!(args.ssr_runtime.as_deref(), Some("napi-vm"));
+        assert_eq!(args.rendering, "ssr");
+        assert!(args.dry_run);
     }
 
     #[test]

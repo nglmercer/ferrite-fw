@@ -1,5 +1,52 @@
 # Framework support implementation status
 
+## Explicit experimental Vue SSR CLI profiles
+
+Shared template descriptors now include separate SSR runtime requirements and
+expose Vue 3.5.22 JS/TS SSR variants using the explicit Node compiler profile and
+napi-vm renderer. `scaffold::files` validates the canonical descriptor before
+routing SSR generation through the existing real Vue renderer/hydration sources.
+Vue SSR is experimental in the registry; whole-profile tested_versions remains
+empty. Doctor reports version/host/runtime rendering profiles and reports SSR as
+unavailable when the selected compiler or runtime combination is unavailable.
+
+CLI supports `ferrite create my-app --framework vue --language ts --rendering ssr
+--compiler-host node --ssr-runtime napi-vm`. Both opt-ins are required. Unsupported
+runtimes, runtime selection on client profiles, ambiguous list/selection requests
+and missing napi-vm build features fail before publication. Generation retains
+transactional publication, the Ferrite installer/editor projection and legacy
+aliases. Global --mode remains distinct. Generated dev scripts and instructions
+use `ferrite ssr`; build/preview retain their real renderer paths. CLI/library
+source generation is byte-identical and no runtime substitution occurs.
+
+Validation: feature-enabled CLI/framework tests passed 20 + 35, and the
+feature-disabled CLI passed 18, including missing-feature rejection without
+writes. A freshly built feature-enabled CLI actually created and installed both
+SSR language variants with empty PATH, then removed their test-owned package
+stores and restored them through `install --frozen-lockfile` with empty PATH.
+Both retained byte-identical locks and complete stored package identities;
+doctor reported Vue 3.5.22, Node compiler, napi-vm runtime and experimental SSR
+profiles. The explicitly executed CLI fixture passed. All four generated Vue
+application cases were re-executed and passed: development graph/HTTP recovery,
+Chromium and Firefox watcher interactions/recovery, and default production
+build/preview hydration/interaction in both browsers for both languages. Final
+all-target framework/CLI/test Clippy with warnings denied and formatting/diff
+checks passed. Existing ignored cases remain unexecuted by the unit gate.
+
+The first combined browser run exposed a test race: it clicked newly rendered
+SSR HTML after reload before hydration. Update/recovery readiness now additionally
+requires the mount-completion signal; real clicks/counter assertions and timeouts
+are unchanged. Final combined rerun passed all four cases. An initial new frozen
+fixture compilation error was corrected to use the actual Lockfile.package field.
+
+No configuration or lock migration is required. Public TemplateProfile struct
+literals now require ssr_runtime: None for client profiles or the canonical SSR
+runtime; obtaining profiles through scaffold::select avoids manual construction.
+Granular Vue HMR/state preservation, complete CLI-driven single-project acceptance,
+runtime-feature-aware doctor diagnostics, type checking, streaming/SSG, the other
+frameworks and full release matrices remain unfinished. These profiles retain
+experimental status and the complete mission remains active and unfinished.
+
 ## Generated Vue development SSR watcher acceptance in both browsers
 
 New explicitly executed real-browser tests install the actual generated Vue SSR

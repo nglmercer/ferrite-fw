@@ -5,9 +5,14 @@ use std::path::Path;
 
 pub(crate) async fn create(args: CreateArgs) -> ferrite::Result<()> {
     if args.list_templates {
-        if args.name.is_some() || args.template.is_some() || args.framework.is_some() {
+        if args.name.is_some()
+            || args.template.is_some()
+            || args.framework.is_some()
+            || args.compiler_host.is_some()
+            || args.ssr_runtime.is_some()
+        {
             return Err(ferrite::FerriteError::Config(
-                "--list-templates cannot be combined with a destination or framework selection"
+                "--list-templates cannot be combined with a destination, framework or host/runtime selection"
                     .into(),
             ));
         }
@@ -16,12 +21,13 @@ pub(crate) async fn create(args: CreateArgs) -> ferrite::Result<()> {
             .flat_map(|descriptor| descriptor.template_variants)
         {
             println!(
-                "{}/{}/{} (version: {}, compiler host: {}, {}; SSR unavailable)",
+                "{}/{}/{} (version: {}, compiler host: {}, SSR runtime: {}, {})",
                 profile.framework,
                 profile.language,
                 profile.rendering,
                 profile.framework_version.unwrap_or("builtin"),
                 profile.compiler_host,
+                profile.ssr_runtime.unwrap_or("none"),
                 profile.support.label()
             );
         }
@@ -47,6 +53,15 @@ pub(crate) async fn create(args: CreateArgs) -> ferrite::Result<()> {
         return Err(ferrite::FerriteError::Config(format!(
             "{framework} requires --compiler-host {}; Node is an explicit compiler opt-in and does not select an SSR runtime", profile.compiler_host
         )));
+    }
+    if args.ssr_runtime.as_deref() != profile.ssr_runtime {
+        return Err(ferrite::FerriteError::Config(match profile.ssr_runtime {
+            Some(runtime) => format!("{framework}/{}/{} requires --ssr-runtime {runtime}; compiler host and rendering runtime are separate", args.language, args.rendering),
+            None => "--ssr-runtime requires an SSR template; client profiles have no server renderer".into(),
+        }));
+    }
+    if profile.ssr_runtime.is_some() && !cfg!(feature = "napi-vm") {
+        return Err(ferrite::FerriteError::Config("Vue SSR requires a Ferrite binary built with --features napi-vm; no alternate runtime will be selected".into()));
     }
     let name = args.name.ok_or_else(|| {
         ferrite::FerriteError::Config(
@@ -114,7 +129,14 @@ pub(crate) async fn create(args: CreateArgs) -> ferrite::Result<()> {
     if args.no_install {
         println!("  ferrite install");
     }
-    println!("  ferrite dev");
+    println!(
+        "  ferrite {}",
+        if profile.rendering == "ssr" {
+            "ssr"
+        } else {
+            "dev"
+        }
+    );
     Ok(())
 }
 
@@ -127,6 +149,7 @@ mod tests {
             template: None,
             framework: None,
             compiler_host: None,
+            ssr_runtime: None,
             language: "ts".into(),
             rendering: "client".into(),
             list_templates: false,
@@ -175,6 +198,70 @@ mod tests {
             assert!(!path.join("ferrite.lock").exists());
             let package = ferrite::npm::JsPackageJson::read(&path.join("package.json")).unwrap();
             assert!(package.dependencies.contains_key(framework));
+        }
+    }
+
+    #[tokio::test]
+    async fn vue_ssr_hosts_and_runtime_are_validated_before_publication() {
+        let root = tempfile::tempdir().unwrap();
+        for (compiler, runtime, expected) in [
+            (None, Some("napi-vm"), "--compiler-host node"),
+            (Some("node"), None, "--ssr-runtime napi-vm"),
+            (Some("node"), Some("node"), "--ssr-runtime napi-vm"),
+        ] {
+            let path = root.path().join("invalid");
+            let mut request = args(&path);
+            request.framework = Some("vue".into());
+            request.rendering = "ssr".into();
+            request.compiler_host = compiler.map(str::to_string);
+            request.ssr_runtime = runtime.map(str::to_string);
+            request.no_install = true;
+            assert!(create(request)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains(expected));
+            assert!(!path.exists());
+            assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+        }
+        let path = root.path().join("client");
+        let mut request = args(&path);
+        request.ssr_runtime = Some("napi-vm".into());
+        assert!(create(request)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("client profiles"));
+        assert!(!path.exists());
+        for language in ["js", "ts"] {
+            let path = root.path().join(language);
+            let mut request = args(&path);
+            request.framework = Some("vue".into());
+            request.rendering = "ssr".into();
+            request.compiler_host = Some("node".into());
+            request.ssr_runtime = Some("napi-vm".into());
+            request.language = language.into();
+            request.no_install = true;
+            if cfg!(feature = "napi-vm") {
+                create(request).await.unwrap();
+                let expected =
+                    scaffold::files(scaffold::select("vue", language, "ssr").unwrap(), language)
+                        .unwrap();
+                for (relative, contents) in expected {
+                    assert_eq!(
+                        std::fs::read_to_string(path.join(relative)).unwrap(),
+                        contents
+                    );
+                }
+                assert!(!path.join("ferrite.lock").exists());
+            } else {
+                assert!(create(request)
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("--features napi-vm"));
+                assert!(!path.exists());
+            }
         }
     }
 

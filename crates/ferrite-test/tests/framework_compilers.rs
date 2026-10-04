@@ -1276,7 +1276,7 @@ async fn generated_vue_dev_browser(kind: ferrite_e2e::BrowserKind) {
         std::fs::write(project.root.join("src/App.vue"), &changed).unwrap();
         // The existing experimental adapter declares full reload, so an edit
         // intentionally resets state. Do not claim component state preservation.
-        page.wait_for_function("document.querySelector('h1')?.textContent === 'Hello updated Vue' && document.querySelector('#counter')?.textContent === 'count: 0' && getComputedStyle(document.querySelector('#counter')).color === 'rgb(0, 0, 128)'", Duration::from_secs(20)).await.unwrap_or_else(|error| panic!("{language}/{kind:?}: {error}; {:?}; {:?}", page.page_errors(), page.console_messages()));
+        page.wait_for_function("globalThis.__hydrated === true && document.querySelector('h1')?.textContent === 'Hello updated Vue' && document.querySelector('#counter')?.textContent === 'count: 0' && getComputedStyle(document.querySelector('#counter')).color === 'rgb(0, 0, 128)'", Duration::from_secs(20)).await.unwrap_or_else(|error| panic!("{language}/{kind:?}: {error}; {:?}; {:?}", page.page_errors(), page.console_messages()));
         assert!(page
             .evaluate::<bool>("globalThis.__ssrButton === document.querySelector('#counter')")
             .await
@@ -1325,7 +1325,7 @@ async fn generated_vue_dev_browser(kind: ferrite_e2e::BrowserKind) {
             .filter(|message| message.kind == "error")
             .count();
         std::fs::write(project.root.join("src/App.vue"), &original).unwrap();
-        page.wait_for_function("!document.querySelector('#ferrite-error-overlay') && document.querySelector('h1')?.textContent === 'Hello Ferrite + Vue' && document.querySelector('#counter')?.textContent === 'count: 0' && getComputedStyle(document.querySelector('#counter')).color === 'rgb(128, 0, 0)'", Duration::from_secs(20)).await.unwrap_or_else(|error| panic!("{language}/{kind:?}: {error}; {:?}; {:?}", page.page_errors(), page.console_messages()));
+        page.wait_for_function("globalThis.__hydrated === true && !document.querySelector('#ferrite-error-overlay') && document.querySelector('h1')?.textContent === 'Hello Ferrite + Vue' && document.querySelector('#counter')?.textContent === 'count: 0' && getComputedStyle(document.querySelector('#counter')).color === 'rgb(128, 0, 0)'", Duration::from_secs(20)).await.unwrap_or_else(|error| panic!("{language}/{kind:?}: {error}; {:?}; {:?}", page.page_errors(), page.console_messages()));
         page.locator("#counter").click().await.unwrap();
         page.wait_for_function(
             "document.querySelector('#counter').textContent === 'count: 1'",

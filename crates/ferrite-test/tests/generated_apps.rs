@@ -1523,3 +1523,99 @@ async fn chromium_generated_react_profiles() {
 async fn firefox_generated_react_profiles() {
     acceptance(BrowserKind::Firefox, &["react"]).await;
 }
+
+#[cfg(feature = "napi-vm")]
+#[tokio::test]
+#[ignore = "fresh napi-vm CLI and real registry; Vue SSR generation and frozen reinstall"]
+async fn cli_vue_ssr_generation_and_clean_frozen_reinstall() {
+    let binary = cli();
+    let listing = command(
+        &binary,
+        Path::new(env!("CARGO_MANIFEST_DIR")),
+        &["create", "--list-templates"],
+        false,
+    )
+    .await;
+    for language in ["js", "ts"] {
+        assert!(
+            listing.contains(&format!("vue/{language}/ssr")),
+            "{listing}"
+        );
+        let project = ferrite_test::TempProject::new(&[]);
+        let destination = project.root.join("app");
+        command(
+            &binary,
+            &project.root,
+            &[
+                "create",
+                destination.to_str().unwrap(),
+                "--framework",
+                "vue",
+                "--language",
+                language,
+                "--rendering",
+                "ssr",
+                "--compiler-host",
+                "node",
+                "--ssr-runtime",
+                "napi-vm",
+            ],
+            false,
+        )
+        .await;
+        let expected = ferrite::frameworks::scaffold::files(
+            ferrite::frameworks::scaffold::select("vue", language, "ssr").unwrap(),
+            "app",
+        )
+        .unwrap();
+        for (relative, contents) in expected {
+            assert_eq!(
+                std::fs::read_to_string(destination.join(relative)).unwrap(),
+                contents
+            );
+        }
+        let lock_path = destination.join("ferrite.lock");
+        let original_lock = std::fs::read(&lock_path).unwrap();
+        let lock = ferrite::npm::Lockfile::read(&lock_path).unwrap();
+        lock.validate().unwrap();
+        assert!(lock.importers["."].dependencies.contains_key("vue"));
+        // All removals are confined to this test's newly generated project.
+        std::fs::remove_dir_all(destination.join(".ferrite/npm/packages")).unwrap();
+        command(
+            &binary,
+            &destination,
+            &["install", "--frozen-lockfile"],
+            false,
+        )
+        .await;
+        assert_eq!(std::fs::read(&lock_path).unwrap(), original_lock);
+        for package in &lock.package {
+            assert!(destination
+                .join(".ferrite/npm/packages")
+                .join(package.id())
+                .join("package.json")
+                .is_file());
+        }
+        let report: serde_json::Value = serde_json::from_str(
+            &command(&binary, &destination, &["doctor", "--json"], true).await,
+        )
+        .unwrap();
+        assert_eq!(report["ssr_runtime"], "napi-vm");
+        let vue = report["frameworks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["framework"] == "vue")
+            .unwrap();
+        assert_eq!(vue["compiler_host"], "node");
+        assert_eq!(vue["version"], "3.5.22");
+        assert_eq!(vue["ssr"], "experimental");
+        assert!(vue["rendering_profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["language"] == language
+                && row["rendering"] == "ssr"
+                && row["ssr_runtime"] == "napi-vm"));
+    }
+}

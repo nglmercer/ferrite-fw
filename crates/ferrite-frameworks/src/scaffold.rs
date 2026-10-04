@@ -9,6 +9,7 @@ pub struct TemplateProfile {
     pub language: &'static str,
     pub rendering: &'static str,
     pub compiler_host: &'static str,
+    pub ssr_runtime: Option<&'static str>,
     pub framework_version: Option<&'static str>,
     pub support: crate::registry::Support,
 }
@@ -18,6 +19,7 @@ pub const TEMPLATES: &[TemplateProfile] = &[
         language: "js",
         rendering: "client",
         compiler_host: "native",
+        ssr_runtime: None,
         framework_version: None,
         support: crate::registry::Support::Experimental,
     },
@@ -26,6 +28,7 @@ pub const TEMPLATES: &[TemplateProfile] = &[
         language: "ts",
         rendering: "client",
         compiler_host: "native",
+        ssr_runtime: None,
         framework_version: None,
         support: crate::registry::Support::Experimental,
     },
@@ -39,6 +42,7 @@ pub const REACT_TEMPLATES: &[TemplateProfile] = &[
         language: "js",
         rendering: "client",
         compiler_host: "native",
+        ssr_runtime: None,
         framework_version: Some(REACT_VERSION),
         support: crate::registry::Support::Experimental,
     },
@@ -47,6 +51,7 @@ pub const REACT_TEMPLATES: &[TemplateProfile] = &[
         language: "ts",
         rendering: "client",
         compiler_host: "native",
+        ssr_runtime: None,
         framework_version: Some(REACT_VERSION),
         support: crate::registry::Support::Experimental,
     },
@@ -58,6 +63,7 @@ pub const VUE_TEMPLATES: &[TemplateProfile] = &[
         language: "js",
         rendering: "client",
         compiler_host: "node",
+        ssr_runtime: None,
         framework_version: Some(crate::registry::VUE_NODE.framework_version),
         support: crate::registry::Support::Experimental,
     },
@@ -66,6 +72,25 @@ pub const VUE_TEMPLATES: &[TemplateProfile] = &[
         language: "ts",
         rendering: "client",
         compiler_host: "node",
+        ssr_runtime: None,
+        framework_version: Some(crate::registry::VUE_NODE.framework_version),
+        support: crate::registry::Support::Experimental,
+    },
+    TemplateProfile {
+        framework: "vue",
+        language: "js",
+        rendering: "ssr",
+        compiler_host: "node",
+        ssr_runtime: Some("napi-vm"),
+        framework_version: Some(crate::registry::VUE_NODE.framework_version),
+        support: crate::registry::Support::Experimental,
+    },
+    TemplateProfile {
+        framework: "vue",
+        language: "ts",
+        rendering: "ssr",
+        compiler_host: "node",
+        ssr_runtime: Some("napi-vm"),
         framework_version: Some(crate::registry::VUE_NODE.framework_version),
         support: crate::registry::Support::Experimental,
     },
@@ -76,6 +101,7 @@ pub const SVELTE_TEMPLATES: &[TemplateProfile] = &[
         language: "js",
         rendering: "client",
         compiler_host: "node",
+        ssr_runtime: None,
         framework_version: Some(crate::registry::SVELTE_NODE.framework_version),
         support: crate::registry::Support::Experimental,
     },
@@ -84,6 +110,7 @@ pub const SVELTE_TEMPLATES: &[TemplateProfile] = &[
         language: "ts",
         rendering: "client",
         compiler_host: "node",
+        ssr_runtime: None,
         framework_version: Some(crate::registry::SVELTE_NODE.framework_version),
         support: crate::registry::Support::Experimental,
     },
@@ -118,6 +145,16 @@ pub fn files(profile: &TemplateProfile, name: &str) -> Result<BTreeMap<String, S
             profile.compiler_host, profile.framework_version, profile.support.label(),
             canonical.compiler_host, canonical.framework_version, canonical.support.label(),
         )));
+    }
+    if profile.rendering == "ssr" {
+        return vue_ssr_files(
+            name,
+            profile.language,
+            profile.compiler_host,
+            profile.ssr_runtime.ok_or_else(|| {
+                FerriteError::Config("SSR profile requires an explicit runtime".into())
+            })?,
+        );
     }
     let extension = profile.language;
     let mut files = BTreeMap::new();
@@ -241,7 +278,7 @@ fn component_files(
 
 /// Experimental Vue SSR source generation. Callers select compiler and runtime
 /// separately; generation does not install or start either host.
-/// CLI template advertising waits for generated-profile acceptance.
+/// Available through shared experimental generation profiles.
 pub fn vue_ssr_files(
     name: &str,
     language: &str,
@@ -269,7 +306,13 @@ pub fn vue_ssr_files(
     }
     generated.insert(format!("src/entry-server.{language}"), "import { createSSRApp } from 'vue';\nimport { renderToString } from 'vue/server-renderer';\nimport App from './App.vue';\nexport async function render() {\n  return await renderToString(createSSRApp(App));\n}\n".into());
     generated.get_mut("ferrite.toml").expect("Vue configuration").push_str(&format!("\n[ssr]\nentry = \"src/entry-server.{language}\"\n\n[runtime]\nbackend = \"napi-vm\"\n"));
-    generated.insert("README.md".into(), format!("# {name}\n\nExperimental Vue {} SSR sources. Install dependencies through Ferrite.\nNode is explicitly required for the official component compiler. Rendering uses\nthe separate in-process napi-vm backend and requires a Ferrite binary built with\nthat feature. Run ferrite dev, ferrite build and ferrite preview.\nThe server entry renders App through Vue's real renderToString API; the client\nentry hydrates through createSSRApp. Transpilation does not perform type checking.\nGenerated-profile dev/HMR and release acceptance remain unfinished; this source\ngenerator is not yet an advertised CLI template.\n", crate::registry::VUE_NODE.framework_version));
+    let mut manifest: serde_json::Value = serde_json::from_str(&generated["package.json"])?;
+    manifest["scripts"]["dev"] = serde_json::json!("ferrite ssr");
+    generated.insert(
+        "package.json".into(),
+        format!("{}\n", serde_json::to_string_pretty(&manifest)?),
+    );
+    generated.insert("README.md".into(), format!("# {name}\n\nExperimental Vue {} SSR sources. Install dependencies through Ferrite.\nNode is explicitly required for the official component compiler. Rendering uses\nthe separate in-process napi-vm backend and requires a Ferrite binary built with\nthat feature. Run ferrite ssr, ferrite build and ferrite preview.\nThe server entry renders App through Vue's real renderToString API; the client\nentry hydrates through createSSRApp. Transpilation does not perform type checking.\nThe current experimental development adapter reloads on edits and resets state.\nType-checker integration, streaming, SSG and release matrices remain unfinished.\n", crate::registry::VUE_NODE.framework_version));
     Ok(generated)
 }
 
@@ -409,10 +452,11 @@ mod tests {
         for framework in ["vanilla", "react", "vue", "svelte"] {
             for language in ["js", "ts"] {
                 let canonical = select(framework, language, "client").unwrap();
-                for field in ["host", "version", "support"] {
+                for field in ["host", "version", "support", "runtime"] {
                     let mut requested = canonical.clone();
                     match field {
                         "host" => requested.compiler_host = "embedded",
+                        "runtime" => requested.ssr_runtime = Some("node"),
                         "version" => requested.framework_version = Some("0.0.0"),
                         "support" => requested.support = crate::registry::Support::Tested,
                         _ => unreachable!(),
@@ -580,6 +624,16 @@ mod vue_ssr_generation_tests {
     fn explicit_hosts_generate_real_server_and_hydration_entries() {
         for language in ["js", "ts"] {
             let files = super::vue_ssr_files("ssr-app", language, "node", "napi-vm").unwrap();
+            let profile = super::select("vue", language, "ssr").unwrap();
+            assert_eq!(profile.compiler_host, "node");
+            assert_eq!(profile.ssr_runtime, Some("napi-vm"));
+            assert_eq!(profile.support, crate::registry::Support::Experimental);
+            assert_eq!(super::files(profile, "ssr-app").unwrap(), files);
+            let mut unsupported = profile.clone();
+            unsupported.ssr_runtime = Some("node");
+            assert!(super::files(&unsupported, "ssr-app").is_err());
+            let manifest: serde_json::Value = serde_json::from_str(&files["package.json"]).unwrap();
+            assert_eq!(manifest["scripts"]["dev"], "ferrite ssr");
             assert!(files["index.html"].contains("<!--ssr-outlet-->"));
             assert!(
                 files[&format!("src/main.{language}")].contains("createSSRApp(App).mount('#app')")
