@@ -239,6 +239,40 @@ fn component_files(
     Ok(())
 }
 
+/// Experimental Vue SSR source generation. Callers select compiler and runtime
+/// separately; generation does not install or start either host.
+/// CLI template advertising waits for generated-profile acceptance.
+pub fn vue_ssr_files(
+    name: &str,
+    language: &str,
+    compiler_host: &str,
+    ssr_runtime: &str,
+) -> Result<BTreeMap<String, String>> {
+    if compiler_host != "node" || ssr_runtime != "napi-vm" {
+        return Err(FerriteError::Config("experimental Vue SSR generation requires explicit Node compiler host and separate napi-vm SSR runtime; other combinations are unavailable".into()));
+    }
+    let profile = select("vue", language, "client")?;
+    let mut generated = files(profile, name)?;
+    let main = generated
+        .get_mut(&format!("src/main.{language}"))
+        .expect("Vue client entry");
+    *main = main.replace("createApp", "createSSRApp");
+    let html = generated.get_mut("index.html").expect("Vue shell");
+    *html = html.replace(
+        "<main id=\"app\"></main>",
+        "<main id=\"app\"><!--ssr-outlet--></main>",
+    );
+    if !html.contains("<!--ssr-outlet-->") {
+        return Err(FerriteError::Config(
+            "Vue SSR generation requires a shell outlet".into(),
+        ));
+    }
+    generated.insert(format!("src/entry-server.{language}"), "import { createSSRApp } from 'vue';\nimport { renderToString } from 'vue/server-renderer';\nimport App from './App.vue';\nexport async function render() {\n  return await renderToString(createSSRApp(App));\n}\n".into());
+    generated.get_mut("ferrite.toml").expect("Vue configuration").push_str(&format!("\n[ssr]\nentry = \"src/entry-server.{language}\"\n\n[runtime]\nbackend = \"napi-vm\"\n"));
+    generated.insert("README.md".into(), format!("# {name}\n\nExperimental Vue {} SSR sources. Install dependencies through Ferrite.\nNode is explicitly required for the official component compiler. Rendering uses\nthe separate in-process napi-vm backend and requires a Ferrite binary built with\nthat feature. Run ferrite dev, ferrite build and ferrite preview.\nThe server entry renders App through Vue's real renderToString API; the client\nentry hydrates through createSSRApp. Transpilation does not perform type checking.\nGenerated-profile dev/HMR and release acceptance remain unfinished; this source\ngenerator is not yet an advertised CLI template.\n", crate::registry::VUE_NODE.framework_version));
+    Ok(generated)
+}
+
 /// Anchored parent directory; publication never replaces an existing destination.
 pub struct CreationTarget {
     pub path: PathBuf,
@@ -537,5 +571,25 @@ mod tests {
         assert!(!path.exists());
         assert!(!target.path.exists());
         assert!(std::fs::read_dir(outside.path()).unwrap().next().is_none());
+    }
+}
+
+#[cfg(test)]
+mod vue_ssr_generation_tests {
+    #[test]
+    fn explicit_hosts_generate_real_server_and_hydration_entries() {
+        for language in ["js", "ts"] {
+            let files = super::vue_ssr_files("ssr-app", language, "node", "napi-vm").unwrap();
+            assert!(files["index.html"].contains("<!--ssr-outlet-->"));
+            assert!(
+                files[&format!("src/main.{language}")].contains("createSSRApp(App).mount('#app')")
+            );
+            assert!(files[&format!("src/entry-server.{language}")]
+                .contains("renderToString(createSSRApp(App))"));
+            assert!(files["ferrite.toml"].contains("backend = \"napi-vm\""));
+        }
+        assert!(super::vue_ssr_files("ssr-app", "ts", "native", "napi-vm").is_err());
+        assert!(super::vue_ssr_files("ssr-app", "ts", "node", "node").is_err());
+        assert!(super::vue_ssr_files("ssr-app", "coffee", "node", "napi-vm").is_err());
     }
 }

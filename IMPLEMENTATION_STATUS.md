@@ -1,5 +1,26 @@
 # Framework support implementation status
 
+## Explicit Vue SSR source generator
+
+The new library `scaffold::vue_ssr_files` builds on existing canonical Vue client
+scaffolding and preserves its component, pinned dependency, public assets,
+interaction fixtures and editor files. It requires explicitly selected Node
+compiler host and separate napi-vm runtime, rejects unsupported combinations and
+languages, and generates a real renderToString server entry, createSSRApp hydration
+entry, HTML outlet and explicit SSR/runtime configuration. Generated documentation
+identifies this as experimental and calls out the runtime feature requirement
+and remaining acceptance/type-checking limitations. It does not start a host,
+install dependencies or infer a runtime.
+
+Framework tests passed 34, with five existing resource-dependent cases ignored;
+all-target framework Clippy with warnings denied, formatting and diff checks
+passed. Tests cover both JS/TS wiring and rejected host/runtime/language inputs.
+These generation tests do not prove the complete generated application cycle.
+The new source API is deliberately not yet advertised by CLI template selection;
+generated-profile install/dev/HMR/build/preview browser acceptance must follow,
+then CLI host/runtime selection and registry exposure. Existing aliases/profiles
+and configuration formats remain unchanged. The full mission remains unfinished.
+
 ## Actual Vue SSR preview hydrates in Chromium and Firefox
 
 The real Vue 3.5.22 production SSR conformance fixture now shares its HTTP/CSS
