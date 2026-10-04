@@ -1,5 +1,31 @@
 # Framework support implementation status
 
+## Generated Vue SSR JS/TS sources build and hydrate in both browsers
+
+A new real-package acceptance case generates each Vue SSR source variant into a
+clean temporary project, installs its actual generated package.json through
+Ferrite, writes the resolved lock, and uses create_builder to load the generated
+ferrite.toml and declarative compiler profile. Default production settings build
+both environments without the hand-written fixture's minification override.
+The emitted renderer must produce the generated heading/counter/scoped markup
+and retain component styles. Preview then hydrates each generated app in Chromium
+and Firefox, retains the original server DOM button, updates count zero to one,
+applies the generated scoped color, and emits no page/console errors or hydration
+diagnostics. Source instrumentation adds only a pre-module DOM snapshot and a
+mount-completion flag; component and rendering logic remain generated.
+
+The expanded explicitly selected test PASSED all JS/TS and both-browser cases.
+The earlier install/build/render-only run also passed. Final feature-enabled
+compiler-test Clippy with warnings denied, formatting and diff checks passed.
+An initial Config field-name compilation error was corrected to use CLI overrides
+before final execution. The test is ignored by default for its registry, Node
+compiler-host and browser requirements; actual execution supplies this evidence.
+
+CLI create exposure, generated dev SSR/source-edit/HMR/recovery, frozen clean
+reinstall, full editor/type-checker support, streaming/SSG, other frameworks and
+release matrices remain unfinished. No whole profile is promoted until its
+complete acceptance cycle executes. The full mission remains unfinished.
+
 ## Explicit Vue SSR source generator
 
 The new library `scaffold::vue_ssr_files` builds on existing canonical Vue client

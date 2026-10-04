@@ -797,3 +797,174 @@ async fn official_vue_ssr_hydrates_in_chromium() {
 async fn official_vue_ssr_hydrates_in_firefox() {
     vue_ssr_conformance(Some(ferrite_e2e::BrowserKind::Firefox)).await;
 }
+
+#[cfg(feature = "napi-vm")]
+#[tokio::test]
+#[ignore = "real registry/Node compiler host and both browsers; generated Vue SSR acceptance"]
+async fn generated_vue_ssr_sources_install_build_and_render() {
+    for language in ["js", "ts"] {
+        let mut generated = ferrite::frameworks::scaffold::vue_ssr_files(
+            "generated-ssr",
+            language,
+            "node",
+            "napi-vm",
+        )
+        .unwrap();
+        // Observability only: snapshot before module execution and signal mount.
+        let index = generated.get_mut("index.html").unwrap();
+        *index = index.replace("<script type=", "<script>globalThis.__ssrButton = document.querySelector('#app button');</script><script type=");
+        generated
+            .get_mut(&format!("src/main.{language}"))
+            .unwrap()
+            .push_str("\nglobalThis.__hydrated = true;\n");
+        let inputs: Vec<_> = generated
+            .iter()
+            .map(|(path, text)| (path.as_str(), text.as_str()))
+            .collect();
+        let project = TempProject::new(&inputs);
+        let manifest: ferrite::npm::JsPackageJson =
+            serde_json::from_str(&generated["package.json"]).unwrap();
+        let npm = project.root.join(".ferrite/npm");
+        let client =
+            ferrite::npm::RegistryClient::new(ferrite::npm::DEFAULT_REGISTRY, npm.join("metadata"))
+                .unwrap();
+        let installer = ferrite::npm::Installer::new(client, npm);
+        let mut lock = ferrite::npm::Lockfile::default();
+        installer
+            .install_manifest(&manifest, &mut lock, false)
+            .await
+            .unwrap();
+        lock.write(&project.root.join("ferrite.lock")).unwrap();
+        let builder = ferrite::create_builder(ferrite::Config {
+            root: Some(project.root.clone()),
+            overrides: ferrite::CliOverrides {
+                mode: Some("production".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        assert_eq!(builder.config.runtime.backend, "napi-vm");
+        let reports = builder.build_app().await.unwrap();
+        assert_eq!(reports.len(), 2);
+        let server = reports.iter().find(|report| report.env == "ssr").unwrap();
+        let artifact = ferrite::SsrRendererArtifact::read(&server.out_dir).unwrap();
+        assert!(
+            !artifact.stylesheets.is_empty(),
+            "{language}: missing component CSS"
+        );
+        let adapter = artifact
+            .into_adapter(
+                Arc::new(ferrite::runtime::napi_vm::NapiVmRuntime::with_defaults()),
+                "<!--ssr-outlet-->".into(),
+                "/",
+            )
+            .unwrap();
+        let response = adapter
+            .render(
+                ferrite::ssr::SsrHttpRequest {
+                    method: "GET".into(),
+                    uri: "/".into(),
+                    headers: vec![],
+                    body: vec![],
+                },
+                Default::default(),
+            )
+            .await
+            .unwrap();
+        let html = response.into_string().await.unwrap();
+        assert!(html.contains("Hello Ferrite + Vue"), "{language}: {html}");
+        assert!(html.contains("count: 0</button>"), "{language}: {html}");
+        assert!(html.contains("data-v-"), "{language}: {html}");
+        let mut config = builder.config.clone();
+        let reservation = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        config.server.port = reservation.local_addr().unwrap().port();
+        drop(reservation);
+        let port = config.server.port;
+        let serving =
+            tokio::spawn(async move { ferrite::preview_with_plugins(&config, &[]).await });
+        struct Preview(tokio::task::JoinHandle<ferrite::Result<()>>);
+        impl Drop for Preview {
+            fn drop(&mut self) {
+                self.0.abort();
+            }
+        }
+        let preview = Preview(serving);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if tokio::net::TcpStream::connect(("127.0.0.1", port))
+                    .await
+                    .is_ok()
+                {
+                    break;
+                }
+                assert!(!preview.0.is_finished());
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        for kind in [
+            ferrite_e2e::BrowserKind::Chromium,
+            ferrite_e2e::BrowserKind::Firefox,
+        ] {
+            let executable = match kind {
+                ferrite_e2e::BrowserKind::Chromium => ferrite_e2e::find_chromium(None),
+                ferrite_e2e::BrowserKind::Firefox => ferrite_e2e::find_firefox(None),
+            }
+            .expect("generated SSR acceptance requires both selected browsers");
+            let browser = ferrite_e2e::Browser::launch(
+                ferrite_e2e::LaunchOptions::default()
+                    .browser(kind)
+                    .executable(executable),
+            )
+            .await
+            .unwrap();
+            let page = browser.new_page().await.unwrap();
+            page.goto(&format!("http://127.0.0.1:{port}/"))
+                .await
+                .unwrap();
+            page.wait_for_function("globalThis.__hydrated === true", Duration::from_secs(15))
+                .await
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "{language}/{kind:?}: {error}; {:?}; {:?}",
+                        page.page_errors(),
+                        page.console_messages()
+                    )
+                });
+            assert!(page
+                .evaluate::<bool>(
+                    "globalThis.__ssrButton === document.querySelector('#app button')"
+                )
+                .await
+                .unwrap());
+            page.locator("#counter").click().await.unwrap();
+            page.wait_for_function(
+                "document.querySelector('#counter').textContent === 'count: 1'",
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                page.evaluate::<String>(
+                    "getComputedStyle(document.querySelector('#counter')).color"
+                )
+                .await
+                .unwrap(),
+                "rgb(128, 0, 0)"
+            );
+            assert!(page.page_errors().is_empty(), "{:?}", page.page_errors());
+            assert!(
+                page.console_messages()
+                    .iter()
+                    .all(|message| message.kind != "error"
+                        && !message.text.to_lowercase().contains("hydration")),
+                "{:?}",
+                page.console_messages()
+            );
+            browser.close().await.unwrap();
+        }
+    }
+}
