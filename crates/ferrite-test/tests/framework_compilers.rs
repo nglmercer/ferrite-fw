@@ -1013,7 +1013,16 @@ async fn generated_vue_ssr_dev_graph_updates_and_recovers() {
             .unwrap();
         let entry = format!("/src/entry-server.{language}");
         let (graph, styles) = server.ssr_runtime_graph_with_styles(&entry).await.unwrap();
-        assert!(!styles.is_empty());
+        let style_id = ModuleId::new("/src/App.vue?ferrite-style=0");
+        assert!(styles
+            .iter()
+            .any(|url| url.contains("App.vue?ferrite-style=0")));
+        let initial_style = server
+            .pipeline_module(&style_id, None, "client")
+            .await
+            .unwrap();
+        assert!(initial_style.code.contains("rgb(128, 0, 0)"));
+        assert!(initial_style.code.contains("data-v-"));
         let runtime = Arc::new(ferrite::runtime::napi_vm::NapiVmRuntime::with_defaults());
         let mut adapter = ferrite::ssr::JsSsrAdapter::new_graph(runtime, graph).unwrap();
         async fn render(adapter: &ferrite::ssr::JsSsrAdapter) -> String {
@@ -1037,7 +1046,9 @@ async fn generated_vue_ssr_dev_graph_updates_and_recovers() {
         assert!(render(&adapter).await.contains("Hello Ferrite + Vue"));
         std::fs::write(
             project.root.join("src/App.vue"),
-            original.replace("Hello Ferrite + Vue", "Hello updated Vue"),
+            original
+                .replace("Hello Ferrite + Vue", "Hello updated Vue")
+                .replace("rgb(128, 0, 0)", "rgb(0, 0, 128)"),
         )
         .unwrap();
         adapter
@@ -1046,6 +1057,12 @@ async fn generated_vue_ssr_dev_graph_updates_and_recovers() {
         let updated = render(&adapter).await;
         assert!(updated.contains("Hello updated Vue"), "{updated}");
         assert!(!updated.contains("Hello Ferrite + Vue"));
+        let updated_style = server
+            .pipeline_module(&style_id, None, "client")
+            .await
+            .unwrap();
+        assert!(updated_style.code.contains("rgb(0, 0, 128)"));
+        assert!(!updated_style.code.contains("rgb(128, 0, 0)"));
         std::fs::write(
             project.root.join("src/App.vue"),
             "<script setup>const broken = ;</script>",
@@ -1060,5 +1077,10 @@ async fn generated_vue_ssr_dev_graph_updates_and_recovers() {
             .replace_graph(server.ssr_runtime_graph(&entry).await.unwrap())
             .unwrap();
         assert!(render(&adapter).await.contains("Hello Ferrite + Vue"));
+        let recovered_style = server
+            .pipeline_module(&style_id, None, "client")
+            .await
+            .unwrap();
+        assert_eq!(recovered_style.code, initial_style.code);
     }
 }

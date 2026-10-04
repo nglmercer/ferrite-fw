@@ -9,13 +9,16 @@ through the shared development graph and one persistent napi-vm worker. A source
 edit changes rendered HTML, invalid syntax rejects graph construction rather
 than returning stale output, and restoring the component renders successfully
 on the same server and runtime. Component stylesheet URLs are retained.
+The executed case additionally requires generated scoped CSS to change from the
+original color after the edit, excludes the old color, and requires byte-identical
+original style output after source restoration.
 
 The selected real-registry/Node-compiler test passed both language cases; final
 feature-enabled compiler-test Clippy with warnings denied and formatting/diff
 checks passed. The test is ignored by default and was explicitly executed with
 `--ignored --exact`. This proves graph revalidation and recovery, not watcher,
 HTTP or browser HMR acceptance. No configuration or lock migration is required.
-Generated development HTTP/browser interaction, style edits, HMR state behavior,
+Generated development HTTP/browser interaction, HMR state behavior,
 CLI exposure and the remaining framework/release matrices are still unfinished.
 The full mission remains active and unfinished.
 
