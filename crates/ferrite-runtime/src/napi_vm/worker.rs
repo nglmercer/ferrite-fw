@@ -110,6 +110,16 @@ impl WorkerState {
         &mut self,
         graph: &crate::CompiledModuleGraph,
     ) -> std::result::Result<serde_json::Value, String> {
+        // Validate with the selected engine before mutating registrations. Its
+        // grammar may differ from the compiler's parser, so retain module IDs.
+        for module in &graph.modules {
+            let mut lexer = napi_vm::lexer::Lexer::new(&module.code);
+            let mut parser = napi_vm::parser::Parser::new_with_spans(lexer.tokenize_with_spans());
+            parser.parse_program().map_err(|error| format!(
+                "napi-vm graph entry `{}` cannot parse module `{}`: {error}; inspect emitted module syntax and selected runtime compatibility",
+                graph.entry, module.id
+            ))?;
+        }
         for id in self.graph_modules.drain(..) {
             self.interp.remove_module(&id);
         }

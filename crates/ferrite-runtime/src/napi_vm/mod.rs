@@ -47,12 +47,19 @@ mod tests {
     async fn graph_syntax_errors_identify_entry_and_backend() {
         let runtime = NapiVmRuntime::with_defaults();
         let graph = crate::CompiledModuleGraph {
-            entry: "/broken.js".into(),
-            modules: vec![CompiledModule {
-                id: "/broken.js".into(),
-                code: "export function broken( {".into(),
-                url: None,
-            }],
+            entry: "/entry.js".into(),
+            modules: vec![
+                CompiledModule {
+                    id: "/entry.js".into(),
+                    code: "import '/broken.js'; export const answer = 42;".into(),
+                    url: None,
+                },
+                CompiledModule {
+                    id: "/broken.js".into(),
+                    code: "export function broken( {".into(),
+                    url: None,
+                },
+            ],
         };
         let error = runtime
             .evaluate_module_graph(
@@ -66,7 +73,11 @@ mod tests {
             .unwrap_err();
         let message = error.to_string();
         assert!(
-            message.contains("napi-vm graph entry `/broken.js`"),
+            message.contains("napi-vm graph entry `/entry.js`"),
+            "{message}"
+        );
+        assert!(
+            message.contains("cannot parse module `/broken.js`"),
             "{message}"
         );
         assert!(message.contains("SyntaxError"), "{message}");

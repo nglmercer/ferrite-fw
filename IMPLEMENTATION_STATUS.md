@@ -1,5 +1,25 @@
 # Framework support implementation status
 
+## Engine parser preflight identifies the actual Svelte module failure
+
+Before graph registration changes, napi-vm graph evaluation now lexes/parses each
+supplied module with the pinned engine's own public lexer and parser. Errors name
+both graph entry and failing module and retain line/column plus the original
+parser diagnostic. This does not rewrite or substitute framework compiler output.
+The syntax regression now distinguishes an importing entry from its broken
+transitive dependency, checking both identities. Final runtime tests passed 22;
+feature-enabled all-target runtime Clippy with warnings denied, formatting and
+diff checks passed. This adds parsing work before evaluation; throughput and
+syntax-preflight caching remain unverified.
+
+The actual Svelte renderer test was executed again and still FAILED, now locating
+`/assets/index-7416ddf8.js` at 137:20. Inspection of the saved emitted artifact
+shows `for (name in attrs)` on that line: valid framework JavaScript rejected by
+the selected pinned interpreter. This supplies a concrete upstream parser
+compatibility defect to resolve; it does not establish SSR support or hydration.
+No test assertion was weakened and no alternative runtime was started. The
+Svelte rendering failure and the complete remaining mission remain unfinished.
+
 ## Actual Svelte renderer exposes embedded-runtime failure
 
 A new explicitly selectable real-package test imports `svelte/server` render,
