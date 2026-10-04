@@ -334,6 +334,23 @@ async fn standalone_ssr_build_compiles_and_renders_without_node() {
     let asset = http_get(port, script);
     assert!(asset.starts_with("HTTP/1.0 200"), "{asset}");
     assert!(asset.contains("clientLoaded"), "{asset}");
+    let asset_head = http_request(port, script, "HEAD");
+    assert!(asset_head.starts_with("HTTP/1.0 200"), "{asset_head}");
+    assert_eq!(asset_head.split_once("\r\n\r\n").unwrap().1, "");
+    let size = asset.split_once("\r\n\r\n").unwrap().1.len();
+    assert!(
+        asset_head
+            .to_lowercase()
+            .contains(&format!("content-length: {size}\r\n")),
+        "{asset_head}"
+    );
+    let asset_post = http_request(port, script, "POST");
+    assert!(asset_post.starts_with("HTTP/1.0 405"), "{asset_post}");
+    assert!(
+        asset_post.to_lowercase().contains("allow: get, head"),
+        "{asset_post}"
+    );
+
     let private = http_get(port, "/app/server/renderer.json");
     assert!(private.starts_with("HTTP/1.0 404"), "{private}");
 }

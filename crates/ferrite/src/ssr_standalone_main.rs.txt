@@ -43,7 +43,12 @@ async fn handler(State(state): State<AppState>, method: Method, uri: Uri, header
     }
     if method != Method::GET && method != Method::HEAD { return (StatusCode::METHOD_NOT_ALLOWED, [(axum::http::header::ALLOW, "GET, HEAD")]).into_response(); }
     match assets::get(&format!("/{relative}")) {
-        Some((mime, bytes)) => ([(axum::http::header::CONTENT_TYPE, mime)], if method == Method::HEAD { Vec::new() } else { bytes }).into_response(),
+        Some((mime, bytes)) => {
+            let mut response_headers = HeaderMap::new();
+            response_headers.insert(axum::http::header::CONTENT_TYPE, mime.parse().expect("valid asset MIME"));
+            response_headers.insert(axum::http::header::CONTENT_LENGTH, bytes.len().to_string().parse().expect("valid asset size"));
+            (response_headers, if method == Method::HEAD { Vec::new() } else { bytes }).into_response()
+        },
         None => StatusCode::NOT_FOUND.into_response(),
     }
 }

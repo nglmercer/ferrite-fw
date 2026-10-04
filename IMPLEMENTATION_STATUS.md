@@ -1,5 +1,17 @@
 # Framework support implementation status
 
+## Embedded SSR asset HEAD headers
+
+Generated SSR servers now include the embedded asset length for GET and HEAD,
+with an empty HEAD body. The real generated SSR binary acceptance test now checks
+client-script HEAD length against its GET bytes and verifies asset POST returns
+405 with the Allow header. Its existing renderer GET/POST/HEAD, private-file and
+empty-PATH checks remain intact. The expanded slow test was actually selected,
+compiled offline and passed; feature-enabled standalone-test Clippy with warnings
+denied, formatting and diff checks passed. This validates custom-renderer binary
+HTTP behavior, not framework hydration or browser interaction. The full mission
+and its remaining framework/runtime/release requirements remain unfinished.
+
 ## Embedded static standalone HTTP methods
 
 The generated embedded static server now permits GET/HEAD and rejects other
