@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 const compilers = new Map();
+const vueTypeDependencies = new WeakMap();
 function compiler(request) {
   const { framework, packageDir, version } = request;
   const manifest = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8'));
@@ -68,6 +69,19 @@ export async function compile(request) {
     const cssMap = result.css ? svelteMap(result.css.map, request, diagnostics) : null;
     return { pieces: [{ code: result.js.code, map: jsMap }], language: 'js', css: result.css ? [{ id: 'style-0', code: result.css.code, map: cssMap, modules: null }] : [], dependencies: [], diagnostics, compilerVersion: module.VERSION };
   }
+  // The official compiler retains imported type scopes independently of Ferrite's
+  // graph cache. Invalidate changed inputs before compileScript reuses them.
+  const typeInputs = vueTypeDependencies.get(module) || new Map();
+  for (const [path, previous] of typeInputs) {
+    let current;
+    try { current = readFileSync(path, 'utf8'); } catch { current = null; }
+    if (current !== previous) {
+      if (typeof module.invalidateTypeCache !== 'function') throw new Error(`${filename}: selected Vue compiler cannot invalidate imported type dependencies`);
+      module.invalidateTypeCache(path);
+      typeInputs.set(path, current);
+    }
+  }
+  vueTypeDependencies.set(module, typeInputs);
   const parsed = module.parse(source, { filename, sourceMap: true });
   errors(parsed.errors, filename);
   const descriptor = parsed.descriptor;
@@ -81,6 +95,9 @@ export async function compile(request) {
   if (descriptor.template?.lang && descriptor.template.lang !== 'html') throw new Error(`${filename}: template language ${descriptor.template.lang} requires a configured preprocessor`);
   const id = request.scopeId;
   const script = descriptor.script || descriptor.scriptSetup ? module.compileScript(descriptor, { id, genDefaultAs: '__sfc__', isProd: !development, sourceMap: true, templateOptions: { ssr: server } }) : null;
+  for (const path of script?.deps || []) {
+    typeInputs.set(path, readFileSync(path, 'utf8'));
+  }
   const diagnostics = [];
   const pieces = [{ code: script?.content || 'const __sfc__ = {};', map: map(script?.map) }];
   if (descriptor.template) {

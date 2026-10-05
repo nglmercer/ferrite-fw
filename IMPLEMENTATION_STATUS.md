@@ -1,5 +1,32 @@
 # Framework support implementation status
 
+## Vue imported type dependency cache invalidation
+
+The real official-compiler fixture now installs explicit TypeScript 5.9.3 and
+compiles defineProps from an imported interface. It requires the imported type
+file in pipeline dependencies and changes only that file from string to number;
+output must change from type: String to type: Number through the same persistent
+host. The first run identified the official compiler's actionable missing
+TypeScript requirement; after installing it, the regression reproduced stale
+compiler output despite Ferrite dependency invalidation.
+
+The wrapper now retains content snapshots of compiler-reported imported type
+inputs per loaded Vue compiler and calls its version-matched invalidateTypeCache
+API for changed/missing files before compilation. An absent invalidation API fails
+explicitly. Snapshots refresh after successful compileScript; the shared pipeline
+continues tracking dependencies. Official Vue 3.5.22 source was checked at
+https://github.com/vuejs/core/blob/v3.5.22/packages/compiler-sfc/src/script/resolveType.ts
+and its public export in src/index.ts. No substitute type parser/compiler is used.
+
+The full explicitly selected Vue/Svelte compiler maps/resources/cache/library
+conformance case passed in 20.02s after the fix. All-target framework/test Clippy
+with warnings denied, formatting and diff checks passed. No lock migration is
+required. Imported types require an explicitly installed TypeScript dependency;
+this does not implement type checking. Transitive/re-export/configuration type
+cache matrices, watcher/browser type edits and complete checker integration remain
+unverified, alongside the remaining frameworks/release gates. The mission stays
+active and unfinished.
+
 ## Safe repeated HTML base rewriting
 
 The shared base rewrite preserves protocol-relative external URLs and references

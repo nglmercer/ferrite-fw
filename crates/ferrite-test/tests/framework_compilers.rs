@@ -19,6 +19,7 @@ async fn fixture() -> TempProject {
         dependencies: std::collections::HashMap::from([
             ("vue".into(), "3.5.22".into()),
             ("svelte".into(), "5.39.6".into()),
+            ("typescript".into(), "5.9.3".into()),
         ]),
         ..Default::default()
     };
@@ -235,6 +236,25 @@ async fn official_components_resources_maps_cache_and_library_parity() {
     assert!(error.contains("Counter.vue:2:1"), "{error}");
     assert!(error.contains("missing end tag"), "{error}");
     std::fs::write(project.root.join("Counter.vue"), &original).unwrap();
+    let types = project.root.join("props.ts");
+    std::fs::write(&types, "export interface Props { value: string }").unwrap();
+    std::fs::write(project.root.join("Typed.vue"), "<script setup lang='ts'>import type { Props } from './props'; defineProps<Props>();</script><template>{{ value }}</template>").unwrap();
+    let typed = server
+        .pipeline_module(&ModuleId::new("/Typed.vue"), None, "client")
+        .await
+        .unwrap();
+    assert!(typed
+        .dependencies
+        .iter()
+        .any(|path| path.ends_with("props.ts")));
+    assert!(typed.code.contains("type: String"), "{}", typed.code);
+    std::fs::write(&types, "export interface Props { value: number }").unwrap();
+    let updated = server
+        .pipeline_module(&ModuleId::new("/Typed.vue"), None, "client")
+        .await
+        .unwrap();
+    assert!(updated.code.contains("type: Number"), "{}", updated.code);
+    assert!(!updated.code.contains("type: String"), "{}", updated.code);
     // The same declarative opt-in is resolved by CLI and library entrypoints.
     std::fs::write(
         project.root.join("ferrite.toml"),
