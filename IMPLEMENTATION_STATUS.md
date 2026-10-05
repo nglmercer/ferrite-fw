@@ -1,5 +1,25 @@
 # Framework support implementation status
 
+## Prototype-sensitive Vue CSS module names
+
+The official compiler conformance fixture now includes default, named,
+__proto__ and constructor CSS module blocks and requires all four class maps
+and generated style edges in client/server output. The initial execution
+reproduced the missing __proto__ class map. The worker now uses a null-prototype
+map and emits JSON.parse of serialized metadata, retaining own properties even
+for names with object-literal prototype semantics. Official compilers still
+produce CSS and class identifiers; repeated names retain last-block semantics.
+Official Vue loader reference checked:
+https://raw.githubusercontent.com/vuejs/vue-loader/v17.4.2/src/cssModules.ts
+
+Actual compiler conformance passed in 17.19s after the fix. Generated JS/TS
+production SSR acceptance now uses useCssModule('__proto__') to apply a class
+and verifies its extracted CSS background color, retained server DOM, hydration
+and counter interaction in Chromium and Firefox. Explicit execution passed in
+51.66s. All-target framework/test Clippy with napi-vm and warnings denied,
+changed-file formatting and diff checks passed. No migration; complete CSS
+feature matrices and the full framework mission remain unfinished.
+
 ## Watched transitive Vue type edits in real browsers
 
 The generated development SSR browser fixture now compiles a TypeScript

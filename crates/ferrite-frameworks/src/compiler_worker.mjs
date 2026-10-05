@@ -109,7 +109,7 @@ export async function compile(request) {
   }
   const css = [];
   const dependencies = new Set(script?.deps || []);
-  const moduleStyles = {};
+  const moduleStyles = Object.create(null);
   for (const [index, style] of descriptor.styles.entries()) {
     if (style.lang && style.lang !== 'css') throw new Error(`${filename}: style language ${style.lang} requires a configured preprocessor`);
     const result = await module.compileStyleAsync({ source: style.content, filename, id: `data-v-${id}`, scoped: style.scoped, isProd: !development, modules: Boolean(style.module), inMap: style.map });
@@ -119,7 +119,7 @@ export async function compile(request) {
     if (style.module) moduleStyles[typeof style.module === 'string' ? style.module : '$style'] = result.modules;
   }
   if (descriptor.styles.some(style => style.scoped)) pieces.push({ code: `__sfc__.__scopeId = ${JSON.stringify(`data-v-${id}`)};`, map: null });
-  if (Object.keys(moduleStyles).length) pieces.push({ code: `__sfc__.__cssModules = ${JSON.stringify(moduleStyles)};`, map: null });
+  if (Object.keys(moduleStyles).length) pieces.push({ code: `__sfc__.__cssModules = JSON.parse(${JSON.stringify(JSON.stringify(moduleStyles))});`, map: null });
   pieces.push({ code: 'export default __sfc__;', map: null });
   return { pieces, language: script?.lang === 'ts' ? 'ts' : 'js', css, dependencies: [...dependencies], diagnostics, compilerVersion: module.version };
 }

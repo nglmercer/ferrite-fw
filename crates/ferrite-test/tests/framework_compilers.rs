@@ -83,6 +83,27 @@ async fn official_components_resources_maps_cache_and_library_parity() {
             "CLI/library compiler pipeline parity"
         );
     }
+    std::fs::write(project.root.join("MultiModules.vue"), "<template><div /></template><style module>.first { color: red; }</style><style module='theme'>.second { color: blue; }</style><style module='__proto__'>.accent { color: green; }</style><style module='constructor'>.muted { color: gray; }</style>").unwrap();
+    for target in ["client", "ssr"] {
+        let compiled = server
+            .pipeline_module(&ModuleId::new("/MultiModules.vue"), None, target)
+            .await
+            .unwrap();
+        for class in ["first", "second", "accent", "muted"] {
+            assert!(
+                compiled.code.contains(class),
+                "{target}: missing CSS module class {class}"
+            );
+        }
+        assert_eq!(
+            compiled
+                .imports
+                .iter()
+                .filter(|(_, id, _)| id.0.contains("ferrite-style="))
+                .count(),
+            4
+        );
+    }
     let vue = server
         .pipeline_module(&ModuleId::new("/Counter.vue"), None, "client")
         .await
@@ -910,6 +931,17 @@ async fn generated_vue_ssr_sources_install_build_and_render() {
                 "import { ref } from 'vue';\nimport type { Props } from './props';\ndefineProps<Props>();",
             );
         }
+        let component = generated.get_mut("src/App.vue").unwrap();
+        *component = component
+            .replace("import { ref }", "import { ref, useCssModule }")
+            .replace(
+                "</script>",
+                "const classes = useCssModule('__proto__');\n</script>",
+            )
+            .replace("id=\"counter\"", "id=\"counter\" :class=\"classes.accent\"");
+        component.push_str(
+            "<style module='__proto__'>.accent { background-color: rgb(0, 128, 0); }</style>\n",
+        );
         // Observability only: snapshot before module execution and signal mount.
         let index = generated.get_mut("index.html").unwrap();
         *index = index.replace("<script type=", "<script>globalThis.__ssrButton = document.querySelector('#app button');</script><script type=");
@@ -1054,6 +1086,14 @@ async fn generated_vue_ssr_sources_install_build_and_render() {
                 .await
                 .unwrap(),
                 "rgb(128, 0, 0)"
+            );
+            assert_eq!(
+                page.evaluate::<String>(
+                    "getComputedStyle(document.querySelector('#counter')).backgroundColor"
+                )
+                .await
+                .unwrap(),
+                "rgb(0, 128, 0)"
             );
             assert!(page.page_errors().is_empty(), "{:?}", page.page_errors());
             assert!(
