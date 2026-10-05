@@ -28,6 +28,7 @@ const ADAPTER_SCRIPT: &str = include_str!("adapter.mjs");
 /// Default per-hook timeout.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_PENDING_REQUESTS: usize = 64;
 
 /// Tier-3 host: foreign plugins in a Node.js child process.
 pub struct NodeAdapterHost {
@@ -440,10 +441,20 @@ impl NodeAdapterInner {
             ));
         }
         let (tx, rx) = mpsc::channel();
-        self.pending
-            .lock()
-            .map_err(|_| poison("pending"))?
-            .insert(id, tx);
+        {
+            let mut pending = self.pending.lock().map_err(|_| poison("pending"))?;
+            // Recheck under the queue lock: shutdown may have drained it since
+            // the initial stopped check.
+            if self.stopped.load(Ordering::SeqCst) {
+                return Err(FerriteError::Build(
+                    "node worker is stopped; explicitly create a new enabled host".into(),
+                ));
+            }
+            if pending.len() >= MAX_PENDING_REQUESTS {
+                return Err(FerriteError::Build(format!("node worker pending request limit ({MAX_PENDING_REQUESTS}) reached; reduce concurrent compiler/plugin calls or retry after requests finish")));
+            }
+            pending.insert(id, tx);
+        }
         line.push('\n');
         let write_result = self
             .stdin
@@ -1343,6 +1354,68 @@ export default () => { factories++; return {transform(code) { return code; }}; }
         host.shutdown();
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "requires real Node; executed explicitly"]
+    async fn real_node_pending_limit_and_shutdown() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = dir.path().join("pending.mjs");
+        std::fs::write(
+            &entry,
+            "export async function hang() { await new Promise(() => {}); }",
+        )
+        .unwrap();
+        let host = Arc::new(NodeAdapterHost::spawn(None).unwrap());
+        host.register_plugin("compiler", &entry.to_string_lossy())
+            .unwrap();
+        let mut calls = tokio::task::JoinSet::new();
+        for _ in 0..MAX_PENDING_REQUESTS {
+            let worker = host.clone();
+            calls.spawn(async move {
+                worker
+                    .call_export("compiler", "hang", serde_json::Value::Null)
+                    .await
+            });
+        }
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while host.inner.pending.lock().unwrap().len() != MAX_PENDING_REQUESTS {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let error = host
+            .call_export("compiler", "hang", serde_json::Value::Null)
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("pending request limit (64)"),
+            "{error}"
+        );
+        assert!(!host.inner.stopped.load(Ordering::SeqCst));
+        assert_eq!(
+            host.inner.pending.lock().unwrap().len(),
+            MAX_PENDING_REQUESTS
+        );
+        host.shutdown();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while let Some(result) = calls.join_next().await {
+                let error = result.unwrap().unwrap_err();
+                assert!(error.to_string().contains("shut down"), "{error}");
+            }
+        })
+        .await
+        .unwrap();
+        assert!(host.inner.pending.lock().unwrap().is_empty());
+        assert!(host
+            .inner
+            .child
+            .lock()
+            .unwrap()
+            .try_wait()
+            .unwrap()
+            .is_some());
+    }
+
     #[tokio::test]
     #[ignore = "requires real Node; executed explicitly"]
     async fn real_node_typed_exports_logs_timeout_and_cancellation() {
@@ -1356,6 +1429,7 @@ export default () => { factories++; return {transform(code) { return code; }}; }
                 await Promise.resolve(); return { value: input.value + 1 };
             }
             export async function hang() { await new Promise(() => {}); }
+            export function spin() { while (true) {} }
         "#,
         )
         .unwrap();
@@ -1399,6 +1473,29 @@ export default () => { factories++; return {transform(code) { return code; }}; }
                 .unwrap()
                 .is_some(),
             "timed-out child must be reaped"
+        );
+        let spinning =
+            NodeAdapterHost::spawn_with_timeout(None, Duration::from_millis(500)).unwrap();
+        spinning
+            .register_plugin("compiler", &entry.to_string_lossy())
+            .unwrap();
+        let started = std::time::Instant::now();
+        let error = spinning
+            .call_export("compiler", "spin", serde_json::Value::Null)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("timed out"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(3));
+        assert!(
+            spinning
+                .inner
+                .child
+                .lock()
+                .unwrap()
+                .try_wait()
+                .unwrap()
+                .is_some(),
+            "CPU-bound timed-out worker must be reaped"
         );
         let host = Arc::new(NodeAdapterHost::spawn(None).unwrap());
         host.register_plugin("compiler", &entry.to_string_lossy())

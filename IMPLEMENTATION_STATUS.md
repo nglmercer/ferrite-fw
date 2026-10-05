@@ -1,5 +1,25 @@
 # Framework support implementation status
 
+## Bounded persistent Node worker pending requests
+
+The existing compiler/plugin transport now caps pending requests at 64 and
+rejects saturation with an actionable reduce-concurrency/retry error. It also
+rechecks stopped state while holding the pending queue lock, preventing calls
+from entering a queue already drained by shutdown. Saturation does not terminate
+or silently restart the worker. This bounds retained pending protocol calls;
+it is not a process heap cap or a Node sandbox.
+
+A real Node acceptance case fills all 64 slots with unresolved exports, rejects
+the next call, verifies the worker remains live, then requires shutdown to drain
+all waiters and reap the process: explicitly passed in 0.08s. Existing typed
+exports/log-channel/timeout/cancellation coverage now also executes a synchronous
+CPU-bound infinite loop; it must time out and reap the worker within three
+seconds. Explicit execution passed in 1.22s. Plugin tests passed 19 with 11
+ignored (only the two named real Node cases were explicitly run here), strict
+all-target Clippy, changed-file formatting and diff checks passed. No migration;
+physical memory limits, transport-write deadlines and the full mission remain
+unfinished.
+
 ## Vue style error overlay and watched recovery
 
 Generated JS/TS development SSR acceptance now appends a malformed inline CSS
