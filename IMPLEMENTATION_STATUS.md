@@ -1,5 +1,25 @@
 # Framework support implementation status
 
+## Indexed foreign maps cannot silently bypass validation
+
+The foreign map regression reproduced acceptance of an indexed map containing
+sections alongside ordinary mapping fields: the pinned regular-map decoder
+ignored sections. The bridge now rejects any sections field with an actionable
+flatten-to-regular-v3 error, instead of retaining an index map the downstream
+pipeline cannot decode consistently. Indexed map flattening is still unavailable.
+
+The current ECMA-426 decoding algorithm was checked at
+https://tc39.es/ecma426/#sec-decodesourcemapsources: shorter sourcesContent is
+valid and missing entries have null content. Tests explicitly preserve acceptance
+of that case in object/string form; an initial stricter expectation was corrected
+after checking the standard, without adding an invalid restriction.
+
+Standard plugin tests passed 20 with 15 ignored; all 15 real Node cases explicitly
+passed in 1.37s. Strict all-target Clippy, changed-file formatting and diff checks
+passed. Plugins returning indexed maps must flatten them before returning.
+No lockfile migration. Full map composition/index support and the framework
+mission remain unfinished.
+
 ## Real foreign metadata through the native plugin API
 
 An explicitly executed Node hook fixture now registers through ForeignHookPlugin,

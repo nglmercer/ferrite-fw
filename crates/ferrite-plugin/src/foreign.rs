@@ -150,6 +150,11 @@ fn source_map(value: Value) -> Result<Option<SourceMap>> {
             ))
         }
     };
+    let structure: Value = serde_json::from_str(&json)
+        .map_err(|error| FerriteError::Build(format!("foreign source map is invalid: {error}")))?;
+    if structure.get("sections").is_some() {
+        return Err(FerriteError::Build("foreign indexed source maps are unavailable; flatten sections to a regular v3 source map before returning it".into()));
+    }
     oxc_sourcemap::SourceMap::from_json_string(&json)
         .map_err(|error| FerriteError::Build(format!("foreign source map is invalid: {error}")))?;
     Ok(Some(SourceMap::external(json)))
@@ -383,5 +388,14 @@ mod tests {
         assert!(source_map(Value::Null).unwrap().is_none());
         assert!(source_map(Value::Bool(false)).is_err());
         assert!(source_map(Value::String("not JSON".into())).is_err());
+        let mismatched = serde_json::json!({"version":3,"sources":["source.js"],"sourcesContent":[],"names":[],"mappings":"AAAA"});
+        assert!(source_map(mismatched.clone()).is_ok());
+        assert!(source_map(Value::String(mismatched.to_string())).is_ok());
+        let indexed =
+            serde_json::json!({"version":3,"sources":[],"names":[],"mappings":"","sections":[]});
+        assert!(source_map(indexed)
+            .unwrap_err()
+            .to_string()
+            .contains("indexed source maps"));
     }
 }
