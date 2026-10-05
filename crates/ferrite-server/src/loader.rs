@@ -109,7 +109,7 @@ impl DevServer {
             );
         }
         // 3. `?direct` CSS (from `<link>` tags).
-        let direct_css = query.is_some_and(|q| q.contains("direct")) && path_part.ends_with(".css");
+        let direct_css = is_direct_css_query(query) && path_part.ends_with(".css");
         // 4. Load (plugin first, then built-ins / fs).
         let mut loaded = self
             .load_source_full(ctx, &resolved_id, environment)

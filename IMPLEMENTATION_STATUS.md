@@ -1,5 +1,20 @@
 # Framework support implementation status
 
+## Consistent loader direct-CSS classification
+
+Inspection confirmed compiler wrapper contents already participate in the host
+cache identity, so no cache-key change was needed. It found a remaining loader
+substring check for direct CSS. That check now uses the same exact query predicate
+as transformation and HTTP response typing. Added pipeline coverage retains a
+plugin-provided JavaScript module type for CSS-named resources with lookalike
+query flags. That case passed before and after the change; it is a preservation
+guard, not evidence of an independently reproduced loader failure.
+
+Server tests passed 59 with two existing ignored cases. All-target server Clippy
+with warnings denied, formatting and diff checks passed. No migration is needed.
+Full framework support, checker/HMR/source-map conformance and release matrices
+remain unfinished; the mission remains active.
+
 ## Preserve official Vue error source coordinates
 
 The focused compiler wrapper now preserves compiler-provided positive integer

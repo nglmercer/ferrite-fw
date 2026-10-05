@@ -2508,3 +2508,49 @@ async fn direct_css_requires_an_exact_query_flag() {
         );
     }
 }
+
+#[tokio::test]
+async fn lookalike_direct_query_preserves_plugin_module_type() {
+    struct CssNamedModule;
+    #[async_trait::async_trait]
+    impl Plugin for CssNamedModule {
+        fn name(&self) -> &'static str {
+            "css-named-module"
+        }
+        async fn load(
+            &self,
+            _: &PluginContext,
+            request: LoadRequest,
+        ) -> Result<Option<LoadResult>> {
+            Ok(request.id.starts_with("/virtual.css").then(|| LoadResult {
+                code: "export const value = 42;".into(),
+                module_type: ModuleType::Js,
+                ..Default::default()
+            }))
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("virtual.css"), "unused").unwrap();
+    let config = ferrite_config::resolve_config(
+        Default::default(),
+        Some(root.path().into()),
+        Default::default(),
+    )
+    .unwrap();
+    let server = DevServer::new_without_watcher(config, vec![Arc::new(CssNamedModule)])
+        .await
+        .unwrap();
+    for url in [
+        "/virtual.css?indirect",
+        "/virtual.css?name=direct",
+        "/virtual.css?direct=false",
+    ] {
+        let module = server
+            .pipeline_module(&ModuleId::new(url), None, "client")
+            .await
+            .unwrap();
+        assert_eq!(module.module_type, ModuleType::Js, "{url}");
+        assert!(module.code.contains("42"));
+        assert!(!module.code.contains("__ferrite_css"), "{}", module.code);
+    }
+}
