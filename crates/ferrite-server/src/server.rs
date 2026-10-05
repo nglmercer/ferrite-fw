@@ -27,13 +27,19 @@ use std::net::SocketAddr;
 impl DevServer {
     /// Build the axum router (middleware mode, §76).
     pub fn router(&self) -> axum::Router {
-        axum::Router::new()
+        let router = axum::Router::new()
             .route(HMR_ENDPOINT, get(ws_handler))
             .route("/@ferrite/client", get(client_handler))
             .route("/@ferrite/inspect", get(inspect_handler))
             .route(&format!("{RPC_ROUTE_PREFIX}{{*hash}}"), post(rpc_handler))
             .fallback(fallback_handler)
-            .with_state(self.inner.clone())
+            .with_state(self.inner.clone());
+        let base = self.inner.config.base.trim_end_matches('/');
+        if base.starts_with('/') && !base.is_empty() {
+            router.clone().nest(base, router)
+        } else {
+            router
+        }
     }
 
     /// Listen until Ctrl-C (or error). Honors `strict_port`.
@@ -299,7 +305,16 @@ impl DevServer {
                 } else {
                     module.id.0.clone()
                 };
-                format!("{id}{}direct", if id.contains('?') { "&" } else { "?" })
+                let base = self.inner.config.base.trim_end_matches('/');
+                let browser_id = if base.starts_with('/') && !base.is_empty() {
+                    format!("{base}/{id}", id = id.trim_start_matches('/'))
+                } else {
+                    id.clone()
+                };
+                format!(
+                    "{browser_id}{}direct",
+                    if id.contains('?') { "&" } else { "?" }
+                )
             })
             .collect();
         let modules: Vec<_> = modules

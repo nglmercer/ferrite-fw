@@ -2554,3 +2554,57 @@ async fn lookalike_direct_query_preserves_plugin_module_type() {
         assert!(!module.code.contains("__ferrite_css"), "{}", module.code);
     }
 }
+
+#[tokio::test]
+async fn ssr_styles_use_base_urls_and_nested_router_serves_them() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(
+        root.path().join("server.js"),
+        "import './style.css'; export function render() { return 'hello'; }",
+    )
+    .unwrap();
+    std::fs::write(root.path().join("style.css"), "button { color: red; }").unwrap();
+    let user = ferrite_config::UserConfig {
+        base: Some("/app/".into()),
+        ..Default::default()
+    };
+    let config =
+        ferrite_config::resolve_config(user, Some(root.path().into()), Default::default()).unwrap();
+    let server = DevServer::new_without_watcher(config, vec![])
+        .await
+        .unwrap();
+    let (graph, styles) = server
+        .ssr_runtime_graph_with_styles("/server.js")
+        .await
+        .unwrap();
+    assert_eq!(graph.entry, "/server.js");
+    assert_eq!(styles, ["/app/style.css?direct"]);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let router = server.router();
+    let serving = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    struct Serving(tokio::task::JoinHandle<()>);
+    impl Drop for Serving {
+        fn drop(&mut self) {
+            self.0.abort();
+        }
+    }
+    let _serving = Serving(serving);
+    let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+    socket
+        .write_all(b"GET /app/style.css?direct HTTP/1.0\r\nHost: localhost\r\n\r\n")
+        .await
+        .unwrap();
+    let mut response = String::new();
+    socket.read_to_string(&mut response).await.unwrap();
+    assert!(response.starts_with("HTTP/1.0 200"), "{response}");
+    assert!(
+        response.to_lowercase().contains("content-type: text/css"),
+        "{response}"
+    );
+    assert!(response.contains("red"), "{response}");
+    assert!(!response.contains("/@ferrite/client"), "{response}");
+}

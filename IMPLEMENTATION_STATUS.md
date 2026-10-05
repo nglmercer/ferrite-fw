@@ -1,5 +1,22 @@
 # Framework support implementation status
 
+## Development SSR stylesheet delivery under absolute base paths
+
+The development server mounts its existing router beneath a configured absolute
+base path while retaining root transport endpoints. Shared SSR graph collection
+prefixes browser stylesheet URLs with that base without changing executable graph
+module identities. A real TCP HTTP regression requires /app/style.css?direct to
+return HTTP 200, CSS content type and stylesheet content without browser HMR code;
+it also requires the graph entry to remain /server.js and its stylesheet URL to
+be base-prefixed.
+
+Server tests passed 60 with two existing cases ignored. All-target server Clippy
+with warnings denied, formatting and diff checks passed. No lock/config migration
+is required. This verifies absolute-base routing and SSR stylesheet delivery,
+not the complete framework browser cycle under a base path. Relative/remote bases,
+base-aware transport details, full framework/HMR/checker acceptance and release
+matrices remain unfinished. The full mission remains active.
+
 ## Consistent loader direct-CSS classification
 
 Inspection confirmed compiler wrapper contents already participate in the host
