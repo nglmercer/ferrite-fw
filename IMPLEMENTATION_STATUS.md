@@ -1,5 +1,22 @@
 # Framework support implementation status
 
+## Watched transitive Vue type edits in real browsers
+
+The generated development SSR browser fixture now compiles a TypeScript
+component importing defineProps through a barrel into a leaf interface. It
+changes only that leaf from string to number while the app is running, requires
+an actual watcher-driven reload/reset, fetches the served compiled component to
+verify Number replaces String, checks retained server DOM after hydration, and
+clicks the counter again. Existing component/CSS edit and syntax recovery
+assertions remain active for both JS and TS variants.
+
+Explicit Chromium execution passed in 42.93s and Firefox in 45.53s. Focused
+compiler-test Clippy with napi-vm and warnings denied, changed-file formatting
+and diff checks passed. Existing graph/watcher/compiler invalidation handled
+this case without additional runtime changes. These results establish this
+concrete transitive dependency flow; config aliases, package type resolution,
+full checking and the remaining mission are still unfinished. No migration.
+
 ## Generated Vue TypeScript compiler dependency
 
 Vue TS client and SSR scaffolds now pin TypeScript 5.9.3 as a development

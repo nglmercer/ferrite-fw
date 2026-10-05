@@ -1247,6 +1247,21 @@ async fn generated_vue_dev_browser(kind: ferrite_e2e::BrowserKind) {
             "napi-vm",
         )
         .unwrap();
+        if language == "ts" {
+            generated.insert(
+                "src/leaf.ts".into(),
+                "export interface Props { label?: string }\n".into(),
+            );
+            generated.insert(
+                "src/props.ts".into(),
+                "export type { Props } from './leaf';\n".into(),
+            );
+            let component = generated.get_mut("src/App.vue").unwrap();
+            *component = component.replace(
+                "import { ref } from 'vue';",
+                "import { ref } from 'vue';\nimport type { Props } from './props';\ndefineProps<Props>();",
+            );
+        }
         let index = generated.get_mut("index.html").unwrap();
         *index = index.replace("<script type=", "<script>globalThis.__ssrButton = document.querySelector('#app button');</script><script type=");
         generated
@@ -1369,6 +1384,28 @@ async fn generated_vue_dev_browser(kind: ferrite_e2e::BrowserKind) {
             "{:?}",
             page.console_messages()
         );
+        if language == "ts" {
+            assert!(page.evaluate::<bool>("fetch('/src/App.vue').then(r => r.text()).then(code => code.includes('type: String'))").await.unwrap());
+            // Only the transitive type input changes: the component is untouched.
+            std::fs::write(
+                project.root.join("src/leaf.ts"),
+                "export interface Props { label?: number }\n",
+            )
+            .unwrap();
+            page.wait_for_function("globalThis.__hydrated === true && document.querySelector('#counter')?.textContent === 'count: 0'", Duration::from_secs(20)).await.unwrap();
+            assert!(page.evaluate::<bool>("fetch('/src/App.vue').then(r => r.text()).then(code => code.includes('type: Number') && !code.includes('type: String'))").await.unwrap());
+            assert!(page
+                .evaluate::<bool>("globalThis.__ssrButton === document.querySelector('#counter')")
+                .await
+                .unwrap());
+            page.locator("#counter").click().await.unwrap();
+            page.wait_for_function(
+                "document.querySelector('#counter').textContent === 'count: 1'",
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
+        }
         let original = generated["src/App.vue"].clone();
         let changed = original
             .replace("Hello Ferrite + Vue", "Hello updated Vue")
