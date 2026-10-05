@@ -1,5 +1,23 @@
 # Framework support implementation status
 
+## Generated Vue TypeScript compiler dependency
+
+Vue TS client and SSR scaffolds now pin TypeScript 5.9.3 as a development
+compiler dependency, allowing the official Vue 3.5.22 compiler to resolve
+imported defineProps types after an ordinary generated-project install.
+JavaScript and Svelte scaffolds do not acquire this dependency. Existing projects
+using imported Vue macro types should add this exact version and rerun Ferrite
+install; no lockfile format migration is required. This does not enable checking.
+
+The generated Vue SSR acceptance case now adds an imported type without injecting
+extra dependencies into the generated manifest. Explicit execution installed,
+built and rendered both JS/TS profiles, then verified hydration, retained server
+DOM, scoped CSS and interaction in Chromium and Firefox: passed in 46.34s.
+The scaffold dependency unit check and all-target framework/test Clippy with
+napi-vm and warnings denied passed. Formatting of changed Rust files and diff
+checks passed. Full framework support, checker integration and release matrices
+remain unfinished; profiles remain experimental.
+
 ## Re-exported Vue type dependency edits and recovery
 
 The actual official Vue/TypeScript conformance case now routes defineProps through

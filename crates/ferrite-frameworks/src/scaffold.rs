@@ -262,8 +262,14 @@ fn component_files(
         "<h1>Hello Ferrite</h1><button id=\"counter\" type=\"button\">count: 0</button>",
         "",
     );
+    let dev_dependencies = if profile.framework == "vue" && typed {
+        // Official compiler-sfc resolves imported macro types through TypeScript.
+        serde_json::json!({"typescript": "5.9.3"})
+    } else {
+        serde_json::json!({})
+    };
     files.insert("package.json".into(), format!("{}\n", serde_json::to_string_pretty(&serde_json::json!({
-        "name": name, "private": true, "type": "module", "scripts": {"dev":"ferrite dev", "build":"ferrite build", "preview":"ferrite preview"}, "dependencies": {profile.framework: version}, "devDependencies": {}
+        "name": name, "private": true, "type": "module", "scripts": {"dev":"ferrite dev", "build":"ferrite build", "preview":"ferrite preview"}, "dependencies": {profile.framework: version}, "devDependencies": dev_dependencies
     }))?));
     files.insert("ferrite.toml".into(), format!("[framework]\nenabled = [\"{}\"]\ncompiler_host = \"node\"\n\n[server]\nport = 5173\n\n[build]\nentries = [\"index.html\"]\n", profile.framework));
     let types = match profile.framework {
@@ -539,6 +545,14 @@ mod tests {
                     crate::registry::SVELTE_NODE.framework_version
                 };
                 assert_eq!(package["dependencies"][framework], expected);
+                assert_eq!(
+                    package["devDependencies"]["typescript"],
+                    if framework == "vue" && language == "ts" {
+                        serde_json::json!("5.9.3")
+                    } else {
+                        serde_json::Value::Null
+                    }
+                );
                 assert!(files[&format!("src/App.{framework}")].contains("count += 1"));
                 assert!(
                     files[&format!("src/main.{language}")].contains(&format!("./App.{framework}"))

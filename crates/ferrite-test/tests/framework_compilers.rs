@@ -898,6 +898,18 @@ async fn generated_vue_ssr_sources_install_build_and_render() {
             "napi-vm",
         )
         .unwrap();
+        if language == "ts" {
+            // Exercise the generated dependency graph, without injecting TypeScript.
+            generated.insert(
+                "src/props.ts".into(),
+                "export interface Props { label?: string }\n".into(),
+            );
+            let component = generated.get_mut("src/App.vue").unwrap();
+            *component = component.replace(
+                "import { ref } from 'vue';",
+                "import { ref } from 'vue';\nimport type { Props } from './props';\ndefineProps<Props>();",
+            );
+        }
         // Observability only: snapshot before module execution and signal mount.
         let index = generated.get_mut("index.html").unwrap();
         *index = index.replace("<script type=", "<script>globalThis.__ssrButton = document.querySelector('#app button');</script><script type=");
