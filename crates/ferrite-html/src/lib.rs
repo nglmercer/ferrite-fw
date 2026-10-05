@@ -325,7 +325,7 @@ fn rewrite_asset_prefix(html: &str, base: &str) -> String {
     let base = base.trim_end_matches('/');
     let mut output = html.to_string();
     for attr in ["src=\"/", "href=\"/"] {
-        output = output.replace(attr, &format!("{}=\"{}/", &attr[..attr.len() - 2], base));
+        output = output.replace(attr, &format!("{}{}/", &attr[..attr.len() - 1], base));
     }
     output
 }
@@ -353,6 +353,14 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert!(entries[0].is_module);
         assert_eq!(entries[0].src, "/src/main.ts");
+    }
+
+    #[test]
+    fn base_rewrite_preserves_attribute_syntax() {
+        let html =
+            "<link href=\"/favicon.svg\"><script type=\"module\" src=\"/src/main.js\"></script>";
+        let output = apply_core_rewrites(html, "/app/", false);
+        assert_eq!(output, "<link href=\"/app/favicon.svg\"><script type=\"module\" src=\"/app/src/main.js\"></script>");
     }
 
     #[test]

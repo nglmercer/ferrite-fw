@@ -1625,6 +1625,18 @@ async fn cli_vue_ssr_generation_and_clean_frozen_reinstall() {
 #[tokio::test]
 #[ignore = "fresh napi-vm CLI, registry, Node compiler and both browsers"]
 async fn cli_vue_ssr_create_dev_build_preview_cycle() {
+    cli_vue_ssr_cycle_at_base("/").await;
+}
+
+#[cfg(feature = "napi-vm")]
+#[tokio::test]
+#[ignore = "fresh napi-vm CLI, registry, Node compiler and both browsers"]
+async fn cli_vue_ssr_base_path_cycle() {
+    cli_vue_ssr_cycle_at_base("/app/").await;
+}
+
+#[cfg(feature = "napi-vm")]
+async fn cli_vue_ssr_cycle_at_base(base: &str) {
     async fn get(url: &str, path: &str) -> String {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let mut stream = tokio::net::TcpStream::connect(url.strip_prefix("http://").unwrap())
@@ -1675,6 +1687,9 @@ async fn cli_vue_ssr_create_dev_build_preview_cycle() {
                 false,
             )
             .await;
+            let config_path = destination.join("ferrite.toml");
+            let config = std::fs::read_to_string(&config_path).unwrap();
+            std::fs::write(&config_path, format!("base = {base:?}\n{config}")).unwrap();
             let index = destination.join("index.html");
             let html = std::fs::read_to_string(&index).unwrap();
             std::fs::write(&index, html.replace("<script type=", "<script>globalThis.__ssrButton = document.querySelector('#counter');</script><script type=")).unwrap();
@@ -1698,7 +1713,7 @@ async fn cli_vue_ssr_create_dev_build_preview_cycle() {
                         .all(|module| !module.code.contains("/@ferrite/client")));
                 }
                 let (mut child, url) = server(&binary, &destination, mode, mode == "ssr").await;
-                let response = get(&url, "/").await;
+                let response = get(&url, base).await;
                 assert!(response.starts_with("HTTP/1.0 200"), "{response}");
                 let (headers, html) = response.split_once("\r\n\r\n").unwrap();
                 assert!(
@@ -1713,7 +1728,10 @@ async fn cli_vue_ssr_create_dev_build_preview_cycle() {
                 );
                 assert!(!html.contains("<!--ssr-outlet-->"), "{html}");
                 if mode == "ssr" {
-                    assert!(html.contains("ferrite-style=0&amp;direct"), "{html}");
+                    assert!(
+                        html.contains(&format!("{base}src/App.vue?ferrite-style=0&amp;direct")),
+                        "{html}"
+                    );
                 } else {
                     assert!(get(&url, "/server/renderer.json")
                         .await
@@ -1722,17 +1740,30 @@ async fn cli_vue_ssr_create_dev_build_preview_cycle() {
                         .await
                         .starts_with("HTTP/1.0 404"));
                 }
+                if mode == "ssr" {
+                    for path in [
+                        format!("{base}src/main.{language}"),
+                        format!("{base}src/App.vue?ferrite-style=0&direct"),
+                    ] {
+                        let asset = get(&url, &path).await;
+                        assert!(asset.starts_with("HTTP/1.0 200"), "{path}: {asset}");
+                    }
+                }
                 let page = browser.new_page().await.unwrap();
-                page.goto(&url).await.unwrap();
-                page.wait_for_function("globalThis.__hydrated === true", Duration::from_secs(15))
+                page.goto(&format!("{url}{base}")).await.unwrap();
+                if let Err(error) = page
+                    .wait_for_function("globalThis.__hydrated === true", Duration::from_secs(15))
                     .await
-                    .unwrap_or_else(|error| {
-                        panic!(
-                            "{kind:?}/{language}/{mode}: {error}; {:?}; {:?}",
-                            page.page_errors(),
-                            page.console_messages()
-                        )
-                    });
+                {
+                    let state = page
+                        .evaluate::<String>("document.body.innerHTML")
+                        .await
+                        .unwrap();
+                    panic!(
+                        "{kind:?}/{language}/{mode}: {error}; {state}; {:?}",
+                        page.console_messages()
+                    );
+                }
                 assert!(page
                     .evaluate::<bool>(
                         "globalThis.__ssrButton === document.querySelector('#counter')"
@@ -1780,7 +1811,7 @@ async fn cli_vue_ssr_create_dev_build_preview_cycle() {
                     );
                     std::fs::write(&component, "<script setup>const broken = ;</script>").unwrap();
                     page.wait_for_function("document.querySelector('#ferrite-error-overlay')?.textContent.includes('App.vue')", Duration::from_secs(15)).await.unwrap();
-                    let failed = get(&url, "/").await;
+                    let failed = get(&url, base).await;
                     assert!(failed.starts_with("HTTP/1.0 500"), "{failed}");
                     assert!(!failed.contains("Hello CLI update"), "{failed}");
                     assert_eq!(

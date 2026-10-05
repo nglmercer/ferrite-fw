@@ -455,8 +455,14 @@ impl Builder {
                     }
                 }
             }
-            let rewritten = ferrite_html::rewrite_module_scripts(&html, |src| {
-                if let Some(entry) = manifest_entry(manifest, src) {
+            let based_html = ferrite_html::apply_core_rewrites(&html, &config.base, false);
+            let rewritten = ferrite_html::rewrite_module_scripts(&based_html, |src| {
+                let source = if config.base != "/" {
+                    src.strip_prefix(base.trim_end_matches('/')).unwrap_or(src)
+                } else {
+                    src
+                };
+                if let Some(entry) = manifest_entry(manifest, source) {
                     return format!("{base}{}", entry.file);
                 }
                 src.to_string()

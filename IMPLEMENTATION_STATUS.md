@@ -1,5 +1,30 @@
 # Framework support implementation status
 
+## Generated Vue SSR CLI acceptance beneath /app/
+
+The shared CLI cycle now runs as separate root-base and /app/ tests without
+weakening interaction, syntax recovery, CSS, hydration or console assertions.
+The base case requests meaningful SSR HTML and generated entry/style endpoints
+under /app/, navigates both real browsers there, builds and previews with empty
+PATH, and checks original server DOM retention and counter interaction for JS/TS.
+
+It exposed two real bugs. The shared HTML base rewrite duplicated equals/quote
+syntax, creating malformed src/href URLs; rewriting now preserves attribute
+syntax, with an exact HTML unit regression. Production HTML previously prefixed
+module chunks but left public references such as favicon.svg outside the base.
+Build now applies the shared base rewrite while resolving original manifest entry
+identities, preserving correct chunk URLs and prefixing public references.
+Diagnostic assertions identified failures instead of ignoring asset errors.
+
+Final explicitly selected /app/ CLI acceptance passed all four browser/language
+cycles in 120.51s. HTML tests passed eight; feature-enabled facade tests passed 33
+with one existing ignored case. Fresh CLI build, all-target HTML/facade/test Clippy
+with warnings denied, formatting and diff checks passed. Root-base acceptance was
+not rerun in this increment; no broader release/profile promotion is claimed.
+No configuration/lock migration is needed. Relative/remote bases, granular HMR,
+checking/source-map acceptance, remaining frameworks and release matrices remain
+unfinished. The full mission remains active.
+
 ## Development SSR stylesheet delivery under absolute base paths
 
 The development server mounts its existing router beneath a configured absolute
