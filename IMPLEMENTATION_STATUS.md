@@ -1,5 +1,25 @@
 # Framework support implementation status
 
+## Foreign results cannot silently lose JSON metadata
+
+A real Node regression reproduced a returned Map becoming an empty metadata
+object. The adapter now validates result data before protocol serialization,
+reporting the property path and requiring plain JSON data. It rejects Map/Set
+and custom prototypes, functions/undefined/BigInt, non-finite numbers, symbols,
+accessors/non-enumerable fields, sparse/named arrays, cycles and nesting beyond
+128 levels. Top-level undefined retains the documented optional-hook null result.
+Shared object references without cycles remain valid. Accessors are rejected
+without executing them; invalid results do not poison the persistent worker.
+
+All 14 real Node cases explicitly passed, including every invalid-data case and
+subsequent valid/shared-data calls. Standard plugin tests passed 19 with 14
+ignored there (all separately executed); strict all-target Clippy, changed-file
+formatting and diff checks passed. Official Vue/Svelte compiler conformance also
+passed in 22.52s during this increment. Plugins returning custom map classes
+must convert them to plain JSON explicitly. No lockfile migration. Complete
+plugin transport/context compatibility and the overall framework mission remain
+unfinished.
+
 ## Foreign hook objects reject hidden required behavior
 
 Real Node registration tests now cover non-enumerable buildStart, inherited

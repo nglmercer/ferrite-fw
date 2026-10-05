@@ -1510,6 +1510,72 @@ export default () => { factories++; return {transform(code) { return code; }}; }
             .is_some());
     }
 
+    #[tokio::test]
+    #[ignore = "requires real Node; executed explicitly"]
+    async fn real_node_rejects_lossy_json_results() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = dir.path().join("json.mjs");
+        std::fs::write(
+            &entry,
+            r#"
+export function result(kind) {
+  if (kind === 'map') return {metadata: new Map([['required', true]])};
+  if (kind === 'set') return new Set(['required']);
+  if (kind === 'function') return {required() {}};
+  if (kind === 'undefined') return {required: undefined};
+  if (kind === 'nan') return {required: NaN};
+  if (kind === 'symbol') return {[Symbol('required')]: true};
+  if (kind === 'accessor') return {get required() { throw new Error('getter executed'); }};
+  if (kind === 'cycle') { const value = {}; value.self = value; return value; }
+  if (kind === 'hole') return Array(1);
+  if (kind === 'hidden') return Object.defineProperty({}, 'required', {value: true});
+  if (kind === 'bigint') return 1n;
+  if (kind === 'deep') { let value = {}; for (let i = 0; i < 130; i++) value = {child: value}; return value; }
+  if (kind === 'shared') { const value = {required: true}; return {a: value, b: value}; }
+  return {code: 'export default 42;', map: null, metadata: {required: true}};
+}
+"#,
+        )
+        .unwrap();
+        let host = NodeAdapterHost::spawn(None).unwrap();
+        host.register_plugin("json", &entry.to_string_lossy())
+            .unwrap();
+        for kind in [
+            "map",
+            "set",
+            "function",
+            "undefined",
+            "nan",
+            "symbol",
+            "accessor",
+            "cycle",
+            "hole",
+            "hidden",
+            "bigint",
+            "deep",
+        ] {
+            let error = host
+                .call_export("json", "result", serde_json::json!(kind))
+                .await
+                .unwrap_err();
+            assert!(
+                error.to_string().contains("non-JSON result"),
+                "{kind}: {error}"
+            );
+        }
+        let shared = host
+            .call_export("json", "result", serde_json::json!("shared"))
+            .await
+            .unwrap();
+        assert_eq!(shared["a"], shared["b"]);
+        assert_eq!(
+            host.call_export("json", "result", serde_json::json!("valid"))
+                .await
+                .unwrap()["metadata"]["required"],
+            true
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[ignore = "requires real Node; executed explicitly"]
     async fn real_node_pending_limit_and_shutdown() {

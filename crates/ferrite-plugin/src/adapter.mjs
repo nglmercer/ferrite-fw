@@ -91,8 +91,33 @@ const hookContext = new Proxy(Object.freeze({}), {
   get(_target, key) { throw new Error(`unsupported foreign hook context this.${String(key)}; use the native plugin API`); }
 });
 
+function validateJsonResult(value, path = '$', active = new Set(), depth = 0) {
+  const fail = reason => { throw new Error(`non-JSON result at ${path}: ${reason}; return plain JSON data`); };
+  if (depth > 128) fail('nesting exceeds 128 levels');
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return;
+  if (typeof value === 'number') { if (!Number.isFinite(value)) fail('non-finite number'); return; }
+  if (typeof value !== 'object') fail(`unsupported ${typeof value}`);
+  if (active.has(value)) fail('cyclic reference');
+  const array = Array.isArray(value);
+  if (array && Object.getPrototypeOf(value) !== Array.prototype) fail('unsupported array prototype');
+  if (!array && Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) fail('unsupported object prototype');
+  active.add(value);
+  for (const key of Reflect.ownKeys(value)) {
+    if (array && key === 'length') continue;
+    if (typeof key === 'symbol') fail('symbol property');
+    if (array && (!/^(0|[1-9][0-9]*)$/.test(key) || Number(key) >= value.length)) fail('named array property');
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor.get || descriptor.set) fail(`accessor property ${key}`);
+    if (!descriptor.enumerable) fail(`non-enumerable property ${key}`);
+    validateJsonResult(descriptor.value, `${path}.${key}`, active, depth + 1);
+  }
+  if (array && Object.keys(value).length !== value.length) fail('sparse array');
+  active.delete(value);
+}
 function respond(id, ok, result, error) {
-  const message = { id, ok, result: result === undefined ? null : result };
+  const normalized = result === undefined ? null : result;
+  validateJsonResult(normalized);
+  const message = { id, ok, result: normalized };
   if (error !== undefined) message.error = error;
   protocolWrite(JSON.stringify(message) + "\n");
 }
