@@ -402,7 +402,9 @@ fn poison(what: &str) -> FerriteError {
 
 impl NodeAdapterInner {
     fn stop(&self, reason: &str) {
-        self.stopped.store(true, Ordering::SeqCst);
+        if self.stopped.swap(true, Ordering::SeqCst) {
+            return;
+        }
         if let Ok(mut child) = self.child.lock() {
             child.kill().ok();
             child.wait().ok();
@@ -486,6 +488,13 @@ impl NodeAdapterInner {
                     .write_all(line.as_bytes());
                 if let Err(error) = write_result {
                     self.stop("node input transport failed; worker terminated");
+                    // Shutdown may have broken the pipe before its stop owner
+                    // finishes draining waiters. Preserve that cancellation.
+                    if let Ok(response) =
+                        rx.recv_timeout(self.timeout.saturating_sub(started.elapsed()))
+                    {
+                        return Ok(response);
+                    }
                     return Err(FerriteError::Build(format!(
                         "tier-3 node adapter: node stdin closed: {error}"
                     )));
@@ -1415,6 +1424,58 @@ export default () => { factories++; return {transform(code) { return code; }}; }
         }
         let error = completed.unwrap().unwrap().unwrap_err();
         assert!(error.to_string().contains("timed out"), "{error}");
+        assert!(host.inner.pending.lock().unwrap().is_empty());
+        assert!(host
+            .inner
+            .child
+            .lock()
+            .unwrap()
+            .try_wait()
+            .unwrap()
+            .is_some());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "requires real Node; executed explicitly"]
+    async fn real_node_stalled_input_shutdown_preserves_cancellation() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = dir.path().join("paused.mjs");
+        std::fs::write(&entry, "export function pause() { process.stdin.pause(); setInterval(() => {}, 1000); return true; } export function consume(value) { return value.length; }").unwrap();
+        let host = Arc::new(NodeAdapterHost::spawn(None).unwrap());
+        host.register_plugin("compiler", &entry.to_string_lossy())
+            .unwrap();
+        host.call_export("compiler", "pause", serde_json::Value::Null)
+            .await
+            .unwrap();
+        let worker = host.clone();
+        let task = tokio::spawn(async move {
+            worker
+                .call_export(
+                    "compiler",
+                    "consume",
+                    serde_json::json!("x".repeat(4 * 1024 * 1024)),
+                )
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while host.inner.pending.lock().unwrap().is_empty()
+                || host.inner.stdin.try_lock().is_ok()
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        host.shutdown();
+        let error = tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("cancelled or shut down"),
+            "{error}"
+        );
         assert!(host.inner.pending.lock().unwrap().is_empty());
         assert!(host
             .inner

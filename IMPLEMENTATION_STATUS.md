@@ -1,5 +1,22 @@
 # Framework support implementation status
 
+## Cancellation during blocked Node transport writes
+
+A new real Node regression pauses stdin, sends 4 MiB, waits until the request
+holds the writer lock, then explicitly shuts down the worker. Before the fix,
+the call released but reported only Broken pipe, hiding cancellation. Stop now
+has one atomic owner, preserving the initiating shutdown reason rather than
+letting EOF/transport failures drain waiters first. A failed write receives that
+stop owner's response, retaining the actionable cancelled/shut-down diagnostic.
+The request must finish promptly, drain pending state and leave the child reaped.
+
+All 13 real Node transport cases explicitly passed in 1.27s, including stalled
+write deadlines, CPU-bound timeout, saturation and cancellation. Standard plugin
+tests passed 19 with 13 ignored there (all explicitly executed separately);
+strict all-target Clippy, changed-file formatting and diff checks passed. No
+migration. Physical process memory limits, wider host/platform matrices and the
+full framework mission remain unfinished.
+
 ## Node request deadlines include stalled transport writes
 
 Previously a worker that remained alive but paused stdin could block a large
