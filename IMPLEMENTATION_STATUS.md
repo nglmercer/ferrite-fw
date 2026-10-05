@@ -1,5 +1,21 @@
 # Framework support implementation status
 
+## Real foreign metadata through the native plugin API
+
+An explicitly executed Node hook fixture now registers through ForeignHookPlugin,
+then calls its native resolve/load API with real graph/resolver/plugin context.
+For client and SSR environments and both boolean flags it requires official
+moduleSideEffects to survive as native side_effects, importer identity and SSR
+context to survive in resolution metadata, loaded source to remain exact and
+registration dependencies to remain watched. This adds actual Node-to-Rust
+transport/API evidence beyond the preceding deserialization-only regression.
+
+All 15 real Node cases explicitly passed in 1.41s. Standard plugin tests passed
+20 with 15 ignored there (all separately executed); strict all-target Clippy,
+changed-file formatting and diff checks passed. No migration. Production
+side-effect elimination, complete foreign context/lifecycle and the wider
+framework mission remain unfinished.
+
 ## Official foreign moduleSideEffects field
 
 Foreign resolution/load result decoding now accepts Rollup's documented

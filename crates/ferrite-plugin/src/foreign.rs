@@ -272,6 +272,79 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    #[ignore = "requires real Node; executed explicitly"]
+    async fn real_node_official_side_effects_and_importer_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = dir.path().join("metadata.mjs");
+        std::fs::write(&entry, "export default {resolveId(id, importer, options) { return {id, moduleSideEffects: id.endsWith('true'), meta: {importer, ssr: options.ssr}}; }, load(id) { return {code: 'export default 42;', moduleSideEffects: id.endsWith('true')}; }, transform(code) { return {code, moduleSideEffects: false}; }};").unwrap();
+        let host = Arc::new(NodeAdapterHost::spawn(None).unwrap());
+        let plugin =
+            ForeignHookPlugin::register(host.clone(), "metadata", &entry, Value::Null).unwrap();
+        let graph = ferrite_graph::ModuleGraph::new();
+        let emitted = std::sync::Mutex::new(std::collections::HashMap::new());
+        let watches = std::sync::Mutex::new(Vec::new());
+        let warnings = std::sync::Mutex::new(Vec::new());
+        let importer = ferrite_core::ModuleId::new("/entry.js");
+        for kind in [
+            ferrite_core::EnvironmentKind::Client,
+            ferrite_core::EnvironmentKind::Ssr,
+        ] {
+            let resolver = ferrite_resolver::Resolver::for_environment(
+                dir.path().into(),
+                &ferrite_config::ResolveConfig::default(),
+                &kind,
+            );
+            let environment = ferrite_core::Environment::new("fixture", kind.clone());
+            let context = PluginContext {
+                graph: &graph,
+                resolver: &resolver,
+                environment: &environment,
+                emitted: &emitted,
+                watch_files: &watches,
+                warnings: &warnings,
+            };
+            for flag in [false, true] {
+                let specifier = format!("/module-{flag}");
+                let resolved = plugin
+                    .resolve_id(
+                        &context,
+                        ResolveHookRequest {
+                            kind: ferrite_resolver::ResolveKind::Import,
+                            specifier: &specifier,
+                            importer: Some(&importer),
+                            environment: kind.clone(),
+                            ssr: environment.kind.is_ssr(),
+                        },
+                    )
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(resolved.side_effects, Some(flag));
+                assert_eq!(resolved.meta["importer"], "/entry.js");
+                assert_eq!(resolved.meta["ssr"], environment.kind.is_ssr());
+                let loaded = plugin
+                    .load(
+                        &context,
+                        LoadRequest {
+                            id: specifier,
+                            environment: kind.clone(),
+                        },
+                    )
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(loaded.side_effects, Some(flag));
+                assert_eq!(loaded.code, "export default 42;");
+                assert!(loaded
+                    .dependencies
+                    .iter()
+                    .any(|path| std::path::Path::new(path) == entry.canonicalize().unwrap()));
+            }
+        }
+        host.shutdown();
+    }
+
     #[test]
     fn official_module_side_effects_preserve_boolean_metadata() {
         for field in ["moduleSideEffects", "sideEffects"] {
