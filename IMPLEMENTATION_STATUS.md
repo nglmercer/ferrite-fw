@@ -1,5 +1,23 @@
 # Framework support implementation status
 
+## Re-exported Vue type dependency edits and recovery
+
+The actual official Vue/TypeScript conformance case now routes defineProps through
+a barrel export into a leaf interface. It requires the leaf in pipeline watched
+dependencies and verifies a leaf-only string-to-boolean edit changes the generated
+runtime validator. An invalid leaf type must reject compilation rather than
+serve stale successful output; fixing the leaf to number must recover on the
+same server/compiler worker and remove the Boolean validator.
+
+The existing cache invalidation fix passed the initial re-export case without
+additional implementation changes. The expanded failure/recovery case also passed
+when explicitly executed with real packages, in 19.27s. Focused compiler-test
+Clippy with warnings denied, formatting and diff checks passed. These tests add
+evidence for this concrete transitive case, not a full type-resolution matrix.
+No migration is required. TypeScript config/package alias changes, watcher/browser
+type edits, complete type checking, remaining frameworks and release gates remain
+unfinished. The full mission stays active.
+
 ## Vue imported type dependency cache invalidation
 
 The real official-compiler fixture now installs explicit TypeScript 5.9.3 and

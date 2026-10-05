@@ -255,6 +255,61 @@ async fn official_components_resources_maps_cache_and_library_parity() {
         .unwrap();
     assert!(updated.code.contains("type: Number"), "{}", updated.code);
     assert!(!updated.code.contains("type: String"), "{}", updated.code);
+    let leaf = project.root.join("leaf.ts");
+    std::fs::write(&leaf, "export interface Props { value: string }").unwrap();
+    std::fs::write(&types, "export type { Props } from './leaf';").unwrap();
+    let via_barrel = server
+        .pipeline_module(&ModuleId::new("/Typed.vue"), None, "client")
+        .await
+        .unwrap();
+    assert!(via_barrel
+        .dependencies
+        .iter()
+        .any(|path| path.ends_with("leaf.ts")));
+    assert!(
+        via_barrel.code.contains("type: String"),
+        "{}",
+        via_barrel.code
+    );
+    std::fs::write(&leaf, "export interface Props { value: boolean }").unwrap();
+    let updated_leaf = server
+        .pipeline_module(&ModuleId::new("/Typed.vue"), None, "client")
+        .await
+        .unwrap();
+    assert!(
+        updated_leaf.code.contains("type: Boolean"),
+        "{}",
+        updated_leaf.code
+    );
+    assert!(
+        !updated_leaf.code.contains("type: String"),
+        "{}",
+        updated_leaf.code
+    );
+    std::fs::write(&leaf, "export interface Props { value: ; }").unwrap();
+    let invalid_type = server
+        .pipeline_module(&ModuleId::new("/Typed.vue"), None, "client")
+        .await
+        .unwrap_err();
+    assert!(
+        invalid_type.to_string().contains("Unexpected token"),
+        "{invalid_type}"
+    );
+    std::fs::write(&leaf, "export interface Props { value: number }").unwrap();
+    let recovered_type = server
+        .pipeline_module(&ModuleId::new("/Typed.vue"), None, "client")
+        .await
+        .unwrap();
+    assert!(
+        recovered_type.code.contains("type: Number"),
+        "{}",
+        recovered_type.code
+    );
+    assert!(
+        !recovered_type.code.contains("type: Boolean"),
+        "{}",
+        recovered_type.code
+    );
     // The same declarative opt-in is resolved by CLI and library entrypoints.
     std::fs::write(
         project.root.join("ferrite.toml"),
