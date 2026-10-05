@@ -1625,6 +1625,19 @@ async fn cli_vue_ssr_generation_and_clean_frozen_reinstall() {
 #[tokio::test]
 #[ignore = "fresh napi-vm CLI, registry, Node compiler and both browsers"]
 async fn cli_vue_ssr_create_dev_build_preview_cycle() {
+    async fn get(url: &str, path: &str) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut stream = tokio::net::TcpStream::connect(url.strip_prefix("http://").unwrap())
+            .await
+            .unwrap();
+        stream
+            .write_all(format!("GET {path} HTTP/1.0\r\nHost: localhost\r\n\r\n").as_bytes())
+            .await
+            .unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.unwrap();
+        response
+    }
     let binary = cli();
     for kind in [BrowserKind::Chromium, BrowserKind::Firefox] {
         let executable = match kind {
@@ -1685,6 +1698,30 @@ async fn cli_vue_ssr_create_dev_build_preview_cycle() {
                         .all(|module| !module.code.contains("/@ferrite/client")));
                 }
                 let (mut child, url) = server(&binary, &destination, mode, mode == "ssr").await;
+                let response = get(&url, "/").await;
+                assert!(response.starts_with("HTTP/1.0 200"), "{response}");
+                let (headers, html) = response.split_once("\r\n\r\n").unwrap();
+                assert!(
+                    headers.to_lowercase().contains("content-type: text/html"),
+                    "{headers}"
+                );
+                assert!(
+                    html.contains("Hello Ferrite + Vue")
+                        && html.contains("count: 0")
+                        && html.contains("data-v-"),
+                    "{html}"
+                );
+                assert!(!html.contains("<!--ssr-outlet-->"), "{html}");
+                if mode == "ssr" {
+                    assert!(html.contains("ferrite-style=0&amp;direct"), "{html}");
+                } else {
+                    assert!(get(&url, "/server/renderer.json")
+                        .await
+                        .starts_with("HTTP/1.0 404"));
+                    assert!(get(&url, "/server/manifest.json")
+                        .await
+                        .starts_with("HTTP/1.0 404"));
+                }
                 let page = browser.new_page().await.unwrap();
                 page.goto(&url).await.unwrap();
                 page.wait_for_function("globalThis.__hydrated === true", Duration::from_secs(15))

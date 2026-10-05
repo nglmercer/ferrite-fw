@@ -1,5 +1,22 @@
 # Framework support implementation status
 
+## CLI SSR cycle verifies HTML before JavaScript and private output
+
+The same-project Vue SSR CLI acceptance cycle now requests development and built
+preview over raw TCP HTTP before opening a browser. It requires HTTP 200, HTML
+content type, meaningful generated heading/counter/scoped markup and replacement
+of the SSR outlet. Development must include generated component stylesheet links.
+Built preview must reject private renderer artifacts and server manifests with
+HTTP 404. These assertions accompany the existing real hydration, interaction,
+watched edits, build and Node-free preview checks for both languages and browsers.
+
+The explicitly selected test passed all four language/browser cycles in 116.96s.
+Changed-test Clippy with warnings denied, formatting and diff checks passed.
+No assertions were removed and no profile was promoted. Complete syntax-recovery
+integration into this same CLI cycle, granular HMR, framework checking, remaining
+frameworks and release matrices remain unfinished. No migration is required;
+the full mission remains active.
+
 ## Single-project Vue SSR CLI creation/development/build/preview cycle
 
 The explicitly executed cli_vue_ssr_create_dev_build_preview_cycle test uses a
