@@ -1,5 +1,22 @@
 # Framework support implementation status
 
+## Exact direct-CSS transport query parsing
+
+Shared CSS transformation and HTTP response typing now use one exact query-flag
+predicate. Filenames containing direct, indirect flags, name=direct values,
+direct=false and redirect fields cannot accidentally request raw CSS. An exact
+direct flag works alone or alongside other fields in either order. This fixes
+substring-based response/compiler disagreement without changing component
+ownership or generated resource IDs.
+
+The new real-pipeline regression failed before the fix on style.css?indirect,
+then passed unchanged afterward. Server tests passed 58 with two existing ignored
+cases; all-target server Clippy with warnings denied, formatting and diff checks
+passed. No configuration/lock migration is required. Clients relying on accidental
+substring matching must request ?direct explicitly. Broader framework, HMR,
+checker, SSR and release acceptance remains unfinished; the full mission stays
+active.
+
 ## Syntax rejection and recovery inside the Vue SSR CLI cycle
 
 The same generated-project CLI cycle now includes an intentionally invalid Vue

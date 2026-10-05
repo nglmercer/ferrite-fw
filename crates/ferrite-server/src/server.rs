@@ -125,7 +125,9 @@ impl DevServer {
             let content_type = ferrite_assets::content_type(&module.id.0);
             return Ok(PipelineResponse::bytes(bytes, content_type));
         }
-        let content_type = if module.module_type == ModuleType::Css && url.contains("direct") {
+        let content_type = if module.module_type == ModuleType::Css
+            && is_direct_css_query(ModuleId::new(url).split_query().1)
+        {
             "text/css"
         } else {
             "text/javascript"

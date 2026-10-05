@@ -2455,3 +2455,56 @@ async fn ssr_http_preserves_request_and_response_contracts_at_root() {
     let _ = serving.await;
     server.close();
 }
+
+#[tokio::test]
+async fn direct_css_requires_an_exact_query_flag() {
+    let root = tempfile::tempdir().unwrap();
+    for name in ["style.css", "indirect.css"] {
+        std::fs::write(root.path().join(name), "button { color: red; }").unwrap();
+    }
+    let config = ferrite_config::resolve_config(
+        Default::default(),
+        Some(root.path().into()),
+        Default::default(),
+    )
+    .unwrap();
+    let server = DevServer::new_without_watcher(config, vec![])
+        .await
+        .unwrap();
+    for url in [
+        "/style.css?direct",
+        "/style.css?version=1&direct",
+        "/style.css?direct&version=1",
+    ] {
+        let result = server.transform_request(url).await.unwrap();
+        assert_eq!(result.content_type, "text/css", "{url}");
+        let module = server
+            .pipeline_module(&ModuleId::new(url), None, "client")
+            .await
+            .unwrap();
+        assert!(
+            !module.code.contains("/@ferrite/client"),
+            "{url}: {}",
+            module.code
+        );
+    }
+    for url in [
+        "/indirect.css",
+        "/style.css?indirect",
+        "/style.css?name=direct",
+        "/style.css?direct=false",
+        "/style.css?redirect=1",
+    ] {
+        let result = server.transform_request(url).await.unwrap();
+        assert_eq!(result.content_type, "text/javascript", "{url}");
+        let module = server
+            .pipeline_module(&ModuleId::new(url), None, "client")
+            .await
+            .unwrap();
+        assert!(
+            module.code.contains("/@ferrite/client"),
+            "{url}: {}",
+            module.code
+        );
+    }
+}

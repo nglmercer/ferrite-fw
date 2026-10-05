@@ -81,7 +81,7 @@ impl DevServer {
         match module_type {
             &ModuleType::Css => {
                 let (path_part, query) = id.split_query();
-                let direct = query.is_some_and(|q| q.contains("direct"));
+                let direct = is_direct_css_query(query);
                 let css_id = path_part.to_string();
                 let result = ferrite_css::transform_css(
                     &css_id,

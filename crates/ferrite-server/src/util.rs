@@ -8,6 +8,11 @@ use ferrite_transform::OxcOptions;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Direct CSS is a transport flag, never a substring of a path or query value.
+pub(crate) fn is_direct_css_query(query: Option<&str>) -> bool {
+    query.is_some_and(|query| query.split('&').any(|part| part == "direct"))
+}
+
 /// True when the module must be served as raw bytes.
 pub(crate) fn is_raw_asset(path: &str, module_type: &ModuleType, query: Option<&str>) -> bool {
     if query.is_some() {
