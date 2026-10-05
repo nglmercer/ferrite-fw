@@ -1515,6 +1515,42 @@ async fn generated_vue_dev_browser(kind: ferrite_e2e::BrowserKind) {
             "{:?}",
             page.console_messages()
         );
+        let style_location = format!("App.vue:{}:8", changed.lines().count() + 1);
+        std::fs::write(
+            project.root.join("src/App.vue"),
+            format!("{changed}<style>button {{ color: red;</style>\n"),
+        )
+        .unwrap();
+        page.wait_for_function(&format!("document.querySelector('#ferrite-error-overlay')?.textContent.includes('{}') && document.querySelector('#ferrite-error-overlay')?.textContent.includes('Unclosed block')", style_location), Duration::from_secs(15)).await.unwrap();
+        assert_eq!(
+            page.evaluate::<String>("document.querySelector('#counter').textContent")
+                .await
+                .unwrap(),
+            "count: 1"
+        );
+        let style_errors = page
+            .console_messages()
+            .iter()
+            .filter(|message| message.kind == "error")
+            .count();
+        std::fs::write(project.root.join("src/App.vue"), &changed).unwrap();
+        page.wait_for_function("globalThis.__hydrated === true && !document.querySelector('#ferrite-error-overlay') && document.querySelector('h1')?.textContent === 'Hello updated Vue' && document.querySelector('#counter')?.textContent === 'count: 0' && getComputedStyle(document.querySelector('#counter')).color === 'rgb(0, 0, 128)'", Duration::from_secs(20)).await.unwrap();
+        page.locator("#counter").click().await.unwrap();
+        page.wait_for_function(
+            "document.querySelector('#counter').textContent === 'count: 1'",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            page.console_messages()
+                .iter()
+                .filter(|message| message.kind == "error")
+                .count(),
+            style_errors,
+            "{:?}",
+            page.console_messages()
+        );
         std::fs::write(
             project.root.join("src/App.vue"),
             "<script setup>const broken = ;</script>",

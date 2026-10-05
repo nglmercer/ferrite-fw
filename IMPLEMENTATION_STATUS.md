@@ -1,5 +1,21 @@
 # Framework support implementation status
 
+## Vue style error overlay and watched recovery
+
+Generated JS/TS development SSR acceptance now appends a malformed inline CSS
+block while the counter is at one. The real watcher/browser path must show
+Unclosed block with the exact App.vue line and column 8, preserve the working
+DOM/counter, then clear the overlay after correction, restore blue scoped CSS,
+reset through the declared reload behavior and allow another counter click.
+Console error counts must stop increasing after CSS recovery. Existing script
+syntax failure/recovery, hydration and transitive type edit checks remain active.
+
+Explicit Chromium execution passed in 44.69s and Firefox in 52.52s. Focused
+compiler-test Clippy with napi-vm and warnings denied, changed-file formatting
+and diff checks passed. This validates the preceding style-coordinate fix in
+actual development overlays, rather than only compiler strings. No migration;
+full maps/diagnostics matrices, granular HMR and the full mission remain unfinished.
+
 ## Original component columns for Vue style errors
 
 Real official compiler regression cases now require exact inline and multiline
