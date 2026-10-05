@@ -1,5 +1,22 @@
 # Framework support implementation status
 
+## Official foreign moduleSideEffects field
+
+Foreign resolution/load result decoding now accepts Rollup's documented
+moduleSideEffects spelling as an alias of existing sideEffects boolean metadata.
+The regression reproduced rejection as an unknown field before the change.
+Tests require true/false preservation under both names for resolve/load, reject
+conflicting duplicate aliases and retain explicit rejection of unsupported
+no-treeshake string semantics. Transform side-effect overrides remain explicitly
+unsupported rather than silently discarded. Official field contract checked at
+https://rollupjs.org/plugin-development/#resolveid and #load.
+
+Plugin tests passed 20 with 14 ignored there; all 14 real Node cases explicitly
+passed in 1.35s. Strict all-target Clippy, changed-file formatting and diff checks
+passed. This increment verifies result decoding and transport regressions, not
+a new production tree-shaking matrix. No migration; existing sideEffects callers
+remain valid. Full foreign compatibility and the broader mission are unfinished.
+
 ## Foreign results cannot silently lose JSON metadata
 
 A real Node regression reproduced a returned Map becoming an empty metadata

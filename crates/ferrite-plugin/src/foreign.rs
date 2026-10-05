@@ -96,6 +96,7 @@ struct Resolution {
     id: String,
     #[serde(default)]
     external: bool,
+    #[serde(alias = "moduleSideEffects")]
     side_effects: Option<bool>,
     module_type: Option<ModuleType>,
     #[serde(default)]
@@ -111,6 +112,7 @@ struct CodeResult {
     #[serde(default)]
     dependencies: Vec<String>,
     module_type: Option<ModuleType>,
+    #[serde(alias = "moduleSideEffects")]
     side_effects: Option<bool>,
 }
 
@@ -268,6 +270,34 @@ mod tests {
                 .code,
             "source"
         );
+    }
+
+    #[test]
+    fn official_module_side_effects_preserve_boolean_metadata() {
+        for field in ["moduleSideEffects", "sideEffects"] {
+            for flag in [false, true] {
+                let mut resolution = serde_json::json!({"id": "/module.js"});
+                resolution[field] = flag.into();
+                assert_eq!(
+                    decode::<Resolution>(resolution, "resolveId")
+                        .unwrap()
+                        .side_effects,
+                    Some(flag)
+                );
+                let mut loaded = serde_json::json!({"code": "export default 42;"});
+                loaded[field] = flag.into();
+                assert_eq!(
+                    code_result(loaded, "load").unwrap().side_effects,
+                    Some(flag)
+                );
+            }
+        }
+        assert!(decode::<Resolution>(
+            serde_json::json!({"id": "/module.js", "moduleSideEffects": "no-treeshake"}),
+            "resolveId"
+        )
+        .is_err());
+        assert!(decode::<Resolution>(serde_json::json!({"id": "/module.js", "moduleSideEffects": false, "sideEffects": true}), "resolveId").is_err());
     }
 
     #[test]
