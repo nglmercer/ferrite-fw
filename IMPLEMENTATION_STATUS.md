@@ -1,5 +1,24 @@
 # Framework support implementation status
 
+## Preserve official Vue error source coordinates
+
+The focused compiler wrapper now preserves compiler-provided positive integer
+loc.start line/column coordinates in Vue parse/template/style error messages.
+Errors without valid locations remain filename/message diagnostics; no coordinates
+are fabricated. The real-package pipeline regression requires a malformed nested
+template to report Counter.vue:2:1 and its missing-end-tag diagnostic through the
+plugin transport. It failed before the fix and passed afterward.
+
+The complete official Vue/Svelte compiler resource/maps/cache/library-parity case
+was explicitly executed and passed in 15.07s. All-target framework/test Clippy and
+final focused-test Clippy with warnings denied, formatting and diff checks passed.
+The first post-fix run verified the location but failed later because the new
+invalid fixture had not been restored; restoring original source before subsequent
+parity checks fixed test isolation. No config/lock migration is required.
+Structured error ranges/code frames and full source-map/checker acceptance remain
+unfinished, as do the remaining frameworks and release matrices. The full mission
+remains active.
+
 ## Exact direct-CSS transport query parsing
 
 Shared CSS transformation and HTTP response typing now use one exact query-flag

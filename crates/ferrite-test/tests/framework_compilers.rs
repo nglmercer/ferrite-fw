@@ -222,6 +222,19 @@ async fn official_components_resources_maps_cache_and_library_parity() {
         .await
         .unwrap_err();
     assert!(error.to_string().contains("no longer exists"), "{error}");
+    std::fs::write(
+        project.root.join("Counter.vue"),
+        "<template>\n<div>\n</template>\n",
+    )
+    .unwrap();
+    let error = server
+        .pipeline_module(&ModuleId::new("/Counter.vue"), None, "client")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("Counter.vue:2:1"), "{error}");
+    assert!(error.contains("missing end tag"), "{error}");
+    std::fs::write(project.root.join("Counter.vue"), &original).unwrap();
     // The same declarative opt-in is resolved by CLI and library entrypoints.
     std::fs::write(
         project.root.join("ferrite.toml"),

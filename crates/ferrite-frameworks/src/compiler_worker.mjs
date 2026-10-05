@@ -46,7 +46,14 @@ function svelteMap(value, request, diagnostics) {
   return json;
 }
 function errors(values, filename) {
-  if (values?.length) throw new Error(`${filename}: ${values.map(value => typeof value === 'string' ? value : value.message).join('\n')}`);
+  if (values?.length) throw new Error(values.map(value => {
+    const start = typeof value === 'object' && value !== null ? value.loc?.start : null;
+    const position = Number.isInteger(start?.line) && start.line > 0
+      && Number.isInteger(start?.column) && start.column > 0
+      ? `:${start.line}:${start.column}` : '';
+    const message = typeof value === 'string' ? value : value.message;
+    return `${filename}${position}: ${message}`;
+  }).join('\n'));
 }
 export async function compile(request) {
   const module = compiler(request);
