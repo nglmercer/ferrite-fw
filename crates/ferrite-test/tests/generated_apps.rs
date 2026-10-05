@@ -1754,6 +1754,7 @@ async fn cli_vue_ssr_create_dev_build_preview_cycle() {
                 )
                 .await
                 .unwrap();
+                let mut expected_errors = 0;
                 if mode == "ssr" {
                     std::fs::write(
                         &component,
@@ -1770,15 +1771,55 @@ async fn cli_vue_ssr_create_dev_build_preview_cycle() {
                     )
                     .await
                     .unwrap();
+                    assert!(
+                        page.console_messages()
+                            .iter()
+                            .all(|message| message.kind != "error"),
+                        "{:?}",
+                        page.console_messages()
+                    );
+                    std::fs::write(&component, "<script setup>const broken = ;</script>").unwrap();
+                    page.wait_for_function("document.querySelector('#ferrite-error-overlay')?.textContent.includes('App.vue')", Duration::from_secs(15)).await.unwrap();
+                    let failed = get(&url, "/").await;
+                    assert!(failed.starts_with("HTTP/1.0 500"), "{failed}");
+                    assert!(!failed.contains("Hello CLI update"), "{failed}");
+                    assert_eq!(
+                        page.evaluate::<String>("document.querySelector('#counter').textContent")
+                            .await
+                            .unwrap(),
+                        "count: 1"
+                    );
+                    expected_errors = page
+                        .console_messages()
+                        .iter()
+                        .filter(|message| message.kind == "error")
+                        .count();
                     std::fs::write(&component, &original).unwrap();
-                    page.wait_for_function("globalThis.__hydrated === true && document.querySelector('h1')?.textContent === 'Hello Ferrite + Vue' && getComputedStyle(document.querySelector('#counter')).color === 'rgb(128, 0, 0)'", Duration::from_secs(20)).await.unwrap();
+                    page.wait_for_function("globalThis.__hydrated === true && !document.querySelector('#ferrite-error-overlay') && document.querySelector('#counter')?.textContent === 'count: 0' && document.querySelector('h1')?.textContent === 'Hello Ferrite + Vue' && getComputedStyle(document.querySelector('#counter')).color === 'rgb(128, 0, 0)'", Duration::from_secs(20)).await.unwrap();
                 }
+                if mode == "ssr" {
+                    page.locator("#counter").click().await.unwrap();
+                    page.wait_for_function(
+                        "document.querySelector('#counter').textContent === 'count: 1'",
+                        Duration::from_secs(5),
+                    )
+                    .await
+                    .unwrap();
+                }
+                assert_eq!(
+                    page.console_messages()
+                        .iter()
+                        .filter(|message| message.kind == "error")
+                        .count(),
+                    expected_errors,
+                    "{:?}",
+                    page.console_messages()
+                );
                 assert!(page.page_errors().is_empty(), "{:?}", page.page_errors());
                 assert!(
                     page.console_messages()
                         .iter()
-                        .all(|message| message.kind != "error"
-                            && !message.text.to_lowercase().contains("hydration")),
+                        .all(|message| !message.text.to_lowercase().contains("hydration")),
                     "{:?}",
                     page.console_messages()
                 );

@@ -1,5 +1,24 @@
 # Framework support implementation status
 
+## Syntax rejection and recovery inside the Vue SSR CLI cycle
+
+The same generated-project CLI cycle now includes an intentionally invalid Vue
+component after a successful watched edit and click. Both language variants in
+Chromium and Firefox must show an App.vue error overlay, retain the previously
+interactive counter, and return HTTP 500 without stale successful component HTML.
+Restoring source must remove the overlay, hydrate original markup/styles with the
+current reset behavior, and accept another real click before production build
+and Node-free preview. Successful phases reject console errors; errors from the
+intentional syntax failure are recorded and recovery may add none. Page errors
+and hydration diagnostics remain rejected throughout.
+
+The explicitly executed strengthened cycle passed all four browser/language
+combinations in 121.30s. Changed-test Clippy with warnings denied, formatting and
+diff checks passed. No migration or support-status promotion is required.
+Granular Vue HMR/state preservation, checker/source-map acceptance, remaining
+framework implementations and complete release matrices remain unfinished;
+the full mission remains active.
+
 ## CLI SSR cycle verifies HTML before JavaScript and private output
 
 The same-project Vue SSR CLI acceptance cycle now requests development and built
