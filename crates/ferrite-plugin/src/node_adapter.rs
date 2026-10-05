@@ -423,6 +423,7 @@ impl NodeAdapterInner {
 
     /// Send one request, await its response (or timeout).
     fn request(&self, mut body: serde_json::Value) -> Result<AdapterResponse> {
+        let started = std::time::Instant::now();
         if self.stopped.load(Ordering::SeqCst) {
             return Err(FerriteError::Build(
                 "node worker is stopped; explicitly create a new enabled host".into(),
@@ -456,28 +457,55 @@ impl NodeAdapterInner {
             pending.insert(id, tx);
         }
         line.push('\n');
-        let write_result = self
-            .stdin
-            .lock()
-            .map_err(|_| poison("stdin"))?
-            .write_all(line.as_bytes())
-            .map_err(|error| {
-                FerriteError::Build(format!("tier-3 node adapter: node stdin closed: {error}"))
+        let timed_out = AtomicBool::new(false);
+        let timeout_error = || {
+            FerriteError::Build(format!(
+                "node worker request timed out after {} ms; worker terminated",
+                self.timeout.as_millis()
+            ))
+        };
+        // The deadline must also cover waiting for the writer lock and a full
+        // pipe. Killing the child releases blocked writes on every platform.
+        std::thread::scope(|scope| {
+            let (finished_tx, finished_rx) = mpsc::channel::<()>();
+            let deadline_expired = &timed_out;
+            scope.spawn(move || {
+                if matches!(
+                    finished_rx.recv_timeout(self.timeout.saturating_sub(started.elapsed())),
+                    Err(mpsc::RecvTimeoutError::Timeout)
+                ) {
+                    deadline_expired.store(true, Ordering::SeqCst);
+                    self.stop("node compiler/plugin request timed out; worker terminated");
+                }
             });
-        if let Err(error) = write_result {
-            self.stop("node input transport failed; worker terminated");
-            return Err(error);
-        }
-        match rx.recv_timeout(self.timeout) {
-            Ok(response) => Ok(response),
-            Err(_) => {
-                self.stop("node compiler/plugin request timed out; worker terminated");
-                Err(FerriteError::Build(format!(
-                    "node worker request timed out after {} ms; worker terminated",
-                    self.timeout.as_millis()
-                )))
+            let result = (|| {
+                let write_result = self
+                    .stdin
+                    .lock()
+                    .map_err(|_| poison("stdin"))?
+                    .write_all(line.as_bytes());
+                if let Err(error) = write_result {
+                    self.stop("node input transport failed; worker terminated");
+                    return Err(FerriteError::Build(format!(
+                        "tier-3 node adapter: node stdin closed: {error}"
+                    )));
+                }
+                match rx.recv_timeout(self.timeout.saturating_sub(started.elapsed())) {
+                    Ok(response) => Ok(response),
+                    Err(_) => {
+                        timed_out.store(true, Ordering::SeqCst);
+                        self.stop("node compiler/plugin request timed out; worker terminated");
+                        Err(timeout_error())
+                    }
+                }
+            })();
+            let _ = finished_tx.send(());
+            if timed_out.load(Ordering::SeqCst) {
+                Err(timeout_error())
+            } else {
+                result
             }
-        }
+        })
     }
 }
 
@@ -1352,6 +1380,50 @@ export default () => { factories++; return {transform(code) { return code; }}; }
             1
         );
         host.shutdown();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "requires real Node; executed explicitly"]
+    async fn real_node_stalled_input_obeys_request_deadline() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = dir.path().join("paused.mjs");
+        std::fs::write(&entry, "export function pause() { process.stdin.pause(); setInterval(() => {}, 1000); return true; } export function consume(value) { return value.length; }").unwrap();
+        let host = Arc::new(
+            NodeAdapterHost::spawn_with_timeout(None, Duration::from_millis(500)).unwrap(),
+        );
+        host.register_plugin("compiler", &entry.to_string_lossy())
+            .unwrap();
+        host.call_export("compiler", "pause", serde_json::Value::Null)
+            .await
+            .unwrap();
+        let worker = host.clone();
+        let mut task = tokio::spawn(async move {
+            worker
+                .call_export(
+                    "compiler",
+                    "consume",
+                    serde_json::json!("x".repeat(4 * 1024 * 1024)),
+                )
+                .await
+        });
+        let completed = tokio::time::timeout(Duration::from_secs(2), &mut task).await;
+        if completed.is_err() {
+            // Cleanup keeps the regression safe even before the fix.
+            host.shutdown();
+            let _ = task.await;
+            panic!("request blocked in stdin beyond its deadline");
+        }
+        let error = completed.unwrap().unwrap().unwrap_err();
+        assert!(error.to_string().contains("timed out"), "{error}");
+        assert!(host.inner.pending.lock().unwrap().is_empty());
+        assert!(host
+            .inner
+            .child
+            .lock()
+            .unwrap()
+            .try_wait()
+            .unwrap()
+            .is_some());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

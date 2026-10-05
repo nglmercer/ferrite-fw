@@ -1,5 +1,26 @@
 # Framework support implementation status
 
+## Node request deadlines include stalled transport writes
+
+Previously a worker that remained alive but paused stdin could block a large
+write before response timeout began. A real Node regression now pauses input,
+keeps the process alive and sends a 4 MiB request; it reproduced blocking past
+the outer two-second deadline, with explicit shutdown cleanup to keep the red
+test safe. The request now uses one elapsed deadline from request start through
+queueing, writer locking, pipe writes and response waiting. A scoped watchdog
+terminates/reaps the worker on expiry, releasing blocked writes; it is joined
+before the call finishes and cancelled on ordinary completion. Pending calls
+retain the existing 64-call cap and explicit-stop/no-restart behavior.
+
+The stalled-input case explicitly passed in 0.56s after the fix. All 12 real
+Node transport tests explicitly passed together in 1.26s. Standard plugin tests
+passed 19 (12 ignored there, separately executed above); strict all-target
+plugin Clippy, changed-file formatting and diff checks passed. Actual official
+Vue/Svelte compiler maps/resources/cache/library conformance passed in 21.18s.
+No migration; scoped watchdogs add one temporary thread per admitted request.
+Physical process memory isolation and full host/release matrices remain
+unfinished. Node remains explicitly enabled and is not a sandbox.
+
 ## Bounded persistent Node worker pending requests
 
 The existing compiler/plugin transport now caps pending requests at 64 and
