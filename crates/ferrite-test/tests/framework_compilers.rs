@@ -933,14 +933,14 @@ async fn generated_vue_ssr_sources_install_build_and_render() {
         }
         let component = generated.get_mut("src/App.vue").unwrap();
         *component = component
-            .replace("import { ref }", "import { ref, useCssModule }")
+            .replace("import { ref }", "import { ref, computed, useCssModule }")
             .replace(
                 "</script>",
-                "const classes = useCssModule('__proto__');\n</script>",
+                "const classes = useCssModule('__proto__');\nconst width = computed(() => (count.value + 1) + 'px');\n</script>",
             )
             .replace("id=\"counter\"", "id=\"counter\" :class=\"classes.accent\"");
         component.push_str(
-            "<style module='__proto__'>.accent { background-color: rgb(0, 128, 0); }</style>\n",
+            "<style module='__proto__'>.accent { background-color: rgb(0, 128, 0); border-style: solid; border-width: v-bind(width); }</style>\n",
         );
         // Observability only: snapshot before module execution and signal mount.
         let index = generated.get_mut("index.html").unwrap();
@@ -1009,6 +1009,10 @@ async fn generated_vue_ssr_sources_install_build_and_render() {
         assert!(html.contains("Hello Ferrite + Vue"), "{language}: {html}");
         assert!(html.contains("count: 0</button>"), "{language}: {html}");
         assert!(html.contains("data-v-"), "{language}: {html}");
+        assert!(
+            html.contains("style=\"--") && html.contains(":1px"),
+            "{language}: SSR must serialize the initial CSS variable: {html}"
+        );
         let mut config = builder.config.clone();
         let reservation = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         config.server.port = reservation.local_addr().unwrap().port();
@@ -1072,6 +1076,14 @@ async fn generated_vue_ssr_sources_install_build_and_render() {
                 )
                 .await
                 .unwrap());
+            assert_eq!(
+                page.evaluate::<String>(
+                    "getComputedStyle(document.querySelector('#counter')).borderTopWidth"
+                )
+                .await
+                .unwrap(),
+                "1px"
+            );
             page.locator("#counter").click().await.unwrap();
             page.wait_for_function(
                 "document.querySelector('#counter').textContent === 'count: 1'",
@@ -1095,6 +1107,12 @@ async fn generated_vue_ssr_sources_install_build_and_render() {
                 .unwrap(),
                 "rgb(0, 128, 0)"
             );
+            page.wait_for_function(
+                "getComputedStyle(document.querySelector('#counter')).borderTopWidth === '2px'",
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
             assert!(page.page_errors().is_empty(), "{:?}", page.page_errors());
             assert!(
                 page.console_messages()

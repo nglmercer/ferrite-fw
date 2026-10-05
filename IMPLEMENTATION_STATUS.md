@@ -1,5 +1,22 @@
 # Framework support implementation status
 
+## Reactive Vue CSS variables through production SSR
+
+Generated production SSR acceptance now uses the official computed/useCssModule
+APIs and a CSS module border-width driven by v-bind(width). It requires the
+renderer HTML to serialize the initial 1px CSS variable before client execution,
+then checks computed border width is 1px after hydration and changes to 2px after
+counter interaction. Existing extracted background CSS, scoped color, retained
+server DOM and console/hydration checks remain active for JS/TS and both browsers.
+
+Initial reactive browser execution passed in 50.15s; the final case including
+pre-JavaScript serialized CSS variable assertions passed in 44.86s. Focused
+compiler-test Clippy with napi-vm and warnings denied, changed-file formatting
+and diff checks passed. Existing official script/template/style compilation
+handled this case without new runtime code. This verifies the concrete production
+path; full development CSS/HMR, preprocessors and the remaining framework mission
+are unfinished. No migration is required.
+
 ## Prototype-sensitive Vue CSS module names
 
 The official compiler conformance fixture now includes default, named,
