@@ -1,5 +1,32 @@
 # Framework support implementation status
 
+## Single-project Vue SSR CLI creation/development/build/preview cycle
+
+The explicitly executed cli_vue_ssr_create_dev_build_preview_cycle test uses a
+freshly built napi-vm CLI to generate and install both JavaScript and TypeScript
+Vue SSR projects, then runs development, watched edits, production build and
+preview in each same project through actual CLI subprocesses. Chromium and
+Firefox must retain the server button during hydration, handle real counter
+clicks, apply scoped styles, update text/CSS after a source edit using the current
+intentional reload/reset strategy, and restore original source before building.
+Production artifacts must retain styles and exclude the dev client from the
+renderer graph. Built preview runs with an empty PATH and must hydrate, preserve
+server DOM, apply CSS and remain interactive without page/console errors or
+hydration diagnostics. Generation/install also run with an empty PATH; explicit
+Node compilation remains enabled for development and build. Instrumentation only
+adds a DOM snapshot and mount-completion flag.
+
+The actual selected test passed all four browser/language cycles in 119.93 seconds.
+Fresh CLI build, compiler-test Clippy with warnings denied, formatting and diff
+checks passed. The previous execution's uncommitted test/logs were absent after
+the environment transition; this restored test was executed anew rather than
+reusing that historical result. No profile is promoted to tested. Syntax-error
+recovery, clean frozen reinstall and HTTP diagnostics remain covered by separate
+committed tests; this cycle does not yet combine every mandatory acceptance item.
+Granular HMR/state preservation, source maps/checkers, full release matrices and
+the remaining frameworks remain unfinished. No migration is required; the full
+mission remains active.
+
 ## Runtime-feature-aware doctor diagnostics
 
 The runtime exposes a metadata-only compiled-graph availability check which starts

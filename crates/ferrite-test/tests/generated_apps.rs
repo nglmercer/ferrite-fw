@@ -1620,3 +1620,136 @@ async fn cli_vue_ssr_generation_and_clean_frozen_reinstall() {
                 && row["ssr_runtime"] == "napi-vm"));
     }
 }
+
+#[cfg(feature = "napi-vm")]
+#[tokio::test]
+#[ignore = "fresh napi-vm CLI, registry, Node compiler and both browsers"]
+async fn cli_vue_ssr_create_dev_build_preview_cycle() {
+    let binary = cli();
+    for kind in [BrowserKind::Chromium, BrowserKind::Firefox] {
+        let executable = match kind {
+            BrowserKind::Chromium => ferrite_e2e::find_chromium(None),
+            BrowserKind::Firefox => ferrite_e2e::find_firefox(None),
+        }
+        .expect("SSR acceptance requires both browsers");
+        let browser = Browser::launch(
+            LaunchOptions::default()
+                .browser(kind)
+                .executable(executable),
+        )
+        .await
+        .unwrap();
+        for language in ["js", "ts"] {
+            let project = ferrite_test::TempProject::new(&[]);
+            let destination = project.root.join("app");
+            command(
+                &binary,
+                &project.root,
+                &[
+                    "create",
+                    destination.to_str().unwrap(),
+                    "--framework",
+                    "vue",
+                    "--language",
+                    language,
+                    "--rendering",
+                    "ssr",
+                    "--compiler-host",
+                    "node",
+                    "--ssr-runtime",
+                    "napi-vm",
+                ],
+                false,
+            )
+            .await;
+            let index = destination.join("index.html");
+            let html = std::fs::read_to_string(&index).unwrap();
+            std::fs::write(&index, html.replace("<script type=", "<script>globalThis.__ssrButton = document.querySelector('#counter');</script><script type=")).unwrap();
+            let main = destination.join(format!("src/main.{language}"));
+            let mut source = std::fs::read_to_string(&main).unwrap();
+            source.push_str("\nglobalThis.__hydrated = true;\n");
+            std::fs::write(&main, source).unwrap();
+            let component = destination.join("src/App.vue");
+            let original = std::fs::read_to_string(&component).unwrap();
+            for mode in ["ssr", "preview"] {
+                if mode == "preview" {
+                    command(&binary, &destination, &["build"], true).await;
+                    let artifact =
+                        ferrite::SsrRendererArtifact::read(&destination.join("dist/server"))
+                            .unwrap();
+                    assert!(!artifact.stylesheets.is_empty());
+                    assert!(artifact
+                        .graph
+                        .modules
+                        .iter()
+                        .all(|module| !module.code.contains("/@ferrite/client")));
+                }
+                let (mut child, url) = server(&binary, &destination, mode, mode == "ssr").await;
+                let page = browser.new_page().await.unwrap();
+                page.goto(&url).await.unwrap();
+                page.wait_for_function("globalThis.__hydrated === true", Duration::from_secs(15))
+                    .await
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "{kind:?}/{language}/{mode}: {error}; {:?}; {:?}",
+                            page.page_errors(),
+                            page.console_messages()
+                        )
+                    });
+                assert!(page
+                    .evaluate::<bool>(
+                        "globalThis.__ssrButton === document.querySelector('#counter')"
+                    )
+                    .await
+                    .unwrap());
+                assert_eq!(
+                    page.evaluate::<String>(
+                        "getComputedStyle(document.querySelector('#counter')).color"
+                    )
+                    .await
+                    .unwrap(),
+                    "rgb(128, 0, 0)"
+                );
+                page.locator("#counter").click().await.unwrap();
+                page.wait_for_function(
+                    "document.querySelector('#counter').textContent === 'count: 1'",
+                    Duration::from_secs(5),
+                )
+                .await
+                .unwrap();
+                if mode == "ssr" {
+                    std::fs::write(
+                        &component,
+                        original
+                            .replace("Hello Ferrite + Vue", "Hello CLI update")
+                            .replace("rgb(128, 0, 0)", "rgb(0, 0, 128)"),
+                    )
+                    .unwrap();
+                    page.wait_for_function("globalThis.__hydrated === true && document.querySelector('h1')?.textContent === 'Hello CLI update' && document.querySelector('#counter')?.textContent === 'count: 0' && getComputedStyle(document.querySelector('#counter')).color === 'rgb(0, 0, 128)'", Duration::from_secs(20)).await.unwrap();
+                    page.locator("#counter").click().await.unwrap();
+                    page.wait_for_function(
+                        "document.querySelector('#counter').textContent === 'count: 1'",
+                        Duration::from_secs(5),
+                    )
+                    .await
+                    .unwrap();
+                    std::fs::write(&component, &original).unwrap();
+                    page.wait_for_function("globalThis.__hydrated === true && document.querySelector('h1')?.textContent === 'Hello Ferrite + Vue' && getComputedStyle(document.querySelector('#counter')).color === 'rgb(128, 0, 0)'", Duration::from_secs(20)).await.unwrap();
+                }
+                assert!(page.page_errors().is_empty(), "{:?}", page.page_errors());
+                assert!(
+                    page.console_messages()
+                        .iter()
+                        .all(|message| message.kind != "error"
+                            && !message.text.to_lowercase().contains("hydration")),
+                    "{:?}",
+                    page.console_messages()
+                );
+                page.close().await.unwrap();
+                child.kill().await.unwrap();
+                child.wait().await.unwrap();
+            }
+        }
+        browser.close().await.unwrap();
+    }
+}
