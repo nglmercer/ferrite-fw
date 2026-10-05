@@ -1,5 +1,22 @@
 # Framework support implementation status
 
+## Safe repeated HTML base rewriting
+
+The shared base rewrite preserves protocol-relative external URLs and references
+already beneath the configured base. A path-boundary check distinguishes /app
+from /application; both single and double quoted src/href references are handled.
+Repeating the rewrite is idempotent for already-based references. No fabricated
+URL or additional prefix is introduced for external resources.
+
+The new exact-output regression failed before the fix on external URLs,
+double-prefixing and single quotes, then passed unchanged afterward. HTML tests
+passed nine; feature-enabled facade tests passed 33 with one existing ignored
+case. All-target HTML/facade Clippy with warnings denied, formatting and diff
+checks passed. Browser cycles were not re-executed in this increment. No migration
+is required. Full HTML parsing, relative/remote base policies, framework checker/
+HMR/source-map conformance, other frameworks and release matrices remain
+unfinished; the full mission remains active.
+
 ## Generated Vue SSR CLI acceptance beneath /app/
 
 The shared CLI cycle now runs as separate root-base and /app/ tests without

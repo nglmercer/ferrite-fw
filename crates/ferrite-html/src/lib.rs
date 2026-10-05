@@ -324,8 +324,36 @@ fn inject_after(html: &str, marker: &str, chunk: &str) -> String {
 fn rewrite_asset_prefix(html: &str, base: &str) -> String {
     let base = base.trim_end_matches('/');
     let mut output = html.to_string();
-    for attr in ["src=\"/", "href=\"/"] {
-        output = output.replace(attr, &format!("{}{}/", &attr[..attr.len() - 1], base));
+    for (prefix, quote) in [
+        ("src=\"", '"'),
+        ("href=\"", '"'),
+        ("src='", '\''),
+        ("href='", '\''),
+    ] {
+        let mut rewritten = String::with_capacity(output.len());
+        let mut remaining = output.as_str();
+        while let Some(offset) = remaining.find(prefix) {
+            let value_start = offset + prefix.len();
+            rewritten.push_str(&remaining[..value_start]);
+            let tail = &remaining[value_start..];
+            let Some(end) = tail.find(quote) else {
+                rewritten.push_str(tail);
+                remaining = "";
+                break;
+            };
+            let value = &tail[..end];
+            let already_based = value
+                .strip_prefix(base)
+                .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with(['/', '?', '#']));
+            if value.starts_with('/') && !value.starts_with("//") && !already_based {
+                rewritten.push_str(base);
+            }
+            rewritten.push_str(value);
+            // Keep the closing quote in the next untouched fragment.
+            remaining = &tail[end..];
+        }
+        rewritten.push_str(remaining);
+        output = rewritten;
     }
     output
 }
@@ -361,6 +389,15 @@ mod tests {
             "<link href=\"/favicon.svg\"><script type=\"module\" src=\"/src/main.js\"></script>";
         let output = apply_core_rewrites(html, "/app/", false);
         assert_eq!(output, "<link href=\"/app/favicon.svg\"><script type=\"module\" src=\"/app/src/main.js\"></script>");
+    }
+
+    #[test]
+    fn base_rewrite_preserves_external_and_already_based_urls() {
+        let html = "<img src=\"//cdn.example/image.png\"><img src=\"/app/logo.svg\"><a href='/docs'>docs</a><img src='/application/logo.svg'>";
+        let expected = "<img src=\"//cdn.example/image.png\"><img src=\"/app/logo.svg\"><a href='/app/docs'>docs</a><img src='/app/application/logo.svg'>";
+        let output = apply_core_rewrites(html, "/app/", false);
+        assert_eq!(output, expected);
+        assert_eq!(apply_core_rewrites(&output, "/app/", false), expected);
     }
 
     #[test]
