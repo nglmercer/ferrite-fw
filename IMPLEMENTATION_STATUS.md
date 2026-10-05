@@ -1,5 +1,24 @@
 # Framework support implementation status
 
+## Foreign hook objects reject hidden required behavior
+
+Real Node registration tests now cover non-enumerable buildStart, inherited
+hooks, accessor transform/handler, symbol properties and non-enumerable hook
+order metadata. The first run reproduced successful registration silently
+ignoring a non-enumerable unsupported buildStart. Registration now inspects
+Reflect.ownKeys and property descriptors, rejects custom prototypes, accessors
+and symbols with actionable errors, and validates all hook metadata before
+reading handler values. Thus required behavior cannot hide from Object.keys.
+Ordinary plain/null-prototype objects and actual module namespace metadata
+remain supported; this does not claim full Vite compatibility.
+
+All 13 real Node transport cases explicitly passed in 1.31s, including expanded
+factory/context checks. Standard plugin tests passed 19 with 13 ignored there
+(separately executed above); strict all-target Clippy, changed-file formatting
+and diff checks passed. Plugins relying on accessors/custom prototypes should
+return plain data hook objects or use the native API. Full foreign hook context,
+configuration/server lifecycle and the broader framework mission remain unfinished.
+
 ## Cancellation during blocked Node transport writes
 
 A new real Node regression pauses stdin, sends 4 MiB, waits until the request

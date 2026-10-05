@@ -1282,6 +1282,29 @@ export default async function(options) {
             (1, "export default {buildStart() {}};", "buildStart"),
             (2, "export default {transform: 42};", "invalid hook"),
             (3, "export default () => [];", "arrays"),
+            (10, "export default {transform: {get handler() { throw new Error('getter executed'); }}};", "accessor"),
+            (11, "export default {transform: Object.defineProperty({handler() {}}, 'order', {value: 'pre'})};", "order"),
+
+            (
+                6,
+                "export default Object.defineProperty({}, 'buildStart', {value() {}});",
+                "buildStart",
+            ),
+            (
+                7,
+                "export default Object.create({buildStart() {}});",
+                "prototype",
+            ),
+            (
+                8,
+                "export default {get transform() { return () => null; }};",
+                "accessor",
+            ),
+            (
+                9,
+                "export default {[Symbol('requiredHook')]: () => {}};",
+                "symbol",
+            ),
             (
                 4,
                 "export default {transform: {filter: {}, handler() {}}};",

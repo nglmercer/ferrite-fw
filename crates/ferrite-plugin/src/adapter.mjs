@@ -59,11 +59,26 @@ function assertHostState(stage) {
     throw new Error(`Node worker environment or cwd changed ${stage}; recreate the explicit host and avoid mutating process.env/process.chdir in compiler or plugin hooks`);
   }
 }
+function dataKeys(value, name, moduleNamespace = false) {
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== null && prototype !== Object.prototype) {
+    throw new Error(`unsupported foreign plugin prototype ${name}; return a plain hook object`);
+  }
+  return Reflect.ownKeys(value).filter(key => {
+    if (moduleNamespace && key === Symbol.toStringTag) return false;
+    if (typeof key === 'symbol') throw new Error(`unsupported foreign plugin symbol property ${name}.${String(key)}`);
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor.get || descriptor.set) throw new Error(`unsupported foreign plugin accessor ${name}.${key}; use data properties`);
+    return true;
+  });
+}
 function hookHandler(value, name) {
   if (value == null) return null;
   if (typeof value === 'function') return value;
-  if (typeof value === 'object' && typeof value.handler === 'function') {
-    for (const key of Object.keys(value)) {
+  if (typeof value === 'object') {
+    const keys = dataKeys(value, name);
+    if (typeof value.handler !== 'function') throw new Error(`invalid hook ${name}; expected a function or {handler: function}`);
+    for (const key of keys) {
       if (key !== 'handler' && !(key === 'order' && value.order == null)) {
         throw new Error(`unsupported hook metadata ${name}.${key}; use an unordered handler or the native plugin API`);
       }
@@ -105,7 +120,7 @@ async function register(id, name, entry, profile, options) {
     plugin = module.default ?? module;
     if (typeof plugin === 'function') plugin = await plugin(options);
     if (!plugin || typeof plugin !== 'object' || Array.isArray(plugin)) throw new Error(`plugin ${name} must return one hook object; arrays and conditional plugins are unsupported`);
-    for (const key of Object.keys(plugin)) {
+    for (const key of dataKeys(plugin, name, plugin === module)) {
       if (key === 'name' || key === 'version') continue;
       if (!supportedHooks.has(key)) throw new Error(`unsupported foreign plugin property/hook ${name}.${key}; use the native plugin API`);
       hookHandler(plugin[key], `${name}.${key}`);
