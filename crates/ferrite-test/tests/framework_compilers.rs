@@ -256,6 +256,30 @@ async fn official_components_resources_maps_cache_and_library_parity() {
         .to_string();
     assert!(error.contains("Counter.vue:2:1"), "{error}");
     assert!(error.contains("missing end tag"), "{error}");
+    for (source, location) in [
+        (
+            "<template><div /></template>\n<style>\nbutton {\n  color: red;\n</style>\n",
+            "BrokenStyle.vue:3:1",
+        ),
+        (
+            "<template><div /></template>\n<style>button { color: red;</style>\n",
+            "BrokenStyle.vue:2:8",
+        ),
+    ] {
+        std::fs::write(project.root.join("BrokenStyle.vue"), source).unwrap();
+        for target in ["client", "ssr"] {
+            let style_error = server
+                .pipeline_module(&ModuleId::new("/BrokenStyle.vue"), None, target)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(style_error.contains(location), "{target}: {style_error}");
+            assert!(
+                style_error.contains("Unclosed block"),
+                "{target}: {style_error}"
+            );
+        }
+    }
     std::fs::write(project.root.join("Counter.vue"), &original).unwrap();
     let types = project.root.join("props.ts");
     std::fs::write(&types, "export interface Props { value: string }").unwrap();

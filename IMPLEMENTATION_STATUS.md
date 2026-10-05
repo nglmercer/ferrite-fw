@@ -1,5 +1,24 @@
 # Framework support implementation status
 
+## Original component columns for Vue style errors
+
+Real official compiler regression cases now require exact inline and multiline
+malformed-style coordinates in client and SSR output. The inline case reproduced
+column 1 instead of column 8. PostCSS already maps error lines through Vue's
+inMap, but Vue 3.5.22 block source maps omit the opening-tag column offset.
+The wrapper preserves the mapped line and adjusts first-content-line columns
+using the official block location; CSS error reasons avoid duplicate embedded
+coordinates. An initial line-offset attempt failed the multiline assertion and
+was corrected without weakening either expectation.
+
+Official version-matched parse/source-map implementation was checked at
+https://raw.githubusercontent.com/vuejs/core/v3.5.22/packages/compiler-sfc/src/parse.ts
+and compileStyle.ts. Final actual compiler conformance passed in 17.04s;
+all-target framework/test Clippy with warnings denied, changed-file formatting
+and diff checks passed. Browser overlay coordinates were not executed for this
+increment. No migration; full diagnostics/maps and the overall mission remain
+unfinished.
+
 ## Reactive Vue CSS variables through production SSR
 
 Generated production SSR acceptance now uses the official computed/useCssModule

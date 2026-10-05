@@ -46,13 +46,18 @@ function svelteMap(value, request, diagnostics) {
   }
   return json;
 }
-function errors(values, filename) {
+function errors(values, filename, blockStart = null) {
   if (values?.length) throw new Error(values.map(value => {
-    const start = typeof value === 'object' && value !== null ? value.loc?.start : null;
+    let start = typeof value === 'object' && value !== null ? value.loc?.start : null;
+    if (blockStart && Number.isInteger(value?.line) && Number.isInteger(value?.column)) {
+      // PostCSS applies inMap to lines, but Vue 3.5.22 block maps omit
+      // the first-line opening-tag column offset.
+      start = { line: value.line, column: value.column + (value.line === blockStart.line ? blockStart.column - 1 : 0) };
+    }
     const position = Number.isInteger(start?.line) && start.line > 0
       && Number.isInteger(start?.column) && start.column > 0
       ? `:${start.line}:${start.column}` : '';
-    const message = typeof value === 'string' ? value : value.message;
+    const message = typeof value === 'string' ? value : blockStart && value.reason ? value.reason : value.message;
     return `${filename}${position}: ${message}`;
   }).join('\n'));
 }
@@ -113,7 +118,7 @@ export async function compile(request) {
   for (const [index, style] of descriptor.styles.entries()) {
     if (style.lang && style.lang !== 'css') throw new Error(`${filename}: style language ${style.lang} requires a configured preprocessor`);
     const result = await module.compileStyleAsync({ source: style.content, filename, id: `data-v-${id}`, scoped: style.scoped, isProd: !development, modules: Boolean(style.module), inMap: style.map });
-    errors(result.errors, filename);
+    errors(result.errors, filename, style.loc.start);
     for (const dependency of result.dependencies || []) dependencies.add(dependency);
     css.push({ id: `style-${index}`, code: result.code, map: map(result.map), modules: result.modules || null });
     if (style.module) moduleStyles[typeof style.module === 'string' ? style.module : '$style'] = result.modules;
