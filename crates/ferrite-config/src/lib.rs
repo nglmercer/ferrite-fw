@@ -522,6 +522,10 @@ impl Default for ReactConfig {
 pub struct RuntimeConfig {
     /// Backend name (`auto`, `none`, `napi-vm`).
     pub backend: String,
+    /// End-to-end embedded request deadline in milliseconds (0 disables it).
+    pub request_timeout_ms: u64,
+    /// Last-owner shutdown wait in milliseconds (0 selects 1000).
+    pub shutdown_timeout_ms: u64,
     /// Maximum queued embedded-worker jobs (0 selects 64).
     pub queue_capacity: usize,
     /// Maximum encoded embedded-worker request bytes (0 selects 8 MiB).
@@ -544,6 +548,8 @@ impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
             backend: "auto".to_string(),
+            request_timeout_ms: 0,
+            shutdown_timeout_ms: 0,
             queue_capacity: 0,
             max_request_bytes: 0,
             max_call_depth: 0,
@@ -1151,6 +1157,12 @@ fn merge_runtime(mut base: RuntimeConfig, over: RuntimeConfig) -> RuntimeConfig 
     if over.backend != defaults.backend {
         base.backend = over.backend;
     }
+    if over.request_timeout_ms != 0 {
+        base.request_timeout_ms = over.request_timeout_ms;
+    }
+    if over.shutdown_timeout_ms != 0 {
+        base.shutdown_timeout_ms = over.shutdown_timeout_ms;
+    }
     if over.queue_capacity != 0 {
         base.queue_capacity = over.queue_capacity;
     }
@@ -1677,6 +1689,8 @@ mod tests {
              backend = \"napi-vm\"\n\
              max_call_depth = 16\n\
              max_jobs_per_drain = 32\n\
+             request_timeout_ms = 250\n\
+             shutdown_timeout_ms = 500\n\
              queue_capacity = 8\n\
              max_request_bytes = 1048576\n\
              fuel_budget = 10000000\n\
@@ -1688,6 +1702,8 @@ mod tests {
         assert_eq!(user.runtime.backend, "napi-vm");
         assert_eq!(user.runtime.max_call_depth, 16);
         assert_eq!(user.runtime.max_jobs_per_drain, 32);
+        assert_eq!(user.runtime.request_timeout_ms, 250);
+        assert_eq!(user.runtime.shutdown_timeout_ms, 500);
         assert_eq!(user.runtime.queue_capacity, 8);
         assert_eq!(user.runtime.max_request_bytes, 1_048_576);
         assert_eq!(user.runtime.fuel_budget, 10_000_000);
@@ -1710,6 +1726,8 @@ mod tests {
         over.runtime.backend = "napi-vm".to_string();
         over.runtime.loop_budget = 5;
         over.runtime.queue_capacity = 4;
+        over.runtime.request_timeout_ms = 250;
+        over.runtime.shutdown_timeout_ms = 500;
         over.runtime.max_request_bytes = 1024;
         let merged = merge_user_config(base, over);
         assert_eq!(merged.runtime.backend, "napi-vm");
@@ -1717,6 +1735,8 @@ mod tests {
         assert_eq!(merged.runtime.queue_capacity, 4);
         assert_eq!(merged.runtime.max_request_bytes, 1024);
         let preserved = merge_user_config(merged, UserConfig::default());
+        assert_eq!(preserved.runtime.request_timeout_ms, 250);
+        assert_eq!(preserved.runtime.shutdown_timeout_ms, 500);
         assert_eq!(preserved.runtime.queue_capacity, 4);
         assert_eq!(preserved.runtime.max_request_bytes, 1024);
 

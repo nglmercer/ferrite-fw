@@ -34,3 +34,18 @@ pub fn parse_spec(spec: &str) -> (String, String) {
         }
     }
 }
+
+/// Resolve an npm alias request while retaining the importing edge's name.
+/// Non-registry protocols remain explicit errors rather than malformed semver.
+pub fn registry_request(name: &str, range: &str) -> ferrite_core::Result<(String, String)> {
+    crate::validate_package_name(name)?;
+    let (target, range) = match range.strip_prefix("npm:") {
+        Some(alias) => parse_spec(alias),
+        None => (name.to_string(), range.to_string()),
+    };
+    crate::validate_package_name(&target)?;
+    if range.contains(':') || range.starts_with('.') || range.starts_with('/') {
+        return Err(ferrite_core::FerriteError::Npm(format!("unsupported registry request `{range}` for {name}; use an npm package version, range or tag")));
+    }
+    Ok((target, range))
+}

@@ -143,7 +143,16 @@ pub(crate) async fn update(
         if let Some(root) = lock.importers.get_mut(".") {
             root.dependencies.remove(name);
         }
-        client.invalidate_metadata(name)?;
+        let metadata_range = if range == "latest" {
+            pkg.dependencies
+                .get(name)
+                .or_else(|| pkg.dev_dependencies.get(name))
+                .unwrap_or(range)
+        } else {
+            range
+        };
+        let (target, _) = ferrite::npm::registry_request(name, metadata_range)?;
+        client.invalidate_metadata(&target)?;
         if let Some(entry) = pkg.dependencies.get_mut(name) {
             if range != "latest" {
                 *entry = range.clone();

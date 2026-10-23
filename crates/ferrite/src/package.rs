@@ -417,6 +417,8 @@ struct SsrScaffold {
     main: String,
     dependency: String,
     artifact: Vec<u8>,
+    sdk_lock: Option<Vec<u8>>,
+    provenance: String,
 }
 
 /// Generate an embedded SSR standalone scaffold using an explicitly supplied
@@ -439,6 +441,15 @@ pub fn write_ssr_standalone(
             )));
         }
     }
+    let sdk_lock = standalone_sdk_lock(&sdk)?;
+    let provenance = serde_json::to_string_pretty(&serde_json::json!({
+        "schema": 1,
+        "sdk_package": "ferrite",
+        "sdk_version": env!("CARGO_PKG_VERSION"),
+        "sdk_manifest_hash": ferrite_core::Hash::of_bytes(&std::fs::read(sdk.join("Cargo.toml"))?).0,
+        "source_lock_hash": sdk_lock.as_ref().map(|bytes| ferrite_core::Hash::of_bytes(bytes).0),
+        "note": "SDK build inputs; source lock seeds standalone resolution. This is not a source signature or final binary attestation.",
+    }))?;
     let runtime_json = serde_json::to_string(runtime).map_err(FerriteError::Json)?;
     let main = include_str!("ssr_standalone_main.rs.txt")
         .replace("__BASE__", &format!("{base:?}"))
@@ -455,8 +466,44 @@ pub fn write_ssr_standalone(
             main,
             dependency,
             artifact: serde_json::to_vec(&artifact).map_err(FerriteError::Json)?,
+            sdk_lock,
+            provenance,
         }),
     )
+}
+
+/// Seed the generated application from the explicitly selected SDK's lock.
+/// This retains reviewed/yanked-but-locked dependency selections in offline
+/// builds. A library SDK without a lock remains usable, with no locked-input claim.
+fn standalone_sdk_lock(sdk: &Path) -> Result<Option<Vec<u8>>> {
+    for directory in sdk.ancestors() {
+        let manifest = directory.join("Cargo.toml");
+        if !manifest.is_file() {
+            continue;
+        }
+        let parsed: toml::Value =
+            toml::from_str(&std::fs::read_to_string(&manifest)?).map_err(|error| {
+                FerriteError::Build(format!("invalid SDK workspace manifest: {error}"))
+            })?;
+        let lock = directory.join("Cargo.lock");
+        if directory == sdk || parsed.get("workspace").is_some() {
+            if lock.is_file() {
+                let bytes = std::fs::read(&lock)?;
+                let _: toml::Value =
+                    toml::from_str(std::str::from_utf8(&bytes).map_err(|error| {
+                        FerriteError::Build(format!("SDK lock is not UTF-8: {error}"))
+                    })?)
+                    .map_err(|error| {
+                        FerriteError::Build(format!("invalid SDK Cargo.lock: {error}"))
+                    })?;
+                return Ok(Some(bytes));
+            }
+            if parsed.get("workspace").is_some() {
+                return Ok(None);
+            }
+        }
+    }
+    Ok(None)
 }
 
 pub(crate) fn validate_ssr_standalone_inputs(
@@ -641,6 +688,10 @@ fn write_standalone_staged(
     let main = if let Some(ssr) = ssr {
         cargo.push_str(&ssr.dependency);
         std::fs::write(dir.join("src/renderer.json"), &ssr.artifact)?;
+        if let Some(lock) = &ssr.sdk_lock {
+            std::fs::write(dir.join("Cargo.lock"), lock)?;
+        }
+        std::fs::write(dir.join("SDK-PROVENANCE.json"), &ssr.provenance)?;
         ssr.main
     } else {
         render_main_rs(opts.embed_assets)
@@ -987,6 +1038,21 @@ mod tests {
         )
         .unwrap();
         assert_eq!(report.files, 3);
+        let sdk_lock = standalone_sdk_lock(Path::new(env!("CARGO_MANIFEST_DIR")))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            std::fs::read(report.dir.join("Cargo.lock")).unwrap(),
+            sdk_lock
+        );
+        let provenance: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(report.dir.join("SDK-PROVENANCE.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            provenance["source_lock_hash"],
+            ferrite_core::Hash::of_bytes(&sdk_lock).0
+        );
+        assert!(provenance["sdk_manifest_hash"].is_string());
         let main = std::fs::read_to_string(report.dir.join("src/main.rs")).unwrap();
         assert!(
             main.contains("include_bytes!(\"renderer.json\")") && main.contains("into_adapter")

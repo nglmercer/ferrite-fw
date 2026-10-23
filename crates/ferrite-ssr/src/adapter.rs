@@ -160,6 +160,8 @@ impl JsSsrAdapter {
                 roots: vec![resolved.root.clone()],
                 max_call_depth: resolved.runtime.max_call_depth,
                 max_jobs_per_drain: resolved.runtime.max_jobs_per_drain,
+                request_timeout_ms: resolved.runtime.request_timeout_ms,
+                shutdown_timeout_ms: resolved.runtime.shutdown_timeout_ms,
                 queue_capacity: resolved.runtime.queue_capacity,
                 max_request_bytes: resolved.runtime.max_request_bytes,
                 fuel_budget: resolved.runtime.fuel_budget,

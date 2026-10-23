@@ -9,6 +9,7 @@ async fn main() {
     let runtime: ferrite::config::RuntimeConfig = serde_json::from_str(__RUNTIME_JSON__).expect("embedded runtime configuration");
     let engine = Arc::new(ferrite::runtime::napi_vm::NapiVmRuntime::new(ferrite::runtime::napi_vm::NapiVmOptions {
         queue_capacity: runtime.queue_capacity, max_request_bytes: runtime.max_request_bytes,
+        request_timeout_ms: runtime.request_timeout_ms, shutdown_timeout_ms: runtime.shutdown_timeout_ms,
         fuel_budget: runtime.fuel_budget, loop_budget: runtime.loop_budget,
         max_call_depth: runtime.max_call_depth, max_jobs_per_drain: runtime.max_jobs_per_drain,
         ..Default::default()

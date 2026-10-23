@@ -5,53 +5,54 @@ order: 12
 
 # Frameworks
 
-`ferrite-frameworks` trae un plugin React más soporte experimental de
-single-file components Vue/Svelte. Los tres están on por default en el
-CLI; cada uno es un `Plugin` plano, así que los usuarios programáticos
-pueden quitar cualquiera.
+Compilar componentes, ejecutarlos en el navegador y renderizar SSR son capacidades
+distintas. El [registro de capacidades](../../../crates/ferrite-frameworks/src/registry.rs)
+es la referencia para generación y diagnóstico. Todos los perfiles de aplicaciones
+siguen siendo experimentales.
 
-## React
+| Framework | Compilación del cliente | Host de compilación | Perfil SSR |
+|---|---|---|---|
+| React 19.2.0 | Oxc/SWC nativo; React Refresh parcial | Nativo | No disponible |
+| Vue 3.5.22 | Compilador oficial de la versión del proyecto | Node explícito | napi-vm experimental |
+| Svelte 5.39.6 | Compilador oficial de la versión del proyecto | Node explícito | Pendiente de aceptación completa del renderizador |
 
-```toml
-[react]
-refresh = true
-runtime = "automatic" # o "classic"
-```
+Vue y Svelte usan compiladores oficiales reales, sin plantillas simuladas. Si no
+se configura explícitamente el host, compilar componentes falla con instrucciones.
+Node se necesita para compilar estos perfiles durante desarrollo y build; es una
+dependencia separada del motor SSR integrado y del ejecutable distribuido.
 
-- Preamble de Refresh + footers por módulo solo en dev: los edits de
-  componentes se intercambian con estado; el resto cae a HMR.
-- `detect_components` encuentra componentes por archivo; `refresh_footer`
-  los registra con el runtime de React Refresh.
-- `runtime = "automatic"` usa el transform JSX; `classic` conserva
-  `React.createElement`. El motor (Oxc/SWC) maneja ambos.
-- Los builds de producción eliminan todo Refresh — costo cero.
+## Crear aplicaciones
 
 ```bash
-ferrite add react react-dom
+ferrite create my-react --framework react --language ts --rendering client
+ferrite create my-vue --framework vue --language ts --rendering client --compiler-host node
+ferrite create my-svelte --framework svelte --language js --rendering client --compiler-host node
 ```
 
-## Vue (experimental)
+React Refresh tiene pruebas reales para componentes, hooks, reexportaciones,
+`memo`, exportaciones por defecto, recuperación de errores y preview de producción.
+La matriz completa sigue pendiente. Producción elimina la instrumentación Refresh.
+Detectar Preact, Solid o Qwik no habilita adaptadores para ellos.
 
-`VuePlugin` parte los `.vue` en bloques script/style servidos como
-módulos virtuales. `<script setup>` se reconoce; el bloque template hoy
-compila a un stub explícito (`template_stub`) — la compilación completa
-es roadmap, y el stub lo dice ruidosamente en el call site.
+Vue/Svelte verifican plantillas e interacción en Chromium y Firefox. El compilador,
+sus dependencias, el host y los archivos utilizados participan en la caché y su
+invalidación. Los cambios pueden recargar el documento; HMR granular con
+conservación del estado todavía no es un contrato completo.
 
-## Svelte (experimental)
+## Vue SSR experimental
 
-`SveltePlugin` parte los `.svelte` igual (`split_svelte`, extracción de
-markup, `markup_stub`). La reactividad del script compila por el
-pipeline JS normal; el template es un stub explícito.
+Compila Ferrite con `--features napi-vm` y selecciona ambos hosts:
 
-## SSR + islands
+```bash
+ferrite create my-app --framework vue --language ts --rendering ssr --compiler-host node --ssr-runtime napi-vm
+```
 
-Los tres renderizan con los mismos adaptadores [SSR](ssr) e hidratan
-como [islands](ssr): HTML server-side más un closure cliente por
-island. El framework nunca cambia el dev server, el manifiesto ni el
-empaquetado standalone.
+Las pruebas JS/TS cubren HTML HTTP antes de JavaScript, hidratación, interacción,
+cambios observados, recuperación de errores de sintaxis/CSS y preview, también bajo
+`/app/`. No demuestran streaming, SSG, todas las funciones Vue ni hidratación de
+binarios en todas las plataformas. SSR React/Svelte permanece no disponible hasta
+superar sus pruebas completas.
 
-## Ejemplos
-
-`examples/react` es la app de referencia (dev, HMR, Refresh, build).
-`examples/vanilla-ts` muestra la base sin framework; `examples/ssr` el
-render de servidor; `examples/rust-wasm` una UI con [WASM](wasm).
+`ferrite doctor` muestra requisitos configurados; no ejecuta los compiladores.
+`ferrite inspect` muestra el perfil resuelto. Consulta el
+[plan de finalización](../../../docs/COMPLETION_PLAN.md) para las tareas y comandos.

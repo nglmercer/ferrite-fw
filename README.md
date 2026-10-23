@@ -229,7 +229,9 @@ imports — plus the items below.
   Svelte 5.39.6 compilation uses their official project-matched compilers on
   the explicitly enabled Node compiler host. Client templates are exercised
   in Chromium/Firefox; server compilation alone does not establish SSR rendering.
-  Complete React Refresh and framework SSR profiles remain unavailable.
+  Complete React Refresh remains unfinished. Vue has an explicitly selected
+  experimental napi-vm SSR profile with real hydration acceptance; React/Svelte
+  full SSR application profiles remain unavailable.
 - **Tier-3 Node adapter.** `ferrite_plugin::NodeAdapterHost` hosts
   foreign ESM plugins in a real Node.js over JSON-lines stdio
   (`null` = skip). `register_hook_plugin` validates an explicit subset:
@@ -399,3 +401,10 @@ distribution are deferred. Playwright itself supports WebKit on Linux.
 ## License
 
 MIT — see [LICENSE-MIT](LICENSE-MIT).
+
+## Completion and acceptance
+
+See [the current completion plan](docs/COMPLETION_PLAN.md) for open work and
+`python3 scripts/acceptance.py --profile runtime` for reproducible, commit-specific
+acceptance reports. Required ignored fixtures are selected explicitly; missing
+prerequisites fail instead of silently becoming compatibility evidence.

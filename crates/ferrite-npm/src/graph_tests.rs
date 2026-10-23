@@ -490,3 +490,115 @@ async fn single_package_api_retains_roots_and_unsupported_fields_fail() {
         assert_eq!(before, lock);
     }
 }
+
+#[tokio::test]
+async fn registry_aliases_preserve_edges_projection_and_frozen_identity() {
+    let mut fixture = Fixture::new();
+    fixture.package("actual", "1.0.0", &[]);
+    fixture.package("actual", "2.0.0", &[]);
+    fixture.package("@scope/library", "1.0.0", &[("nested", "npm:actual@^2")]);
+    fixture.save();
+    let manifest = Fixture::manifest(&[
+        ("legacy", "npm:actual@^1"),
+        ("modern", "npm:actual@^2"),
+        ("scoped", "npm:@scope/library@1"),
+    ]);
+    let mut lock = Lockfile::default();
+    fixture
+        .installer
+        .install_manifest(&manifest, &mut lock, false)
+        .await
+        .unwrap();
+    assert_eq!(lock.importers["."].dependencies["legacy"], "actual@1.0.0");
+    assert_eq!(lock.importers["."].dependencies["modern"], "actual@2.0.0");
+    assert_eq!(
+        lock.find("scoped").unwrap().dependencies["nested"],
+        "actual@2.0.0"
+    );
+    assert_eq!(lock.package.len(), 3);
+    project_editor_dependencies(fixture.dir.path(), &lock).unwrap();
+    let alias: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixture.dir.path().join("node_modules/legacy/package.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(alias["name"], "actual");
+    let snapshot = lock.clone();
+    std::fs::remove_dir_all(&fixture.installer.store).unwrap();
+    std::fs::remove_dir_all(&fixture.installer.client.cache_dir).unwrap();
+    fixture
+        .installer
+        .install_manifest(&manifest, &mut lock, true)
+        .await
+        .unwrap();
+    assert_eq!(lock, snapshot);
+    let mut corrupt = lock.clone();
+    corrupt
+        .importers
+        .get_mut(".")
+        .unwrap()
+        .specifiers
+        .insert("legacy".into(), "npm:unrelated@1".into());
+    assert!(
+        corrupt.validate().is_err(),
+        "alias edges must validate their real target name"
+    );
+}
+
+#[tokio::test]
+async fn shasum_only_registry_packages_replay_with_locked_integrity() {
+    let mut fixture = Fixture::new();
+    fixture.package("legacy-shasum", "1.0.0", &[]);
+    let bytes = std::fs::read(
+        fixture
+            .installer
+            .tarball_cache
+            .join("legacy-shasum-1.0.0.tgz"),
+    )
+    .unwrap();
+    use sha2::Digest as _;
+    let shasum: String = sha1::Sha1::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let info = fixture
+        .metadata
+        .get_mut("legacy-shasum")
+        .unwrap()
+        .versions
+        .get_mut("1.0.0")
+        .unwrap();
+    info.dist.integrity = None;
+    info.dist.shasum = Some(shasum);
+    fixture.save();
+    let manifest = Fixture::manifest(&[("legacy-shasum", "1")]);
+    let mut lock = Lockfile::default();
+    fixture
+        .installer
+        .install_manifest(&manifest, &mut lock, false)
+        .await
+        .unwrap();
+    assert!(lock
+        .find("legacy-shasum")
+        .unwrap()
+        .integrity
+        .as_ref()
+        .unwrap()
+        .starts_with("sha1-"));
+    let snapshot = lock.clone();
+    std::fs::remove_dir_all(&fixture.installer.store).unwrap();
+    std::fs::remove_dir_all(&fixture.installer.client.cache_dir).unwrap();
+    fixture
+        .installer
+        .install_manifest(&manifest, &mut lock, true)
+        .await
+        .unwrap();
+    assert_eq!(lock, snapshot);
+    lock.package[0].integrity = None;
+    assert!(fixture
+        .installer
+        .install_manifest(&manifest, &mut lock, true)
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("lacks locked integrity"));
+}

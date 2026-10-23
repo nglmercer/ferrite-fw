@@ -5,9 +5,23 @@ order: 12
 
 # Frameworks
 
-`ferrite-frameworks` ships a React plugin plus experimental Vue/Svelte
-single-file-component support. All three are enabled by default in the
-CLI; each is a plain `Plugin`, so programmatic users can drop any of them.
+Framework compilation, browser behavior and SSR rendering are separate
+capabilities. The shared [capability registry](../../../crates/ferrite-frameworks/src/registry.rs)
+backs generation and diagnostics. All current application profiles remain
+experimental; a successful compiler invocation does not establish full framework
+compatibility.
+
+| Framework | Client compilation | Compiler host | SSR runtime profile |
+|---|---|---|---|
+| React 19.2.0 | Native Oxc/SWC; partial React Refresh | Native | Unavailable |
+| Vue 3.5.22 | Official project-matched compiler | Explicit Node host | Experimental napi-vm |
+| Svelte 5.39.6 | Official project-matched compiler | Explicit Node host | Unavailable pending full renderer acceptance |
+
+Vue and Svelte use their actual official compilers; template stubs are not
+supported. Without an explicitly configured compiler host, component compilation
+fails with instructions instead of returning placeholder markup. Node is a
+build/development compiler dependency for these profiles, separate from the
+embedded SSR runtime and from the standalone application's runtime requirements.
 
 ## React
 
@@ -17,41 +31,44 @@ refresh = true
 runtime = "automatic" # or "classic"
 ```
 
-- Dev-only Refresh preamble + per-module footers: component edits
-  hot-swap statefully; non-component edits fall back to HMR.
-- `detect_components` finds components per file; `refresh_footer`
-  registers them with the React Refresh runtime.
-- `runtime = "automatic"` uses the JSX transform; `classic` keeps
-  `React.createElement`. The transform engine (Oxc/SWC) handles both.
-- Production builds strip all Refresh code — zero runtime cost.
-
 ```bash
-ferrite add react react-dom
+ferrite create my-react --framework react --language ts --rendering client
 ```
 
-## Vue (experimental)
+React Refresh has browser fixtures for component edits, imported/custom hooks,
+barrels, memo/default exports, mixed exports, syntax recovery and production
+preview. The complete component/hook matrix remains unfinished. Production output
+excludes Refresh instrumentation. Detecting Preact, Solid or Qwik packages does
+not enable an adapter for those frameworks.
 
-`VuePlugin` splits `.vue` files into script/style blocks served as
-virtual modules. `<script setup>` is recognized; the template block
-currently compiles to an explicit stub (`template_stub`) — full template
-compilation is roadmap, and the stub says so loudly at the call site.
+## Vue and Svelte client applications
 
-## Svelte (experimental)
+```bash
+ferrite create my-vue --framework vue --language ts --rendering client --compiler-host node
+ferrite create my-svelte --framework svelte --language js --rendering client --compiler-host node
+```
 
-`SveltePlugin` splits `.svelte` files the same way (`split_svelte`,
-markup extraction, `markup_stub`). Script reactivity compiles through
-the normal JS pipeline; template compilation is an explicit stub.
+Compiler versions must match the project's resolved packages. Compiler options,
+loaded compiler/plugin dependencies, host identity and source dependencies take
+part in caching and invalidation. Browser fixtures exercise actual templates and
+production output in Chromium and Firefox. Current component changes may reload
+the document; granular state-preserving HMR is not a complete supported contract.
 
-## SSR + islands
+## Experimental Vue SSR
 
-All three frameworks render through the same [SSR](ssr) adapters and can
-hydrate as [islands](ssr): server-rendered HTML plus a per-island client
-closure. Framework choice never changes the dev server, manifest, or
-standalone packaging.
+Build Ferrite with `--features napi-vm`, then explicitly select both hosts:
 
-## Examples
+```bash
+ferrite create my-app --framework vue --language ts --rendering ssr --compiler-host node --ssr-runtime napi-vm
+```
 
-`examples/react` is the reference app (dev, HMR, Refresh, build).
-`examples/vanilla-ts` shows the zero-framework baseline; `examples/ssr`
-shows server rendering; `examples/rust-wasm` pairs a framework UI with
-[WASM](wasm).
+The JS/TS fixtures cover meaningful HTTP HTML before JavaScript, hydration,
+interaction, watched changes, syntax/style error recovery and production preview,
+including a `/app/` base. These fixtures do not establish streaming, SSG, all Vue
+features or cross-platform standalone hydration. React/Svelte SSR profiles remain
+unavailable until their own rendering and browser acceptance passes.
+
+Use `ferrite doctor` for configured capabilities and `ferrite inspect` for the
+resolved profile. Doctor reports prerequisites; it does not execute a compiler or
+prove runtime compatibility. See the [completion plan](../../../docs/COMPLETION_PLAN.md)
+for remaining gates and their explicit reproduction commands.

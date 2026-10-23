@@ -1,9 +1,8 @@
 //! Package installation services shared by CLI and project generation.
 
 use crate::{
-    extract_tarball, range_satisfied, resolve_version, validate_package_name, verify_integrity,
-    JsPackageJson, LockedImporter, LockedPackage, Lockfile, RegistryClient, RegistryDist,
-    RegistryVersion,
+    extract_tarball, range_satisfied, resolve_version, verify_integrity, JsPackageJson,
+    LockedImporter, LockedPackage, Lockfile, RegistryClient, RegistryDist, RegistryVersion,
 };
 use ferrite_core::{FerriteError, Result};
 use std::collections::{BTreeMap, BTreeSet};
@@ -144,7 +143,7 @@ impl Installer {
                 name.clone(),
                 Provider {
                     version: info.version.clone(),
-                    id: format!("{name}@{}", info.version),
+                    id: format!("{}@{}", info.name, info.version),
                 },
             );
             infos.insert(name.clone(), info);
@@ -187,7 +186,16 @@ impl Installer {
         old_range: Option<&str>,
         lock: &Lockfile,
     ) -> Result<RegistryVersion> {
-        validate_package_name(name)?;
+        let (target, request) = crate::registry_request(name, range)?;
+        let old_request = old_range
+            .map(|range| crate::registry_request(name, range))
+            .transpose()?;
+        let name = target.as_str();
+        let range = request.as_str();
+        let old_range = old_request
+            .as_ref()
+            .filter(|(target, _)| target == name)
+            .map(|(_, range)| range.as_str());
         let metadata = self.client.metadata(name).await?;
         let preferred = old_id
             .and_then(|id| lock.package_by_id(id))
@@ -238,7 +246,7 @@ impl Installer {
                 name: info.name.clone(),
                 version: info.version.clone(),
                 source: "npm".into(),
-                integrity: info.dist.integrity.clone(),
+                integrity: Some(crate::package::distribution_integrity(&info.dist)?),
                 tarball: Some(info.dist.tarball.clone()),
                 peer_requirements: info
                     .peer_dependencies
@@ -306,7 +314,7 @@ impl Installer {
                     name.clone(),
                     Provider {
                         version: child.version.clone(),
-                        id: format!("{name}@{}", child.version),
+                        id: format!("{}@{}", child.name, child.version),
                     },
                 );
                 children.insert(name.clone(), child);
@@ -370,6 +378,13 @@ impl Installer {
     }
 
     async fn fetch_extract(&self, package: &LockedPackage, dist: &RegistryDist) -> Result<()> {
+        if package
+            .integrity
+            .as_deref()
+            .is_none_or(|integrity| integrity.trim().is_empty())
+        {
+            return Err(FerriteError::Npm(format!("{} lacks locked integrity; run a non-frozen install to record registry integrity or shasum", package.id())));
+        }
         let dest = self.store.join(package.id());
         if dest.join("package.json").exists() {
             let manifest: serde_json::Value =
@@ -388,12 +403,12 @@ impl Installer {
             std::fs::read(&cached)?
         } else {
             let bytes = self.client.tarball(&dist.tarball).await?;
-            verify_integrity(&bytes, dist.integrity.as_deref())?;
+            verify_integrity(&bytes, package.integrity.as_deref())?;
             std::fs::create_dir_all(&self.tarball_cache)?;
             std::fs::write(&cached, &bytes)?;
             bytes
         };
-        verify_integrity(&bytes, dist.integrity.as_deref())?;
+        verify_integrity(&bytes, package.integrity.as_deref())?;
         std::fs::create_dir_all(&self.store)?;
         let staged = tempfile::tempdir_in(&self.store)?;
         extract_tarball(&bytes, staged.path())?;

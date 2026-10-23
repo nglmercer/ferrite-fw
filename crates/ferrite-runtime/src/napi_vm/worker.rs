@@ -5,15 +5,20 @@ use super::options::*;
 use super::util::*;
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
+use std::sync::{atomic::Ordering, Arc};
 
 /// Dedicated-thread event loop; owns the `!Send` interpreter.
-pub(crate) fn worker_loop(options: NapiVmOptions, rx: Receiver<Job>) {
+pub(crate) fn worker_loop(
+    options: NapiVmOptions,
+    rx: Receiver<Request>,
+    lifecycle: Arc<Lifecycle>,
+) {
     let mut state = match WorkerState::new(options.clone()) {
         Ok(state) => state,
         Err(error) => {
             // Fatal init error: fail every job loudly.
-            for job in rx {
-                match job {
+            for request in rx {
+                match request.job {
                     Job::EvalModule { reply, .. }
                     | Job::EvalGraph { reply, .. }
                     | Job::InvokeGraph { reply, .. }
@@ -26,10 +31,21 @@ pub(crate) fn worker_loop(options: NapiVmOptions, rx: Receiver<Job>) {
             return;
         }
     };
-    for job in rx {
+    for request in rx {
+        let Request { job, control } = request;
         if job.cancelled() {
             continue;
         }
+        let mut active = lifecycle
+            .active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if lifecycle.stopped.load(Ordering::Acquire) {
+            control.cancellation.cancel();
+        }
+        *active = Some(control.cancellation.clone());
+        drop(active);
+        state.control = Some(control);
         match job {
             Job::EvalModule {
                 id,
@@ -89,6 +105,11 @@ pub(crate) fn worker_loop(options: NapiVmOptions, rx: Receiver<Job>) {
                 let _ = reply.send(state.require(&request, parent.as_deref()));
             }
         }
+        lifecycle
+            .active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
     }
     // Owner-thread shutdown: run cleanup hooks/finalizers before unload.
     // Errors here are teardown noise on a thread that is already exiting.
@@ -103,6 +124,7 @@ pub(crate) struct WorkerState {
     runtime: Option<napi_vm::NativeAddonRuntime>,
     next_handle: u64,
     graph_modules: Vec<String>,
+    control: Option<RequestControl>,
 }
 
 impl WorkerState {
@@ -113,6 +135,7 @@ impl WorkerState {
         // Validate with the selected engine before mutating registrations. Its
         // grammar may differ from the compiler's parser, so retain module IDs.
         for module in &graph.modules {
+            self.apply_control()?;
             let mut lexer = napi_vm::lexer::Lexer::new(&module.code);
             let mut parser = napi_vm::parser::Parser::new_with_spans(lexer.tokenize_with_spans());
             parser.parse_program().map_err(|error| format!(
@@ -155,7 +178,9 @@ impl WorkerState {
         }
         // Keep the worker thread, but retire all guest state and module caches.
         // Monotonic handles ensure old references cannot alias new functions.
+        self.apply_control()?;
         let mut fresh = Self::new(options.clone())?;
+        fresh.control = self.control.clone();
         fresh.next_handle = self.next_handle;
         *self = fresh;
         Ok(())
@@ -163,6 +188,9 @@ impl WorkerState {
 
     fn new(options: NapiVmOptions) -> std::result::Result<Self, String> {
         let mut interp = napi_vm::Interpreter::with_builtins();
+        // Preserve Ferrite's timer/microtask contract using the official,
+        // explicitly selected host module; no filesystem/network host is enabled.
+        napi_vm_host::builtins::install_timers(&mut interp.global.borrow_mut());
         if options.fuel_budget > 0 {
             interp.set_fuel_budget(options.fuel_budget);
         }
@@ -238,7 +266,27 @@ impl WorkerState {
             runtime,
             next_handle: 1,
             graph_modules: Vec::new(),
+            control: None,
         })
+    }
+
+    fn apply_control(&mut self) -> std::result::Result<(), String> {
+        if let Some(control) = &self.control {
+            control.check()?;
+            self.interp
+                .set_cancellation_token(control.cancellation.clone());
+            self.interp.set_execution_timeout(
+                control
+                    .deadline
+                    .map(|deadline| deadline.saturating_duration_since(std::time::Instant::now())),
+            );
+        }
+        Ok(())
+    }
+
+    fn eval_source(&mut self, code: &str) -> std::result::Result<napi_vm::Value, String> {
+        self.apply_control()?;
+        self.interp.eval_source(code).map_err(vmkind)
     }
 
     /// Define + evaluate a module; return its export record as JSON.
@@ -255,6 +303,7 @@ impl WorkerState {
                 "napi-vm: module id `{id}` must not be relative; pass an absolute id or stable name"
             ));
         }
+        self.apply_control()?;
         self.interp.define_module(id, code.to_string());
         self.interp.ensure_module(id).map_err(vmkind)?;
         // Read exports through a guest `import` (live bindings), not the
@@ -268,7 +317,7 @@ impl WorkerState {
              }}))",
             js_string(id)
         );
-        let value = self.interp.eval_source(&probe).map_err(vmkind)?;
+        let value = self.eval_source(&probe)?;
         let json = napi_vm::value_to_json(&mut self.interp, &value).map_err(vmkind)?;
         let descriptors = json
             .as_str()
@@ -302,7 +351,7 @@ impl WorkerState {
                     "globalThis.__ferrite_fns__[{handle}] = {access};\n"
                 ));
             }
-            self.interp.eval_source(&script).map_err(vmkind)?;
+            self.eval_source(&script)?;
         }
         Ok(serde_json::Value::Object(record))
     }
@@ -330,22 +379,17 @@ impl WorkerState {
              }})()",
             args = js_string(args_json)
         );
-        let value = self.interp.eval_source(&script).map_err(vmkind)?;
+        let value = self.eval_source(&script)?;
         let json = napi_vm::value_to_json(&mut self.interp, &value).map_err(vmkind)?;
         if json.as_str() == Some("__FERRITE_ASYNC__") {
+            self.apply_control()?;
             self.interp.drain_jobs().map_err(vmkind)?;
-            let err = self
-                .interp
-                .eval_source("globalThis.__ferrite_async_err__")
-                .map_err(vmkind)?;
+            let err = self.eval_source("globalThis.__ferrite_async_err__")?;
             let err = napi_vm::value_to_json(&mut self.interp, &err).map_err(vmkind)?;
             if let Some(message) = err.as_str() {
                 return Err(format!("async guest error: {message}"));
             }
-            let settled = self
-                .interp
-                .eval_source("globalThis.__ferrite_async__")
-                .map_err(vmkind)?;
+            let settled = self.eval_source("globalThis.__ferrite_async__")?;
             let settled = napi_vm::value_to_json(&mut self.interp, &settled).map_err(vmkind)?;
             match settled.as_str() {
                 Some(text) => serde_json::from_str(text)
@@ -365,6 +409,7 @@ impl WorkerState {
         request: &str,
         parent: Option<&str>,
     ) -> std::result::Result<serde_json::Value, String> {
+        self.apply_control()?;
         let value = self
             .interp
             .require_commonjs(request, parent)
@@ -381,23 +426,35 @@ mod cancellation_tests {
     async fn abandoned_queued_job_does_not_execute_guest_side_effects() {
         let (jobs, receiver) = std::sync::mpsc::sync_channel(2);
         let (reply, abandoned) = tokio::sync::oneshot::channel();
-        jobs.send(Job::EvalModule {
-            id: "abandoned".into(),
-            code: "globalThis.cancelledRequestExecuted = 42; export const value = 1;".into(),
-            ssr: false,
-            reply,
+        jobs.send(Request {
+            control: RequestControl::new(0),
+            job: Job::EvalModule {
+                id: "abandoned".into(),
+                code: "globalThis.cancelledRequestExecuted = 42; export const value = 1;".into(),
+                ssr: false,
+                reply,
+            },
         })
         .unwrap();
         drop(abandoned);
         let (reply, observed) = tokio::sync::oneshot::channel();
-        jobs.send(Job::EvalModule {
-            id: "probe".into(),
-            code: "export const leaked = globalThis.cancelledRequestExecuted || 0;".into(),
-            ssr: false,
-            reply,
+        jobs.send(Request {
+            control: RequestControl::new(0),
+            job: Job::EvalModule {
+                id: "probe".into(),
+                code: "export const leaked = globalThis.cancelledRequestExecuted || 0;".into(),
+                ssr: false,
+                reply,
+            },
         })
         .unwrap();
-        let worker = std::thread::spawn(move || worker_loop(NapiVmOptions::default(), receiver));
+        let worker = std::thread::spawn(move || {
+            worker_loop(
+                NapiVmOptions::default(),
+                receiver,
+                Arc::new(Lifecycle::default()),
+            )
+        });
         let result = observed.await.unwrap().unwrap();
         assert_eq!(result["leaked"]["value"].as_f64(), Some(0.0));
         drop(jobs);

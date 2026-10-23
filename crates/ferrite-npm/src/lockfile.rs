@@ -193,8 +193,12 @@ impl Lockfile {
             }
         }
         for package in &self.package {
-            self.validate_edges(&package.id(), &package.dependencies)?;
-            self.validate_edges(&package.id(), &package.peers)?;
+            self.validate_edges(
+                &package.id(),
+                &package.dependencies,
+                &package.dependency_specifiers,
+            )?;
+            self.validate_edges(&package.id(), &package.peers, &BTreeMap::new())?;
         }
         for (name, importer) in &self.importers {
             if name.is_empty()
@@ -209,15 +213,25 @@ impl Lockfile {
             {
                 return Err(FerriteError::Npm(format!("unsafe importer path `{name}`")));
             }
-            self.validate_edges(name, &importer.dependencies)?;
+            self.validate_edges(name, &importer.dependencies, &importer.specifiers)?;
         }
         Ok(())
     }
 
-    fn validate_edges(&self, importer: &str, edges: &BTreeMap<String, String>) -> Result<()> {
+    fn validate_edges(
+        &self,
+        importer: &str,
+        edges: &BTreeMap<String, String>,
+        requests: &BTreeMap<String, String>,
+    ) -> Result<()> {
         for (name, id) in edges {
             let target = self.package_by_id(id).ok_or_else(|| FerriteError::Npm(format!("lockfile edge {importer} -> {name} references missing {id}; back up and rename ferrite.lock, then run ferrite install to regenerate it (legacy name collisions cannot be recovered from this lock)")))?;
-            if target.name != *name {
+            validate_package_name(name)?;
+            let expected = match requests.get(name) {
+                Some(range) => crate::registry_request(name, range)?.0,
+                None => name.clone(),
+            };
+            if target.name != expected {
                 return Err(FerriteError::Npm(format!(
                     "lockfile edge {importer} -> {name} targets {}, not {name}",
                     target.name

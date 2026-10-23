@@ -28,7 +28,7 @@ pub use manifest::{classify_package, PackageManifest, PackageRuntime, DEFAULT_RE
 pub use metadata::{PeerDependencyMeta, RegistryDist, RegistryMetadata, RegistryVersion};
 pub use package::{extract_tarball, range_satisfied, resolve_version, verify_integrity};
 pub use package_json::JsPackageJson;
-pub use spec::parse_spec;
+pub use spec::{parse_spec, registry_request};
 
 #[cfg(test)]
 mod tests {
