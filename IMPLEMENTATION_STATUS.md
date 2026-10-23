@@ -1,5 +1,74 @@
 # Framework support implementation status
 
+## Runtime interruption, Svelte renderer recovery and package compatibility
+
+The embedded backend now selects napi-vm-core and its explicit timer host at
+7362971e7781c0c57b36c5a11813fff0e6bc3521. This avoids the Node binding facade
+and preserves queueMicrotask/timer globals after the upstream crate split.
+The original Svelte for-in parser regression and named-function self-reference
+execute successfully. The existing actual official Svelte 5.39.6 server-renderer
+fixture was explicitly executed and PASSED, retaining its emitted-graph and
+meaningful HTML assertions. This does not establish hydration or a complete
+Svelte SSR application profile; its registry status stays unavailable.
+
+Runtime jobs carry cancellation tokens and a deadline measured from runtime
+admission through queueing and guest execution. Dropping the awaiting future
+cancels active guest work. Explicit shared-runtime shutdown rejects subsequent
+calls and cancels active work; last-owner shutdown waiting is bounded. The
+request/shutdown millisecond options propagate through config, merge, SSR,
+standalone generation and inspect/doctor. Native calls remain cooperative;
+uninterruptible native calls can outlive the bounded shutdown wait. No hard heap
+limit or process sandbox is claimed. The deadline begins at runtime admission,
+not initial HTTP arrival.
+
+Registry aliases retain logical import edge names and actual package identities
+through installation, v2 lock validation, resolver selection, editor projection
+and frozen replay. Integrity verification supports SHA-1/256/384/512 SRI sets,
+uses the strongest supplied supported algorithm, accepts alternatives at that
+strength and does not downgrade to a weaker matching digest. Legacy registry
+shasums normalize into locked SHA-1 integrity. Missing locked integrity fails
+with migration instructions, including when the installed identity exists.
+Reqwest uses rustls with native trust roots without an OpenSSL build dependency.
+
+Executing the actual generated SSR binary fixture exposed offline re-resolution
+of a yanked dependency already accepted in the SDK lock. SSR scaffolds now seed
+Cargo resolution from the explicitly selected SDK's own/workspace lock when
+available and record SDK manifest/source-lock hashes in SDK-PROVENANCE.json.
+These are build-input hashes, not source signatures or final binary attestation.
+The generated application may update its own root lock. The real offline binary
+build/empty-PATH HTTP fixture then PASSED (88.16s), preserving meaningful renderer
+HTML, POST metadata, HEAD, embedded assets and private-output assertions.
+
+Selected validation executed during this increment:
+
+- Runtime acceptance runner: config 29, runtime 27 and SSR 23 tests passed.
+- npm: 24 tests; resolver: 17 tests, including actual alias import identities.
+- Framework unit suite: 36; CLI binary unit suite: 20; packaging unit tests: 14.
+- Actual official Svelte renderer and actual generated standalone SSR binary:
+  one explicitly selected ignored test each passed.
+- Acceptance-runner regression tests: four passed, including zero-executed-test
+  rejection and interrupted-command reporting.
+- Strict all-target Clippy passed for runtime/SSR/npm/resolver/config and for
+  facade/CLI/frameworks. Changed Rust source formatting and diff checks passed.
+  Rust 1.99 lint compatibility retains the pre-1.99 atomic API spelling with a
+  scoped deprecation allowance and simplifies an existing identity map.
+
+The first combined deadline test exposed a 40ms recovery budget failing under
+simultaneous compiler load. The test now uses 500ms while retaining its two-second
+outer bound, infinite guest loop, deadline-error and same-worker recovery checks.
+The call-depth fixture now uses non-tail recursion: the newer engine correctly
+optimizes its previous tail-recursive form. Its required stack-cap assertion is
+unchanged. Timer globals were restored through the official host module after
+an initial core-only attempt correctly failed the existing job-cap regression.
+
+Both current and pinned browser-download attempts returned truncated archives;
+no browser hydration or cross-platform release result is claimed for this run.
+Use docs/COMPLETION_PLAN.md for the consolidated remaining backlog and
+scripts/acceptance.py for explicit commit/platform evidence. English, Spanish
+and Chinese framework pages no longer describe removed compiler stubs. Full
+framework support, workspace/portable optional graphs, streaming/SSG, broader
+plugin contracts, hard resource isolation and release matrices remain unfinished.
+
 ## Indexed foreign maps cannot silently bypass validation
 
 The foreign map regression reproduced acceptance of an indexed map containing

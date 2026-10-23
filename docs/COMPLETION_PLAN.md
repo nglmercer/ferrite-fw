@@ -66,6 +66,10 @@ sandbox or a hard memory limit.
 Existing locks with SHA-256/384/512 remain valid. Old entries lacking integrity
 need a non-frozen install to obtain registry integrity/shasum before downloading.
 Aliases use existing v2 specifier and edge fields; no schema bump is required.
+Standalone SSR scaffolds now retain the selected SDK lock, when available, and
+write `SDK-PROVENANCE.json` with manifest/source-lock hashes. The generated root
+may update its lock for its own package; these hashes identify inputs, not a signed
+SDK source snapshot or final binary.
 
 ## 4. Vue as the first complete framework profile
 
@@ -106,7 +110,8 @@ Aliases use existing v2 specifier and edge fields; no schema bump is required.
 ## 8. Packaging and distribution
 
 - [x] Existing executed custom-renderer SSR and static standalone binary acceptance on Linux.
-- [ ] SDK source provenance/digest validation beyond matching package name/version/feature.
+- [x] Seed standalone Cargo resolution from the explicit SDK lock and record manifest/source-lock hashes.
+- [ ] Full SDK source provenance/signatures and final artifact attestation.
 - [ ] Concurrent and atomic final binary publication with failure/rollback tests.
 - [ ] Windows/Linux/macOS release binaries, base paths, methods, assets and private-output checks.
 - [ ] Cross-target toolchain/linker prerequisites; explicitly execute the musl fixture.
