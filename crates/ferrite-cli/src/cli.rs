@@ -32,6 +32,8 @@ pub(crate) enum Command {
     Dev(DevArgs),
     /// Production build.
     Build(BuildArgs),
+    /// Build and atomically publish static HTML using the real SSR renderer.
+    Prerender(PrerenderArgs),
     /// Preview a production build.
     Preview(PreviewArgs),
     /// Run with SSR enabled.
@@ -400,4 +402,13 @@ mod tests {
         assert!(parse_shard("1/0").is_err());
         assert!(parse_shard("x/y").is_err());
     }
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct PrerenderArgs {
+    #[arg(default_value = ".")]
+    pub(crate) root: PathBuf,
+    /// Absolute base-relative path; repeat for additional routes.
+    #[arg(long = "route")]
+    pub(crate) routes: Vec<String>,
 }

@@ -171,7 +171,13 @@ pub(crate) async fn fallback_handler(
         }
     }
     // Application routes must reach the renderer before index.html fallback.
-    if !path.contains('.') {
+    // Axum's nested router strips the base from Uri; middleware callers may
+    // supply the full URL. Accept both without changing renderer request data.
+    let route = path
+        .strip_prefix(inner.config.base.trim_end_matches('/'))
+        .filter(|route| route.starts_with('/'))
+        .unwrap_or(&path);
+    if inner.config.ssr.matches_route(route) {
         let adapter = inner.ssr_adapter.read().await.clone();
         if let Some(adapter) = adapter {
             let request_headers: Vec<_> = headers

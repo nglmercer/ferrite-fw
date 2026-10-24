@@ -48,6 +48,10 @@ impl NapiVmRuntime {
         let (jobs, rx) = mpsc::sync_channel::<Request>(capacity);
         let thread = thread::Builder::new()
             .name("ferrite-napi-vm".to_string())
+            // Official renderer graphs exceed the OS default 2 MiB thread
+            // stack during recursive parsing/evaluation. Guest depth remains
+            // independently bounded by the engine execution budget.
+            .stack_size(16 * 1024 * 1024)
             .spawn(move || worker_loop(options, rx, worker_lifecycle))
             .expect("spawn napi-vm worker");
         Self {

@@ -12,9 +12,9 @@ siguen siendo experimentales.
 
 | Framework | Compilación del cliente | Host de compilación | Perfil SSR |
 |---|---|---|---|
-| React 19.2.0 | Oxc/SWC nativo; React Refresh parcial | Nativo | No disponible |
+| React 19.2.0 | Oxc/SWC nativo; React Refresh parcial | Nativo | napi-vm experimental |
 | Vue 3.5.22 | Compilador oficial de la versión del proyecto | Node explícito | napi-vm experimental |
-| Svelte 5.39.6 | Compilador oficial de la versión del proyecto | Node explícito | Pendiente de aceptación completa del renderizador |
+| Svelte 5.39.6 | Compilador oficial de la versión del proyecto | Node explícito | napi-vm experimental |
 
 Vue y Svelte usan compiladores oficiales reales, sin plantillas simuladas. Si no
 se configura explícitamente el host, compilar componentes falla con instrucciones.
@@ -39,7 +39,7 @@ sus dependencias, el host y los archivos utilizados participan en la caché y su
 invalidación. Los cambios pueden recargar el documento; HMR granular con
 conservación del estado todavía no es un contrato completo.
 
-## Vue SSR experimental
+## Vue y Svelte SSR experimental
 
 Compila Ferrite con `--features napi-vm` y selecciona ambos hosts:
 
@@ -50,8 +50,12 @@ ferrite create my-app --framework vue --language ts --rendering ssr --compiler-h
 Las pruebas JS/TS cubren HTML HTTP antes de JavaScript, hidratación, interacción,
 cambios observados, recuperación de errores de sintaxis/CSS y preview, también bajo
 `/app/`. No demuestran streaming, SSG, todas las funciones Vue ni hidratación de
-binarios en todas las plataformas. SSR React/Svelte permanece no disponible hasta
-superar sus pruebas completas.
+binarios en todas las plataformas. Svelte JS/TS ya supera las pruebas de build,
+preview, hidratación, conservación del DOM, interacción y CSS en Chromium y Firefox.
+Usa el mismo comando con `--framework svelte` para este perfil experimental.
+React JS/TS también supera SSR síncrono de producción e hidratación en ambos
+navegadores. Usa `--framework react --compiler-host native --ssr-runtime napi-vm`;
+no requiere Node. Las matrices completas de desarrollo y standalone siguen pendientes.
 
 `ferrite doctor` muestra requisitos configurados; no ejecuta los compiladores.
 `ferrite inspect` muestra el perfil resuelto. Consulta el

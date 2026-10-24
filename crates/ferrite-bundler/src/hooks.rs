@@ -44,12 +44,7 @@ pub trait BundleHooks: Send + Sync {
     /// The wrapper text is folded into the chunk hash and applied after
     /// import rewriting, so wrappers never see rewritten specifiers and
     /// never break them.
-    async fn chunk_wrapper(
-        &self,
-        _id: &str,
-        _code: &str,
-        _is_entry: bool,
-    ) -> Result<ChunkWrapper> {
+    async fn chunk_wrapper(&self, _id: &str, _code: &str, _is_entry: bool) -> Result<ChunkWrapper> {
         Ok(ChunkWrapper::default())
     }
 }

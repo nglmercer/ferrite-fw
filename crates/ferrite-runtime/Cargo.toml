@@ -18,7 +18,7 @@ futures = { workspace = true }
 napi-vm = { package = "napi-vm-core", git = "https://github.com/nglmercer/napi-vm", rev = "7362971e7781c0c57b36c5a11813fff0e6bc3521", default-features = false, features = ["node-api-host"], optional = true }
 
 # Explicit timer/microtask host APIs moved out of the interpreter core.
-napi-vm-host = { package = "napi-vm-runtime", git = "https://github.com/nglmercer/napi-vm", rev = "7362971e7781c0c57b36c5a11813fff0e6bc3521", default-features = false, optional = true }
+napi-vm-host = { package = "napi-vm-runtime", git = "https://github.com/nglmercer/napi-vm", rev = "7362971e7781c0c57b36c5a11813fff0e6bc3521", default-features = false, features = ["runtime-web"], optional = true }
 
 [features]
 default = []

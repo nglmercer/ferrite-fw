@@ -30,6 +30,7 @@
 mod jobs;
 mod options;
 mod runtime;
+mod syntax_cache;
 mod util;
 mod worker;
 
@@ -82,6 +83,24 @@ mod tests {
         );
         assert!(message.contains("SyntaxError"), "{message}");
         assert!(message.contains("runtime compatibility"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn explicit_web_host_encodes_unicode_without_installing_network_capabilities() {
+        let runtime = NapiVmRuntime::with_defaults();
+        let namespace = runtime.evaluate_module(CompiledModule {
+            id: "/text-codec.js".into(),
+            code: "export function codec() { const bytes = new TextEncoder().encode('ñ🙂'); return {length: bytes.length, text: new TextDecoder().decode(bytes), fetch: typeof fetch}; }".into(),
+            url: None,
+        }, RuntimeEnvironment { ssr: true, request_id: None }).await.unwrap();
+        let result = runtime
+            .call(namespace.get_function("codec").unwrap(), vec![])
+            .await
+            .unwrap();
+        let result = crate::js_value_to_json(&result).unwrap();
+        assert_eq!(result["length"].as_f64(), Some(6.0));
+        assert_eq!(result["text"], "ñ🙂");
+        assert_eq!(result["fetch"], "undefined");
     }
 
     #[test]

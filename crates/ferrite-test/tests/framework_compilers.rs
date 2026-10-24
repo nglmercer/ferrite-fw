@@ -672,11 +672,20 @@ async fn official_vue_server_renderer_executes_emitted_graph() {
 
 #[cfg(feature = "napi-vm")]
 async fn vue_ssr_conformance(kind: Option<ferrite_e2e::BrowserKind>) {
+    framework_ssr_conformance("vue", kind).await;
+}
+
+#[cfg(feature = "napi-vm")]
+async fn framework_ssr_conformance(framework: &str, kind: Option<ferrite_e2e::BrowserKind>) {
     let project = fixture().await;
     std::fs::create_dir_all(project.root.join("src")).unwrap();
     std::fs::write(project.root.join("src/entry-server.ts"), "import { createSSRApp } from 'vue'; import { renderToString } from 'vue/server-renderer'; import Counter from '../Counter.vue'; export async function render() { globalThis.__ferrite_vue_requests = (globalThis.__ferrite_vue_requests || 0) + 1; const html = await renderToString(createSSRApp(Counter)); return { html, headers: [['x-request-count', String(globalThis.__ferrite_vue_requests)]] }; }").unwrap();
     std::fs::write(project.root.join("index.html"), "<html><head><link rel=\"icon\" href=\"data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22/%3E\"></head><body><div id=\"app\"><!--ssr-outlet--></div><script>globalThis.__ssrButton = document.querySelector('#app button');</script><script type=\"module\" src=\"/src/main.js\"></script></body></html>").unwrap();
     std::fs::write(project.root.join("src/main.js"), "import { createSSRApp } from 'vue'; import Counter from '../Counter.vue'; createSSRApp(Counter).mount('#app'); globalThis.__hydrated = true;").unwrap();
+    if framework == "svelte" {
+        std::fs::write(project.root.join("src/entry-server.ts"), "import { render as renderComponent } from 'svelte/server'; import Counter from '../Counter.svelte'; export function render() { globalThis.__ferrite_vue_requests = (globalThis.__ferrite_vue_requests || 0) + 1; return { html: renderComponent(Counter).body, headers: [['x-request-count', String(globalThis.__ferrite_vue_requests)]] }; }").unwrap();
+        std::fs::write(project.root.join("src/main.js"), "import { hydrate } from 'svelte'; import Counter from '../Counter.svelte'; hydrate(Counter, {target: document.querySelector('#app')}); globalThis.__hydrated = true;").unwrap();
+    }
     let host = Arc::new(
         NodeCompilerHost::new(
             project.root.clone(),
@@ -692,12 +701,20 @@ async fn vue_ssr_conformance(kind: Option<ferrite_e2e::BrowserKind>) {
     config.build.minify = false;
     let builder = ferrite::Builder::new(
         config.clone(),
-        vec![Arc::new(VuePlugin::with_host(host, false))],
+        vec![if framework == "vue" {
+            Arc::new(VuePlugin::with_host(host, false)) as Arc<dyn ferrite::plugin::Plugin>
+        } else {
+            Arc::new(SveltePlugin::with_host(host, false))
+        }],
     );
     let reports = builder.build_app().await.unwrap();
     let report = reports.iter().find(|report| report.env == "ssr").unwrap();
     let artifact = ferrite::SsrRendererArtifact::read(&report.out_dir).unwrap();
-    if let Some(path) = std::env::var_os("FERRITE_VUE_SSR_ARTIFACT") {
+    if let Some(path) = std::env::var_os(if framework == "vue" {
+        "FERRITE_VUE_SSR_ARTIFACT"
+    } else {
+        "FERRITE_SVELTE_SSR_ARTIFACT"
+    }) {
         std::fs::write(path, serde_json::to_vec(&artifact).unwrap()).unwrap();
     }
     let artifact_styles = artifact.stylesheets.clone();
@@ -731,8 +748,13 @@ async fn vue_ssr_conformance(kind: Option<ferrite_e2e::BrowserKind>) {
     let html = response.into_string().await.unwrap();
     assert!(html.contains("<button"), "{html}");
     assert!(html.contains(">0</button>"), "{html}");
+    let scope_prefix = if framework == "vue" {
+        "data-v-"
+    } else {
+        "svelte-"
+    };
     assert!(
-        html.contains("data-v-"),
+        html.contains(scope_prefix),
         "scoped styles must match server markup: {html}"
     );
     assert!(
@@ -740,7 +762,7 @@ async fn vue_ssr_conformance(kind: Option<ferrite_e2e::BrowserKind>) {
         "SSR component styles must be published"
     );
     let scope = html
-        .split("data-v-")
+        .split(scope_prefix)
         .nth(1)
         .unwrap()
         .split(|character: char| !character.is_ascii_alphanumeric())
@@ -801,7 +823,7 @@ async fn vue_ssr_conformance(kind: Option<ferrite_e2e::BrowserKind>) {
         assert!(style.starts_with("HTTP/1.0 200"), "{style}");
         css.push_str(&style);
     }
-    assert!(css.contains(&format!("data-v-{scope}")), "{css}");
+    assert!(css.contains(&format!("{scope_prefix}{scope}")), "{css}");
     assert!(css.contains("red"), "{css}");
     let private = get(port, "/server/renderer.json").await;
     assert!(private.starts_with("HTTP/1.0 404"), "{private}");
@@ -935,15 +957,41 @@ async fn official_vue_ssr_hydrates_in_firefox() {
 #[tokio::test]
 #[ignore = "real registry/Node compiler host and both browsers; generated Vue SSR acceptance"]
 async fn generated_vue_ssr_sources_install_build_and_render() {
+    generated_ssr_sources("vue").await;
+}
+
+#[cfg(feature = "napi-vm")]
+#[tokio::test]
+#[ignore = "real registry, Node compiler and both browsers"]
+async fn generated_svelte_ssr_sources_install_build_and_render() {
+    generated_ssr_sources("svelte").await;
+}
+
+#[cfg(feature = "napi-vm")]
+#[tokio::test]
+#[ignore = "real registry and both browsers; official React renderer"]
+async fn generated_react_ssr_sources_install_build_and_render() {
+    generated_ssr_sources("react").await;
+}
+
+#[cfg(feature = "napi-vm")]
+async fn generated_ssr_sources(framework: &str) {
     for language in ["js", "ts"] {
-        let mut generated = ferrite::frameworks::scaffold::vue_ssr_files(
+        let mut generated = ferrite::frameworks::scaffold::files(
+            ferrite::frameworks::scaffold::select(framework, language, "ssr").unwrap(),
             "generated-ssr",
-            language,
-            "node",
-            "napi-vm",
         )
         .unwrap();
-        if language == "ts" {
+        let client_extension = if framework == "react" {
+            if language == "js" {
+                "jsx"
+            } else {
+                "tsx"
+            }
+        } else {
+            language
+        };
+        if framework == "vue" && language == "ts" {
             // Exercise the generated dependency graph, without injecting TypeScript.
             generated.insert(
                 "src/props.ts".into(),
@@ -955,22 +1003,24 @@ async fn generated_vue_ssr_sources_install_build_and_render() {
                 "import { ref } from 'vue';\nimport type { Props } from './props';\ndefineProps<Props>();",
             );
         }
-        let component = generated.get_mut("src/App.vue").unwrap();
-        *component = component
+        if framework == "vue" {
+            let component = generated.get_mut("src/App.vue").unwrap();
+            *component = component
             .replace("import { ref }", "import { ref, computed, useCssModule }")
             .replace(
                 "</script>",
                 "const classes = useCssModule('__proto__');\nconst width = computed(() => (count.value + 1) + 'px');\n</script>",
             )
             .replace("id=\"counter\"", "id=\"counter\" :class=\"classes.accent\"");
-        component.push_str(
+            component.push_str(
             "<style module='__proto__'>.accent { background-color: rgb(0, 128, 0); border-style: solid; border-width: v-bind(width); }</style>\n",
         );
+        }
         // Observability only: snapshot before module execution and signal mount.
         let index = generated.get_mut("index.html").unwrap();
         *index = index.replace("<script type=", "<script>globalThis.__ssrButton = document.querySelector('#app button');</script><script type=");
         generated
-            .get_mut(&format!("src/main.{language}"))
+            .get_mut(&format!("src/main.{client_extension}"))
             .unwrap()
             .push_str("\nglobalThis.__hydrated = true;\n");
         let inputs: Vec<_> = generated
@@ -1030,14 +1080,43 @@ async fn generated_vue_ssr_sources_install_build_and_render() {
             .await
             .unwrap();
         let html = response.into_string().await.unwrap();
-        assert!(html.contains("Hello Ferrite + Vue"), "{language}: {html}");
-        assert!(html.contains("count: 0</button>"), "{language}: {html}");
-        assert!(html.contains("data-v-"), "{language}: {html}");
         assert!(
-            html.contains("style=\"--") && html.contains(":1px"),
-            "{language}: SSR must serialize the initial CSS variable: {html}"
+            html.contains(&format!(
+                "Hello Ferrite + {}",
+                match framework {
+                    "vue" => "Vue",
+                    "svelte" => "Svelte",
+                    _ => "React",
+                }
+            )),
+            "{language}: {html}"
         );
+        assert!(
+            html.contains(if framework == "react" {
+                "count: <!-- -->0"
+            } else {
+                "count: 0"
+            }),
+            "{language}: {html}"
+        );
+        if framework != "react" {
+            assert!(
+                html.contains(if framework == "vue" {
+                    "data-v-"
+                } else {
+                    "svelte-"
+                }),
+                "{language}: {html}"
+            );
+        }
+        if framework == "vue" {
+            assert!(
+                html.contains("style=\"--") && html.contains(":1px"),
+                "{language}: SSR must serialize the initial CSS variable: {html}"
+            );
+        }
         let mut config = builder.config.clone();
+        config.ssr.routes = Some(vec!["/".into(), "/users/*".into()]);
         let reservation = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         config.server.port = reservation.local_addr().unwrap().port();
         drop(reservation);
@@ -1082,7 +1161,7 @@ async fn generated_vue_ssr_sources_install_build_and_render() {
             .await
             .unwrap();
             let page = browser.new_page().await.unwrap();
-            page.goto(&format!("http://127.0.0.1:{port}/"))
+            page.goto(&format!("http://127.0.0.1:{port}/users/name.surname"))
                 .await
                 .unwrap();
             page.wait_for_function("globalThis.__hydrated === true", Duration::from_secs(15))
@@ -1100,14 +1179,16 @@ async fn generated_vue_ssr_sources_install_build_and_render() {
                 )
                 .await
                 .unwrap());
-            assert_eq!(
-                page.evaluate::<String>(
-                    "getComputedStyle(document.querySelector('#counter')).borderTopWidth"
-                )
-                .await
-                .unwrap(),
-                "1px"
-            );
+            if framework == "vue" {
+                assert_eq!(
+                    page.evaluate::<String>(
+                        "getComputedStyle(document.querySelector('#counter')).borderTopWidth"
+                    )
+                    .await
+                    .unwrap(),
+                    "1px"
+                );
+            }
             page.locator("#counter").click().await.unwrap();
             page.wait_for_function(
                 "document.querySelector('#counter').textContent === 'count: 1'",
@@ -1123,20 +1204,22 @@ async fn generated_vue_ssr_sources_install_build_and_render() {
                 .unwrap(),
                 "rgb(128, 0, 0)"
             );
-            assert_eq!(
-                page.evaluate::<String>(
-                    "getComputedStyle(document.querySelector('#counter')).backgroundColor"
+            if framework == "vue" {
+                assert_eq!(
+                    page.evaluate::<String>(
+                        "getComputedStyle(document.querySelector('#counter')).backgroundColor"
+                    )
+                    .await
+                    .unwrap(),
+                    "rgb(0, 128, 0)"
+                );
+                page.wait_for_function(
+                    "getComputedStyle(document.querySelector('#counter')).borderTopWidth === '2px'",
+                    Duration::from_secs(5),
                 )
                 .await
-                .unwrap(),
-                "rgb(0, 128, 0)"
-            );
-            page.wait_for_function(
-                "getComputedStyle(document.querySelector('#counter')).borderTopWidth === '2px'",
-                Duration::from_secs(5),
-            )
-            .await
-            .unwrap();
+                .unwrap();
+            }
             assert!(page.page_errors().is_empty(), "{:?}", page.page_errors());
             assert!(
                 page.console_messages()
@@ -1621,4 +1704,17 @@ async fn generated_vue_dev_ssr_chromium() {
 #[ignore = "real registry, Node compiler host and Firefox; generated SSR watcher acceptance"]
 async fn generated_vue_dev_ssr_firefox() {
     generated_vue_dev_browser(ferrite_e2e::BrowserKind::Firefox).await;
+}
+
+#[cfg(feature = "napi-vm")]
+#[tokio::test]
+#[ignore = "official Svelte compiler/renderer, registry and Chromium; real SSR hydration"]
+async fn official_svelte_ssr_hydrates_in_chromium() {
+    framework_ssr_conformance("svelte", Some(ferrite_e2e::BrowserKind::Chromium)).await;
+}
+#[cfg(feature = "napi-vm")]
+#[tokio::test]
+#[ignore = "official Svelte compiler/renderer, registry and Firefox; real SSR hydration"]
+async fn official_svelte_ssr_hydrates_in_firefox() {
+    framework_ssr_conformance("svelte", Some(ferrite_e2e::BrowserKind::Firefox)).await;
 }

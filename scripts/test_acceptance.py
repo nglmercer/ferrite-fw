@@ -23,7 +23,7 @@ class AcceptanceEvidenceTests(unittest.TestCase):
         report = Path(directory.name) / "report.json"
         command = [sys.executable, "-c", source] + (["--exact"] if exact else [])
         args = types.SimpleNamespace(profile="runtime", list=False, timeout=timeout, report=report)
-        with patch.object(acceptance, "plan", return_value=[command]), contextlib.redirect_stdout(io.StringIO()):
+        with patch.object(acceptance, "plan", return_value=[command]), patch.object(acceptance, "environment_evidence", return_value={"os": "test", "architecture": "test"}), contextlib.redirect_stdout(io.StringIO()):
             try:
                 status = acceptance.run(args)
             except (RuntimeError, subprocess.TimeoutExpired) as error:
@@ -43,6 +43,7 @@ class AcceptanceEvidenceTests(unittest.TestCase):
         self.assertEqual(report["status"], "passed")
         self.assertIn("revision", report)
         self.assertIn("platform", report)
+        self.assertEqual(report["environment"]["os"], "test")
 
     def test_nonzero_command_records_a_failure(self):
         result, report = self.invoke("raise SystemExit(7)", exact=False)

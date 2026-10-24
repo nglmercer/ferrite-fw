@@ -64,9 +64,11 @@ pub(crate) fn minify_module(request: &MinifyRequest) -> Result<MinifyResult> {
 /// Positions the inner map cannot resolve pass through sourceless rather
 /// than failing the build; unparseable inputs are a loud error.
 pub fn chain_source_maps(outer_json: &str, inner_json: &str) -> Result<String> {
-    let outer = oxc_sourcemap::SourceMap::from_json_string(outer_json)
+    let outer_json = crate::flatten_source_map(outer_json)?;
+    let inner_json = crate::flatten_source_map(inner_json)?;
+    let outer = oxc_sourcemap::SourceMap::from_json_string(&outer_json)
         .map_err(|error| FerriteError::Other(format!("bad outer source map: {error}")))?;
-    let inner = oxc_sourcemap::SourceMap::from_json_string(inner_json)
+    let inner = oxc_sourcemap::SourceMap::from_json_string(&inner_json)
         .map_err(|error| FerriteError::Other(format!("bad inner source map: {error}")))?;
     // Index inner tokens by intermediate (generated) line → columns.
     // Entry: (dst_col, src_line, src_col, source_id, name_id).

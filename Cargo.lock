@@ -2606,6 +2606,7 @@ version = "0.1.5"
 source = "git+https://github.com/nglmercer/napi-vm?rev=7362971e7781c0c57b36c5a11813fff0e6bc3521#7362971e7781c0c57b36c5a11813fff0e6bc3521"
 dependencies = [
  "base64 0.22.1",
+ "getrandom 0.3.4",
  "libc",
  "napi-vm-core",
  "serde",

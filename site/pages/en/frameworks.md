@@ -13,9 +13,9 @@ compatibility.
 
 | Framework | Client compilation | Compiler host | SSR runtime profile |
 |---|---|---|---|
-| React 19.2.0 | Native Oxc/SWC; partial React Refresh | Native | Unavailable |
+| React 19.2.0 | Native Oxc/SWC; partial React Refresh | Native | Experimental napi-vm |
 | Vue 3.5.22 | Official project-matched compiler | Explicit Node host | Experimental napi-vm |
-| Svelte 5.39.6 | Official project-matched compiler | Explicit Node host | Unavailable pending full renderer acceptance |
+| Svelte 5.39.6 | Official project-matched compiler | Explicit Node host | Experimental napi-vm |
 
 Vue and Svelte use their actual official compilers; template stubs are not
 supported. Without an explicitly configured compiler host, component compilation
@@ -54,7 +54,7 @@ part in caching and invalidation. Browser fixtures exercise actual templates and
 production output in Chromium and Firefox. Current component changes may reload
 the document; granular state-preserving HMR is not a complete supported contract.
 
-## Experimental Vue SSR
+## Experimental Vue and Svelte SSR
 
 Build Ferrite with `--features napi-vm`, then explicitly select both hosts:
 
@@ -64,9 +64,15 @@ ferrite create my-app --framework vue --language ts --rendering ssr --compiler-h
 
 The JS/TS fixtures cover meaningful HTTP HTML before JavaScript, hydration,
 interaction, watched changes, syntax/style error recovery and production preview,
-including a `/app/` base. These fixtures do not establish streaming, SSG, all Vue
-features or cross-platform standalone hydration. React/Svelte SSR profiles remain
-unavailable until their own rendering and browser acceptance passes.
+including a `/app/` base. Svelte JS/TS production builds and preview now pass real
+hydration, DOM retention, interaction and scoped styles in Chromium and Firefox.
+Use the same create command with `--framework svelte` for that experimental SSR
+profile. These checks do not establish streaming, every component feature or
+cross-platform standalone hydration. React JS/TS also passes synchronous production
+SSR and hydration in both engines. Generate it with `--framework react
+--compiler-host native --ssr-runtime napi-vm`; it uses the public edge renderer
+and needs no Node executable. Complete development and standalone matrices remain
+open for the new profiles.
 
 Use `ferrite doctor` for configured capabilities and `ferrite inspect` for the
 resolved profile. Doctor reports prerequisites; it does not execute a compiler or

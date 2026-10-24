@@ -72,9 +72,12 @@ impl Builder {
             let mut reports = vec![builder.build("client").await?, builder.build("ssr").await?];
             let out = self.config.out_dir();
             let runtime = self.config.runtime.clone();
+            let routes = self.config.ssr.clone();
             let base = self.config.base.clone();
             let package = tokio::task::spawn_blocking(move || {
-                crate::package::write_ssr_standalone(&out, &opts, &sdk, &runtime, &base)
+                crate::package::write_ssr_standalone_with_routes(
+                    &out, &opts, &sdk, &runtime, &base, &routes,
+                )
             })
             .await
             .map_err(|error| {

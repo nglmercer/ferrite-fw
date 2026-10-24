@@ -124,6 +124,7 @@ pub(crate) struct WorkerState {
     runtime: Option<napi_vm::NativeAddonRuntime>,
     next_handle: u64,
     graph_modules: Vec<String>,
+    syntax_cache: super::syntax_cache::SyntaxCache,
     control: Option<RequestControl>,
 }
 
@@ -136,9 +137,7 @@ impl WorkerState {
         // grammar may differ from the compiler's parser, so retain module IDs.
         for module in &graph.modules {
             self.apply_control()?;
-            let mut lexer = napi_vm::lexer::Lexer::new(&module.code);
-            let mut parser = napi_vm::parser::Parser::new_with_spans(lexer.tokenize_with_spans());
-            parser.parse_program().map_err(|error| format!(
+            self.syntax_cache.check(&module.code).map_err(|error| format!(
                 "napi-vm graph entry `{}` cannot parse module `{}`: {error}; inspect emitted module syntax and selected runtime compatibility",
                 graph.entry, module.id
             ))?;
@@ -182,6 +181,7 @@ impl WorkerState {
         let mut fresh = Self::new(options.clone())?;
         fresh.control = self.control.clone();
         fresh.next_handle = self.next_handle;
+        fresh.syntax_cache = std::mem::take(&mut self.syntax_cache);
         *self = fresh;
         Ok(())
     }
@@ -191,6 +191,7 @@ impl WorkerState {
         // Preserve Ferrite's timer/microtask contract using the official,
         // explicitly selected host module; no filesystem/network host is enabled.
         napi_vm_host::builtins::install_timers(&mut interp.global.borrow_mut());
+        napi_vm_host::builtins::install_web(&mut interp.global.borrow_mut());
         if options.fuel_budget > 0 {
             interp.set_fuel_budget(options.fuel_budget);
         }
@@ -266,6 +267,7 @@ impl WorkerState {
             runtime,
             next_handle: 1,
             graph_modules: Vec::new(),
+            syntax_cache: Default::default(),
             control: None,
         })
     }

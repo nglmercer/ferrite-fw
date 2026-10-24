@@ -256,6 +256,10 @@ impl Default for BuildConfig {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct SsrConfig {
+    /// Base-relative SSR routes: exact paths, /prefix/*, or *. None uses extensionless routes.
+    pub routes: Option<Vec<String>>,
+    /// Absolute base-relative routes to generate with ferrite prerender.
+    pub prerender: Vec<String>,
     /// SSR entry.
     pub entry: Option<String>,
     /// Dependencies to leave external.
@@ -270,10 +274,71 @@ impl Default for SsrConfig {
     fn default() -> Self {
         Self {
             entry: Some("src/server.rs".to_string()),
+            routes: None,
+            prerender: Vec::new(),
             external: Vec::new(),
             no_external: Vec::new(),
             bundle_all: false,
         }
+    }
+}
+
+impl SsrConfig {
+    pub fn validate_routes(&self) -> Result<()> {
+        for route in self.routes.iter().flatten() {
+            let prefix = route.strip_suffix("/*").unwrap_or(route);
+            if route != "*"
+                && (!route.starts_with('/')
+                    || prefix.contains(['?', '#', '%', '\\', '*'])
+                    || prefix.chars().any(char::is_control)
+                    || prefix.contains("//")
+                    || prefix.split('/').any(|part| matches!(part, "." | "..")))
+            {
+                return Err(FerriteError::Config(format!("invalid ssr.routes pattern `{route}`; use an absolute base-relative path, /prefix/* or *")));
+            }
+        }
+        Ok(())
+    }
+    /// Reserved static/internal prefixes never reach the application renderer.
+    #[must_use]
+    pub fn matches_route(&self, path: &str) -> bool {
+        let relative = path.trim_start_matches('/');
+        if relative.split('/').any(|part| matches!(part, "." | ".."))
+            || relative.contains(['%', '\\', '?', '#'])
+        {
+            return false;
+        }
+        if [
+            "server",
+            "assets",
+            "ssr-assets",
+            "src",
+            "node_modules",
+            "standalone",
+            "@ferrite",
+            "@vite",
+            ".ferrite",
+        ]
+        .iter()
+        .any(|prefix| relative == *prefix || relative.starts_with(&format!("{prefix}/")))
+        {
+            return false;
+        }
+        self.routes.as_ref().map_or_else(
+            || std::path::Path::new(relative).extension().is_none(),
+            |routes| {
+                routes.iter().any(|route| {
+                    route == "*"
+                        || route == path
+                        || route.strip_suffix("/*").is_some_and(|prefix| {
+                            path == prefix
+                                || path
+                                    .strip_prefix(prefix)
+                                    .is_some_and(|rest| rest.starts_with('/'))
+                        })
+                })
+            },
+        )
     }
 }
 
@@ -1231,6 +1296,12 @@ fn merge_build(mut base: BuildConfig, over: BuildConfig) -> BuildConfig {
 }
 
 fn merge_ssr(mut base: SsrConfig, over: SsrConfig) -> SsrConfig {
+    if over.routes.is_some() {
+        base.routes = over.routes;
+    }
+    if !over.prerender.is_empty() {
+        base.prerender = over.prerender;
+    }
     if over.entry.is_some() {
         base.entry = over.entry;
     }
@@ -1345,6 +1416,7 @@ pub fn resolve_config(
     if let Some(framework) = &user.framework {
         framework.validate()?;
     }
+    user.ssr.validate_routes()?;
     let mut names = std::collections::HashSet::new();
     for plugin in user.foreign_plugins.iter().flatten() {
         if plugin.name.trim().is_empty() || !names.insert(&plugin.name) {
@@ -2087,5 +2159,38 @@ mod ssr_package_tests {
         assert_eq!(decoded.ssr_sdk, config.package.ssr_sdk);
         assert!(decoded.standalone);
         assert!(super::PackageConfig::default().ssr_sdk.is_none());
+    }
+}
+
+#[cfg(test)]
+mod ssr_route_tests {
+    use super::*;
+    #[test]
+    fn explicit_dotted_routes_prefixes_assets_and_disabled_policy() {
+        let mut config = SsrConfig::default();
+        assert!(config.matches_route("/profile"));
+        assert!(!config.matches_route("/profile.json"));
+        config.routes = Some(vec!["/profile.json".into(), "/users/*".into()]);
+        config.validate_routes().unwrap();
+        assert!(config.matches_route("/profile.json"));
+        assert!(config.matches_route("/users/name.surname"));
+        assert!(!config.matches_route("/users-other/name"));
+        assert!(!config.matches_route("/other"));
+        config.routes = Some(vec!["*".into()]);
+        for route in [
+            "/server/renderer.json",
+            "/assets/code.js",
+            "/src/main.ts",
+            "/../private",
+            "/%2e%2e/private",
+        ] {
+            assert!(!config.matches_route(route));
+        }
+        config.routes = Some(vec![]);
+        assert!(!config.matches_route("/"));
+        for pattern in ["relative", "/../escape", "/a?x", "/bad*", "/a//b"] {
+            config.routes = Some(vec![pattern.into()]);
+            assert!(config.validate_routes().is_err());
+        }
     }
 }

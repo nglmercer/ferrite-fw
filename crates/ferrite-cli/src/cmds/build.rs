@@ -53,3 +53,34 @@ pub(crate) async fn build(
     }
     Ok(())
 }
+
+pub(crate) async fn prerender(
+    args: PrerenderArgs,
+    config_path: Option<PathBuf>,
+    mode: Option<String>,
+) -> ferrite::Result<()> {
+    let root = root_of(&config_path, args.root);
+    let builder = ferrite::create_builder(ferrite::Config {
+        root: Some(root.clone()),
+        config_path,
+        plugins: default_plugins(&root),
+        overrides: ferrite::CliOverrides {
+            mode,
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .await?;
+    let routes = if args.routes.is_empty() {
+        &builder.config.ssr.prerender
+    } else {
+        &args.routes
+    };
+    let report = builder.prerender(routes).await?;
+    println!(
+        "prerendered {} routes → {}",
+        report.routes.len(),
+        builder.config.out_dir().display()
+    );
+    Ok(())
+}

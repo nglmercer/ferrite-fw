@@ -262,6 +262,7 @@ async fn standalone_ssr_build_compiles_and_renders_without_node() {
     config.package.ssr_sdk =
         Some(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../ferrite"));
     config.base = "/app/".into();
+    config.ssr.routes = Some(vec!["*".into()]);
     let reports = ferrite::Builder::new(config, vec![])
         .build_app()
         .await
@@ -315,6 +316,12 @@ async fn standalone_ssr_build_compiles_and_renders_without_node() {
         "{response}"
     );
     assert!(response.contains("<script"), "{response}");
+    let dotted = http_get(port, "/app/users/name.surname");
+    assert!(
+        dotted.starts_with("HTTP/1.0 202")
+            && dotted.contains("embedded GET /app/users/name.surname"),
+        "{dotted}"
+    );
     let post = http_request(port, "/app/submitted", "POST");
     assert!(post.starts_with("HTTP/1.0 202"), "{post}");
     assert!(

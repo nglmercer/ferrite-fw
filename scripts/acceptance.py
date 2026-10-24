@@ -33,11 +33,14 @@ def plan(profile):
         commands.append(["cargo", "test", "--workspace", "--exclude", "ferrite-e2e", "--locked"])
     if profile in ("runtime", "all"):
         commands.append(["cargo", "test", "--locked", "-p", "ferrite-runtime", "-p", "ferrite-ssr", "-p", "ferrite-config", "--features", "ferrite-runtime/napi-vm,ferrite-ssr/napi-vm", "--lib"])
+    if profile in ("runtime", "all"):
+        commands.append(["cargo", "test", "--locked", "-p", "ferrite-runtime", "--features", "napi-vm", "--lib", "napi_vm::syntax_cache::tests::parser_preflight_cold_and_cached_measurement", "--", "--ignored", "--exact", "--nocapture"])
     if profile in ("frameworks", "all"):
         commands.append(["cargo", "build", "--locked", "-p", "ferrite-cli", "--features", "napi-vm"])
         commands.append(exact("ferrite-frameworks", "compiler_host", "actual_project_matched_compilers_client_server_and_runes"))
-        for name in ("official_svelte_server_renderer_executes_emitted_graph", "official_vue_server_renderer_executes_emitted_graph", "official_components_resources_maps_cache_and_library_parity", "generated_vue_ssr_sources_install_build_and_render", "generated_vue_ssr_dev_graph_updates_and_recovers", "generated_vue_dev_ssr_chromium", "generated_vue_dev_ssr_firefox"):
+        for name in ("official_svelte_server_renderer_executes_emitted_graph", "official_vue_server_renderer_executes_emitted_graph", "official_components_resources_maps_cache_and_library_parity", "generated_vue_ssr_sources_install_build_and_render", "generated_svelte_ssr_sources_install_build_and_render", "generated_react_ssr_sources_install_build_and_render", "official_vue_ssr_hydrates_in_chromium", "official_vue_ssr_hydrates_in_firefox", "official_svelte_ssr_hydrates_in_chromium", "official_svelte_ssr_hydrates_in_firefox", "generated_vue_ssr_dev_graph_updates_and_recovers", "generated_vue_dev_ssr_chromium", "generated_vue_dev_ssr_firefox"):
             commands.append(exact("ferrite-test", "framework_compilers", name, "napi-vm"))
+        commands.append(["cargo", "test", "--locked", "-p", "ferrite-test", "--features", "napi-vm", "--test", "prerender"])
         # Both engines and all existing generated-client/Refresh/foreign-hook
         # acceptance cases execute explicitly, rather than relying on unit tests.
         for engine in ("chromium", "firefox"):
@@ -52,6 +55,21 @@ def plan(profile):
     if profile in ("e2e", "all"):
         commands.append(["cargo", "test", "--locked", "-p", "ferrite-e2e", "--", "--test-threads=1"])
     return commands
+
+
+def environment_evidence(env):
+    tools = {}
+    candidates = {"rustc": shutil.which("rustc"), "cargo": shutil.which("cargo"), "node": shutil.which("node"), "chromium": env.get("FERRITE_CHROMIUM_PATH"), "firefox": env.get("FERRITE_FIREFOX_PATH")}
+    for name, executable in candidates.items():
+        if not executable:
+            tools[name] = {"status": "unavailable"}
+            continue
+        try:
+            result = subprocess.run([executable, "--version"], env=env, capture_output=True, text=True, timeout=5)
+            tools[name] = {"path": str(Path(executable).resolve()), "status": "identified" if result.returncode == 0 else "failed", "version": result.stdout.strip(), "stderr": result.stderr.strip()}
+        except (OSError, subprocess.TimeoutExpired) as error:
+            tools[name] = {"path": str(executable), "status": "failed", "error": str(error)}
+    return {"os": platform.system(), "architecture": platform.machine(), "tools": tools}
 
 
 def run(args):
@@ -75,6 +93,7 @@ def run(args):
         env["FERRITE_CLI_PATH"] = str(Path(metadata["target_directory"]) / "debug" / ("ferrite.exe" if os.name == "nt" else "ferrite"))
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     report = {"schema": 1, "profile": args.profile, "revision": revision, "dirty": bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT)), "platform": platform.platform(), "started_at": datetime.datetime.now(datetime.timezone.utc).isoformat(), "status": "running", "gates": []}
+    report["environment"] = environment_evidence(env)
     output = args.report.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     try:

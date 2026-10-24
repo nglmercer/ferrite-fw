@@ -431,6 +431,25 @@ pub fn write_ssr_standalone(
     runtime: &ferrite_config::RuntimeConfig,
     base: &str,
 ) -> Result<StandaloneReport> {
+    write_ssr_standalone_with_routes(
+        out_dir,
+        opts,
+        sdk,
+        runtime,
+        base,
+        &ferrite_config::SsrConfig::default(),
+    )
+}
+
+pub fn write_ssr_standalone_with_routes(
+    out_dir: &Path,
+    opts: &StandaloneOptions,
+    sdk: &Path,
+    runtime: &ferrite_config::RuntimeConfig,
+    base: &str,
+    routes: &ferrite_config::SsrConfig,
+) -> Result<StandaloneReport> {
+    routes.validate_routes()?;
     let sdk = validate_ssr_standalone_inputs(opts, sdk, runtime, base)?;
     let artifact = crate::SsrRendererArtifact::read(&out_dir.join("server"))?;
     let _ = std::fs::read_to_string(out_dir.join("index.html"))?;
@@ -453,7 +472,11 @@ pub fn write_ssr_standalone(
     let runtime_json = serde_json::to_string(runtime).map_err(FerriteError::Json)?;
     let main = include_str!("ssr_standalone_main.rs.txt")
         .replace("__BASE__", &format!("{base:?}"))
-        .replace("__RUNTIME_JSON__", &format!("{runtime_json:?}"));
+        .replace("__RUNTIME_JSON__", &format!("{runtime_json:?}"))
+        .replace(
+            "__ROUTES_JSON__",
+            &format!("{:?}", serde_json::to_string(routes)?),
+        );
     let dependency = format!(
         "ferrite = {{ path = {}, version = \"={}\", features = [\"napi-vm\"] }}\nserde_json = \"1\"\n",
         serde_json::to_string(&sdk.to_string_lossy()).map_err(FerriteError::Json)?,
@@ -707,7 +730,7 @@ fn write_standalone_staged(
                 .map(|name| format!("{APP_NAME}-{target}-{}", name.to_string_lossy()))
                 .unwrap_or_else(|| format!("{APP_NAME}-{target}"));
             let dest = out_dir.join(file);
-            std::fs::copy(&built, &dest)?;
+            publish_binary(&built, &dest)?;
             Some(dest)
         }
         None => None,
@@ -721,6 +744,34 @@ fn write_standalone_staged(
         embedded_bytes,
         binary,
     })
+}
+
+/// Publish a complete executable with same-directory atomic replacement.
+/// A concurrent publisher fails explicitly and every pre-publication error
+/// preserves the previous binary. Permissions and file contents are synced.
+fn publish_binary(source: &Path, destination: &Path) -> Result<()> {
+    let source_metadata = std::fs::symlink_metadata(source)?;
+    if !source_metadata.is_file() || source_metadata.file_type().is_symlink() {
+        return Err(FerriteError::Build(
+            "compiled binary must be an ordinary file".into(),
+        ));
+    }
+    let _publication = crate::ssg::PublicationLock::acquire(destination)?;
+    if std::fs::symlink_metadata(destination)
+        .is_ok_and(|metadata| metadata.file_type().is_symlink() || !metadata.is_file())
+    {
+        return Err(FerriteError::Build(
+            "binary destination must be an ordinary file".into(),
+        ));
+    }
+    let staged =
+        tempfile::NamedTempFile::new_in(destination.parent().expect("publication parent"))?;
+    std::fs::copy(source, staged.path())?;
+    staged.as_file().sync_all()?;
+    staged.persist(destination).map_err(|error| {
+        FerriteError::Build(format!("cannot atomically publish binary: {error}"))
+    })?;
+    Ok(())
 }
 
 fn render_readme(opts: &StandaloneOptions, binary: &Option<PathBuf>) -> String {
@@ -1155,5 +1206,63 @@ mod tests {
             .contains("fake-unknown-linux-fake"));
         std::fs::remove_dir_all(&dir).unwrap();
         std::fs::remove_dir_all(&tools).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod publication_tests {
+    use super::*;
+    #[test]
+    fn complete_binary_replacement_preserves_permissions_and_failure_preserves_previous() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("compiled");
+        let target = directory.path().join("app");
+        std::fs::write(&source, "complete executable").unwrap();
+        std::fs::write(&target, "previous").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        publish_binary(&source, &target).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "complete executable"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+                0o755
+            );
+        }
+        assert!(publish_binary(&directory.path().join("missing"), &target).is_err());
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "complete executable"
+        );
+        let _lock = crate::ssg::PublicationLock::acquire(&target).unwrap();
+        assert!(publish_binary(&source, &target)
+            .unwrap_err()
+            .to_string()
+            .contains("publication lock"));
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "complete executable"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn binary_publication_refuses_redirected_destinations() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("compiled");
+        let external = directory.path().join("external");
+        let link = directory.path().join("app");
+        std::fs::write(&source, "new").unwrap();
+        std::fs::write(&external, "preserved").unwrap();
+        std::os::unix::fs::symlink(&external, &link).unwrap();
+        assert!(publish_binary(&source, &link).is_err());
+        assert_eq!(std::fs::read_to_string(&external).unwrap(), "preserved");
     }
 }

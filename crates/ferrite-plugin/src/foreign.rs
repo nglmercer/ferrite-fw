@@ -150,12 +150,7 @@ fn source_map(value: Value) -> Result<Option<SourceMap>> {
             ))
         }
     };
-    let structure: Value = serde_json::from_str(&json)
-        .map_err(|error| FerriteError::Build(format!("foreign source map is invalid: {error}")))?;
-    if structure.get("sections").is_some() {
-        return Err(FerriteError::Build("foreign indexed source maps are unavailable; flatten sections to a regular v3 source map before returning it".into()));
-    }
-    oxc_sourcemap::SourceMap::from_json_string(&json)
+    let json = ferrite_transform::flatten_source_map(&json)
         .map_err(|error| FerriteError::Build(format!("foreign source map is invalid: {error}")))?;
     Ok(Some(SourceMap::external(json)))
 }
@@ -396,6 +391,6 @@ mod tests {
         assert!(source_map(indexed)
             .unwrap_err()
             .to_string()
-            .contains("indexed source maps"));
+            .contains("indexed source map"));
     }
 }

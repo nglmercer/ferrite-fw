@@ -16,7 +16,9 @@ pub use commonjs::{
     CJS_REQUIRE_EXPORT,
 };
 pub mod concat;
+mod indexed_maps;
 mod minify;
+pub use indexed_maps::flatten_source_map;
 mod parse;
 mod rewrite;
 mod transform;

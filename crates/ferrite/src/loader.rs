@@ -414,6 +414,7 @@ pub async fn preview_dir(dir: &std::path::Path, port: u16) -> Result<()> {
         port,
         PreviewRendering {
             base: "/",
+            routes: None,
             renderer: None,
         },
         &[],
@@ -425,6 +426,7 @@ pub async fn preview_dir(dir: &std::path::Path, port: u16) -> Result<()> {
 
 struct PreviewRendering<'a> {
     base: &'a str,
+    routes: Option<&'a ferrite_config::SsrConfig>,
     renderer: Option<Arc<dyn ferrite_ssr::SsrAdapter>>,
 }
 
@@ -445,7 +447,17 @@ async fn preview_with_control(
         .entry
         .as_deref()
         .is_some_and(|entry| entry != "src/server.rs");
-    let renderer = if has_server || explicit_entry {
+    let prerendered = dir.join("prerender-manifest.json").is_file();
+    if prerendered {
+        let report: crate::PrerenderReport =
+            serde_json::from_slice(&std::fs::read(dir.join("prerender-manifest.json"))?)?;
+        if report.version != 1 {
+            return Err(FerriteError::Build(
+                "unsupported prerender manifest; rebuild static output".into(),
+            ));
+        }
+    }
+    let renderer = if !prerendered && (has_server || explicit_entry) {
         if control.config.runtime.backend != "napi-vm" || !cfg!(feature = "napi-vm") {
             return Err(FerriteError::Ssr(format!("built SSR preview requires the explicitly selected napi-vm runtime and its compiled feature; selected `{}`. Configure [runtime].backend = 'napi-vm' and build Ferrite with --features napi-vm", control.config.runtime.backend)));
         }
@@ -474,6 +486,7 @@ async fn preview_with_control(
         port,
         PreviewRendering {
             base: &control.config.base,
+            routes: Some(&control.config.ssr),
             renderer,
         },
         &control.headers,
@@ -492,7 +505,11 @@ async fn preview_with_parts(
     mounts: &[ferrite_plugin::PreviewMount],
     proxies: &[ferrite_plugin::ProxyRule],
 ) -> Result<()> {
-    let PreviewRendering { base, renderer } = application;
+    let PreviewRendering {
+        base,
+        renderer,
+        routes,
+    } = application;
     use axum::extract::State;
     use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
     use axum::response::IntoResponse as _;
@@ -500,6 +517,7 @@ async fn preview_with_parts(
     struct PreviewState {
         dir: PathBuf,
         base: String,
+        routes: ferrite_config::SsrConfig,
         headers: Vec<(HeaderName, HeaderValue)>,
         mounts: Vec<ferrite_plugin::PreviewMount>,
         proxies: Vec<ferrite_plugin::ProxyRule>,
@@ -636,7 +654,7 @@ async fn preview_with_parts(
         if state.renderer.is_some() && (relative == "server" || relative.starts_with("server/")) {
             return (StatusCode::NOT_FOUND, "server output is private").into_response();
         }
-        if std::path::Path::new(relative).extension().is_none() {
+        if state.routes.matches_route(&format!("/{relative}")) {
             if let Some(renderer) = &state.renderer {
                 let request_headers: Vec<_> = headers
                     .iter()
@@ -679,7 +697,12 @@ async fn preview_with_parts(
         let file = state.dir.join(relative);
         let file = if file.is_file() {
             file
+        } else if file.is_dir() && file.join("index.html").is_file() {
+            file.join("index.html")
         } else {
+            if state.dir.join("prerender-manifest.json").is_file() {
+                return (StatusCode::NOT_FOUND, "route was not prerendered").into_response();
+            }
             let accepts_html = headers
                 .get(axum::http::header::ACCEPT)
                 .and_then(|value| value.to_str().ok())
@@ -728,6 +751,7 @@ async fn preview_with_parts(
         .with_state(PreviewState {
             dir: dir.to_path_buf(),
             base,
+            routes: routes.cloned().unwrap_or_default(),
             headers: parsed_headers(headers),
             mounts: mounts.to_vec(),
             proxies: proxies.to_vec(),
