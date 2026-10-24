@@ -110,7 +110,9 @@ SDK source snapshot or final binary.
 - [ ] Extend foreign context and lifecycle contracts one tested capability at a time.
 - [x] Flatten and compose embedded indexed source maps with nested offsets and unmapped boundaries.
 - [ ] Complete all emitted chunk/runtime map chains and external section loading contracts.
-- [ ] Dynamic imports, CSS order, shared chunks, scope-hoist bailouts and asset closure fixtures.
+- [x] Executed lazy CSS timing/retry, ordered static styles, shared ESM state, direct CSS imports and image closure with minify/scope hoisting on/off in both browsers.
+- [x] Compose final native import/CSS/preload/wrapper map edits; invalidate stale maps from uncomposable code hooks.
+- [ ] Broader cyclic/worker/Wasm and plugin-driven output closures, native scope-hoist bailouts and full render-hook map composition.
 - [ ] Benchmark before selecting a Rolldown backend; retain the current backend until parity passes.
 
 ## 7. Rendering features

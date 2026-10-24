@@ -16,7 +16,9 @@ pub use commonjs::{
     CJS_REQUIRE_EXPORT,
 };
 pub mod concat;
+mod dynamic_preload;
 mod effect_imports;
+pub use dynamic_preload::preload_dynamic_imports;
 mod indexed_maps;
 pub use effect_imports::remove_effect_only_imports;
 mod minify;
@@ -33,7 +35,7 @@ pub use defines::apply_defines_mapped;
 pub use minify::chain_source_maps;
 pub use rewrite::{
     apply_define, apply_text_edits, inject_hmr_mapped, rewrite_import_meta_hot, rewrite_specifiers,
-    rewrite_specifiers_mapped, with_hmr_client,
+    rewrite_specifiers_mapped, strip_bare_imports_mapped, with_hmr_client,
 };
 pub use transform::{drop_unused_exports, instrument_react_refresh};
 pub use types::{

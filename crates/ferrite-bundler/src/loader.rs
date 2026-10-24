@@ -41,6 +41,10 @@ pub struct LoadedModule {
 /// Loads transformed modules for the bundler (implemented by the facade).
 #[async_trait::async_trait]
 pub trait ModuleLoader: Send + Sync {
+    /// Published files referenced by one loaded module (including CSS URLs).
+    fn asset_files(&self, _id: &ModuleId) -> Vec<String> {
+        Vec::new()
+    }
     /// Load + transform a module for `env` (`client`/`ssr`).
     async fn load(&self, id: &ModuleId, env: &str) -> Result<LoadedModule>;
 }

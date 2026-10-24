@@ -225,6 +225,49 @@ pub fn inject_hmr_mapped(
     apply_text_edits(id, code, &edits, sourcemap)
 }
 
+/// Remove extracted CSS side-effect imports using statement spans. Preserve
+/// formatting and bindings; dynamic imports and lookalike strings stay intact.
+pub fn strip_bare_imports_mapped(
+    id: &str,
+    code: &str,
+    specifiers: &std::collections::HashSet<String>,
+    sourcemap: bool,
+) -> Result<(String, Option<String>)> {
+    if specifiers.is_empty() {
+        return Ok((code.into(), None));
+    }
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, code, SourceType::mjs()).parse();
+    if !parsed.diagnostics.is_empty() {
+        return Err(ferrite_core::FerriteError::Build(format!(
+            "cannot strip CSS imports from invalid JavaScript `{id}`"
+        )));
+    }
+    let edits: Vec<_> = parsed
+        .program
+        .body
+        .iter()
+        .filter_map(|statement| {
+            if let oxc_ast::ast::Statement::ImportDeclaration(declaration) = statement {
+                if declaration
+                    .specifiers
+                    .as_ref()
+                    .is_none_or(|list| list.is_empty())
+                    && specifiers.contains(declaration.source.value.as_str())
+                {
+                    return Some((
+                        declaration.span.start as usize,
+                        declaration.span.end as usize,
+                        String::new(),
+                    ));
+                }
+            }
+            None
+        })
+        .collect();
+    apply_text_edits(id, code, &edits, sourcemap)
+}
+
 #[cfg(test)]
 mod map_tests {
     use super::*;

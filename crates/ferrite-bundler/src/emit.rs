@@ -11,37 +11,44 @@ use ferrite_core::Result;
 use ferrite_transform::rewrite_specifiers;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::collections::VecDeque;
 
-/// Rewrite import specifiers in rendered code (specifier → relative URL).
-///
-/// Operates on exact quoted-specifier matches produced by the loader's own
-/// import list, so it cannot misfire on unrelated strings.
-#[must_use]
-/// CSS module ids in an entry closure (BFS in import order).
+/// CSS roots in module evaluation order. CSS @imports remain inside their
+/// owning stylesheet, avoiding duplicate application through extra link tags.
 pub(crate) fn entry_css_files(
     entry: &ModuleId,
     modules: &HashMap<ModuleId, LoadedModule>,
     live: &HashSet<ModuleId>,
+    include_dynamic: bool,
 ) -> Vec<String> {
     let mut seen = HashSet::new();
-    let mut queue = VecDeque::from([entry.clone()]);
+    let mut stack = vec![entry.clone()];
     let mut out = Vec::new();
-    while let Some(id) = queue.pop_front() {
-        if !seen.insert(id.clone()) {
+    while let Some(id) = stack.pop() {
+        if !seen.insert(id.clone()) || !live.contains(&id) {
             continue;
         }
         let Some(module) = modules.get(&id) else {
             continue;
         };
-        if !live.contains(&id) {
-            continue;
-        }
         if module.css.is_some() {
             out.push(id.0.clone());
+            // Custom stylesheet wrappers may carry real JS imports. Native
+            // CSS @imports are already loaded by this stylesheet itself.
+            for (_, dep, kind) in module.imports.iter().rev() {
+                if *kind == ferrite_graph::ImportKind::Static
+                    && modules.get(dep).is_some_and(|module| module.css.is_none())
+                {
+                    stack.push(dep.clone());
+                }
+            }
+            continue;
         }
-        for (_, dep, _) in &module.imports {
-            queue.push_back(dep.clone());
+        for (_, dep, kind) in module.imports.iter().rev() {
+            if *kind == ferrite_graph::ImportKind::Static
+                || (include_dynamic && *kind == ferrite_graph::ImportKind::Dynamic)
+            {
+                stack.push(dep.clone());
+            }
         }
     }
     out
@@ -117,6 +124,7 @@ pub(crate) fn emit_css_module(
 /// Matches minified and pretty code (`import"…"`, optional whitespace /
 /// semicolon). Binding imports (`import x from …`), dynamic imports, and
 /// lookalike string contents (whose quotes are escaped) are never touched.
+#[cfg(test)]
 pub(crate) fn strip_bare_imports(code: &str, specs: &[&str]) -> String {
     if specs.is_empty() {
         return code.to_string();
@@ -140,6 +148,7 @@ pub(crate) fn strip_bare_imports(code: &str, specs: &[&str]) -> String {
 }
 
 /// Length of the bare-import statement at `text` start, if any.
+#[cfg(test)]
 pub(crate) fn match_bare_import(text: &str, specs: &[&str]) -> Option<usize> {
     let after_import = text.strip_prefix("import")?;
     // `import(`, `import x`, `import*`… are not bare imports.

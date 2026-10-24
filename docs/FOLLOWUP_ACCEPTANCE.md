@@ -23,3 +23,26 @@ counted as executed by a plain `cargo test`.
 
 These are bounded fixtures, not complete Vite or framework parity. See
 [VITE_COMPATIBILITY.md](VITE_COMPATIBILITY.md) and the consolidated roadmap.
+
+
+## Production correctness (dependent draft)
+
+On the same Linux/tool/browser versions:
+
+- 75 transform/bundler unit tests passed, including AST-accurate dynamic import
+  wrapping, unmapped generated boundaries and native CSS import ownership.
+- Both real browser matrices passed all minify/scope-hoist combinations. One
+  combination uses nested JS/CSS output paths. Checks cover static cascade order,
+  lazy CSS timing, failed stylesheet retry, CSS readiness before module execution,
+  singleton shared state, deduplicated concurrent CSS, direct CSS imports and
+  serving the actual emitted SVG asset.
+- Two ordinary production cases verify original TypeScript positions after final
+  import/CSS/helper/banner edits, CSS-driven importer hash invalidation and removal
+  of stale maps following uncomposable code replacements.
+- Thirteen side-effect/prerender/SSR-route/plugin-preview regressions passed.
+- Official generated React/Vue/Svelte JS/TS production SSR fixtures passed again.
+- Strict all-target Clippy, formatting, whitespace and four runner regressions.
+
+[PRODUCTION_CORRECTNESS.md](PRODUCTION_CORRECTNESS.md) defines the bounded contract
+and remaining gaps. The production acceptance profile selects these gates
+explicitly; a zero-test exact fixture is a failure.
