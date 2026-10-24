@@ -252,10 +252,23 @@ impl Default for BuildConfig {
     }
 }
 
+/// One base-relative route assigned to a lazily loaded server module.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SsrRouteEntry {
+    pub route: String,
+    pub entry: String,
+}
+
+/// Internal entry used by the server's route-dispatch plugin.
+pub const SSR_ROUTER_ENTRY: &str = "@ferrite/ssr-router";
+
 /// SSR options (§23).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct SsrConfig {
+    /// Route-specific server entries. Exact paths win, then longest prefix, then * .
+    pub entries: Vec<SsrRouteEntry>,
     /// Pull JavaScript response bytes through an explicitly stream-capable runtime.
     pub streaming: bool,
     /// Base-relative SSR routes: exact paths, /prefix/*, or *. None uses extensionless routes.
@@ -275,6 +288,7 @@ pub struct SsrConfig {
 impl Default for SsrConfig {
     fn default() -> Self {
         Self {
+            entries: Vec::new(),
             streaming: false,
             entry: Some("src/server.rs".to_string()),
             routes: None,
@@ -288,7 +302,35 @@ impl Default for SsrConfig {
 
 impl SsrConfig {
     pub fn validate_routes(&self) -> Result<()> {
-        for route in self.routes.iter().flatten() {
+        let mut seen = std::collections::HashSet::new();
+        for entry in &self.entries {
+            if !seen.insert(&entry.route) {
+                return Err(FerriteError::Config(format!(
+                    "duplicate SSR entry route `{}`",
+                    entry.route
+                )));
+            }
+            let path = std::path::Path::new(&entry.entry);
+            if entry.entry.is_empty()
+                || entry.entry.contains(['\\', '?', '#', '\0'])
+                || path.is_absolute()
+                || path
+                    .components()
+                    .any(|part| !matches!(part, std::path::Component::Normal(_)))
+                || !ferrite_core::ModuleType::from_path(&entry.entry).is_js_like()
+            {
+                return Err(FerriteError::Config(format!(
+                    "SSR route entry `{}` must be a project-relative JavaScript/TypeScript module",
+                    entry.entry
+                )));
+            }
+        }
+        for route in self
+            .routes
+            .iter()
+            .flatten()
+            .chain(self.entries.iter().map(|entry| &entry.route))
+        {
             let prefix = route.strip_suffix("/*").unwrap_or(route);
             if route != "*"
                 && (!route.starts_with('/')
@@ -332,7 +374,12 @@ impl SsrConfig {
             return false;
         }
         self.routes.as_ref().map_or_else(
-            || std::path::Path::new(relative).extension().is_none(),
+            || {
+                self.entries
+                    .iter()
+                    .any(|entry| ssr_route_matches(&entry.route, path))
+                    || std::path::Path::new(relative).extension().is_none()
+            },
             |routes| {
                 routes.iter().any(|route| {
                     route == "*"
@@ -347,6 +394,19 @@ impl SsrConfig {
             },
         )
     }
+}
+
+/// Match a previously validated SSR route pattern.
+#[must_use]
+pub fn ssr_route_matches(route: &str, path: &str) -> bool {
+    route == "*"
+        || route == path
+        || route.strip_suffix("/*").is_some_and(|prefix| {
+            path == prefix
+                || path
+                    .strip_prefix(prefix)
+                    .is_some_and(|rest| rest.starts_with('/'))
+        })
 }
 
 /// Resolver options.
@@ -1316,6 +1376,9 @@ fn merge_build(mut base: BuildConfig, over: BuildConfig) -> BuildConfig {
 }
 
 fn merge_ssr(mut base: SsrConfig, over: SsrConfig) -> SsrConfig {
+    if !over.entries.is_empty() {
+        base.entries = over.entries;
+    }
     base.streaming |= over.streaming;
     if over.routes.is_some() {
         base.routes = over.routes;
@@ -2101,6 +2164,23 @@ mod foreign_profile_tests {
 /// Explicit configuration wins; the legacy Rust default selects conventional
 /// discovery. This selects source, not a renderer or runtime backend.
 pub fn resolve_js_server_entry(config: &ResolvedConfig) -> Result<Option<String>> {
+    if !config.ssr.entries.is_empty() {
+        config.ssr.validate_routes()?;
+        for entry in &config.ssr.entries {
+            if !config.root.join(&entry.entry).is_file() {
+                return Err(FerriteError::Build(format!(
+                    "SSR route `{}` entry `{}` is not a file",
+                    entry.route, entry.entry
+                )));
+            }
+        }
+        // Validate an explicitly configured fallback too, before serving traffic.
+        let mut fallback = config.clone();
+        fallback.ssr.entries.clear();
+        resolve_js_server_entry(&fallback)?;
+        return Ok(Some(SSR_ROUTER_ENTRY.into()));
+    }
+
     if let Some(entry) = config
         .ssr
         .entry
@@ -2204,6 +2284,38 @@ mod ssr_package_tests {
 #[cfg(test)]
 mod ssr_route_tests {
     use super::*;
+    #[test]
+    fn route_entries_validate_patterns_paths_and_explicit_allowlists() {
+        let mut config = SsrConfig {
+            entries: vec![SsrRouteEntry {
+                route: "/admin/report.json".into(),
+                entry: "src/admin.ts".into(),
+            }],
+            ..Default::default()
+        };
+        config.validate_routes().unwrap();
+        assert!(config.matches_route("/admin/report.json"));
+        config.routes = Some(vec!["/allowed".into()]);
+        assert!(!config.matches_route("/admin/report.json"));
+        config.entries.push(config.entries[0].clone());
+        assert!(config.validate_routes().is_err());
+        config.entries.pop();
+        for path in [
+            "../escape.ts",
+            "/root.ts",
+            "src/../escape.ts",
+            "src/style.css",
+            "src/a.ts?query",
+            "src\\a.ts",
+        ] {
+            config.entries[0].entry = path.into();
+            assert!(config.validate_routes().is_err(), "{path}");
+        }
+        config.entries[0].entry = "src/valid.ts".into();
+        config.entries[0].route = "/invalid*".into();
+        assert!(config.validate_routes().is_err());
+    }
+
     #[test]
     fn streaming_requires_effective_process_backend() {
         let mut user = UserConfig::default();

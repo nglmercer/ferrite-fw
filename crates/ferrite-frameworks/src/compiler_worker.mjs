@@ -1,6 +1,7 @@
 // Focused official compiler wrappers, hosted by the persistent Node transport.
 // This module has no SSR renderer and does not supply a browser runtime.
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 const compilers = new Map();
@@ -125,6 +126,21 @@ export async function compile(request) {
   }
   if (descriptor.styles.some(style => style.scoped)) pieces.push({ code: `__sfc__.__scopeId = ${JSON.stringify(`data-v-${id}`)};`, map: null });
   if (Object.keys(moduleStyles).length) pieces.push({ code: `__sfc__.__cssModules = JSON.parse(${JSON.stringify(JSON.stringify(moduleStyles))});`, map: null });
+  if (development && !server) {
+    const signature = createHash('sha256').update(JSON.stringify([script?.content || '', moduleStyles, descriptor.styles.some(style => style.scoped)])).digest('hex');
+    pieces.push({ code: `__sfc__.__hmrId = ${JSON.stringify(id)};
+__sfc__.__ferriteHmrSignature = ${JSON.stringify(signature)};
+if (import.meta.hot) {
+  const runtime = globalThis.__VUE_HMR_RUNTIME__;
+  if (!runtime) throw new Error('Vue development runtime does not expose HMR');
+  runtime.createRecord(__sfc__.__hmrId, __sfc__);
+  import.meta.hot.accept(next => {
+    if (!next) return;
+    if (next.default.__ferriteHmrSignature === __sfc__.__ferriteHmrSignature) runtime.rerender(__sfc__.__hmrId, next.default.render);
+    else runtime.reload(__sfc__.__hmrId, next.default);
+  });
+}`, map: null });
+  }
   pieces.push({ code: 'export default __sfc__;', map: null });
   return { pieces, language: script?.lang === 'ts' ? 'ts' : 'js', css, dependencies: [...dependencies], diagnostics, compilerVersion: module.version };
 }

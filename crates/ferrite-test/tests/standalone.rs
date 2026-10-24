@@ -281,6 +281,14 @@ async fn standalone_ssr_profile(backend: &str, streaming: bool) {
     }
     let mut config = standalone_config(&project, None);
     config.ssr.streaming = streaming;
+    std::fs::write(project.root.join("src/special.ts"), if streaming {
+        "export function render(){return {status:203,body:new ReadableStream({start(c){c.enqueue('<h1>special route</h1>');c.close();}})}}"
+    } else {"export function render(){return {status:203,html:'<h1>special route</h1>'}}"}).unwrap();
+    config.ssr.entries = vec![ferrite::config::SsrRouteEntry {
+        route: "/special.json".into(),
+        entry: "src/special.ts".into(),
+    }];
+
     config.runtime.backend = backend.into();
     if backend == "napi-vm-process" {
         config.runtime.request_timeout_ms = 750;
@@ -344,6 +352,11 @@ async fn standalone_ssr_profile(backend: &str, streaming: bool) {
             "{failed}"
         );
     }
+    let special = http_get(port, "/app/special.json?query=retained");
+    assert!(
+        special.starts_with("HTTP/1.0 203") && special.contains("<h1>special route</h1>"),
+        "{special}"
+    );
     let response = http_get(port, "/app/");
     assert!(response.starts_with("HTTP/1.0 202"), "{response}");
     assert!(

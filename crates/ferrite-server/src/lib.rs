@@ -12,6 +12,7 @@ mod pipeline_transform;
 mod proxy;
 mod routes;
 mod server;
+mod ssr_router;
 mod ssr_tools;
 mod state;
 mod types;

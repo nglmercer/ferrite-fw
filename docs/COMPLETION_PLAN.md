@@ -116,7 +116,8 @@ SDK source snapshot or final binary.
 ## 7. Rendering features
 
 - [x] Explicit routing policy for dotted routes shared by dev, preview and standalone.
-- [ ] Multiple server entry selection and per-entry artifact routing.
+- [x] Base-relative route entries with lazy renderer selection shared by dev, built graphs, prerender and standalone.
+- [ ] Independent per-entry shells/runtime policies and per-route CSS isolation.
 - [x] HTTP disconnect drops pending SSR and cancels process-runtime invocation; recovery verified.
 - [x] Rust response streaming backpressure, HEAD, producer errors and disconnect teardown.
 - [x] Experimental Linux process-worker pull streaming bridge, deadlines, bounded bytes and teardown; official React/Vue production output.
@@ -287,3 +288,8 @@ The Node reference fixture compares supported exports cases using an explicitly
 installed Node executable. The emitted integration fixture verifies distinct
 client/server conditions and a mapped transitive dependency whose version differs
 from the root, with scope hoisting enabled and disabled.
+
+
+Route-specific entries are documented in [SSR_ROUTES.md](SSR_ROUTES.md).
+[Vite replacement acceptance](VITE_COMPATIBILITY.md) tracks compatibility without
+promoting partial fixtures to full framework or plugin parity.

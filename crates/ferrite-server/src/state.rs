@@ -202,6 +202,13 @@ impl DevServer {
         } else {
             Apply::Serve
         };
+        let mut plugins = plugins;
+        if !config.ssr.entries.is_empty() {
+            plugins.insert(
+                0,
+                Arc::new(crate::ssr_router::SsrRouterPlugin::new(&config)?),
+            );
+        }
         let container = PluginContainer::new(plugins, mode);
         container.hook_config_resolved(&config).await?;
         let compiler = match compiler_override {
