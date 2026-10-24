@@ -46,3 +46,46 @@ On the same Linux/tool/browser versions:
 [PRODUCTION_CORRECTNESS.md](PRODUCTION_CORRECTNESS.md) defines the bounded contract
 and remaining gaps. The production acceptance profile selects these gates
 explicitly; a zero-test exact fixture is a failure.
+
+## SSR document and islands profile
+
+The new `--profile ssr` selects 17 gates on Linux. It covers:
+
+- 160 ferrite/config/server/SSR unit tests (three intentionally ignored unit cases
+  excluded), including attribute escaping, input validation, original mounted
+  request URLs, missing-media behavior and configuration merge precedence.
+- Six ordinary document/route/prerender checks, including independent shells,
+  selected CSS closures, source revalidation and legacy manifest-only loading.
+- Both browser matrices hydrate official React/Vue/Svelte server HTML in dev,
+  source-hidden preview and prerendered output. Load/interaction/visible/manual/
+  idle triggers, original DOM identity, props, retries, deduplicated attempts,
+  inserted roots, cleanup and an isolated admin document are checked.
+- A generated standalone repeats those framework checks in both engines from an
+  unrelated working directory with an empty PATH. Three additional standalone
+  cases cover buffered embedded, buffered process and streamed process documents.
+- Seven explicit streaming fixtures and a Node-free CLI process-streamed
+  prerender case. The latter also regresses an explicit file-config renderer being
+  accidentally overwritten by default programmatic configuration.
+
+Versions remain Linux x86_64, Rust 1.99.1, Node 24.22.1, Chromium headless shell
+153.0.8010.0 and official Firefox 157.0. Strict all-target Clippy, formatting,
+whitespace and four runner regressions are checked separately. Earlier failed
+attempts uncovered and fixed interaction scheduling, copied island ready-state,
+missing favicon overlays and stripped mounted request URIs.
+
+Rust 1.99.1 also produced a missing-rlib failure when generated standalone builds
+reused the workspace build cache. Verification uses an isolated SDK target via
+`FERRITE_STANDALONE_TARGET_DIR` and the existing external e2e codegen-units override;
+no repository toolchain/profile change was made. The acceptance runner records
+failures honestly and must finish all selected gates before reporting success.
+
+[SSR_DOCUMENTS_AND_ISLANDS.md](SSR_DOCUMENTS_AND_ISLANDS.md) describes the implemented
+contract and remaining limitations. This does not promote all framework versions,
+nested island ownership, arbitrary native addons or cross-platform isolation.
+
+Final snapshot rerun: the ordinary document/route/prerender gates passed; the
+Chromium fixture then stopped while requesting React from registry.npmjs.org
+(network request failure). The complete 17-gate profile is not claimed green for
+this snapshot. Prior browser, streaming and standalone runs above remain
+individual evidence. A subsequent environment lacked the Rust/browser toolchain,
+so a complete rerun still requires the documented prerequisites.

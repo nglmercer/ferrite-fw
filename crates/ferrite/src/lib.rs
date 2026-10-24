@@ -47,7 +47,10 @@ pub use ferrite_wasm as wasm;
 
 pub mod package;
 mod ssr_build;
+mod ssr_documents;
+mod ssr_islands;
 pub use ssr_build::{load_built_ssr_graph, write_built_ssr_artifact, SsrRendererArtifact};
+pub use ssr_documents::SsrDocumentArtifact;
 
 // --- re-exported vocabulary --------------------------------------------------
 pub use ferrite_config::{

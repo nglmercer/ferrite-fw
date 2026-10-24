@@ -16,7 +16,9 @@ pub use ferrite_runtime::{CompiledModule, CompiledModuleGraph};
 
 pub use adapter::{FnAdapter, JsSsrAdapter, SsrAdapter, SsrModule, StaticShellAdapter};
 pub use external::{is_external, is_native_specifier, native_shim_module};
-pub use islands::{island_hydration_script, island_tag, Island};
+pub use islands::{
+    island_hydration_script, island_registry_runtime, island_tag, island_tag_with_strategy, Island,
+};
 pub use request::{RenderBody, SsrContext, SsrHttpRequest, SsrResponse};
 pub use router::{match_route, SsrRouter};
 pub use rpc::{RpcEncoding, RpcRegistry, RpcRequest, RPC_ROUTE_PREFIX};
