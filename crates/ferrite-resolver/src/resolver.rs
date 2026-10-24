@@ -65,6 +65,14 @@ impl Resolver {
 
     /// Resolve a specifier.
     pub fn resolve(&self, request: &ResolveRequest<'_>) -> Result<ResolvedId> {
+        self.resolve_depth(request, 0)
+    }
+    fn resolve_depth(&self, request: &ResolveRequest<'_>, depth: usize) -> Result<ResolvedId> {
+        if depth > 64 {
+            return Err(FerriteError::Resolve(
+                "package/alias resolution exceeds 64 redirects; check circular mappings".into(),
+            ));
+        }
         let desired = if request.kind == ResolveKind::Require {
             "require"
         } else {
@@ -98,7 +106,7 @@ impl Resolver {
             {
                 selected.conditions.push(desired.into());
             }
-            return selected.resolve(request);
+            return selected.resolve_depth(request, depth + 1);
         }
         let (specifier, query) = split_query(request.specifier);
 
@@ -143,7 +151,7 @@ impl Resolver {
                 environment: request.environment.clone(),
                 kind: request.kind,
             };
-            return self.resolve(&nested);
+            return self.resolve_depth(&nested, depth + 1);
         }
         // 7. Absolute paths (root-relative).
         if specifier.starts_with('/') && !specifier.starts_with("/@npm/") {
@@ -178,7 +186,9 @@ impl Resolver {
                 .importer
                 .map(|importer| self.importer_dir(importer))
                 .unwrap_or_else(|| self.root.clone());
-            if let Some(resolved) = self.resolve_package_imports(&base_dir, rest, query)? {
+            if let Some(resolved) =
+                self.resolve_package_imports(&base_dir, rest, query, request, depth)?
+            {
                 return Ok(resolved);
             }
             return Err(FerriteError::Resolve(format!(
@@ -291,6 +301,7 @@ impl Resolver {
         ferrite_npm::validate_package_name(&name)?;
         if self.lockfile.exists() {
             let lock = ferrite_npm::Lockfile::read(&self.lockfile)?;
+            let active = lock.active_graph(&ferrite_npm::InstallPlatform::current())?;
             let base = request
                 .importer
                 .map(|importer| self.importer_dir(importer))
@@ -298,12 +309,23 @@ impl Resolver {
             let owner = lock
                 .package
                 .iter()
-                .find(|package| base.starts_with(self.npm_store.join(package.id())));
+                .filter(|package| {
+                    base.starts_with(self.npm_store.join(package.id()))
+                        || package
+                            .path
+                            .as_ref()
+                            .is_some_and(|path| base.starts_with(self.root.join(path)))
+                })
+                .max_by_key(|package| package.path.as_ref().map_or(0, String::len));
             let target = if let Some(owner) = owner {
                 if owner.name == name {
                     Some(owner.id())
                 } else {
-                    owner.dependencies.get(&name).cloned()
+                    active
+                        .dependencies
+                        .get(&owner.id())
+                        .and_then(|edges| edges.get(&name))
+                        .cloned()
                 }
             } else {
                 let importer = lock
@@ -311,19 +333,29 @@ impl Resolver {
                     .iter()
                     .filter(|(path, _)| base.starts_with(self.root.join(path)))
                     .max_by_key(|(path, _)| path.len());
-                importer.and_then(|(_, root)| root.dependencies.get(&name).cloned())
+                importer.and_then(|(path, _)| {
+                    active
+                        .importers
+                        .get(path)
+                        .and_then(|edges| edges.get(&name))
+                        .cloned()
+                })
             };
             let id = target.ok_or_else(|| FerriteError::Resolve(format!(
                 "no locked dependency edge for `{name}` from {}; run ferrite install to record importer dependencies",
                 base.display()
             )))?;
-            let dir = self.npm_store.join(&id);
+            let package = lock.package_by_id(&id).expect("validated edge");
+            let dir = package
+                .path
+                .as_ref()
+                .map_or_else(|| self.npm_store.join(&id), |path| self.root.join(path));
             if !dir.join("package.json").exists() {
                 return Err(FerriteError::Resolve(format!(
                     "locked package {id} is missing; run ferrite install --frozen-lockfile"
                 )));
             }
-            return self.resolve_in_package(&dir, &name, &subpath, query, true);
+            return self.resolve_in_package(&dir, &name, &subpath, query, package.path.is_none());
         }
         // Legacy manually populated stores remain usable only when unambiguous.
         if let Some(dir) = self.find_store_package(&name)? {
@@ -351,7 +383,7 @@ impl Resolver {
         query: Option<&str>,
         in_store: bool,
     ) -> Result<ResolvedId> {
-        let pkg = read_package_json(dir);
+        let pkg = read_package_json(dir)?;
         let export_subpath = if subpath.is_empty() {
             "."
         } else {
@@ -359,8 +391,13 @@ impl Resolver {
         };
         // 1. `exports` field.
         if let Some(exports) = pkg.as_ref().and_then(|pkg| pkg.exports.clone()) {
-            if let Some(target) = resolve_exports(&exports, export_subpath, &self.conditions) {
-                let file = dir.join(target.trim_start_matches("./"));
+            if let Some(target) =
+                resolve_package_map(&exports, export_subpath, &self.conditions, MapKind::Exports)?
+            {
+                let file = dir.join(target.strip_prefix("./").expect("validated local export"));
+                if !file.is_file() {
+                    return Err(FerriteError::Resolve(format!("export target `{target}` in {name} is not an existing file; package maps do not probe extensions or directory indexes")));
+                }
                 return self.finalize_package_file(dir, &file, query, pkg.as_ref(), in_store);
             }
             return Err(FerriteError::Resolve(format!(
@@ -399,30 +436,72 @@ impl Resolver {
     }
 
     /// Resolve `#` imports via the nearest package.json `imports` field.
-    pub(crate) fn resolve_package_imports(
+    fn resolve_package_imports(
         &self,
         base_dir: &Path,
         name: &str,
         query: Option<&str>,
+        request: &ResolveRequest<'_>,
+        depth: usize,
     ) -> Result<Option<ResolvedId>> {
         let mut dir = base_dir.to_path_buf();
         loop {
-            // Like Node, keep walking up past a package.json that lacks a
-            // matching `imports` entry instead of stopping at the first one.
+            if dir.file_name().is_some_and(|name| name == "node_modules") {
+                return Ok(None);
+            }
             let candidate = dir.join("package.json");
             if candidate.exists() {
-                if let Ok(text) = std::fs::read_to_string(&candidate) {
-                    if let Ok(pkg) = serde_json::from_str::<PackageJson>(&text) {
-                        if let Some(imports) = pkg.imports {
-                            let key = format!("#{name}");
-                            if let Some(target) = resolve_exports(&imports, &key, &self.conditions)
-                            {
-                                let file = dir.join(target.trim_start_matches("./"));
-                                return self.finalize_file(&file, query, None).map(Some);
-                            }
-                        }
+                let pkg: PackageJson = serde_json::from_slice(&std::fs::read(&candidate)?)
+                    .map_err(|error| {
+                        FerriteError::Resolve(format!(
+                            "invalid package scope {}: {error}",
+                            candidate.display()
+                        ))
+                    })?;
+                let Some(imports) = pkg.imports else {
+                    return Ok(None);
+                };
+                let key = format!("#{name}");
+                let Some(target) =
+                    resolve_package_map(&imports, &key, &self.conditions, MapKind::Imports)?
+                else {
+                    return Ok(None);
+                };
+                if let Some(relative) = target.strip_prefix("./") {
+                    let file = dir.join(relative);
+                    if !file.is_file() {
+                        return Err(FerriteError::Resolve(format!("import target `{target}` is not an existing file; package maps do not probe extensions or directory indexes")));
                     }
+                    return if is_under(&file, &self.npm_store) {
+                        self.finalize_npm_file(&file, &self.npm_path_to_url(&file), query)
+                            .map(Some)
+                    } else {
+                        self.finalize_file(&file, query, None).map(Some)
+                    };
                 }
+                // Resolve from the map's owning package, so locked dependency
+                // and peer edges cannot accidentally come from its caller.
+                let scope = dir.join(".ferrite-import-scope.js");
+                let scope = if is_under(&scope, &self.npm_store) {
+                    self.npm_path_to_url(&scope)
+                } else if let Ok(relative) = scope.strip_prefix(&self.root) {
+                    format!("/{}", relative.to_string_lossy().replace('\\', "/"))
+                } else {
+                    format!("/@fs{}", scope.to_string_lossy().replace('\\', "/"))
+                };
+                let importer = ModuleId::new(scope);
+                let target = attach_query(&target, query);
+                return self
+                    .resolve_depth(
+                        &ResolveRequest {
+                            specifier: &target,
+                            importer: Some(&importer),
+                            environment: request.environment.clone(),
+                            kind: request.kind,
+                        },
+                        depth + 1,
+                    )
+                    .map(Some);
             }
             if !dir.pop() {
                 return Ok(None);
@@ -500,7 +579,7 @@ impl Resolver {
         let module_type = ModuleType::from_path(&probed);
         let mut resolved = ResolvedId::new(attach_query(&url, query));
         resolved.module_type = Some(module_type);
-        resolved.side_effects = side_effects;
+        resolved.side_effects = side_effects.or_else(|| package_side_effects(&canonical));
         Ok(resolved)
     }
 
@@ -564,22 +643,8 @@ impl Resolver {
             });
             Ok(resolved)
         } else {
-            // node_modules fallback: still serve through the npm URL space when
-            // the package has a name, otherwise as a file URL.
-            if let Some(name) = pkg.and_then(|p| p.name.clone()) {
-                let version = pkg
-                    .and_then(|p| p.version.clone())
-                    .unwrap_or_else(|| "0.0.0".to_string());
-                let relative = probed.strip_prefix(dir).unwrap_or(&probed);
-                let url = format!(
-                    "/@npm/{name}@{version}/{}",
-                    relative.to_string_lossy().replace('\\', "/")
-                );
-                let mut resolved = ResolvedId::new(attach_query(&url, query));
-                resolved.module_type = Some(module_type);
-                resolved.side_effects = side_effects;
-                return Ok(resolved);
-            }
+            // Local and node_modules sources keep their actual file identity;
+            // a fabricated store URL cannot be loaded or watched reliably.
             self.finalize_file(&probed, query, side_effects)
         }
     }

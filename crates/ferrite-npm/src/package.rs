@@ -34,43 +34,87 @@ pub fn resolve_version(metadata: &RegistryMetadata, range: &str) -> Result<Strin
     })
 }
 
-/// Verify `integrity` (`sha512-<base64>` / `sha1-<base64>`) for `bytes`.
+/// Verify an SRI set using the strongest supported algorithm present.
+/// Multiple digests of that strength are alternatives; weaker matches never
+/// override a mismatch at a stronger strength. Unknown algorithms are ignored
+/// only when a supported digest is also present.
 pub fn verify_integrity(bytes: &[u8], integrity: Option<&str>) -> Result<()> {
     let Some(integrity) = integrity else {
-        return Ok(());
-    };
-    let Some((algorithm, expected)) = integrity.split_once('-') else {
-        return Err(FerriteError::Npm(format!(
-            "bad integrity value `{integrity}`"
-        )));
+        return Err(FerriteError::Npm(
+            "tarball has no integrity metadata; require registry integrity or a legacy shasum"
+                .into(),
+        ));
     };
     use base64::Engine as _;
-    let expected = base64::engine::general_purpose::STANDARD
-        .decode(expected.trim())
-        .map_err(|error| FerriteError::Npm(format!("bad integrity base64: {error}")))?;
-    let actual: Vec<u8> = match algorithm {
-        "sha512" => {
-            use sha2::Digest as _;
-            sha2::Sha512::digest(bytes).to_vec()
-        }
-        "sha384" => {
-            use sha2::Digest as _;
-            sha2::Sha384::digest(bytes).to_vec()
-        }
-        "sha256" => {
-            use sha2::Digest as _;
-            sha2::Sha256::digest(bytes).to_vec()
-        }
-        other => {
-            return Err(FerriteError::Npm(format!(
-                "unsupported integrity algorithm `{other}`"
-            )));
-        }
-    };
-    if actual != expected {
-        return Err(FerriteError::Npm("tarball integrity mismatch".to_string()));
+    use sha2::Digest as _;
+    let mut candidates = Vec::new();
+    for token in integrity.split_ascii_whitespace() {
+        let Some((algorithm, encoded)) = token.split_once('-') else {
+            return Err(FerriteError::Npm(format!("bad integrity value `{token}`")));
+        };
+        let strength = match algorithm {
+            "sha512" => 4,
+            "sha384" => 3,
+            "sha256" => 2,
+            "sha1" => 1,
+            _ => continue,
+        };
+        let encoded = encoded.split('?').next().unwrap_or(encoded);
+        candidates.push((strength, encoded));
     }
-    Ok(())
+    let strength = candidates
+        .iter()
+        .map(|(strength, _)| *strength)
+        .max()
+        .ok_or_else(|| {
+            FerriteError::Npm("integrity contains no supported hash algorithm".into())
+        })?;
+    let actual = match strength {
+        4 => sha2::Sha512::digest(bytes).to_vec(),
+        3 => sha2::Sha384::digest(bytes).to_vec(),
+        2 => sha2::Sha256::digest(bytes).to_vec(),
+        _ => sha1::Sha1::digest(bytes).to_vec(),
+    };
+    for (_, encoded) in candidates
+        .into_iter()
+        .filter(|(candidate, _)| *candidate == strength)
+    {
+        // A malformed alternative cannot hide a later valid digest.
+        if let Ok(expected) = base64::engine::general_purpose::STANDARD.decode(encoded) {
+            if actual == expected {
+                return Ok(());
+            }
+        }
+    }
+    Err(FerriteError::Npm(
+        "tarball integrity mismatch or malformed digest".into(),
+    ))
+}
+
+/// Normalize registry integrity, retaining legacy SHA-1 metadata in the lock.
+pub(crate) fn distribution_integrity(dist: &RegistryDist) -> Result<String> {
+    if let Some(integrity) = &dist.integrity {
+        if !integrity.trim().is_empty() {
+            return Ok(integrity.clone());
+        }
+    }
+    let shasum = dist.shasum.as_deref().ok_or_else(|| {
+        FerriteError::Npm("registry tarball has neither integrity nor shasum".into())
+    })?;
+    if shasum.len() != 40 || !shasum.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(FerriteError::Npm(
+            "registry tarball has a malformed SHA-1 shasum".into(),
+        ));
+    }
+    let bytes: Vec<u8> = (0..40)
+        .step_by(2)
+        .map(|index| u8::from_str_radix(&shasum[index..index + 2], 16).expect("validated hex"))
+        .collect();
+    use base64::Engine as _;
+    Ok(format!(
+        "sha1-{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    ))
 }
 
 /// Extract a gzip tarball into `dest`, stripping the `package/` prefix.
@@ -149,5 +193,53 @@ pub fn range_satisfied(version: &str, range: &str) -> bool {
     ) {
         (Ok(range), Ok(version)) => range.satisfies(&version),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod integrity_tests {
+    use super::*;
+    use base64::Engine as _;
+    use sha2::Digest as _;
+
+    #[test]
+    fn strongest_sri_alternatives_prevent_weaker_hash_downgrades() {
+        let bytes = b"verified tarball";
+        let encode = |bytes| base64::engine::general_purpose::STANDARD.encode(bytes);
+        let sha1 = format!("sha1-{}", encode(sha1::Sha1::digest(bytes).to_vec()));
+        let sha512 = format!("sha512-{}", encode(sha2::Sha512::digest(bytes).to_vec()));
+        let wrong = format!(
+            "sha512-{}",
+            encode(sha2::Sha512::digest(b"different").to_vec())
+        );
+        assert!(verify_integrity(bytes, Some(&sha1)).is_ok());
+        assert!(verify_integrity(bytes, Some(&format!("{sha1} {wrong}"))).is_err());
+        assert!(verify_integrity(bytes, Some(&format!("{wrong} {sha512}"))).is_ok());
+        assert!(verify_integrity(bytes, Some(&format!("sha999-unknown {sha512}?option"))).is_ok());
+        assert!(verify_integrity(bytes, Some("sha999-unknown")).is_err());
+        assert!(verify_integrity(bytes, Some("")).is_err());
+        assert!(verify_integrity(bytes, None).is_err());
+    }
+
+    #[test]
+    fn legacy_shasum_is_converted_and_verified() {
+        let bytes = b"legacy tarball";
+        let hex: String = sha1::Sha1::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let mut dist = RegistryDist {
+            tarball: "unused".into(),
+            integrity: None,
+            shasum: Some(hex),
+        };
+        let normalized = distribution_integrity(&dist).unwrap();
+        assert!(normalized.starts_with("sha1-"));
+        assert!(verify_integrity(bytes, Some(&normalized)).is_ok());
+        assert!(verify_integrity(b"tampered", Some(&normalized)).is_err());
+        dist.shasum = Some("not hex".into());
+        assert!(distribution_integrity(&dist).is_err());
+        dist.shasum = None;
+        assert!(distribution_integrity(&dist).is_err());
     }
 }

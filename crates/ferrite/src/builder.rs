@@ -72,9 +72,12 @@ impl Builder {
             let mut reports = vec![builder.build("client").await?, builder.build("ssr").await?];
             let out = self.config.out_dir();
             let runtime = self.config.runtime.clone();
+            let routes = self.config.ssr.clone();
             let base = self.config.base.clone();
             let package = tokio::task::spawn_blocking(move || {
-                crate::package::write_ssr_standalone(&out, &opts, &sdk, &runtime, &base)
+                crate::package::write_ssr_standalone_with_routes(
+                    &out, &opts, &sdk, &runtime, &base, &routes,
+                )
             })
             .await
             .map_err(|error| {
@@ -315,7 +318,7 @@ impl Builder {
             output
                 .ssr_manifest
                 .write(&out_dir.join("ssr-manifest.json"))?;
-            if config.runtime.backend == "napi-vm" {
+            if ferrite_runtime::compiled_graph_backend_available(&config.runtime.backend) {
                 crate::write_built_ssr_artifact(&out_dir)?;
             }
         } else {
@@ -694,6 +697,6 @@ mod standalone_tests {
         let html = response.into_string().await.unwrap();
         assert!(html.contains("<h1>packaged /app/</h1>"), "{html}");
         let main = std::fs::read_to_string(scaffold.join("src/main.rs")).unwrap();
-        assert!(main.contains("artifact.into_adapter"));
+        assert!(main.contains("artifact.into_streaming_adapter"));
     }
 }

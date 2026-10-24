@@ -55,6 +55,24 @@ pub const REACT_TEMPLATES: &[TemplateProfile] = &[
         framework_version: Some(REACT_VERSION),
         support: crate::registry::Support::Experimental,
     },
+    TemplateProfile {
+        framework: "react",
+        language: "js",
+        rendering: "ssr",
+        compiler_host: "native",
+        ssr_runtime: Some("napi-vm"),
+        framework_version: Some(REACT_VERSION),
+        support: crate::registry::Support::Experimental,
+    },
+    TemplateProfile {
+        framework: "react",
+        language: "ts",
+        rendering: "ssr",
+        compiler_host: "native",
+        ssr_runtime: Some("napi-vm"),
+        framework_version: Some(REACT_VERSION),
+        support: crate::registry::Support::Experimental,
+    },
 ];
 
 pub const VUE_TEMPLATES: &[TemplateProfile] = &[
@@ -114,6 +132,24 @@ pub const SVELTE_TEMPLATES: &[TemplateProfile] = &[
         framework_version: Some(crate::registry::SVELTE_NODE.framework_version),
         support: crate::registry::Support::Experimental,
     },
+    TemplateProfile {
+        framework: "svelte",
+        language: "js",
+        rendering: "ssr",
+        compiler_host: "node",
+        ssr_runtime: Some("napi-vm"),
+        framework_version: Some(crate::registry::SVELTE_NODE.framework_version),
+        support: crate::registry::Support::Experimental,
+    },
+    TemplateProfile {
+        framework: "svelte",
+        language: "ts",
+        rendering: "ssr",
+        compiler_host: "node",
+        ssr_runtime: Some("napi-vm"),
+        framework_version: Some(crate::registry::SVELTE_NODE.framework_version),
+        support: crate::registry::Support::Experimental,
+    },
 ];
 
 pub fn select(
@@ -147,7 +183,12 @@ pub fn files(profile: &TemplateProfile, name: &str) -> Result<BTreeMap<String, S
         )));
     }
     if profile.rendering == "ssr" {
-        return vue_ssr_files(
+        return (match profile.framework {
+            "react" => react_ssr_files,
+            "vue" => vue_ssr_files,
+            "svelte" => svelte_ssr_files,
+            _ => return Err(FerriteError::Config("unavailable SSR scaffold".into())),
+        })(
             name,
             profile.language,
             profile.compiler_host,
@@ -318,7 +359,91 @@ pub fn vue_ssr_files(
         "package.json".into(),
         format!("{}\n", serde_json::to_string_pretty(&manifest)?),
     );
-    generated.insert("README.md".into(), format!("# {name}\n\nExperimental Vue {} SSR sources. Install dependencies through Ferrite.\nNode is explicitly required for the official component compiler. Rendering uses\nthe separate in-process napi-vm backend and requires a Ferrite binary built with\nthat feature. Run ferrite ssr, ferrite build and ferrite preview.\nThe server entry renders App through Vue's real renderToString API; the client\nentry hydrates through createSSRApp. Transpilation does not perform type checking.\nThe current experimental development adapter reloads on edits and resets state.\nType-checker integration, streaming, SSG and release matrices remain unfinished.\n", crate::registry::VUE_NODE.framework_version));
+    generated.insert("README.md".into(), format!("# {name}\n\nExperimental Vue {} SSR sources. Install dependencies through Ferrite.\nNode is explicitly required for the official component compiler. Rendering uses\nthe separate in-process napi-vm backend and requires a Ferrite binary built with\nthat feature. Run ferrite ssr, ferrite build and ferrite preview.\nThe server entry renders App through Vue's real renderToString API; the client\nentry hydrates through createSSRApp. Transpilation does not perform type checking.\nThe current experimental development adapter reloads on edits and resets state.\nUse ferrite prerender --route / for static generation. Type-checker integration,\nstreaming and full framework/platform release matrices remain unfinished.\n", crate::registry::VUE_NODE.framework_version));
+    Ok(generated)
+}
+
+/// Experimental synchronous React SSR using the public edge renderer export.
+pub fn react_ssr_files(
+    name: &str,
+    language: &str,
+    compiler_host: &str,
+    ssr_runtime: &str,
+) -> Result<BTreeMap<String, String>> {
+    if compiler_host != "native" || ssr_runtime != "napi-vm" {
+        return Err(FerriteError::Config("experimental React SSR generation requires explicit native compiler host and separate napi-vm SSR runtime".into()));
+    }
+    let mut generated = files(select("react", language, "client")?, name)?;
+    let extension = if language == "js" { "jsx" } else { "tsx" };
+    let main = generated.get_mut(&format!("src/main.{extension}")).unwrap();
+    *main = main.replace("createRoot", "hydrateRoot").replace(
+        "hydrateRoot(target).render(<App />)",
+        "hydrateRoot(target, <App />)",
+    );
+    generated.insert(format!("src/entry-server.{extension}"), "import { renderToString } from 'react-dom/server.edge';\nimport App from './App';\nexport function render() { return renderToString(<App />); }\n".into());
+    generated
+        .get_mut(&format!("src/App.{extension}"))
+        .unwrap()
+        .insert_str(0, "import './style.css';\n");
+    generated
+        .get_mut("src/style.css")
+        .unwrap()
+        .push_str("button { color: rgb(128, 0, 0); }\n");
+    let html = generated.get_mut("index.html").unwrap();
+    *html = html.replace(
+        "<main id=\"app\"></main>",
+        "<main id=\"app\"><!--ssr-outlet--></main>",
+    );
+    generated
+        .get_mut("ferrite.toml")
+        .unwrap()
+        .push_str(&format!(
+        "\n[ssr]\nentry = \"src/entry-server.{extension}\"\n\n[runtime]\nbackend = \"napi-vm\"\n"
+    ));
+    let mut manifest: serde_json::Value = serde_json::from_str(&generated["package.json"])?;
+    manifest["scripts"]["dev"] = serde_json::json!("ferrite ssr");
+    generated.insert(
+        "package.json".into(),
+        format!("{}\n", serde_json::to_string_pretty(&manifest)?),
+    );
+    generated.insert("README.md".into(), format!("# {name}\n\nExperimental React {REACT_VERSION} synchronous SSR. Run `ferrite install`,\n`ferrite ssr`, `ferrite build` and `ferrite preview`. Native compilation and the\nnapi-vm renderer require no Node executable. The server uses the public\nreact-dom/server.edge renderToString API; the client uses hydrateRoot.\nStreaming, complete Refresh and cross-platform standalone acceptance remain\nunfinished. TypeScript transpilation does not perform type checking.\n"));
+    Ok(generated)
+}
+
+/// Experimental Svelte SSR with explicit compiler and renderer hosts.
+pub fn svelte_ssr_files(
+    name: &str,
+    language: &str,
+    compiler_host: &str,
+    ssr_runtime: &str,
+) -> Result<BTreeMap<String, String>> {
+    if compiler_host != "node" || ssr_runtime != "napi-vm" {
+        return Err(FerriteError::Config("experimental Svelte SSR generation requires explicit Node compiler host and separate napi-vm SSR runtime".into()));
+    }
+    let mut generated = files(select("svelte", language, "client")?, name)?;
+    let main = generated.get_mut(&format!("src/main.{language}")).unwrap();
+    *main = main
+        .replace("{ mount }", "{ hydrate }")
+        .replace("mount(App,", "hydrate(App,");
+    let html = generated.get_mut("index.html").unwrap();
+    *html = html.replace(
+        "<main id=\"app\"></main>",
+        "<main id=\"app\"><!--ssr-outlet--></main>",
+    );
+    generated.insert(format!("src/entry-server.{language}"), "import { render as renderComponent } from 'svelte/server';\nimport App from './App.svelte';\nexport function render() { return renderComponent(App).body; }\n".into());
+    generated
+        .get_mut("ferrite.toml")
+        .unwrap()
+        .push_str(&format!(
+        "\n[ssr]\nentry = \"src/entry-server.{language}\"\n\n[runtime]\nbackend = \"napi-vm\"\n"
+    ));
+    let mut manifest: serde_json::Value = serde_json::from_str(&generated["package.json"])?;
+    manifest["scripts"]["dev"] = serde_json::json!("ferrite ssr");
+    generated.insert(
+        "package.json".into(),
+        format!("{}\n", serde_json::to_string_pretty(&manifest)?),
+    );
+    generated.insert("README.md".into(), format!("# {name}\n\nExperimental Svelte {} SSR. Run `ferrite install`, `ferrite ssr`,\n`ferrite build` and `ferrite preview`. Node is explicitly required for the\nofficial component compiler; rendering uses the separate napi-vm runtime.\nThe server uses svelte/server render; the client hydrates the existing DOM.\nDevelopment edits reload and reset state. Transpilation does not type-check.\nPlatform release matrices and streaming remain unfinished.\n", crate::registry::SVELTE_NODE.framework_version));
     Ok(generated)
 }
 
@@ -508,7 +633,10 @@ mod tests {
                 assert_eq!(config["compilerOptions"]["jsx"], "react-jsx");
             }
         }
-        assert!(select("react", "ts", "ssr").is_err());
+        assert_eq!(
+            select("react", "ts", "ssr").unwrap().ssr_runtime,
+            Some("napi-vm")
+        );
     }
 
     #[test]
@@ -634,6 +762,38 @@ mod tests {
 
 #[cfg(test)]
 mod vue_ssr_generation_tests {
+    #[test]
+    fn react_ssr_uses_explicit_native_compiler_and_public_renderer() {
+        for language in ["js", "ts"] {
+            let files =
+                super::files(super::select("react", language, "ssr").unwrap(), "app").unwrap();
+            let extension = if language == "js" { "jsx" } else { "tsx" };
+            assert!(
+                files[&format!("src/main.{extension}")].contains("hydrateRoot(target, <App />)")
+            );
+            assert!(
+                files[&format!("src/entry-server.{extension}")].contains("react-dom/server.edge")
+            );
+        }
+        assert!(super::react_ssr_files("app", "js", "node", "napi-vm").is_err());
+        assert!(super::react_ssr_files("app", "js", "native", "node").is_err());
+    }
+
+    #[test]
+    fn svelte_profiles_generate_official_render_and_hydration_entries() {
+        for language in ["js", "ts"] {
+            let profile = super::select("svelte", language, "ssr").unwrap();
+            let files = super::files(profile, "ssr-app").unwrap();
+            assert!(files[&format!("src/main.{language}")].contains("hydrate(App, { target })"));
+            assert!(files[&format!("src/entry-server.{language}")]
+                .contains("renderComponent(App).body"));
+            assert!(files["index.html"].contains("<!--ssr-outlet-->"));
+            assert!(files["ferrite.toml"].contains("backend = \"napi-vm\""));
+        }
+        assert!(super::svelte_ssr_files("app", "js", "native", "napi-vm").is_err());
+        assert!(super::svelte_ssr_files("app", "js", "node", "node").is_err());
+    }
+
     #[test]
     fn explicit_hosts_generate_real_server_and_hydration_entries() {
         for language in ["js", "ts"] {

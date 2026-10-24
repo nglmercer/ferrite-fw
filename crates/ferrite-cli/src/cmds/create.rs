@@ -271,7 +271,7 @@ mod tests {
         let path = root.path().join("installed");
         create(args(&path)).await.unwrap();
         let lock = ferrite::npm::Lockfile::read(&path.join("ferrite.lock")).unwrap();
-        assert_eq!(lock.version, 2);
+        assert_eq!(lock.version, ferrite::npm::LOCKFILE_VERSION);
         assert!(lock.importers.contains_key("."));
         assert!(path.join("src/main.ts").exists());
         let other = root.path().join("uninstalled");

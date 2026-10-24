@@ -14,6 +14,9 @@ pub struct JsPackageJson {
     /// Dev dependencies.
     #[serde(rename = "devDependencies")]
     pub dev_dependencies: HashMap<String, String>,
+    /// Optional requests override ordinary/dev requests of the same name.
+    #[serde(rename = "optionalDependencies")]
+    pub optional_dependencies: HashMap<String, String>,
     /// Rest of the file, preserved verbatim.
     #[serde(flatten)]
     pub rest: HashMap<String, serde_json::Value>,

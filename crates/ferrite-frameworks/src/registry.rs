@@ -174,7 +174,7 @@ pub const FRAMEWORKS: &[FrameworkDescriptor] = &[
         compiler_profiles: &[],
         compiler_package: None,
         client: Support::Experimental,
-        ssr: Support::Unavailable,
+        ssr: Support::Experimental,
         tested_versions: &[],
     },
     FrameworkDescriptor {
@@ -194,7 +194,7 @@ pub const FRAMEWORKS: &[FrameworkDescriptor] = &[
         compiler_profiles: &[SVELTE_NODE],
         compiler_package: Some("svelte/compiler"),
         client: Support::Experimental,
-        ssr: Support::Unavailable,
+        ssr: Support::Experimental,
         tested_versions: &[],
     },
 ];
@@ -261,14 +261,7 @@ mod tests {
             let error = compiler_unavailable(framework, "/App").to_string();
             assert!(error.contains(descriptor(framework).unwrap().compiler_package.unwrap()));
             assert!(error.contains("validated compiler host"));
-            assert_eq!(
-                descriptor(framework).unwrap().ssr,
-                if framework == "vue" {
-                    Support::Experimental
-                } else {
-                    Support::Unavailable
-                }
-            );
+            assert_eq!(descriptor(framework).unwrap().ssr, Support::Experimental);
             assert_eq!(descriptor(framework).unwrap().client, Support::Experimental);
         }
     }

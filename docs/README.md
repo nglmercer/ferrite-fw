@@ -4,6 +4,12 @@ Start with the [project README](../README.md) for installation, commands and a
 workspace overview, or the [getting started guide](../site/pages/en/getting-started.md)
 for a first application.
 
+## Current completion gates
+
+[Completion plan](COMPLETION_PLAN.md) records the current work packages and
+explicit acceptance runner. `IMPLEMENTATION_STATUS.md` retains historical evidence;
+older remaining-work paragraphs are not a current consolidated backlog.
+
 ## Framework guides
 
 The website's Markdown pages remain in `site/pages/` so the documentation site

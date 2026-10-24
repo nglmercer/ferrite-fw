@@ -2377,12 +2377,13 @@ async fn ssr_http_preserves_request_and_response_contracts_at_root() {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("index.html"), "STATIC SHELL").unwrap();
     std::fs::write(root.path().join("asset.js"), "export const asset = 1;").unwrap();
-    let config = ferrite_config::resolve_config(
+    let mut config = ferrite_config::resolve_config(
         Default::default(),
         Some(root.path().into()),
         Default::default(),
     )
     .unwrap();
+    config.ssr.routes = Some(vec!["/".into(), "/submit".into(), "/users/*".into()]);
     let server = DevServer::new_without_watcher(config, Vec::new())
         .await
         .unwrap();
@@ -2420,6 +2421,7 @@ async fn ssr_http_preserves_request_and_response_contracts_at_root() {
     let client = reqwest::Client::new();
     for (method, path, body) in [
         (reqwest::Method::GET, "/?query=1", ""),
+        (reqwest::Method::GET, "/users/name.surname?query=1", ""),
         (reqwest::Method::POST, "/submit", "request body"),
         (reqwest::Method::HEAD, "/", ""),
     ] {

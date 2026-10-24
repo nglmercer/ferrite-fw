@@ -14,6 +14,10 @@ use ferrite_core::{FerriteError, Result};
 #[cfg(feature = "napi-vm")]
 pub mod napi_vm;
 
+/// Linux process-isolated graph invocation.
+#[cfg(all(feature = "napi-vm", target_os = "linux"))]
+pub mod process;
+
 /// A value crossing the Rust ↔ JS boundary (§87).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum JsValue {
@@ -124,7 +128,7 @@ impl CompiledModuleGraph {
 }
 
 /// Runtime environment flags.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RuntimeEnvironment {
     /// True for SSR evaluation.
     pub ssr: bool,
@@ -198,6 +202,14 @@ impl ModuleNamespace {
     }
 }
 
+/// A process-owned streamed invocation. Dropping the body cancels its worker.
+pub struct JsStreamResponse {
+    /// Plain JSON-compatible response metadata.
+    pub head: JsValue,
+    /// Ordered byte chunks, pulled on demand.
+    pub body: std::pin::Pin<Box<dyn futures::Stream<Item = Result<Vec<u8>>> + Send>>,
+}
+
 /// JS engine abstraction (§20).
 #[async_trait::async_trait]
 pub trait JsRuntime: Send + Sync {
@@ -242,6 +254,21 @@ pub trait JsRuntime: Send + Sync {
         graph.validate()?;
         Err(FerriteError::Runtime(format!(
             "backend `{}` does not support atomic compiled graph invocation",
+            self.name()
+        )))
+    }
+
+    /// Open a request-isolated pull stream. Unsupported backends fail explicitly.
+    async fn invoke_module_graph_stream(
+        &self,
+        graph: CompiledModuleGraph,
+        _export: &str,
+        _args: Vec<JsValue>,
+        _env: RuntimeEnvironment,
+    ) -> Result<JsStreamResponse> {
+        graph.validate()?;
+        Err(FerriteError::Runtime(format!(
+            "backend `{}` does not support streamed graph invocation",
             self.name()
         )))
     }
@@ -312,7 +339,8 @@ impl JsRuntime for UnavailableRuntime {
 /// establish compatibility with any particular framework or language feature.
 #[must_use]
 pub fn compiled_graph_backend_available(backend: &str) -> bool {
-    backend == "napi-vm" && cfg!(feature = "napi-vm")
+    (backend == "napi-vm" && cfg!(feature = "napi-vm"))
+        || (backend == "napi-vm-process" && cfg!(all(feature = "napi-vm", target_os = "linux")))
 }
 
 /// Build the runtime for a backend name (`auto`/`none` need no engine).
@@ -322,6 +350,8 @@ pub fn compiled_graph_backend_available(backend: &str) -> bool {
 #[must_use]
 pub fn runtime_for_backend(backend: &str) -> Arc<dyn JsRuntime> {
     match backend {
+        #[cfg(all(feature = "napi-vm", target_os = "linux"))]
+        "napi-vm-process" => Arc::new(process::ProcessRuntime::new(Default::default())),
         #[cfg(feature = "napi-vm")]
         "napi-vm" => Arc::new(napi_vm::NapiVmRuntime::with_defaults()),
         #[cfg(not(feature = "napi-vm"))]

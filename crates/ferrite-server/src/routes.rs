@@ -171,7 +171,13 @@ pub(crate) async fn fallback_handler(
         }
     }
     // Application routes must reach the renderer before index.html fallback.
-    if !path.contains('.') {
+    // Axum's nested router strips the base from Uri; middleware callers may
+    // supply the full URL. Accept both without changing renderer request data.
+    let route = path
+        .strip_prefix(inner.config.base.trim_end_matches('/'))
+        .filter(|route| route.starts_with('/'))
+        .unwrap_or(&path);
+    if inner.config.ssr.matches_route(route) {
         let adapter = inner.ssr_adapter.read().await.clone();
         if let Some(adapter) = adapter {
             let request_headers: Vec<_> = headers
@@ -317,4 +323,190 @@ pub fn ssr_http_response(ssr: ferrite_ssr::SsrResponse, head: bool) -> Response 
         }
     };
     (status, response_headers, body).into_response()
+}
+
+#[cfg(test)]
+mod streaming_tests {
+    use super::*;
+    use std::{
+        pin::Pin,
+        sync::{
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+            Arc,
+        },
+        task::{Context, Poll},
+        time::Duration,
+    };
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    struct ObservedStream {
+        polled: Arc<AtomicUsize>,
+        dropped: Arc<AtomicBool>,
+        remaining: usize,
+        chunk: axum::body::Bytes,
+    }
+    impl futures::Stream for ObservedStream {
+        type Item = ferrite_core::Result<axum::body::Bytes>;
+        fn poll_next(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            self.polled.fetch_add(1, Ordering::SeqCst);
+            if self.remaining == 0 {
+                return Poll::Ready(None);
+            }
+            self.remaining -= 1;
+            Poll::Ready(Some(Ok(self.chunk.clone())))
+        }
+    }
+    impl Drop for ObservedStream {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::SeqCst);
+        }
+    }
+    fn response(polled: Arc<AtomicUsize>, dropped: Arc<AtomicBool>) -> ferrite_ssr::SsrResponse {
+        ferrite_ssr::SsrResponse {
+            status: 200,
+            headers: vec![("content-type".into(), "text/html".into())],
+            body: ferrite_ssr::RenderBody::Stream(Box::pin(ObservedStream {
+                polled,
+                dropped,
+                remaining: 1024,
+                chunk: vec![b'x'; 1024 * 1024].into(),
+            })),
+        }
+    }
+    #[tokio::test]
+    async fn head_drops_stream_without_polling_or_buffering() {
+        let polled = Arc::new(AtomicUsize::new(0));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let response = ssr_http_response(response(polled.clone(), dropped.clone()), true);
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(axum::body::to_bytes(response.into_body(), 0)
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(polled.load(Ordering::SeqCst), 0);
+        assert!(dropped.load(Ordering::SeqCst));
+    }
+    #[tokio::test]
+    async fn slow_http_consumer_backpressures_and_disconnect_drops_stream() {
+        let polled = Arc::new(AtomicUsize::new(0));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let (producer_polled, producer_dropped) = (polled.clone(), dropped.clone());
+        let router = axum::Router::new().route(
+            "/",
+            axum::routing::get(move || {
+                let response = response(producer_polled.clone(), producer_dropped.clone());
+                async move { ssr_http_response(response, false) }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        struct Serving(tokio::task::JoinHandle<()>);
+        impl Drop for Serving {
+            fn drop(&mut self) {
+                self.0.abort();
+            }
+        }
+        let _serving = Serving(server);
+        let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+        socket
+            .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .unwrap();
+        let mut first = vec![0; 4096];
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), socket.read(&mut first))
+                .await
+                .unwrap()
+                .unwrap()
+                > 0
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            polled.load(Ordering::SeqCst) < 1024,
+            "server drained a gigabyte instead of backpressuring"
+        );
+        assert!(!dropped.load(Ordering::SeqCst));
+        drop(socket);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !dropped.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("disconnect must drop the response producer");
+        assert!(polled.load(Ordering::SeqCst) < 1024);
+    }
+    #[tokio::test]
+    async fn stream_errors_propagate_without_collecting_more_chunks() {
+        let chunks = futures::stream::iter(vec![
+            Ok(axum::body::Bytes::from_static(b"prefix")),
+            Err(ferrite_core::FerriteError::Ssr("producer failed".into())),
+            Ok(axum::body::Bytes::from_static(b"must not arrive")),
+        ]);
+        let response = ssr_http_response(
+            ferrite_ssr::SsrResponse {
+                status: 200,
+                headers: vec![],
+                body: ferrite_ssr::RenderBody::Stream(Box::pin(chunks)),
+            },
+            false,
+        );
+        let error = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("producer failed"), "{error}");
+    }
+    #[tokio::test]
+    async fn pending_http_render_is_dropped_when_connection_closes() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let started = Arc::new(tokio::sync::Notify::new());
+        let (handler_dropped, handler_started) = (dropped.clone(), started.clone());
+        struct PendingRender(Arc<AtomicBool>);
+        impl Drop for PendingRender {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        let router = axum::Router::new().route(
+            "/",
+            axum::routing::get(move || {
+                let (dropped, started) = (handler_dropped.clone(), handler_started.clone());
+                async move {
+                    let _render = PendingRender(dropped);
+                    started.notify_one();
+                    std::future::pending::<Response>().await
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        struct Serving(tokio::task::JoinHandle<()>);
+        impl Drop for Serving {
+            fn drop(&mut self) {
+                self.0.abort();
+            }
+        }
+        let _serving = Serving(server);
+        let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+        socket
+            .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), started.notified())
+            .await
+            .unwrap();
+        drop(socket);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !dropped.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("disconnect must cancel the pending render");
+    }
 }

@@ -90,8 +90,8 @@ pub(crate) async fn inspect(
         println!("framework compiler: {:?}", resolved.framework);
         println!("SSR runtime: {}", resolved.runtime.backend);
         println!(
-            "runtime limits: queue_capacity={}, max_request_bytes={} (0 selects host defaults)",
-            resolved.runtime.queue_capacity, resolved.runtime.max_request_bytes
+            "runtime limits: queue_capacity={}, max_request_bytes={}, request_timeout_ms={} (0 disables), shutdown_timeout_ms={} (0 selects 1000)",
+            resolved.runtime.queue_capacity, resolved.runtime.max_request_bytes, resolved.runtime.request_timeout_ms, resolved.runtime.shutdown_timeout_ms
         );
         println!("locked:   {} packages", lock.package.len());
         println!();
@@ -190,8 +190,8 @@ pub(crate) async fn doctor(
             report.compiler, report.ssr_runtime, report.ssr_runtime_probe
         );
         println!(
-            "runtime limits: queue_capacity={}, max_request_bytes={} (0 selects host defaults)",
-            report.runtime_config.queue_capacity, report.runtime_config.max_request_bytes
+            "runtime limits: queue_capacity={}, max_request_bytes={}, request_timeout_ms={} (0 disables), shutdown_timeout_ms={} (0 selects 1000)",
+            report.runtime_config.queue_capacity, report.runtime_config.max_request_bytes, report.runtime_config.request_timeout_ms, report.runtime_config.shutdown_timeout_ms
         );
         println!(
             "Node: {} (not a compiler execution test)",

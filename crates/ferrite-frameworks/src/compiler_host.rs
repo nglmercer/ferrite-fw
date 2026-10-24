@@ -336,6 +336,7 @@ mod ownership_tests {
         lock.importers.insert(
             ".".into(),
             LockedImporter {
+                optional_dependencies: Vec::new(),
                 dependencies: [("vue".into(), selected.id())].into(),
                 ..Default::default()
             },
@@ -359,6 +360,7 @@ mod ownership_tests {
         lock.importers.insert(
             "workspace".into(),
             LockedImporter {
+                optional_dependencies: Vec::new(),
                 dependencies: [("vue".into(), old.id())].into(),
                 ..Default::default()
             },

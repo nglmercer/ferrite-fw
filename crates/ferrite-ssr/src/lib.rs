@@ -271,7 +271,7 @@ mod tests {
     #[tokio::test]
     async fn configured_guest_depth_and_job_caps_fail_and_allow_recovery() {
         for (code, expected) in [
-            ("function recurse() { return recurse(); } export function render() { return recurse(); }", "Maximum call stack"),
+            ("function recurse() { return 1 + recurse(); } export function render() { return recurse(); }", "Maximum call stack"),
             ("function spin() { queueMicrotask(spin); } export function render() { queueMicrotask(spin); return 'unbounded'; }", "Maximum job count"),
         ] {
             let mut resolved = test_resolved();
@@ -289,6 +289,58 @@ mod tests {
             let response = adapter.render(request, Default::default()).await.unwrap();
             assert_eq!(response.into_string().await.unwrap(), "<h1>recovered</h1>");
         }
+    }
+
+    #[cfg(feature = "napi-vm")]
+    #[tokio::test]
+    async fn resolved_request_deadline_interrupts_renderer_and_allows_recovery() {
+        let mut resolved = test_resolved();
+        resolved.runtime.backend = "napi-vm".into();
+        resolved.runtime.request_timeout_ms = 500;
+        resolved.runtime.fuel_budget = u64::MAX;
+        resolved.runtime.loop_budget = u64::MAX;
+        let mut adapter = JsSsrAdapter::from_resolved(
+            &resolved,
+            CompiledModule {
+                id: "timed-renderer".into(),
+                code: "export function render() { while (true) {} }".into(),
+                url: None,
+            },
+        );
+        let request = SsrHttpRequest {
+            method: "GET".into(),
+            uri: "/".into(),
+            headers: Vec::new(),
+            body: Vec::new(),
+        };
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            adapter.render(request.clone(), Default::default()),
+        )
+        .await
+        .expect("configured deadline must interrupt render")
+        .unwrap_err();
+        assert!(error.to_string().contains("deadline"), "{error}");
+        adapter
+            .replace_graph(ferrite_runtime::CompiledModuleGraph {
+                entry: "timed-renderer".into(),
+                modules: vec![CompiledModule {
+                    id: "timed-renderer".into(),
+                    code: "export function render() { return '<h1>recovered</h1>'; }".into(),
+                    url: None,
+                }],
+            })
+            .unwrap();
+        assert_eq!(
+            adapter
+                .render(request, Default::default())
+                .await
+                .unwrap()
+                .into_string()
+                .await
+                .unwrap(),
+            "<h1>recovered</h1>"
+        );
     }
 
     #[cfg(feature = "napi-vm")]

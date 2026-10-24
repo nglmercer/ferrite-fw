@@ -51,6 +51,7 @@ fn resolver_follows_importer_edges_instead_of_highest_store_version() {
     lock.importers.insert(
         ".".into(),
         LockedImporter {
+            optional_dependencies: Vec::new(),
             specifiers: BTreeMap::from([
                 ("a".into(), "1.0.0".into()),
                 ("b".into(), "1.0.0".into()),
@@ -114,6 +115,7 @@ fn missing_or_ambiguous_store_versions_fail_and_custom_locks_work() {
     lock.importers.insert(
         ".".into(),
         LockedImporter {
+            optional_dependencies: Vec::new(),
             specifiers: BTreeMap::from([("pkg".into(), "1.0.0".into())]),
             dependencies: BTreeMap::from([("pkg".into(), one.id())]),
         },
@@ -267,4 +269,39 @@ fn npm_cycles_queries_and_dot_segments_share_concrete_module_identity() {
             "/@npm/@scope/cycle@1.0.0/src/a.js?ferrite-cjs-factory"
         );
     }
+}
+
+#[test]
+fn registry_aliases_resolve_actual_store_identity_and_private_dependencies() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut actual = package("actual", "1.0.0", &[("nested", "@scope/real@2.0.0")]);
+    actual
+        .dependency_specifiers
+        .insert("nested".into(), "npm:@scope/real@^2".into());
+    let nested = package("@scope/real", "2.0.0", &[]);
+    let mut lock = Lockfile::default();
+    for record in [actual, nested] {
+        install_files(dir.path(), &record);
+        lock.upsert(record);
+    }
+    lock.importers.insert(
+        ".".into(),
+        LockedImporter {
+            optional_dependencies: Vec::new(),
+            specifiers: BTreeMap::from([("alias".into(), "npm:actual@^1".into())]),
+            dependencies: BTreeMap::from([("alias".into(), "actual@1.0.0".into())]),
+        },
+    );
+    lock.write(&dir.path().join("ferrite.lock")).unwrap();
+    let resolver = Resolver::new(dir.path().into(), &Default::default());
+    let imported = resolve(&resolver, "alias", None).unwrap().id;
+    assert_eq!(imported.0, "/@npm/actual@1.0.0/index.js");
+    assert_eq!(
+        resolve(&resolver, "nested", Some(&imported)).unwrap().id.0,
+        "/@npm/@scope/real@2.0.0/index.js"
+    );
+    assert!(
+        resolve(&resolver, "actual", None).is_err(),
+        "alias installation must not expose an undeclared root name"
+    );
 }

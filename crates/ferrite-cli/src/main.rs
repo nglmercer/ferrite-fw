@@ -13,12 +13,17 @@ use std::sync::Arc;
 
 #[tokio::main]
 async fn main() {
+    #[cfg(all(feature = "napi-vm", target_os = "linux"))]
+    if ferrite::runtime::process::run_worker_if_requested().await {
+        return;
+    }
     let cli = Cli::parse();
     init_logging(&cli.log_level);
     let result = match cli.command {
         Command::Dev(args) => cmds::dev::dev(args, cli.config, cli.mode, false).await,
         Command::Ssr(args) => cmds::dev::dev(args, cli.config, cli.mode, true).await,
         Command::Build(args) => cmds::build::build(args, cli.config, cli.mode).await,
+        Command::Prerender(args) => cmds::build::prerender(args, cli.config, cli.mode).await,
         Command::Preview(args) => cmds::preview::preview(args, cli.config).await,
         Command::Add(args) => cmds::npm::add(args, cli.config, cli.mode).await,
         Command::Remove(args) => cmds::npm::remove(args, cli.config, cli.mode).await,

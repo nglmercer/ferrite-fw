@@ -363,6 +363,9 @@ pub(crate) struct RouteRuntime {
 pub(crate) fn handler_id(entry: &RouteHandlerEntry) -> usize {
     Arc::as_ptr(&entry.hits) as usize
 }
+// Rust 1.99 renamed this API to try_update. Retain the equivalent spelling
+// accepted by earlier supported stable toolchains.
+#[allow(deprecated)]
 fn reserve(hits: &AtomicU32, times: Option<u32>) -> bool {
     hits.fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
         if times.is_some_and(|limit| count >= limit) {

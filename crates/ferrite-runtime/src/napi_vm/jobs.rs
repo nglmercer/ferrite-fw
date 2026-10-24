@@ -2,7 +2,12 @@
 
 use std::sync::mpsc::SyncSender;
 use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 /// Worker jobs (all interpreter interaction stays on the worker thread).
 pub(crate) enum Job {
@@ -84,20 +89,106 @@ impl Job {
     }
 }
 
-/// Shared worker state (last `Arc` drop stops and joins the thread).
+/// One end-to-end request budget, including time spent waiting in the queue.
+#[derive(Clone)]
+pub(crate) struct RequestControl {
+    pub(crate) cancellation: napi_vm::CancellationToken,
+    pub(crate) deadline: Option<Instant>,
+}
+
+impl RequestControl {
+    pub(crate) fn new(timeout_ms: u64) -> Self {
+        Self {
+            cancellation: napi_vm::CancellationToken::default(),
+            deadline: (timeout_ms != 0).then(|| Instant::now() + Duration::from_millis(timeout_ms)),
+        }
+    }
+
+    pub(crate) fn check(&self) -> Result<(), String> {
+        if self.cancellation.is_cancelled() {
+            return Err("napi-vm request cancelled or worker shut down".into());
+        }
+        if self
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            return Err("napi-vm request deadline exceeded (including queue time)".into());
+        }
+        Ok(())
+    }
+}
+
+pub(crate) struct Request {
+    pub(crate) job: Job,
+    pub(crate) control: RequestControl,
+}
+
+/// Cancels running guest code when an awaiting future is dropped.
+pub(crate) struct RequestGuard(pub(crate) napi_vm::CancellationToken);
+impl std::fmt::Debug for RequestGuard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RequestGuard")
+    }
+}
+
+impl Drop for RequestGuard {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct Lifecycle {
+    pub(crate) stopped: AtomicBool,
+    pub(crate) active: Mutex<Option<napi_vm::CancellationToken>>,
+}
+
+impl Lifecycle {
+    pub(crate) fn stop(&self) {
+        // Synchronize with admission so shutdown cannot miss a starting request.
+        let active = self
+            .active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        self.stopped.store(true, Ordering::Release);
+        if let Some(token) = active.as_ref() {
+            token.cancel();
+        }
+    }
+}
+
+/// Shared worker state. Dropping the last owner cancels active guest execution.
 pub(crate) struct Worker {
-    pub(crate) jobs: Option<SyncSender<Job>>,
+    pub(crate) jobs: Mutex<Option<SyncSender<Request>>>,
     pub(crate) max_request_bytes: usize,
+    pub(crate) request_timeout_ms: u64,
+    pub(crate) shutdown_timeout_ms: u64,
+    pub(crate) lifecycle: Arc<Lifecycle>,
     pub(crate) thread: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl Drop for Worker {
     fn drop(&mut self) {
-        self.jobs.take();
-        if let Ok(mut slot) = self.thread.lock() {
-            if let Some(handle) = slot.take() {
+        self.lifecycle.stop();
+        self.jobs
+            .get_mut()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
+        if let Some(handle) = self
+            .thread
+            .get_mut()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+        {
+            let deadline = Instant::now() + Duration::from_millis(self.shutdown_timeout_ms);
+            while !handle.is_finished() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            if handle.is_finished() {
                 let _ = handle.join();
             }
+            // A native host call may be uninterruptible. Detach after the bound;
+            // do not claim hard process isolation or block the caller forever.
         }
     }
 }

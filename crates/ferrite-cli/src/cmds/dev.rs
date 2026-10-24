@@ -38,7 +38,7 @@ pub(crate) async fn dev(
     let resolved = server.inner().config.clone();
     let mut ssr_mode = String::from("client only");
     if ssr {
-        if resolved.runtime.backend != "napi-vm" {
+        if !ferrite::runtime::compiled_graph_backend_available(&resolved.runtime.backend) {
             return Err(ferrite::FerriteError::Other(format!(
                 "SSR requires a renderer-capable runtime; selected backend `{}` cannot execute entry-server. Select --runtime napi-vm with the napi-vm feature, or omit --ssr for client serving",
                 resolved.runtime.backend

@@ -3,10 +3,10 @@
 use std::path::PathBuf;
 
 /// Pinned napi-vm revision backing this integration.
-pub const NAPI_VM_PIN: &str = "0fa987d8860d620cd1008a84f2a17c9b67c495cd";
+pub const NAPI_VM_PIN: &str = "7362971e7781c0c57b36c5a11813fff0e6bc3521";
 
 /// One allowlisted native addon.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct NativeAddonAllow {
     /// Addon path (absolute, or relative to the first configured root).
     pub path: PathBuf,
@@ -15,8 +15,15 @@ pub struct NativeAddonAllow {
 }
 
 /// napi-vm backend options.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct NapiVmOptions {
+    /// Install the pure byte-window helper for an isolated streaming worker.
+    #[serde(default)]
+    pub stream_helpers: bool,
+    /// End-to-end request deadline in milliseconds (0 disables the deadline).
+    pub request_timeout_ms: u64,
+    /// Maximum last-owner shutdown wait in milliseconds (0 selects 1000).
+    pub shutdown_timeout_ms: u64,
     /// Maximum queued jobs (0 selects the bounded default of 64).
     pub queue_capacity: usize,
     /// Maximum encoded request payload bytes (0 selects 8 MiB).

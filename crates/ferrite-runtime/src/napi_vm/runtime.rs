@@ -37,14 +37,29 @@ impl NapiVmRuntime {
         } else {
             options.max_request_bytes
         };
-        let (jobs, rx) = mpsc::sync_channel::<Job>(capacity);
+        let request_timeout_ms = options.request_timeout_ms;
+        let shutdown_timeout_ms = if options.shutdown_timeout_ms == 0 {
+            1000
+        } else {
+            options.shutdown_timeout_ms
+        };
+        let lifecycle = Arc::new(Lifecycle::default());
+        let worker_lifecycle = lifecycle.clone();
+        let (jobs, rx) = mpsc::sync_channel::<Request>(capacity);
         let thread = thread::Builder::new()
             .name("ferrite-napi-vm".to_string())
-            .spawn(move || worker_loop(options, rx))
+            // Official renderer graphs exceed the OS default 2 MiB thread
+            // stack during recursive parsing/evaluation. Guest depth remains
+            // independently bounded by the engine execution budget.
+            .stack_size(16 * 1024 * 1024)
+            .spawn(move || worker_loop(options, rx, worker_lifecycle))
             .expect("spawn napi-vm worker");
         Self {
             worker: Arc::new(Worker {
-                jobs: Some(jobs),
+                jobs: Mutex::new(Some(jobs)),
+                request_timeout_ms,
+                shutdown_timeout_ms,
+                lifecycle,
                 max_request_bytes,
                 thread: Mutex::new(Some(thread)),
             }),
@@ -60,7 +75,7 @@ impl NapiVmRuntime {
     /// CJS-require `request` (JS, JSON, or an allowlisted `.node` binary).
     pub async fn require(&self, request: &str, parent: Option<&str>) -> Result<JsValue> {
         let (reply, receive) = tokio::sync::oneshot::channel();
-        self.send(Job::Require {
+        let _request_guard = self.send(Job::Require {
             request: request.to_string(),
             parent: parent.map(str::to_string),
             reply,
@@ -72,15 +87,42 @@ impl NapiVmRuntime {
         Ok(JsValue::from(json))
     }
 
-    fn send(&self, job: Job) -> Result<()> {
+    /// Stop accepting requests and cooperatively cancel the active guest request.
+    /// All clones share the stopped state; a stopped runtime never restarts itself.
+    pub fn shutdown(&self) {
+        self.worker.lifecycle.stop();
+        self.worker
+            .jobs
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
+    }
+
+    fn send(&self, job: Job) -> Result<RequestGuard> {
         if job.payload_bytes() > self.worker.max_request_bytes {
             return Err(FerriteError::Runtime(format!("napi-vm request payload exceeds {} bytes; reduce the graph/arguments or explicitly configure max_request_bytes", self.worker.max_request_bytes)));
         }
-        self.worker.jobs.as_ref().ok_or_else(|| FerriteError::Runtime("napi-vm worker stopped".into()))?
-            .try_send(job).map_err(|error| match error {
+        let control = RequestControl::new(self.worker.request_timeout_ms);
+        let guard = RequestGuard(control.cancellation.clone());
+        let jobs = self
+            .worker
+            .jobs
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if self
+            .worker
+            .lifecycle
+            .stopped
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Err(FerriteError::Runtime("napi-vm worker shut down".into()));
+        }
+        jobs.as_ref().ok_or_else(|| FerriteError::Runtime("napi-vm worker stopped".into()))?
+            .try_send(Request { job, control }).map_err(|error| match error {
                 mpsc::TrySendError::Full(_) => FerriteError::Runtime("napi-vm worker queue is full; retry after active requests finish or explicitly configure queue_capacity".into()),
                 mpsc::TrySendError::Disconnected(_) => FerriteError::Runtime("napi-vm worker stopped".into()),
-            })
+            })?;
+        Ok(guard)
     }
 }
 
@@ -96,7 +138,7 @@ impl JsRuntime for NapiVmRuntime {
         env: RuntimeEnvironment,
     ) -> Result<ModuleNamespace> {
         let (reply, receive) = tokio::sync::oneshot::channel();
-        self.send(Job::EvalModule {
+        let _request_guard = self.send(Job::EvalModule {
             id: module.id,
             code: module.code,
             ssr: env.ssr,
@@ -116,7 +158,7 @@ impl JsRuntime for NapiVmRuntime {
     ) -> Result<ModuleNamespace> {
         graph.validate()?;
         let (reply, receive) = tokio::sync::oneshot::channel();
-        self.send(Job::EvalGraph {
+        let _request_guard = self.send(Job::EvalGraph {
             graph,
             ssr: env.ssr,
             reply,
@@ -139,7 +181,7 @@ impl JsRuntime for NapiVmRuntime {
         let encoded: Result<Vec<_>> = args.iter().map(js_value_to_json).collect();
         let args_json = serde_json::to_string(&encoded?).map_err(FerriteError::Json)?;
         let (reply, receive) = tokio::sync::oneshot::channel();
-        self.send(Job::InvokeGraph {
+        let _request_guard = self.send(Job::InvokeGraph {
             graph,
             export: export.to_string(),
             args_json,
@@ -160,7 +202,7 @@ impl JsRuntime for NapiVmRuntime {
         }
         let args_json = serde_json::to_string(&encoded).map_err(FerriteError::Json)?;
         let (reply, receive) = tokio::sync::oneshot::channel();
-        self.send(Job::Call {
+        let _request_guard = self.send(Job::Call {
             handle: handle.id,
             args_json,
             reply,
@@ -217,12 +259,15 @@ mod queue_tests {
         let (jobs, receiver) = mpsc::sync_channel(1);
         let runtime = NapiVmRuntime {
             worker: Arc::new(Worker {
-                jobs: Some(jobs),
+                jobs: Mutex::new(Some(jobs)),
+                request_timeout_ms: 0,
+                shutdown_timeout_ms: 1000,
+                lifecycle: Arc::new(Lifecycle::default()),
                 max_request_bytes: 32,
                 thread: Mutex::new(None),
             }),
         };
-        runtime.send(module_job("export const n = 1;")).unwrap();
+        let _guard = runtime.send(module_job("export const n = 1;")).unwrap();
         let error = runtime.send(module_job("export const n = 2;")).unwrap_err();
         assert!(error.to_string().contains("queue is full"), "{error}");
         let error = runtime.send(module_job(&"x".repeat(64))).unwrap_err();
@@ -230,5 +275,166 @@ mod queue_tests {
         drop(receiver);
         let error = runtime.send(module_job("x")).unwrap_err();
         assert!(error.to_string().contains("stopped"), "{error}");
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    async fn render(runtime: &NapiVmRuntime, code: &str) -> Result<JsValue> {
+        runtime
+            .invoke_module_graph(
+                crate::CompiledModuleGraph {
+                    entry: "/entry.js".into(),
+                    modules: vec![CompiledModule {
+                        id: "/entry.js".into(),
+                        code: code.into(),
+                        url: None,
+                    }],
+                },
+                "render",
+                Vec::new(),
+                RuntimeEnvironment {
+                    ssr: true,
+                    request_id: None,
+                },
+            )
+            .await
+    }
+
+    async fn wait_active(runtime: &NapiVmRuntime) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if runtime.worker.lifecycle.active.lock().unwrap().is_some() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("worker must start the request");
+    }
+
+    #[tokio::test]
+    async fn svelte_for_in_head_and_named_function_expression_execute() {
+        let runtime = NapiVmRuntime::with_defaults();
+        let result = render(&runtime, "export function render() { let name; const attrs = { a: 1, b: 2 }; let total = 0; for (name in attrs) { total += attrs[name]; } const factorial = function self(n) { return n < 2 ? 1 : n * self(n - 1); }; return total + factorial(4); }").await.unwrap();
+        assert!(matches!(result, JsValue::Number(value) if value == 27.0));
+    }
+
+    #[tokio::test]
+    async fn request_deadline_interrupts_running_guest_and_worker_recovers() {
+        let runtime = NapiVmRuntime::new(NapiVmOptions {
+            request_timeout_ms: 500,
+            fuel_budget: u64::MAX,
+            loop_budget: u64::MAX,
+            ..Default::default()
+        });
+        let start = Instant::now();
+        let error = tokio::time::timeout(
+            Duration::from_secs(2),
+            render(&runtime, "export function render() { while (true) {} }"),
+        )
+        .await
+        .expect("deadline must release the caller")
+        .unwrap_err();
+        assert!(error.to_string().contains("deadline"), "{error}");
+        assert!(start.elapsed() < Duration::from_secs(2));
+        assert!(
+            matches!(render(&runtime, "export function render() { return 'recovered'; }").await.unwrap(), JsValue::String(value) if value == "recovered")
+        );
+    }
+
+    #[tokio::test]
+    async fn dropped_request_interrupts_running_guest_and_worker_recovers() {
+        let runtime = NapiVmRuntime::new(NapiVmOptions {
+            fuel_budget: u64::MAX,
+            loop_budget: u64::MAX,
+            ..Default::default()
+        });
+        let guest = runtime.clone();
+        let task = tokio::spawn(async move {
+            render(&guest, "export function render() { while (true) {} }").await
+        });
+        wait_active(&runtime).await;
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            render(&runtime, "export function render() { return 42; }"),
+        )
+        .await
+        .expect("cancellation must free the worker")
+        .unwrap();
+        assert!(matches!(result, JsValue::Number(value) if value == 42.0));
+    }
+
+    #[tokio::test]
+    async fn explicit_shutdown_cancels_active_work_and_rejects_clones() {
+        let runtime = NapiVmRuntime::new(NapiVmOptions {
+            fuel_budget: u64::MAX,
+            loop_budget: u64::MAX,
+            ..Default::default()
+        });
+        let guest = runtime.clone();
+        let task = tokio::spawn(async move {
+            render(&guest, "export function render() { while (true) {} }").await
+        });
+        wait_active(&runtime).await;
+        runtime.shutdown();
+        let error = tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("shutdown must interrupt active code")
+            .unwrap()
+            .unwrap_err();
+        assert!(error.to_string().contains("cancel"), "{error}");
+        assert!(render(&runtime, "export function render() { return 42; }")
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("shut down"));
+    }
+
+    #[tokio::test]
+    async fn expired_queued_request_never_executes() {
+        let (jobs, receiver) = mpsc::sync_channel(2);
+        let (reply, expired) = tokio::sync::oneshot::channel();
+        jobs.send(Request {
+            control: RequestControl {
+                cancellation: napi_vm::CancellationToken::default(),
+                deadline: Some(Instant::now() - Duration::from_millis(1)),
+            },
+            job: Job::EvalModule {
+                id: "expired".into(),
+                code: "globalThis.expiredRan = 42; export const n = 1;".into(),
+                ssr: false,
+                reply,
+            },
+        })
+        .unwrap_or_else(|_| panic!("queue admission"));
+        let (reply, probe) = tokio::sync::oneshot::channel();
+        jobs.send(Request {
+            control: RequestControl::new(0),
+            job: Job::EvalModule {
+                id: "probe".into(),
+                code: "export const n = globalThis.expiredRan || 0;".into(),
+                ssr: false,
+                reply,
+            },
+        })
+        .unwrap_or_else(|_| panic!("queue admission"));
+        drop(jobs);
+        let worker = thread::spawn(move || {
+            worker_loop(
+                NapiVmOptions::default(),
+                receiver,
+                Arc::new(Lifecycle::default()),
+            )
+        });
+        assert!(expired.await.unwrap().unwrap_err().contains("deadline"));
+        assert_eq!(probe.await.unwrap().unwrap()["n"]["value"], 0);
+        worker.join().unwrap();
     }
 }

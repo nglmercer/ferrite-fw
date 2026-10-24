@@ -73,7 +73,9 @@ mod app;
 mod builder;
 mod loader;
 mod report;
+mod ssg;
 mod ssr_dev;
+pub use ssg::{prerender, PrerenderReport, PrerenderedRoute};
 
 pub use api::{build, create_builder, create_server, preview, Config};
 pub use app::{Ferrite, ModuleRequest};

@@ -256,6 +256,12 @@ impl Default for BuildConfig {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct SsrConfig {
+    /// Pull JavaScript response bytes through an explicitly stream-capable runtime.
+    pub streaming: bool,
+    /// Base-relative SSR routes: exact paths, /prefix/*, or *. None uses extensionless routes.
+    pub routes: Option<Vec<String>>,
+    /// Absolute base-relative routes to generate with ferrite prerender.
+    pub prerender: Vec<String>,
     /// SSR entry.
     pub entry: Option<String>,
     /// Dependencies to leave external.
@@ -269,11 +275,77 @@ pub struct SsrConfig {
 impl Default for SsrConfig {
     fn default() -> Self {
         Self {
+            streaming: false,
             entry: Some("src/server.rs".to_string()),
+            routes: None,
+            prerender: Vec::new(),
             external: Vec::new(),
             no_external: Vec::new(),
             bundle_all: false,
         }
+    }
+}
+
+impl SsrConfig {
+    pub fn validate_routes(&self) -> Result<()> {
+        for route in self.routes.iter().flatten() {
+            let prefix = route.strip_suffix("/*").unwrap_or(route);
+            if route != "*"
+                && (!route.starts_with('/')
+                    || prefix.contains(['?', '#', '%', '\\', '*'])
+                    || prefix.chars().any(char::is_control)
+                    || prefix.contains("//")
+                    || prefix.split('/').any(|part| matches!(part, "." | "..")))
+            {
+                return Err(FerriteError::Config(format!("invalid ssr.routes pattern `{route}`; use an absolute base-relative path, /prefix/* or *")));
+            }
+        }
+        Ok(())
+    }
+    /// Reserved static/internal prefixes never reach the application renderer.
+    #[must_use]
+    pub fn matches_route(&self, path: &str) -> bool {
+        let relative = path.trim_start_matches('/');
+        if relative.split('/').any(|part| matches!(part, "." | ".."))
+            || relative.contains(['%', '\\', '?', '#'])
+        {
+            return false;
+        }
+        if [
+            "server",
+            "assets",
+            "ssr-assets",
+            "src",
+            "node_modules",
+            "standalone",
+            "@ferrite",
+            "@react-refresh",
+            "@id",
+            "@npm",
+            "@fs",
+            "@vite",
+            ".ferrite",
+        ]
+        .iter()
+        .any(|prefix| relative == *prefix || relative.starts_with(&format!("{prefix}/")))
+        {
+            return false;
+        }
+        self.routes.as_ref().map_or_else(
+            || std::path::Path::new(relative).extension().is_none(),
+            |routes| {
+                routes.iter().any(|route| {
+                    route == "*"
+                        || route == path
+                        || route.strip_suffix("/*").is_some_and(|prefix| {
+                            path == prefix
+                                || path
+                                    .strip_prefix(prefix)
+                                    .is_some_and(|rest| rest.starts_with('/'))
+                        })
+                })
+            },
+        )
     }
 }
 
@@ -520,8 +592,17 @@ impl Default for ReactConfig {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct RuntimeConfig {
-    /// Backend name (`auto`, `none`, `napi-vm`).
+    /// Backend name (`auto`, `none`, `napi-vm`, Linux `napi-vm-process`).
     pub backend: String,
+    /// End-to-end request deadline in milliseconds (0 disables the embedded
+    /// deadline; the process profile selects a five-second default).
+    pub request_timeout_ms: u64,
+    /// Process profile address-space limit (0 selects 2 GiB).
+    pub process_memory_limit_bytes: u64,
+    /// Process profile child concurrency (0 selects four).
+    pub process_concurrency: usize,
+    /// Last-owner shutdown wait in milliseconds (0 selects 1000).
+    pub shutdown_timeout_ms: u64,
     /// Maximum queued embedded-worker jobs (0 selects 64).
     pub queue_capacity: usize,
     /// Maximum encoded embedded-worker request bytes (0 selects 8 MiB).
@@ -544,6 +625,10 @@ impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
             backend: "auto".to_string(),
+            request_timeout_ms: 0,
+            process_memory_limit_bytes: 0,
+            process_concurrency: 0,
+            shutdown_timeout_ms: 0,
             queue_capacity: 0,
             max_request_bytes: 0,
             max_call_depth: 0,
@@ -1151,6 +1236,18 @@ fn merge_runtime(mut base: RuntimeConfig, over: RuntimeConfig) -> RuntimeConfig 
     if over.backend != defaults.backend {
         base.backend = over.backend;
     }
+    if over.process_memory_limit_bytes != 0 {
+        base.process_memory_limit_bytes = over.process_memory_limit_bytes;
+    }
+    if over.process_concurrency != 0 {
+        base.process_concurrency = over.process_concurrency;
+    }
+    if over.request_timeout_ms != 0 {
+        base.request_timeout_ms = over.request_timeout_ms;
+    }
+    if over.shutdown_timeout_ms != 0 {
+        base.shutdown_timeout_ms = over.shutdown_timeout_ms;
+    }
     if over.queue_capacity != 0 {
         base.queue_capacity = over.queue_capacity;
     }
@@ -1219,6 +1316,13 @@ fn merge_build(mut base: BuildConfig, over: BuildConfig) -> BuildConfig {
 }
 
 fn merge_ssr(mut base: SsrConfig, over: SsrConfig) -> SsrConfig {
+    base.streaming |= over.streaming;
+    if over.routes.is_some() {
+        base.routes = over.routes;
+    }
+    if !over.prerender.is_empty() {
+        base.prerender = over.prerender;
+    }
     if over.entry.is_some() {
         base.entry = over.entry;
     }
@@ -1332,6 +1436,18 @@ pub fn resolve_config(
     }
     if let Some(framework) = &user.framework {
         framework.validate()?;
+    }
+    user.ssr.validate_routes()?;
+    if user.ssr.streaming
+        && overrides
+            .runtime
+            .as_deref()
+            .unwrap_or(&user.runtime.backend)
+            != "napi-vm-process"
+    {
+        return Err(FerriteError::Config(
+            "ssr.streaming requires the explicit napi-vm-process runtime".into(),
+        ));
     }
     let mut names = std::collections::HashSet::new();
     for plugin in user.foreign_plugins.iter().flatten() {
@@ -1677,6 +1793,8 @@ mod tests {
              backend = \"napi-vm\"\n\
              max_call_depth = 16\n\
              max_jobs_per_drain = 32\n\
+             request_timeout_ms = 250\n\
+             shutdown_timeout_ms = 500\n\
              queue_capacity = 8\n\
              max_request_bytes = 1048576\n\
              fuel_budget = 10000000\n\
@@ -1688,6 +1806,8 @@ mod tests {
         assert_eq!(user.runtime.backend, "napi-vm");
         assert_eq!(user.runtime.max_call_depth, 16);
         assert_eq!(user.runtime.max_jobs_per_drain, 32);
+        assert_eq!(user.runtime.request_timeout_ms, 250);
+        assert_eq!(user.runtime.shutdown_timeout_ms, 500);
         assert_eq!(user.runtime.queue_capacity, 8);
         assert_eq!(user.runtime.max_request_bytes, 1_048_576);
         assert_eq!(user.runtime.fuel_budget, 10_000_000);
@@ -1708,8 +1828,12 @@ mod tests {
         let base = UserConfig::default();
         let mut over = UserConfig::default();
         over.runtime.backend = "napi-vm".to_string();
+        over.runtime.process_memory_limit_bytes = 512 * 1024 * 1024;
+        over.runtime.process_concurrency = 2;
         over.runtime.loop_budget = 5;
         over.runtime.queue_capacity = 4;
+        over.runtime.request_timeout_ms = 250;
+        over.runtime.shutdown_timeout_ms = 500;
         over.runtime.max_request_bytes = 1024;
         let merged = merge_user_config(base, over);
         assert_eq!(merged.runtime.backend, "napi-vm");
@@ -1717,6 +1841,13 @@ mod tests {
         assert_eq!(merged.runtime.queue_capacity, 4);
         assert_eq!(merged.runtime.max_request_bytes, 1024);
         let preserved = merge_user_config(merged, UserConfig::default());
+        assert_eq!(
+            preserved.runtime.process_memory_limit_bytes,
+            512 * 1024 * 1024
+        );
+        assert_eq!(preserved.runtime.process_concurrency, 2);
+        assert_eq!(preserved.runtime.request_timeout_ms, 250);
+        assert_eq!(preserved.runtime.shutdown_timeout_ms, 500);
         assert_eq!(preserved.runtime.queue_capacity, 4);
         assert_eq!(preserved.runtime.max_request_bytes, 1024);
 
@@ -2067,5 +2198,71 @@ mod ssr_package_tests {
         assert_eq!(decoded.ssr_sdk, config.package.ssr_sdk);
         assert!(decoded.standalone);
         assert!(super::PackageConfig::default().ssr_sdk.is_none());
+    }
+}
+
+#[cfg(test)]
+mod ssr_route_tests {
+    use super::*;
+    #[test]
+    fn streaming_requires_effective_process_backend() {
+        let mut user = UserConfig::default();
+        user.ssr.streaming = true;
+        assert!(resolve_config(user.clone(), None, CliOverrides::default()).is_err());
+        let process = CliOverrides {
+            runtime: Some("napi-vm-process".into()),
+            ..Default::default()
+        };
+        assert!(
+            resolve_config(user.clone(), None, process)
+                .unwrap()
+                .ssr
+                .streaming
+        );
+        user.runtime.backend = "napi-vm-process".into();
+        let embedded = CliOverrides {
+            runtime: Some("napi-vm".into()),
+            ..Default::default()
+        };
+        assert!(resolve_config(user.clone(), None, embedded).is_err());
+        assert!(
+            resolve_config(user, None, CliOverrides::default())
+                .unwrap()
+                .ssr
+                .streaming
+        );
+    }
+
+    #[test]
+    fn explicit_dotted_routes_prefixes_assets_and_disabled_policy() {
+        let mut config = SsrConfig::default();
+        assert!(config.matches_route("/profile"));
+        assert!(!config.matches_route("/profile.json"));
+        config.routes = Some(vec!["/profile.json".into(), "/users/*".into()]);
+        config.validate_routes().unwrap();
+        assert!(config.matches_route("/profile.json"));
+        assert!(config.matches_route("/users/name.surname"));
+        assert!(!config.matches_route("/users-other/name"));
+        assert!(!config.matches_route("/other"));
+        config.routes = Some(vec!["*".into()]);
+        for route in [
+            "/server/renderer.json",
+            "/assets/code.js",
+            "/src/main.ts",
+            "/@react-refresh",
+            "/@id/react-refresh",
+            "/@npm/react@19/index.js",
+            "/@fs/tmp/module",
+            "/../private",
+            "/%2e%2e/private",
+        ] {
+            assert!(!config.matches_route(route));
+        }
+        config.routes = Some(vec![]);
+        assert!(!config.matches_route("/"));
+        for pattern in ["relative", "/../escape", "/a?x", "/bad*", "/a//b"] {
+            config.routes = Some(vec![pattern.into()]);
+            assert!(config.validate_routes().is_err());
+        }
     }
 }

@@ -7,6 +7,8 @@
 mod exports;
 #[cfg(test)]
 mod lock_tests;
+#[cfg(test)]
+mod map_tests;
 mod node;
 mod resolver;
 mod side_effects;
@@ -158,7 +160,7 @@ mod tests {
     }
 
     #[test]
-    fn package_imports_walk_past_bare_package_json() {
+    fn package_imports_stop_at_nearest_package_scope() {
         let dir = std::env::temp_dir().join(format!("ferrite-imports-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("nested")).unwrap();
@@ -178,8 +180,7 @@ mod tests {
             environment: EnvironmentKind::Client,
             kind: ResolveKind::Import,
         };
-        let resolved = resolver.resolve(&request).unwrap();
-        assert_eq!(resolved.id.0, "/dep.js");
+        assert!(resolver.resolve(&request).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

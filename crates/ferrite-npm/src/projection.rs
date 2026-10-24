@@ -8,7 +8,16 @@ const MARKER: &str = ".ferrite-projection.json";
 /// Project exact dependency edges as symlinks for Node compiler hosts. No npm
 /// resolver or lifecycle scripts run. Existing unmanaged node_modules fail closed.
 pub fn project_node_modules(npm_root: &Path, lock: &Lockfile) -> Result<PathBuf> {
-    lock.validate()?;
+    project_node_modules_for_platform(npm_root, lock, &crate::InstallPlatform::current())
+}
+
+/// Project a frozen graph for an explicitly selected target.
+pub fn project_node_modules_for_platform(
+    npm_root: &Path,
+    lock: &Lockfile,
+    platform: &crate::InstallPlatform,
+) -> Result<PathBuf> {
+    let active = lock.active_graph(platform)?;
     let absolute = if npm_root.is_absolute() {
         npm_root.to_path_buf()
     } else {
@@ -18,9 +27,23 @@ pub fn project_node_modules(npm_root: &Path, lock: &Lockfile) -> Result<PathBuf>
     let root = absolute.canonicalize()?;
     let store = root.join("packages");
     let mut plans = Vec::new();
-    for package in &lock.package {
-        let directory = store.join(package.id());
-        validate_directory(&directory)?;
+    for package in lock
+        .package
+        .iter()
+        .filter(|package| active.packages.contains(&package.id()))
+    {
+        let directory = if package.path.is_some() {
+            let project = root.parent().and_then(Path::parent).ok_or_else(|| {
+                FerriteError::Npm("local projection needs project/.ferrite/npm".into())
+            })?;
+            let directory = crate::workspace::local_directory(project, package)?;
+            validate_local_anchor(&store, package, &directory)?;
+            directory
+        } else {
+            let directory = store.join(package.id());
+            validate_directory(&directory)?;
+            directory
+        };
         let manifest: serde_json::Value =
             serde_json::from_slice(&std::fs::read(directory.join("package.json"))?)?;
         if manifest["name"] != package.name || manifest["version"] != package.version {
@@ -29,20 +52,33 @@ pub fn project_node_modules(npm_root: &Path, lock: &Lockfile) -> Result<PathBuf>
                 package.id()
             )));
         }
-        plans.push((directory.join("node_modules"), package.dependencies.clone()));
+        plans.push((
+            directory.join("node_modules"),
+            active.dependencies[&package.id()].clone(),
+        ));
     }
-    let importer = lock.importers.get(".").ok_or_else(|| {
+    let _importer = lock.importers.get(".").ok_or_else(|| {
         FerriteError::Npm(
             "compiler projection requires a concrete root importer; run ferrite install".into(),
         )
     })?;
     let root_modules = root.join("node_modules");
-    plans.push((root_modules.clone(), importer.dependencies.clone()));
+    plans.push((root_modules.clone(), active.importers["."].clone()));
     // Check every existing view before writing any of them.
     for (destination, links) in &plans {
         for (name, target) in links {
             validate_package_name(name)?;
-            validate_directory(&store.join(target))?;
+            let package = lock.package_by_id(target).expect("validated edge");
+            if package.path.is_some() {
+                let project = root
+                    .parent()
+                    .and_then(Path::parent)
+                    .ok_or_else(|| FerriteError::Npm("invalid local projection root".into()))?;
+                let directory = crate::workspace::local_directory(project, package)?;
+                validate_local_anchor(&store, package, &directory)?;
+            } else {
+                validate_directory(&store.join(target))?;
+            }
         }
         validate_existing(destination, &store)?;
     }
@@ -137,7 +173,7 @@ fn validate_editor_link(destination: &Path, target: &Path) -> Result<bool> {
     }
 }
 
-fn relative_target(from: &Path, target: &Path) -> Result<PathBuf> {
+pub(crate) fn relative_target(from: &Path, target: &Path) -> Result<PathBuf> {
     let from: Vec<_> = from.components().collect();
     let target: Vec<_> = target.components().collect();
     let common = from.iter().zip(&target).take_while(|(a, b)| a == b).count();
@@ -168,7 +204,7 @@ fn validate_directory(path: &Path) -> Result<()> {
     }
     Ok(())
 }
-fn validate_existing(destination: &Path, store: &Path) -> Result<()> {
+pub(crate) fn validate_existing(destination: &Path, store: &Path) -> Result<()> {
     match std::fs::symlink_metadata(destination) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error.into()),
@@ -242,17 +278,34 @@ fn validate_existing(destination: &Path, store: &Path) -> Result<()> {
     Ok(())
 }
 #[cfg(unix)]
-fn link_directory(target: &Path, link: &Path) -> Result<()> {
+pub(crate) fn link_directory(target: &Path, link: &Path) -> Result<()> {
     std::os::unix::fs::symlink(target, link)?;
     Ok(())
 }
 #[cfg(windows)]
-fn link_directory(target: &Path, link: &Path) -> Result<()> {
+pub(crate) fn link_directory(target: &Path, link: &Path) -> Result<()> {
     std::os::windows::fs::symlink_dir(target, link).map_err(|error| {
         FerriteError::Npm(format!(
             "compiler projection needs directory symlinks (enable Windows Developer Mode): {error}"
         ))
     })?;
+    Ok(())
+}
+
+fn validate_local_anchor(
+    store: &Path,
+    package: &crate::LockedPackage,
+    directory: &Path,
+) -> Result<()> {
+    let anchor = store.join(package.id());
+    let relative = relative_target(anchor.parent().expect("anchor parent"), directory)?;
+    let meta = std::fs::symlink_metadata(&anchor)?;
+    if !meta.file_type().is_symlink() || std::fs::read_link(&anchor)? != relative {
+        return Err(FerriteError::Npm(format!(
+            "invalid local store anchor {}",
+            anchor.display()
+        )));
+    }
     Ok(())
 }
 
@@ -286,6 +339,7 @@ mod tests {
         lock.importers.insert(
             ".".into(),
             LockedImporter {
+                optional_dependencies: Vec::new(),
                 dependencies: BTreeMap::from([
                     (a.name.clone(), a.id()),
                     (two.name.clone(), two.id()),

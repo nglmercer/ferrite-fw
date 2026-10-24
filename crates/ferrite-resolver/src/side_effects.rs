@@ -14,10 +14,15 @@ pub(crate) fn side_effects_for(pkg: &PackageJson, dir: &Path, file: &Path) -> Op
                 .unwrap_or(file)
                 .to_string_lossy()
                 .replace('\\', "/");
-            // Conservative: side effects unless a `!`-negated glob matches...
-            // Simplified: true when any positive glob matches the extension set.
-            let matched = globs.iter().any(|glob| glob_match(glob, &relative));
-            Some(matched)
+            for pattern in globs {
+                // Invalid patterns cannot establish absence of side effects.
+                match match_glob(pattern, &relative) {
+                    Some(true) => return Some(true),
+                    Some(false) => (),
+                    None => return None,
+                }
+            }
+            Some(false)
         }
     }
 }
@@ -41,76 +46,59 @@ pub(crate) fn package_side_effects(file: &Path) -> Option<bool> {
     }
 }
 
-/// Tiny glob matcher (`*`, `**`, `?`, trailing `/...`).
-pub(crate) fn glob_match(pattern: &str, path: &str) -> bool {
-    let pattern = pattern.trim_start_matches("./");
-    if pattern.contains("**") {
-        let parts: Vec<&str> = pattern.split("**").collect();
-        let mut rest = path;
-        for (i, part) in parts.iter().enumerate() {
-            let part = part.trim_matches('/');
-            if part.is_empty() {
-                continue;
-            }
-            if i == 0 {
-                if !segment_match(part, rest) {
-                    // prefix piece must match at the start (up to `/`)
-                    if let Some(pos) = rest.find('/') {
-                        if !segment_match(part, &rest[..pos]) {
-                            return false;
-                        }
-                        rest = &rest[pos + 1..];
-                    } else {
-                        return segment_match(part, rest);
-                    }
-                } else if let Some(pos) = rest.find('/') {
-                    rest = &rest[pos + 1..];
-                }
-            } else if i == parts.len() - 1 {
-                return rest.split('/').any(|segment| segment_match(part, segment))
-                    || segment_match(part, rest);
-            }
-        }
-        return true;
-    }
-    if pattern.contains('/') {
-        segment_match(pattern, path)
+/// A slashless package pattern applies to a basename at any depth. A single
+/// star never crosses a path separator; globstars, alternatives and character
+/// classes follow the same glob engine used elsewhere in Ferrite.
+fn match_glob(pattern: &str, path: &str) -> Option<bool> {
+    let pattern = pattern.strip_prefix("./").unwrap_or(pattern);
+    let pattern = if pattern.contains('/') {
+        pattern.to_string()
     } else {
-        path.split('/')
-            .any(|segment| segment_match(pattern, segment))
-    }
+        format!("**/{pattern}")
+    };
+    globset::GlobBuilder::new(&pattern)
+        .literal_separator(true)
+        .build()
+        .ok()
+        .map(|glob| glob.compile_matcher().is_match(path))
 }
 
-pub(crate) fn segment_match(pattern: &str, text: &str) -> bool {
-    let (mut px, mut tx) = (pattern.as_bytes(), text.as_bytes());
-    let (mut star, mut mark): (Option<&[u8]>, &[u8]) = (None, tx);
-    while !tx.is_empty() {
-        match px.first() {
-            Some(b'*') => {
-                star = Some(&px[1..]);
-                px = &px[1..];
-                mark = tx;
-            }
-            Some(b'?') | Some(_) if px.first() == Some(&tx[0]) || px.first() == Some(&b'?') => {
-                px = &px[1..];
-                tx = &tx[1..];
-            }
-            _ => {
-                if let Some(saved) = star {
-                    px = saved;
-                    mark = &mark[1..];
-                    tx = mark;
-                    if mark.is_empty() && px.is_empty() {
-                        return true;
-                    }
-                } else {
-                    return false;
-                }
-            }
+#[cfg(test)]
+pub(crate) fn glob_match(pattern: &str, path: &str) -> bool {
+    match_glob(pattern, path).unwrap_or(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn package_globs_are_path_anchored_and_invalid_patterns_are_conservative() {
+        for (pattern, path) in [
+            ("*.css", "style.css"),
+            ("*.css", "deep/style.css"),
+            ("**/*.css", "style.css"),
+            ("./src/**/*.css", "src/deep/style.css"),
+            ("./{src,lib}/polyfill[0-9].js", "lib/polyfill2.js"),
+        ] {
+            assert_eq!(match_glob(pattern, path), Some(true), "{pattern}: {path}");
         }
+        for (pattern, path) in [
+            ("**/*.css", "style.css/nested.js"),
+            ("src/*.js", "src/deep/file.js"),
+            ("src/**/*.css", "other/src/style.css"),
+            ("*.css", "style.css.js"),
+        ] {
+            assert_eq!(match_glob(pattern, path), Some(false), "{pattern}: {path}");
+        }
+        let package: PackageJson =
+            serde_json::from_value(serde_json::json!({"sideEffects":["[invalid"]})).unwrap();
+        assert_eq!(
+            side_effects_for(
+                &package,
+                Path::new("/package"),
+                Path::new("/package/main.js")
+            ),
+            None
+        );
     }
-    while px.first() == Some(&b'*') {
-        px = &px[1..];
-    }
-    px.is_empty()
 }

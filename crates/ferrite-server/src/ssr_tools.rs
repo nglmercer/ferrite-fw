@@ -267,7 +267,7 @@ impl DevServer {
 ///
 /// Returns the byte range plus the URL and 1-based position.
 fn split_frame(line: &str) -> Option<(usize, usize, &str, usize, usize)> {
-    let end = line.rfind(')').map_or(line.len(), |index| index);
+    let end = line.rfind(')').unwrap_or(line.len());
     // `segment` is a prefix of `line`, so segment-relative offsets are
     // line-relative.
     let segment = line[..end].trim_end();

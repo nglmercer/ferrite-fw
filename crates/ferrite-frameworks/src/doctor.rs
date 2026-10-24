@@ -729,6 +729,7 @@ mod tests {
         lock.importers.insert(
             ".".into(),
             LockedImporter {
+                optional_dependencies: Vec::new(),
                 specifiers: [("vue".into(), "3.5.22".into())].into(),
                 dependencies: [("vue".into(), selected.id())].into(),
             },

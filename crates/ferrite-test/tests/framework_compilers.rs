@@ -672,11 +672,20 @@ async fn official_vue_server_renderer_executes_emitted_graph() {
 
 #[cfg(feature = "napi-vm")]
 async fn vue_ssr_conformance(kind: Option<ferrite_e2e::BrowserKind>) {
+    framework_ssr_conformance("vue", kind).await;
+}
+
+#[cfg(feature = "napi-vm")]
+async fn framework_ssr_conformance(framework: &str, kind: Option<ferrite_e2e::BrowserKind>) {
     let project = fixture().await;
     std::fs::create_dir_all(project.root.join("src")).unwrap();
     std::fs::write(project.root.join("src/entry-server.ts"), "import { createSSRApp } from 'vue'; import { renderToString } from 'vue/server-renderer'; import Counter from '../Counter.vue'; export async function render() { globalThis.__ferrite_vue_requests = (globalThis.__ferrite_vue_requests || 0) + 1; const html = await renderToString(createSSRApp(Counter)); return { html, headers: [['x-request-count', String(globalThis.__ferrite_vue_requests)]] }; }").unwrap();
     std::fs::write(project.root.join("index.html"), "<html><head><link rel=\"icon\" href=\"data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22/%3E\"></head><body><div id=\"app\"><!--ssr-outlet--></div><script>globalThis.__ssrButton = document.querySelector('#app button');</script><script type=\"module\" src=\"/src/main.js\"></script></body></html>").unwrap();
     std::fs::write(project.root.join("src/main.js"), "import { createSSRApp } from 'vue'; import Counter from '../Counter.vue'; createSSRApp(Counter).mount('#app'); globalThis.__hydrated = true;").unwrap();
+    if framework == "svelte" {
+        std::fs::write(project.root.join("src/entry-server.ts"), "import { render as renderComponent } from 'svelte/server'; import Counter from '../Counter.svelte'; export function render() { globalThis.__ferrite_vue_requests = (globalThis.__ferrite_vue_requests || 0) + 1; return { html: renderComponent(Counter).body, headers: [['x-request-count', String(globalThis.__ferrite_vue_requests)]] }; }").unwrap();
+        std::fs::write(project.root.join("src/main.js"), "import { hydrate } from 'svelte'; import Counter from '../Counter.svelte'; hydrate(Counter, {target: document.querySelector('#app')}); globalThis.__hydrated = true;").unwrap();
+    }
     let host = Arc::new(
         NodeCompilerHost::new(
             project.root.clone(),
@@ -692,12 +701,20 @@ async fn vue_ssr_conformance(kind: Option<ferrite_e2e::BrowserKind>) {
     config.build.minify = false;
     let builder = ferrite::Builder::new(
         config.clone(),
-        vec![Arc::new(VuePlugin::with_host(host, false))],
+        vec![if framework == "vue" {
+            Arc::new(VuePlugin::with_host(host, false)) as Arc<dyn ferrite::plugin::Plugin>
+        } else {
+            Arc::new(SveltePlugin::with_host(host, false))
+        }],
     );
     let reports = builder.build_app().await.unwrap();
     let report = reports.iter().find(|report| report.env == "ssr").unwrap();
     let artifact = ferrite::SsrRendererArtifact::read(&report.out_dir).unwrap();
-    if let Some(path) = std::env::var_os("FERRITE_VUE_SSR_ARTIFACT") {
+    if let Some(path) = std::env::var_os(if framework == "vue" {
+        "FERRITE_VUE_SSR_ARTIFACT"
+    } else {
+        "FERRITE_SVELTE_SSR_ARTIFACT"
+    }) {
         std::fs::write(path, serde_json::to_vec(&artifact).unwrap()).unwrap();
     }
     let artifact_styles = artifact.stylesheets.clone();
@@ -731,8 +748,13 @@ async fn vue_ssr_conformance(kind: Option<ferrite_e2e::BrowserKind>) {
     let html = response.into_string().await.unwrap();
     assert!(html.contains("<button"), "{html}");
     assert!(html.contains(">0</button>"), "{html}");
+    let scope_prefix = if framework == "vue" {
+        "data-v-"
+    } else {
+        "svelte-"
+    };
     assert!(
-        html.contains("data-v-"),
+        html.contains(scope_prefix),
         "scoped styles must match server markup: {html}"
     );
     assert!(
@@ -740,7 +762,7 @@ async fn vue_ssr_conformance(kind: Option<ferrite_e2e::BrowserKind>) {
         "SSR component styles must be published"
     );
     let scope = html
-        .split("data-v-")
+        .split(scope_prefix)
         .nth(1)
         .unwrap()
         .split(|character: char| !character.is_ascii_alphanumeric())
@@ -801,7 +823,7 @@ async fn vue_ssr_conformance(kind: Option<ferrite_e2e::BrowserKind>) {
         assert!(style.starts_with("HTTP/1.0 200"), "{style}");
         css.push_str(&style);
     }
-    assert!(css.contains(&format!("data-v-{scope}")), "{css}");
+    assert!(css.contains(&format!("{scope_prefix}{scope}")), "{css}");
     assert!(css.contains("red"), "{css}");
     let private = get(port, "/server/renderer.json").await;
     assert!(private.starts_with("HTTP/1.0 404"), "{private}");
@@ -935,15 +957,41 @@ async fn official_vue_ssr_hydrates_in_firefox() {
 #[tokio::test]
 #[ignore = "real registry/Node compiler host and both browsers; generated Vue SSR acceptance"]
 async fn generated_vue_ssr_sources_install_build_and_render() {
+    generated_ssr_sources("vue", false).await;
+}
+
+#[cfg(feature = "napi-vm")]
+#[tokio::test]
+#[ignore = "real registry, Node compiler and both browsers"]
+async fn generated_svelte_ssr_sources_install_build_and_render() {
+    generated_ssr_sources("svelte", false).await;
+}
+
+#[cfg(feature = "napi-vm")]
+#[tokio::test]
+#[ignore = "real registry and both browsers; official React renderer"]
+async fn generated_react_ssr_sources_install_build_and_render() {
+    generated_ssr_sources("react", false).await;
+}
+
+#[cfg(feature = "napi-vm")]
+async fn generated_ssr_sources(framework: &str, standalone: bool) {
     for language in ["js", "ts"] {
-        let mut generated = ferrite::frameworks::scaffold::vue_ssr_files(
+        let mut generated = ferrite::frameworks::scaffold::files(
+            ferrite::frameworks::scaffold::select(framework, language, "ssr").unwrap(),
             "generated-ssr",
-            language,
-            "node",
-            "napi-vm",
         )
         .unwrap();
-        if language == "ts" {
+        let client_extension = if framework == "react" {
+            if language == "js" {
+                "jsx"
+            } else {
+                "tsx"
+            }
+        } else {
+            language
+        };
+        if framework == "vue" && language == "ts" {
             // Exercise the generated dependency graph, without injecting TypeScript.
             generated.insert(
                 "src/props.ts".into(),
@@ -955,22 +1003,24 @@ async fn generated_vue_ssr_sources_install_build_and_render() {
                 "import { ref } from 'vue';\nimport type { Props } from './props';\ndefineProps<Props>();",
             );
         }
-        let component = generated.get_mut("src/App.vue").unwrap();
-        *component = component
+        if framework == "vue" {
+            let component = generated.get_mut("src/App.vue").unwrap();
+            *component = component
             .replace("import { ref }", "import { ref, computed, useCssModule }")
             .replace(
                 "</script>",
                 "const classes = useCssModule('__proto__');\nconst width = computed(() => (count.value + 1) + 'px');\n</script>",
             )
             .replace("id=\"counter\"", "id=\"counter\" :class=\"classes.accent\"");
-        component.push_str(
+            component.push_str(
             "<style module='__proto__'>.accent { background-color: rgb(0, 128, 0); border-style: solid; border-width: v-bind(width); }</style>\n",
         );
+        }
         // Observability only: snapshot before module execution and signal mount.
         let index = generated.get_mut("index.html").unwrap();
         *index = index.replace("<script type=", "<script>globalThis.__ssrButton = document.querySelector('#app button');</script><script type=");
         generated
-            .get_mut(&format!("src/main.{language}"))
+            .get_mut(&format!("src/main.{client_extension}"))
             .unwrap()
             .push_str("\nglobalThis.__hydrated = true;\n");
         let inputs: Vec<_> = generated
@@ -1002,6 +1052,13 @@ async fn generated_vue_ssr_sources_install_build_and_render() {
         .await
         .unwrap();
         assert_eq!(builder.config.runtime.backend, "napi-vm");
+        let mut builder = builder;
+        if standalone {
+            builder.config.ssr.routes = Some(vec!["/".into(), "/users/*".into()]);
+            builder.config.package.standalone = true;
+            builder.config.package.ssr_sdk =
+                Some(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../ferrite"));
+        }
         let reports = builder.build_app().await.unwrap();
         assert_eq!(reports.len(), 2);
         let server = reports.iter().find(|report| report.env == "ssr").unwrap();
@@ -1030,20 +1087,96 @@ async fn generated_vue_ssr_sources_install_build_and_render() {
             .await
             .unwrap();
         let html = response.into_string().await.unwrap();
-        assert!(html.contains("Hello Ferrite + Vue"), "{language}: {html}");
-        assert!(html.contains("count: 0</button>"), "{language}: {html}");
-        assert!(html.contains("data-v-"), "{language}: {html}");
         assert!(
-            html.contains("style=\"--") && html.contains(":1px"),
-            "{language}: SSR must serialize the initial CSS variable: {html}"
+            html.contains(&format!(
+                "Hello Ferrite + {}",
+                match framework {
+                    "vue" => "Vue",
+                    "svelte" => "Svelte",
+                    _ => "React",
+                }
+            )),
+            "{language}: {html}"
         );
+        assert!(
+            html.contains(if framework == "react" {
+                "count: <!-- -->0"
+            } else {
+                "count: 0"
+            }),
+            "{language}: {html}"
+        );
+        if framework != "react" {
+            assert!(
+                html.contains(if framework == "vue" {
+                    "data-v-"
+                } else {
+                    "svelte-"
+                }),
+                "{language}: {html}"
+            );
+        }
+        if framework == "vue" {
+            assert!(
+                html.contains("style=\"--") && html.contains(":1px"),
+                "{language}: SSR must serialize the initial CSS variable: {html}"
+            );
+        }
         let mut config = builder.config.clone();
+        config.ssr.routes = Some(vec!["/".into(), "/users/*".into()]);
         let reservation = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         config.server.port = reservation.local_addr().unwrap().port();
         drop(reservation);
         let port = config.server.port;
-        let serving =
-            tokio::spawn(async move { ferrite::preview_with_plugins(&config, &[]).await });
+        let serving = if standalone {
+            let scaffold = reports
+                .iter()
+                .find(|report| report.env == "client")
+                .unwrap()
+                .out_dir
+                .join("standalone");
+            let target = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target");
+            let status = tokio::process::Command::new("cargo")
+                .args(["build", "--offline", "--manifest-path"])
+                .arg(scaffold.join("Cargo.toml"))
+                .env("CARGO_TARGET_DIR", &target)
+                .status()
+                .await
+                .unwrap();
+            assert!(
+                status.success(),
+                "{framework}/{language}: generated standalone must compile"
+            );
+            let binary = project
+                .root
+                .join(format!("server{}", std::env::consts::EXE_SUFFIX));
+            std::fs::copy(
+                target
+                    .join("debug")
+                    .join(format!("ferrite-app{}", std::env::consts::EXE_SUFFIX)),
+                &binary,
+            )
+            .unwrap();
+            let empty = tempfile::tempdir().unwrap();
+            let mut child = tokio::process::Command::new(binary)
+                .env("PATH", "")
+                .env("HOST", "127.0.0.1")
+                .env("PORT", port.to_string())
+                .current_dir(empty.path())
+                .stdout(std::process::Stdio::null())
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+            tokio::spawn(async move {
+                let _empty = empty;
+                let status = child.wait().await?;
+                Err(ferrite::FerriteError::Other(format!(
+                    "standalone exited: {status}"
+                )))
+            })
+        } else {
+            tokio::spawn(async move { ferrite::preview_with_plugins(&config, &[]).await })
+        };
         struct Preview(tokio::task::JoinHandle<ferrite::Result<()>>);
         impl Drop for Preview {
             fn drop(&mut self) {
@@ -1082,7 +1215,7 @@ async fn generated_vue_ssr_sources_install_build_and_render() {
             .await
             .unwrap();
             let page = browser.new_page().await.unwrap();
-            page.goto(&format!("http://127.0.0.1:{port}/"))
+            page.goto(&format!("http://127.0.0.1:{port}/users/name.surname"))
                 .await
                 .unwrap();
             page.wait_for_function("globalThis.__hydrated === true", Duration::from_secs(15))
@@ -1100,14 +1233,16 @@ async fn generated_vue_ssr_sources_install_build_and_render() {
                 )
                 .await
                 .unwrap());
-            assert_eq!(
-                page.evaluate::<String>(
-                    "getComputedStyle(document.querySelector('#counter')).borderTopWidth"
-                )
-                .await
-                .unwrap(),
-                "1px"
-            );
+            if framework == "vue" {
+                assert_eq!(
+                    page.evaluate::<String>(
+                        "getComputedStyle(document.querySelector('#counter')).borderTopWidth"
+                    )
+                    .await
+                    .unwrap(),
+                    "1px"
+                );
+            }
             page.locator("#counter").click().await.unwrap();
             page.wait_for_function(
                 "document.querySelector('#counter').textContent === 'count: 1'",
@@ -1123,20 +1258,22 @@ async fn generated_vue_ssr_sources_install_build_and_render() {
                 .unwrap(),
                 "rgb(128, 0, 0)"
             );
-            assert_eq!(
-                page.evaluate::<String>(
-                    "getComputedStyle(document.querySelector('#counter')).backgroundColor"
+            if framework == "vue" {
+                assert_eq!(
+                    page.evaluate::<String>(
+                        "getComputedStyle(document.querySelector('#counter')).backgroundColor"
+                    )
+                    .await
+                    .unwrap(),
+                    "rgb(0, 128, 0)"
+                );
+                page.wait_for_function(
+                    "getComputedStyle(document.querySelector('#counter')).borderTopWidth === '2px'",
+                    Duration::from_secs(5),
                 )
                 .await
-                .unwrap(),
-                "rgb(0, 128, 0)"
-            );
-            page.wait_for_function(
-                "getComputedStyle(document.querySelector('#counter')).borderTopWidth === '2px'",
-                Duration::from_secs(5),
-            )
-            .await
-            .unwrap();
+                .unwrap();
+            }
             assert!(page.page_errors().is_empty(), "{:?}", page.page_errors());
             assert!(
                 page.console_messages()
@@ -1230,7 +1367,7 @@ async fn generated_vue_ssr_dev_graph_updates_and_recovers() {
         let initial = get(port).await;
         assert!(initial.starts_with("HTTP/1.0 200"), "{initial}");
         assert!(initial.contains("Hello Ferrite + Vue"));
-        assert!(initial.contains("count: 0"));
+        assert!(initial.replace("<!-- -->", "").contains("count: 0"));
         assert!(
             initial.contains("App.vue?ferrite-style=0&amp;direct")
                 || initial.contains("App.vue?ferrite-style=0&direct")
@@ -1621,4 +1758,157 @@ async fn generated_vue_dev_ssr_chromium() {
 #[ignore = "real registry, Node compiler host and Firefox; generated SSR watcher acceptance"]
 async fn generated_vue_dev_ssr_firefox() {
     generated_vue_dev_browser(ferrite_e2e::BrowserKind::Firefox).await;
+}
+
+#[cfg(feature = "napi-vm")]
+#[tokio::test]
+#[ignore = "official Svelte compiler/renderer, registry and Chromium; real SSR hydration"]
+async fn official_svelte_ssr_hydrates_in_chromium() {
+    framework_ssr_conformance("svelte", Some(ferrite_e2e::BrowserKind::Chromium)).await;
+}
+#[cfg(feature = "napi-vm")]
+#[tokio::test]
+#[ignore = "official Svelte compiler/renderer, registry and Firefox; real SSR hydration"]
+async fn official_svelte_ssr_hydrates_in_firefox() {
+    framework_ssr_conformance("svelte", Some(ferrite_e2e::BrowserKind::Firefox)).await;
+}
+
+#[cfg(feature = "napi-vm")]
+#[tokio::test]
+#[ignore = "official packages, generated Cargo binaries and both real browsers"]
+async fn generated_framework_standalone_browser_matrix() {
+    for framework in ["vue", "react", "svelte"] {
+        generated_ssr_sources(framework, true).await;
+    }
+}
+
+#[cfg(feature = "napi-vm")]
+#[tokio::test]
+#[ignore = "official registry packages and explicit Node compiler for Svelte"]
+async fn generated_react_svelte_dev_graph_edits_and_recovers() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    for framework in ["react", "svelte"] {
+        for language in ["js", "ts"] {
+            let generated = ferrite::frameworks::scaffold::files(
+                ferrite::frameworks::scaffold::select(framework, language, "ssr").unwrap(),
+                "dev-matrix",
+            )
+            .unwrap();
+            let inputs: Vec<_> = generated
+                .iter()
+                .map(|(path, text)| (path.as_str(), text.as_str()))
+                .collect();
+            let project = TempProject::new(&inputs);
+            let manifest = serde_json::from_str(&generated["package.json"]).unwrap();
+            let npm = project.root.join(".ferrite/npm");
+            let installer = ferrite::npm::Installer::new(
+                ferrite::npm::RegistryClient::new(
+                    ferrite::npm::DEFAULT_REGISTRY,
+                    npm.join("metadata"),
+                )
+                .unwrap(),
+                npm,
+            );
+            let mut lock = ferrite::npm::Lockfile::default();
+            installer
+                .install_manifest(&manifest, &mut lock, false)
+                .await
+                .unwrap();
+            lock.write(&project.root.join("ferrite.lock")).unwrap();
+            let (config, plugins) = ferrite::Config {
+                root: Some(project.root.clone()),
+                ..Default::default()
+            }
+            .resolve()
+            .await
+            .unwrap();
+            let server = DevServer::new_without_watcher(config.clone(), plugins)
+                .await
+                .unwrap();
+            let shell = server.transform_index_html("/index.html").await.unwrap();
+            server
+                .set_ssr_adapter(
+                    ferrite::create_dev_ssr_adapter(&server, &config, &shell)
+                        .await
+                        .unwrap(),
+                )
+                .await;
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let router = server.router();
+            struct Serving(tokio::task::JoinHandle<()>);
+            impl Drop for Serving {
+                fn drop(&mut self) {
+                    self.0.abort();
+                }
+            }
+            let _serving = Serving(tokio::spawn(async move {
+                axum::serve(listener, router).await.unwrap();
+            }));
+            async fn get(address: std::net::SocketAddr) -> String {
+                let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+                socket
+                    .write_all(b"GET / HTTP/1.0\r\nHost: localhost\r\n\r\n")
+                    .await
+                    .unwrap();
+                let mut response = String::new();
+                tokio::time::timeout(
+                    Duration::from_secs(10),
+                    socket.read_to_string(&mut response),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                response
+            }
+            let component = if framework == "svelte" {
+                "src/App.svelte".to_string()
+            } else {
+                format!("src/App.{}", if language == "ts" { "tsx" } else { "jsx" })
+            };
+            let original = &generated[&component];
+            let label = if framework == "react" {
+                "Hello Ferrite + React"
+            } else {
+                "Hello Ferrite + Svelte"
+            };
+            assert!(original.contains(label), "fixture title changed");
+            let initial = get(address).await;
+            assert!(
+                initial.starts_with("HTTP/1.0 200")
+                    && initial.contains(label)
+                    && initial.replace("<!-- -->", "").contains("count: 0"),
+                "{framework}/{language}: {initial}"
+            );
+            std::fs::write(
+                project.root.join(&component),
+                original.replace(label, "Edited application"),
+            )
+            .unwrap();
+            let updated = get(address).await;
+            assert!(
+                updated.starts_with("HTTP/1.0 200")
+                    && updated.contains("Edited application")
+                    && !updated.contains(label),
+                "{framework}/{language}: {updated}"
+            );
+            let broken = if framework == "svelte" {
+                "<script>const broken = ;</script>"
+            } else {
+                "export default function App( {"
+            };
+            std::fs::write(project.root.join(&component), broken).unwrap();
+            let invalid = get(address).await;
+            assert!(
+                invalid.starts_with("HTTP/1.0 500"),
+                "{framework}/{language}: stale successful HTML on compilation failure: {invalid}"
+            );
+            std::fs::write(project.root.join(&component), original).unwrap();
+            let recovered = get(address).await;
+            assert!(
+                recovered.starts_with("HTTP/1.0 200") && recovered.contains(label),
+                "{framework}/{language}: {recovered}"
+            );
+        }
+    }
 }
