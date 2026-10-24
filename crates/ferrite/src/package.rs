@@ -1119,7 +1119,8 @@ mod tests {
         assert!(provenance["sdk_manifest_hash"].is_string());
         let main = std::fs::read_to_string(report.dir.join("src/main.rs")).unwrap();
         assert!(
-            main.contains("include_bytes!(\"renderer.json\")") && main.contains("into_adapter")
+            main.contains("include_bytes!(\"renderer.json\")")
+                && main.contains("into_streaming_adapter")
         );
         assert!(!main.contains("__BASE__") && !main.contains("__RUNTIME_JSON__"));
         let embedded = std::fs::read(report.dir.join("src/renderer.json")).unwrap();

@@ -25,8 +25,8 @@ async fn main() {
     let artifact = ferrite::SsrRendererArtifact::from_bytes(include_bytes!("renderer.json")).expect("embedded renderer artifact");
     let (_, shell) = assets::get("/index.html").expect("embedded shell");
     let base = format!("{}/", __BASE__.trim_end_matches('/'));
-    let renderer = artifact.into_adapter(engine, String::from_utf8(shell).expect("UTF-8 shell"), &base).expect("embedded renderer");
-    let routes = serde_json::from_str(__ROUTES_JSON__).expect("embedded routing configuration");
+    let routes: ferrite::config::SsrConfig = serde_json::from_str(__ROUTES_JSON__).expect("embedded routing configuration");
+    let renderer = artifact.into_streaming_adapter(engine, String::from_utf8(shell).expect("UTF-8 shell"), &base, routes.streaming).expect("embedded renderer");
     let app = axum::Router::new().fallback(handler).with_state(AppState { renderer, base, routes });
     let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".into());
     let port = std::env::var("PORT").ok().and_then(|value| value.parse::<u16>().ok()).unwrap_or(8080);

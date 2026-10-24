@@ -202,6 +202,14 @@ impl ModuleNamespace {
     }
 }
 
+/// A process-owned streamed invocation. Dropping the body cancels its worker.
+pub struct JsStreamResponse {
+    /// Plain JSON-compatible response metadata.
+    pub head: JsValue,
+    /// Ordered byte chunks, pulled on demand.
+    pub body: std::pin::Pin<Box<dyn futures::Stream<Item = Result<Vec<u8>>> + Send>>,
+}
+
 /// JS engine abstraction (§20).
 #[async_trait::async_trait]
 pub trait JsRuntime: Send + Sync {
@@ -246,6 +254,21 @@ pub trait JsRuntime: Send + Sync {
         graph.validate()?;
         Err(FerriteError::Runtime(format!(
             "backend `{}` does not support atomic compiled graph invocation",
+            self.name()
+        )))
+    }
+
+    /// Open a request-isolated pull stream. Unsupported backends fail explicitly.
+    async fn invoke_module_graph_stream(
+        &self,
+        graph: CompiledModuleGraph,
+        _export: &str,
+        _args: Vec<JsValue>,
+        _env: RuntimeEnvironment,
+    ) -> Result<JsStreamResponse> {
+        graph.validate()?;
+        Err(FerriteError::Runtime(format!(
+            "backend `{}` does not support streamed graph invocation",
             self.name()
         )))
     }

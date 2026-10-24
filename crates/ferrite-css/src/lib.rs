@@ -243,11 +243,24 @@ pub fn minify_css(source: &str) -> String {
 #[must_use]
 pub fn css_to_js(module_id: &str, css: &str, exports: &HashMap<String, String>) -> String {
     let exports_json = serde_json::to_string(exports).unwrap_or_else(|_| "{}".to_string());
+    // Plain CSS updates its style element in place. CSS-module export maps must
+    // instead propagate to their consuming boundary when class mappings change.
+    let accept = if exports.is_empty()
+        && !module_id
+            .split('?')
+            .next()
+            .unwrap_or(module_id)
+            .ends_with(".module.css")
+    {
+        "if (import.meta.hot) import.meta.hot.accept();\n"
+    } else {
+        ""
+    };
     format!(
         "import {{ updateStyle }} from \"/@ferrite/client\";\n\
          const __css__ = {css:?};\n\
          updateStyle({module_id:?}, __css__);\n\
-         if (globalThis.__ferrite_create_hot__({module_id:?})) {{}}\n\
+         {accept}\
          export default {exports_json};\n"
     )
 }
@@ -261,6 +274,18 @@ mod tests {
         let source = "@import \"./base.css\";\n.a { background: url(./img.png); }\n";
         assert_eq!(extract_imports(source).len(), 1);
         assert_eq!(extract_urls(source).len(), 1);
+    }
+
+    #[test]
+    fn plain_styles_accept_edits_but_module_maps_propagate() {
+        let empty = HashMap::new();
+        assert!(css_to_js("/src/style.css?direct", "", &empty).contains("import.meta.hot.accept()"));
+        assert!(!css_to_js("/src/style.module.css?import", "", &empty)
+            .contains("import.meta.hot.accept()"));
+        let exports = HashMap::from([("button".into(), "button_hash".into())]);
+        assert!(
+            !css_to_js("/virtual/component.css", "", &exports).contains("import.meta.hot.accept()")
+        );
     }
 
     #[test]

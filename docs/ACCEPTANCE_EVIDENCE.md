@@ -183,3 +183,41 @@ Final gates for this batch:
 These are scoped Linux checks, not an execution of every release gate on every
 host. Cross-platform process isolation, native-addon isolation fixtures, complete
 framework development/HMR matrices and JavaScript framework streaming remain open.
+
+
+## Streaming and development HMR implementation (2026-10-24)
+
+This follow-up adds an explicit Linux `napi-vm-process` streaming profile; see
+[the streaming contract](SSR_STREAMING.md). It retains per-response admission
+until the body completes, drops or expires. An independent owner enforces deadlines
+on unpolled bodies and kills the process group before reaping. The default-reader
+bridge is deliberately limited; this does not claim full Web Streams compliance.
+
+Executed on Linux x86_64 with Rust 1.99.1, Node 24.22.1, Chromium headless shell
+153.0.8010.0 and official Firefox 157.0:
+
+- 163 unit tests across ferrite, config, CSS, frameworks, runtime and SSR passed
+  (four ignored cases excluded). This includes effective CLI backend selection,
+  reserved development URL routing and CSS boundary regression checks.
+- Seven explicit streaming tests passed: Unicode and large chunks, typed-array
+  views and bounds, overload errors/recovery, unpolled deadlines and admission,
+  producer errors without a shell suffix, real HTTP HEAD/disconnect/recovery,
+  progressive bytes before asynchronous start completion, and official React/Vue
+  production output. The official renderer fixture also ran actual CLI preview
+  with an empty PATH and hydrated/interacted in Chromium and Firefox without
+  replacing the server-rendered button.
+- React/Svelte × JS/TS development hydration/HMR matrices passed in both engines.
+  SSR DOM is retained on hydration, React preserves counter state on component
+  edits, Svelte resets component state through its official HMR wrapper, CSS
+  changes retain the document, and syntax errors recover without a page reload.
+- The generated standalone streaming binary compiled offline and rendered with an
+  empty PATH and unrelated working directory. Status/headers, base paths, dotted
+  routes, POST, HEAD, assets, private output and deadline recovery passed.
+- Both original process-runtime tests and the real HTTP disconnect fixture passed
+  after factoring child creation for streaming.
+- Strict all-target Clippy passed for the implementation crates and ferrite-test;
+  formatting, whitespace and four acceptance-runner regressions passed.
+
+The full roadmap remains open. Historical statements above that JavaScript
+streaming was unimplemented describe earlier revisions. The new acceptance runner
+selects these cases explicitly so a zero-test result cannot be recorded as a pass.

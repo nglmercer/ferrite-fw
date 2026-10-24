@@ -4267,3 +4267,21 @@ full framework mission remains active.
 - The constructor does not resolve a project, load a manifest or install a filesystem compiler loader. Callers remain responsible for serving the published browser assets under the chosen base. Runtime selection remains explicit; graph invocation uses the existing atomic worker operation.
 - Validation: feature-enabled facade/SSR tests: 24 + 21 passed, one facade test explicitly ignored. A byte-only artifact with a compiled dependency renders POST metadata, custom HTTP status/headers and one deduplicated stylesheet link using the default rootless napi-vm runtime. The real compiled-artifact regression also now renders through this rootless constructor after emitted chunks are removed, then verifies HTTP preview. Both embedding regressions pass with an empty PATH. All-target Clippy and formatting/diff checks pass.
 - Remaining: generate and compile a standalone binary around this primitive, package public assets, establish portable SDK/dependency provenance and execute binary/browser acceptance; framework hydration/conformance, cancellation and release matrices remain unfinished. Rootless adapter construction is not a complete standalone profile.
+
+## 2026-10-24: streamed renderers and development HMR
+
+Added an opt-in Linux process-worker JavaScript SSR stream contract with bounded
+pull frames, default-reader support, byte-window encoding, real-time asynchronous
+startup, absolute deadlines and independent cancellation/reaping. Configuration,
+preview and generated standalone adapters retain streaming instead of collecting
+it into a string. Official React/Vue production graphs execute through this
+profile, and CLI preview hydrates/interacts in both real browsers with an empty
+PATH. This remains a limited stream implementation; see docs/SSR_STREAMING.md.
+
+Enabled official Svelte client-development HMR, reserved React Refresh/internal
+module URLs from SSR fallback, and made plain CSS self-accept updates without
+suppressing CSS-module propagation. React/Svelte JS/TS browser matrices cover
+hydration identity, component edits, state/reset behavior, CSS and syntax recovery.
+Explicit runner gates and the consolidated roadmap/evidence describe the tested
+scope. Cross-platform process support and the other unchecked roadmap items
+remain unfinished.

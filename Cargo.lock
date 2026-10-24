@@ -1253,6 +1253,7 @@ dependencies = [
  "ferrite-core",
  "ferrite-e2e",
  "ferrite-frameworks",
+ "futures",
  "serde_json",
  "tempfile",
  "tokio",

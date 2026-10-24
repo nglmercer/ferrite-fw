@@ -21,3 +21,4 @@ tokio = { workspace = true }
 async-trait = { workspace = true }
 ferrite-e2e = { workspace = true }
 axum = { workspace = true }
+futures = { workspace = true }

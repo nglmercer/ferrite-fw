@@ -116,6 +116,7 @@ pub struct JsSsrAdapter {
     graph: Option<CompiledModuleGraph>,
     export: String,
     shell: Option<String>,
+    streaming: bool,
 }
 
 impl JsSsrAdapter {
@@ -129,6 +130,7 @@ impl JsSsrAdapter {
             graph: None,
             export: "render".to_string(),
             shell: None,
+            streaming: false,
         }
     }
 
@@ -204,9 +206,11 @@ impl JsSsrAdapter {
                 graph: None,
                 export: "render".to_string(),
                 shell: None,
+                streaming: resolved.ssr.streaming,
             };
         }
         Self::new(runtime_for_backend(&resolved.runtime.backend), module)
+            .with_streaming(resolved.ssr.streaming)
     }
 
     /// Build from an explicitly compiled graph and the configured runtime.
@@ -239,6 +243,13 @@ impl JsSsrAdapter {
     #[must_use]
     pub fn with_export(mut self, export: impl Into<String>) -> Self {
         self.export = export.into();
+        self
+    }
+
+    /// Select a pull stream; unsupported runtimes return an explicit error.
+    #[must_use]
+    pub fn with_streaming(mut self, streaming: bool) -> Self {
+        self.streaming = streaming;
         self
     }
 
@@ -275,6 +286,41 @@ impl SsrAdapter for JsSsrAdapter {
             "headers": request.headers,
             "body": request.body,
         }));
+        if self.streaming {
+            let stream = self
+                .runtime
+                .invoke_module_graph_stream(
+                    graph,
+                    &self.export,
+                    vec![JsValue::String(url), request_value],
+                    environment,
+                )
+                .await?;
+            let mut response = js_render_response(stream.head, &self.export)?;
+            let (prefix, suffix) = if let Some(shell) = &self.shell {
+                if shell.matches("<!--ssr-outlet-->").count() != 1 {
+                    return Err(FerriteError::Ssr(
+                        "streaming shell requires exactly one ssr-outlet".into(),
+                    ));
+                }
+                let shell = inject_shell(shell, "<!--ssr-outlet-->", &context.preload);
+                let (prefix, suffix) = shell
+                    .split_once("<!--ssr-outlet-->")
+                    .expect("validated outlet");
+                (
+                    Some(bytes::Bytes::from(prefix.to_owned())),
+                    Some(bytes::Bytes::from(suffix.to_owned())),
+                )
+            } else {
+                (None, None)
+            };
+            response.body = crate::RenderBody::Stream(Box::pin(ShellStream {
+                inner: Some(stream.body),
+                prefix,
+                suffix,
+            }));
+            return Ok(response);
+        }
         let result = self
             .runtime
             .invoke_module_graph(
@@ -348,4 +394,38 @@ pub struct SsrModule {
     pub code: String,
     /// Transitive dependency ids.
     pub dependencies: Vec<String>,
+}
+
+/// Preserve shell ordering without buffering the renderer or emitting a suffix
+/// after a failed stream. Dropping this wrapper drops the process-owned body.
+struct ShellStream {
+    inner: Option<futures::stream::BoxStream<'static, Result<Vec<u8>>>>,
+    prefix: Option<bytes::Bytes>,
+    suffix: Option<bytes::Bytes>,
+}
+impl futures::Stream for ShellStream {
+    type Item = Result<bytes::Bytes>;
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        if let Some(prefix) = self.prefix.take() {
+            return std::task::Poll::Ready(Some(Ok(prefix)));
+        }
+        if let Some(inner) = self.inner.as_mut() {
+            match inner.as_mut().poll_next(cx) {
+                std::task::Poll::Pending => return std::task::Poll::Pending,
+                std::task::Poll::Ready(Some(Ok(bytes))) => {
+                    return std::task::Poll::Ready(Some(Ok(bytes.into())))
+                }
+                std::task::Poll::Ready(Some(Err(error))) => {
+                    self.inner = None;
+                    self.suffix = None;
+                    return std::task::Poll::Ready(Some(Err(error)));
+                }
+                std::task::Poll::Ready(None) => self.inner = None,
+            }
+        }
+        std::task::Poll::Ready(self.suffix.take().map(Ok))
+    }
 }

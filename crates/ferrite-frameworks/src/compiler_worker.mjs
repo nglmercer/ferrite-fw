@@ -68,7 +68,7 @@ export async function compile(request) {
   if (request.framework === 'svelte') {
     const result = request.module
       ? module.compileModule(source, { filename, generate: target, dev: development })
-      : module.compile(source, { filename, generate: target, dev: development, css: 'external', hmr: false });
+      : module.compile(source, { filename, generate: target, dev: development, css: 'external', hmr: development && !server });
     const diagnostics = result.warnings.map(warning => ({ severity: 'warning', code: warning.code, message: warning.message, filename: warning.filename || filename, start: warning.start || null }));
     const jsMap = svelteMap(result.js.map, request, diagnostics);
     const cssMap = result.css ? svelteMap(result.css.map, request, diagnostics) : null;

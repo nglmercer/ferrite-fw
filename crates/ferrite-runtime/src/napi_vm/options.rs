@@ -17,6 +17,9 @@ pub struct NativeAddonAllow {
 /// napi-vm backend options.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct NapiVmOptions {
+    /// Install the pure byte-window helper for an isolated streaming worker.
+    #[serde(default)]
+    pub stream_helpers: bool,
     /// End-to-end request deadline in milliseconds (0 disables the deadline).
     pub request_timeout_ms: u64,
     /// Maximum last-owner shutdown wait in milliseconds (0 selects 1000).

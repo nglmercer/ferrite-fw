@@ -256,6 +256,8 @@ impl Default for BuildConfig {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct SsrConfig {
+    /// Pull JavaScript response bytes through an explicitly stream-capable runtime.
+    pub streaming: bool,
     /// Base-relative SSR routes: exact paths, /prefix/*, or *. None uses extensionless routes.
     pub routes: Option<Vec<String>>,
     /// Absolute base-relative routes to generate with ferrite prerender.
@@ -273,6 +275,7 @@ pub struct SsrConfig {
 impl Default for SsrConfig {
     fn default() -> Self {
         Self {
+            streaming: false,
             entry: Some("src/server.rs".to_string()),
             routes: None,
             prerender: Vec::new(),
@@ -316,6 +319,10 @@ impl SsrConfig {
             "node_modules",
             "standalone",
             "@ferrite",
+            "@react-refresh",
+            "@id",
+            "@npm",
+            "@fs",
             "@vite",
             ".ferrite",
         ]
@@ -1309,6 +1316,7 @@ fn merge_build(mut base: BuildConfig, over: BuildConfig) -> BuildConfig {
 }
 
 fn merge_ssr(mut base: SsrConfig, over: SsrConfig) -> SsrConfig {
+    base.streaming |= over.streaming;
     if over.routes.is_some() {
         base.routes = over.routes;
     }
@@ -1430,6 +1438,17 @@ pub fn resolve_config(
         framework.validate()?;
     }
     user.ssr.validate_routes()?;
+    if user.ssr.streaming
+        && overrides
+            .runtime
+            .as_deref()
+            .unwrap_or(&user.runtime.backend)
+            != "napi-vm-process"
+    {
+        return Err(FerriteError::Config(
+            "ssr.streaming requires the explicit napi-vm-process runtime".into(),
+        ));
+    }
     let mut names = std::collections::HashSet::new();
     for plugin in user.foreign_plugins.iter().flatten() {
         if plugin.name.trim().is_empty() || !names.insert(&plugin.name) {
@@ -2186,6 +2205,35 @@ mod ssr_package_tests {
 mod ssr_route_tests {
     use super::*;
     #[test]
+    fn streaming_requires_effective_process_backend() {
+        let mut user = UserConfig::default();
+        user.ssr.streaming = true;
+        assert!(resolve_config(user.clone(), None, CliOverrides::default()).is_err());
+        let process = CliOverrides {
+            runtime: Some("napi-vm-process".into()),
+            ..Default::default()
+        };
+        assert!(
+            resolve_config(user.clone(), None, process)
+                .unwrap()
+                .ssr
+                .streaming
+        );
+        user.runtime.backend = "napi-vm-process".into();
+        let embedded = CliOverrides {
+            runtime: Some("napi-vm".into()),
+            ..Default::default()
+        };
+        assert!(resolve_config(user.clone(), None, embedded).is_err());
+        assert!(
+            resolve_config(user, None, CliOverrides::default())
+                .unwrap()
+                .ssr
+                .streaming
+        );
+    }
+
+    #[test]
     fn explicit_dotted_routes_prefixes_assets_and_disabled_policy() {
         let mut config = SsrConfig::default();
         assert!(config.matches_route("/profile"));
@@ -2201,6 +2249,10 @@ mod ssr_route_tests {
             "/server/renderer.json",
             "/assets/code.js",
             "/src/main.ts",
+            "/@react-refresh",
+            "/@id/react-refresh",
+            "/@npm/react@19/index.js",
+            "/@fs/tmp/module",
             "/../private",
             "/%2e%2e/private",
         ] {

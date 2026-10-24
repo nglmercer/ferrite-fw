@@ -5,7 +5,8 @@ use ferrite_plugin::{Enforce, LoadRequest, LoadResult, Plugin, PluginContext, Re
 use std::sync::Arc;
 
 /// Experimental component adapter. Creating it requires an explicitly enabled
-/// compiler host; it supplies compilation, not an SSR runtime or HMR protocol.
+/// compiler host. Svelte client development uses the official compiler HMR
+/// protocol; SSR and production exclude HMR. The host supplies no SSR runtime.
 pub struct HostedFrameworkPlugin {
     framework: Framework,
     host: Arc<NodeCompilerHost>,

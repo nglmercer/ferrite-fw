@@ -71,9 +71,22 @@ impl SsrRendererArtifact {
         shell: String,
         base: &str,
     ) -> Result<std::sync::Arc<dyn ferrite_ssr::SsrAdapter>> {
+        self.into_streaming_adapter(runtime, shell, base, false)
+    }
+
+    /// Construct an adapter with an explicit streamed-renderer contract.
+    pub fn into_streaming_adapter(
+        self,
+        runtime: std::sync::Arc<dyn ferrite_runtime::JsRuntime>,
+        shell: String,
+        base: &str,
+        streaming: bool,
+    ) -> Result<std::sync::Arc<dyn ferrite_ssr::SsrAdapter>> {
         self.validate()?;
         let adapter = std::sync::Arc::new(
-            ferrite_ssr::JsSsrAdapter::new_graph(runtime, self.graph)?.with_shell(shell),
+            ferrite_ssr::JsSsrAdapter::new_graph(runtime, self.graph)?
+                .with_shell(shell)
+                .with_streaming(streaming),
         );
         let mut seen = HashSet::new();
         let styles: Vec<_> = self

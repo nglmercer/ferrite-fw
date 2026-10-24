@@ -408,3 +408,6 @@ See [the current completion plan](docs/COMPLETION_PLAN.md) for open work and
 `python3 scripts/acceptance.py --profile runtime` for reproducible, commit-specific
 acceptance reports. Required ignored fixtures are selected explicitly; missing
 prerequisites fail instead of silently becoming compatibility evidence.
+
+Experimental JavaScript SSR streaming is available through the explicit Linux
+process runtime. See [the streaming contract and limits](docs/SSR_STREAMING.md).

@@ -17,6 +17,7 @@ use tokio::{
 };
 /// Hidden entry point handled before application argument parsing.
 pub const WORKER_ARG: &str = "--ferrite-runtime-worker";
+mod streaming;
 const MAX_FRAME: usize = 64 * 1024 * 1024;
 /// Zero resource settings select bounded defaults.
 #[derive(Clone, Debug, Default)]
@@ -31,7 +32,7 @@ pub struct ProcessOptions {
     pub engine: crate::napi_vm::NapiVmOptions,
 }
 struct State {
-    slots: Semaphore,
+    slots: Arc<Semaphore>,
     active: Mutex<BTreeSet<u32>>,
 }
 /// Clones share admission and shutdown. Each render starts a fresh child.
@@ -54,7 +55,7 @@ impl ProcessRuntime {
         Self {
             options,
             state: Arc::new(State {
-                slots: Semaphore::new(concurrency),
+                slots: Arc::new(Semaphore::new(concurrency)),
                 active: Mutex::new(BTreeSet::new()),
             }),
         }
@@ -71,6 +72,79 @@ impl ProcessRuntime {
         for pid in self.state.active.lock().unwrap().iter() {
             kill_group(*pid);
         }
+    }
+    fn spawn_worker(
+        &self,
+        timeout: u64,
+        worker_arg: &str,
+    ) -> Result<(tokio::net::UnixStream, ChildGuard, u64, u64)> {
+        let (parent, child_socket) = std::os::unix::net::UnixStream::pair().map_err(error)?;
+        parent.set_nonblocking(true).map_err(error)?;
+        let socket = tokio::net::UnixStream::from_std(parent).map_err(error)?;
+        let fd = child_socket.as_raw_fd();
+        let memory = if self.options.memory_limit_bytes == 0 {
+            2 * 1024 * 1024 * 1024
+        } else {
+            self.options.memory_limit_bytes
+        };
+        let cpu = timeout.div_ceil(1000).max(1);
+        let executable = match &self.options.executable {
+            Some(path) => path.clone(),
+            None => std::env::current_exe().map_err(error)?,
+        };
+        let mut command = tokio::process::Command::new(executable);
+        command
+            .arg(worker_arg)
+            .env("TOKIO_WORKER_THREADS", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true);
+        // Only async-signal-safe syscalls between fork and exec. Native
+        // stdout cannot corrupt the dedicated protocol descriptor.
+        unsafe {
+            command.pre_exec(move || {
+                if libc::setpgid(0, 0) != 0
+                    || libc::dup2(fd, 3) < 0
+                    || libc::fcntl(3, libc::F_SETFD, 0) < 0
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+                let address = libc::rlimit {
+                    rlim_cur: memory,
+                    rlim_max: memory,
+                };
+                let seconds = libc::rlimit {
+                    rlim_cur: cpu,
+                    rlim_max: cpu,
+                };
+                if libc::setrlimit(libc::RLIMIT_AS, &address) != 0
+                    || libc::setrlimit(libc::RLIMIT_CPU, &seconds) != 0
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let (child, pid) = {
+            // Registration and shutdown are serialized. No untracked child
+            // can be spawned after shutdown.
+            let mut active = self.state.active.lock().unwrap();
+            if self.state.slots.is_closed() {
+                return Err(error("shut down"));
+            }
+            let child = command.spawn().map_err(error)?;
+            let pid = child.id().ok_or_else(|| error("missing child PID"))?;
+            active.insert(pid);
+            (child, pid)
+        };
+        let guard = ChildGuard {
+            child,
+            pid,
+            state: self.state.clone(),
+        };
+        drop(child_socket);
+        Ok((socket, guard, memory, cpu))
     }
     async fn invoke(&self, request: Request) -> Result<JsValue> {
         let timeout = if self.options.engine.request_timeout_ms == 0 {
@@ -94,72 +168,7 @@ impl ProcessRuntime {
             if payload.len() > limit {
                 return Err(error("request exceeds payload limit"));
             }
-            let (parent, child_socket) = std::os::unix::net::UnixStream::pair().map_err(error)?;
-            parent.set_nonblocking(true).map_err(error)?;
-            let mut socket = tokio::net::UnixStream::from_std(parent).map_err(error)?;
-            let fd = child_socket.as_raw_fd();
-            let memory = if self.options.memory_limit_bytes == 0 {
-                2 * 1024 * 1024 * 1024
-            } else {
-                self.options.memory_limit_bytes
-            };
-            let cpu = timeout.div_ceil(1000).max(1);
-            let executable = match &self.options.executable {
-                Some(path) => path.clone(),
-                None => std::env::current_exe().map_err(error)?,
-            };
-            let mut command = tokio::process::Command::new(executable);
-            command
-                .arg(WORKER_ARG)
-                .env("TOKIO_WORKER_THREADS", "1")
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .kill_on_drop(true);
-            // Only async-signal-safe syscalls between fork and exec. Native
-            // stdout cannot corrupt the dedicated protocol descriptor.
-            unsafe {
-                command.pre_exec(move || {
-                    if libc::setpgid(0, 0) != 0
-                        || libc::dup2(fd, 3) < 0
-                        || libc::fcntl(3, libc::F_SETFD, 0) < 0
-                    {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    let address = libc::rlimit {
-                        rlim_cur: memory,
-                        rlim_max: memory,
-                    };
-                    let seconds = libc::rlimit {
-                        rlim_cur: cpu,
-                        rlim_max: cpu,
-                    };
-                    if libc::setrlimit(libc::RLIMIT_AS, &address) != 0
-                        || libc::setrlimit(libc::RLIMIT_CPU, &seconds) != 0
-                    {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    Ok(())
-                });
-            }
-            let (child, pid) = {
-                // Registration and shutdown are serialized. No untracked child
-                // can be spawned after shutdown.
-                let mut active = self.state.active.lock().unwrap();
-                if self.state.slots.is_closed() {
-                    return Err(error("shut down"));
-                }
-                let child = command.spawn().map_err(error)?;
-                let pid = child.id().ok_or_else(|| error("missing child PID"))?;
-                active.insert(pid);
-                (child, pid)
-            };
-            let mut guard = ChildGuard {
-                child,
-                pid,
-                state: self.state.clone(),
-            };
-            drop(child_socket);
+            let (mut socket, mut guard, memory, cpu) = self.spawn_worker(timeout, WORKER_ARG)?;
             socket.write_all(&payload).await.map_err(error)?;
             socket.shutdown().await.map_err(error)?;
             let mut response = Vec::new();
@@ -262,38 +271,33 @@ impl JsRuntime for ProcessRuntime {
         })
         .await
     }
+    async fn invoke_module_graph_stream(
+        &self,
+        graph: CompiledModuleGraph,
+        export: &str,
+        args: Vec<JsValue>,
+        env: RuntimeEnvironment,
+    ) -> Result<crate::JsStreamResponse> {
+        streaming::invoke(self, graph, export, args, env).await
+    }
 }
 /// Handle the worker flag before parsing application arguments. Exit when true.
 pub async fn run_worker_if_requested() -> bool {
-    if std::env::args_os().nth(1).as_deref() != Some(std::ffi::OsStr::new(WORKER_ARG)) {
+    let arg = std::env::args_os().nth(1);
+    let result = if arg.as_deref() == Some(std::ffi::OsStr::new(WORKER_ARG)) {
+        worker().await
+    } else if arg.as_deref() == Some(std::ffi::OsStr::new(streaming::WORKER_ARG)) {
+        streaming::worker().await
+    } else {
         return false;
-    }
-    if worker().await.is_err() {
+    };
+    if result.is_err() {
         std::process::exit(1);
     }
     true
 }
 async fn worker() -> Result<()> {
-    // Reject manual invocations without a protocol socket before taking ownership.
-    let mut kind: libc::c_int = 0;
-    let mut length = std::mem::size_of_val(&kind) as libc::socklen_t;
-    if unsafe {
-        libc::getsockopt(
-            3,
-            libc::SOL_SOCKET,
-            libc::SO_TYPE,
-            (&mut kind as *mut libc::c_int).cast(),
-            &mut length,
-        )
-    } != 0
-        || kind != libc::SOCK_STREAM
-    {
-        return Err(error("worker requires its private protocol socket"));
-    }
-    // Descriptor 3 belongs exclusively to the parent protocol.
-    let stream = unsafe { std::os::unix::net::UnixStream::from_raw_fd(3) };
-    stream.set_nonblocking(true).map_err(error)?;
-    let mut stream = tokio::net::UnixStream::from_std(stream).map_err(error)?;
+    let mut stream = worker_socket()?;
     let mut bytes = Vec::new();
     (&mut stream)
         .take((MAX_FRAME + 1) as u64)
@@ -341,6 +345,29 @@ async fn worker() -> Result<()> {
     stream.write_all(&bytes).await.map_err(error)?;
     stream.shutdown().await.map_err(error)?;
     Ok(())
+}
+
+fn worker_socket() -> Result<tokio::net::UnixStream> {
+    // Reject manual invocations without a protocol socket before taking ownership.
+    let mut kind: libc::c_int = 0;
+    let mut length = std::mem::size_of_val(&kind) as libc::socklen_t;
+    if unsafe {
+        libc::getsockopt(
+            3,
+            libc::SOL_SOCKET,
+            libc::SO_TYPE,
+            (&mut kind as *mut libc::c_int).cast(),
+            &mut length,
+        )
+    } != 0
+        || kind != libc::SOCK_STREAM
+    {
+        return Err(error("worker requires its private protocol socket"));
+    }
+    // Descriptor 3 belongs exclusively to the parent protocol.
+    let stream = unsafe { std::os::unix::net::UnixStream::from_raw_fd(3) };
+    stream.set_nonblocking(true).map_err(error)?;
+    tokio::net::UnixStream::from_std(stream).map_err(error)
 }
 
 #[cfg(test)]

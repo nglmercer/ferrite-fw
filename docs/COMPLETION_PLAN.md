@@ -12,10 +12,10 @@ coverage. It does not promote a whole framework or platform profile.
 | Vanilla JS/TS client | Experimental | Full clean-directory platform/release matrix |
 | React 19.2.0 JS/TS client | Experimental | Complete Refresh/component/hook matrix |
 | Vue 3.5.22 JS/TS client | Experimental, explicit Node compiler | Granular HMR and wider component coverage |
-| Vue 3.5.22 JS/TS SSR | Experimental, Node compiler + napi-vm runtime | Framework streaming and full version/platform acceptance |
+| Vue 3.5.22 JS/TS SSR | Experimental, Node compiler + napi-vm runtime | Broader streaming/version/platform acceptance |
 | Svelte 5.39.6 client | Experimental, explicit Node compiler | Wider runes/component/HMR coverage |
-| Svelte 5.39.6 JS/TS SSR | Experimental, Node compiler + napi-vm runtime | Development HMR/component and cross-platform release matrix |
-| React 19.2.0 JS/TS SSR | Experimental, native compiler + napi-vm | Development HMR/component and cross-platform release matrix; streaming |
+| Svelte 5.39.6 JS/TS SSR | Experimental, Node compiler + napi-vm runtime | Wider component/state and cross-platform release matrix |
+| React 19.2.0 JS/TS SSR | Experimental, native compiler + napi-vm | Wider HMR/component and cross-platform release matrix |
 | Preact/Solid/Qwik | Adapter unavailable | Explicit ownership/delegation and independent adapter acceptance |
 
 The registry's `tested_versions` remains empty until a complete declared
@@ -97,7 +97,8 @@ SDK source snapshot or final binary.
 - [x] Implement React JS/TS synchronous production rendering and Chromium/Firefox hydration.
 - [x] React/Svelte JS/TS development SSR edit, syntax-error and recovery checks.
 - [x] Generated Vue/React/Svelte JS/TS standalone hydration/interaction/CSS in Chromium and Firefox on Linux.
-- [ ] React/Svelte development hydration/HMR matrix and framework streaming.
+- [x] React/Svelte JS/TS development hydration, component/CSS HMR and syntax recovery in Chromium and Firefox on Linux.
+- [ ] Wider component/hook/state matrices and cross-platform development acceptance.
 - [x] Verify Svelte SSR with official output, retaining meaningful HTML assertions.
 - [x] Add Svelte SSR JS/TS scaffolds only after renderer/hydration prerequisites pass.
 - [ ] Expand Svelte runes, component resources, diagnostics and state/reset coverage.
@@ -118,7 +119,8 @@ SDK source snapshot or final binary.
 - [ ] Multiple server entry selection and per-entry artifact routing.
 - [x] HTTP disconnect drops pending SSR and cancels process-runtime invocation; recovery verified.
 - [x] Rust response streaming backpressure, HEAD, producer errors and disconnect teardown.
-- [ ] JavaScript framework streaming and ReadableStream bridge.
+- [x] Experimental Linux process-worker pull streaming bridge, deadlines, bounded bytes and teardown; official React/Vue production output.
+- [ ] Full Web Streams compatibility, broader framework versions and cross-platform streaming acceptance.
 - [x] SSG route enumeration, output paths, errors and deterministic builds.
 - [ ] Actual framework islands/hydration acceptance and lazy component preload closure.
 - [ ] Runtime external/native profile contracts and artifact/source-map versioning.

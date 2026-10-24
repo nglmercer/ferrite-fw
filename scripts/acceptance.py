@@ -42,6 +42,8 @@ def plan(profile):
         commands.append(["cargo", "test", "--locked", "-p", "ferrite-runtime", "--features", "napi-vm", "--lib", "napi_vm::syntax_cache::tests::parser_preflight_cold_and_cached_measurement", "--", "--ignored", "--exact", "--nocapture"])
     if profile in ("runtime", "all") and sys.platform.startswith("linux"):
         commands.append(exact("ferrite-test", "process_runtime", "http_disconnect_kills_render_worker_and_next_request_recovers", "napi-vm"))
+        for name in ("stream_pull_unicode_metadata_and_large_chunk_boundaries", "stream_byte_views_bounds_and_recovery", "stream_drop_and_unpolled_deadline_release_admission", "stream_shell_errors_terminate_without_suffix_and_recover", "real_http_stream_head_disconnect_and_recovery", "progressive_bytes_arrive_before_unresolved_async_start"):
+            commands.append(exact("ferrite-test", "streaming", name, "napi-vm"))
     if profile in ("frameworks", "all"):
         commands.append(["cargo", "build", "--locked", "-p", "ferrite-cli", "--features", "napi-vm"])
         commands.append(exact("ferrite-frameworks", "compiler_host", "actual_project_matched_compilers_client_server_and_runes"))
@@ -49,6 +51,10 @@ def plan(profile):
         for name in ("official_svelte_server_renderer_executes_emitted_graph", "official_vue_server_renderer_executes_emitted_graph", "official_components_resources_maps_cache_and_library_parity", "generated_vue_ssr_sources_install_build_and_render", "generated_svelte_ssr_sources_install_build_and_render", "generated_react_ssr_sources_install_build_and_render", "official_vue_ssr_hydrates_in_chromium", "official_vue_ssr_hydrates_in_firefox", "official_svelte_ssr_hydrates_in_chromium", "official_svelte_ssr_hydrates_in_firefox", "generated_react_svelte_dev_graph_edits_and_recovers", "generated_framework_standalone_browser_matrix", "generated_vue_ssr_dev_graph_updates_and_recovers", "generated_vue_dev_ssr_chromium", "generated_vue_dev_ssr_firefox"):
             commands.append(exact("ferrite-test", "framework_compilers", name, "napi-vm"))
         commands.append(["cargo", "test", "--locked", "-p", "ferrite-test", "--features", "napi-vm", "--test", "prerender"])
+        if sys.platform.startswith("linux"):
+            commands.append(exact("ferrite-test", "streaming", "official_react_and_vue_renderers_execute_streamed_production_graphs", "napi-vm"))
+        for engine in ("chromium", "firefox"):
+            commands.append(exact("ferrite-test", "dev_hmr", f"{engine}_react_svelte_ssr_hmr_and_recovery", "napi-vm"))
         # Both engines and all existing generated-client/Refresh/foreign-hook
         # acceptance cases execute explicitly, rather than relying on unit tests.
         for engine in ("chromium", "firefox"):
@@ -62,6 +68,7 @@ def plan(profile):
             commands.append(exact("ferrite-test", "standalone", name, "napi-vm"))
         if sys.platform.startswith("linux"):
             commands.append(exact("ferrite-test", "standalone", "standalone_process_runtime_renders_and_recovers_without_node", "napi-vm"))
+            commands.append(exact("ferrite-test", "standalone", "standalone_streaming_renders_and_recovers_without_node", "napi-vm"))
     if profile in ("e2e", "all"):
         commands.append(["cargo", "test", "--locked", "-p", "ferrite-e2e", "--", "--test-threads=1"])
     return commands

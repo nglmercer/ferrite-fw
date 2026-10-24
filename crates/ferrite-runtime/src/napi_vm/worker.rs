@@ -126,6 +126,7 @@ pub(crate) struct WorkerState {
     graph_modules: Vec<String>,
     syntax_cache: super::syntax_cache::SyntaxCache,
     control: Option<RequestControl>,
+    stream_clock: Option<std::rc::Rc<napi_vm::interpreter::RealTimeClock>>,
 }
 
 impl WorkerState {
@@ -193,6 +194,15 @@ impl WorkerState {
         napi_vm_host::builtins::install_console(&mut interp.global.borrow_mut());
         napi_vm_host::builtins::install_timers(&mut interp.global.borrow_mut());
         napi_vm_host::builtins::install_web(&mut interp.global.borrow_mut());
+        if options.stream_helpers {
+            interp.global.borrow_mut().set(
+                "__ferriteStreamBytes",
+                napi_vm::Value::NativeFunction {
+                    name: "__ferriteStreamBytes".into(),
+                    callable: super::stream_bytes::encode,
+                },
+            );
+        }
         if options.fuel_budget > 0 {
             interp.set_fuel_budget(options.fuel_budget);
         }
@@ -259,6 +269,17 @@ impl WorkerState {
             }
             Some(runtime)
         };
+        let stream_clock = if options.stream_helpers {
+            let clock = std::rc::Rc::new(napi_vm::interpreter::RealTimeClock::default());
+            interp
+                .jobs
+                .borrow_mut()
+                .set_clock(napi_vm::interpreter::ClockMode::RealTime(clock.clone()))
+                .map_err(vmkind)?;
+            Some(clock)
+        } else {
+            None
+        };
         // Guest-side function table for exported handles.
         interp
             .eval_source("globalThis.__ferrite_fns__ = globalThis.__ferrite_fns__ || {};")
@@ -267,6 +288,7 @@ impl WorkerState {
             interp,
             runtime,
             next_handle: 1,
+            stream_clock,
             graph_modules: Vec::new(),
             syntax_cache: Default::default(),
             control: None,
@@ -289,7 +311,20 @@ impl WorkerState {
 
     fn eval_source(&mut self, code: &str) -> std::result::Result<napi_vm::Value, String> {
         self.apply_control()?;
-        self.interp.eval_source(code).map_err(vmkind)
+        if self.stream_clock.is_some() {
+            self.interp
+                .eval_source_with_options(
+                    code,
+                    napi_vm::interpreter::EvaluationOptions {
+                        drain: napi_vm::interpreter::DrainPolicy::None,
+                        resume_pending_checkpoint: true,
+                        retire_execution: false,
+                    },
+                )
+                .map_err(vmkind)
+        } else {
+            self.interp.eval_source(code).map_err(vmkind)
+        }
     }
 
     /// Define + evaluate a module; return its export record as JSON.
@@ -386,13 +421,85 @@ impl WorkerState {
         let json = napi_vm::value_to_json(&mut self.interp, &value).map_err(vmkind)?;
         if json.as_str() == Some("__FERRITE_ASYNC__") {
             self.apply_control()?;
-            self.interp.drain_jobs().map_err(vmkind)?;
-            let err = self.eval_source("globalThis.__ferrite_async_err__")?;
+            if let Some(clock) = self.stream_clock.clone() {
+                use napi_vm::interpreter::Clock;
+                loop {
+                    let ready = self
+                        .interp
+                        .global
+                        .borrow()
+                        .get("__ferrite_async__")
+                        .is_some_and(|value| {
+                            !matches!(value, napi_vm::Value::Null | napi_vm::Value::Undefined)
+                        });
+                    let failed = self
+                        .interp
+                        .global
+                        .borrow()
+                        .get("__ferrite_async_err__")
+                        .is_some_and(|value| {
+                            !matches!(value, napi_vm::Value::Null | napi_vm::Value::Undefined)
+                        });
+                    if ready || failed {
+                        break;
+                    }
+                    self.apply_control()?;
+                    let outcome = self
+                        .interp
+                        .poll_event_loop(napi_vm::interpreter::TurnBudget::jobs(1))
+                        .map_err(vmkind)?;
+                    if !outcome.runnable {
+                        if let Some(deadline) = outcome.next_deadline {
+                            let millis = (deadline - clock.now_ms()).clamp(0.0, 1.0);
+                            std::thread::sleep(std::time::Duration::from_secs_f64(millis / 1000.0));
+                        } else {
+                            let ready = self
+                                .interp
+                                .global
+                                .borrow()
+                                .get("__ferrite_async__")
+                                .is_some_and(|value| {
+                                    !matches!(
+                                        value,
+                                        napi_vm::Value::Null | napi_vm::Value::Undefined
+                                    )
+                                });
+                            let failed = self
+                                .interp
+                                .global
+                                .borrow()
+                                .get("__ferrite_async_err__")
+                                .is_some_and(|value| {
+                                    !matches!(
+                                        value,
+                                        napi_vm::Value::Null | napi_vm::Value::Undefined
+                                    )
+                                });
+                            if !ready && !failed {
+                                return Err("guest promise never settled".into());
+                            }
+                        }
+                    }
+                }
+            } else {
+                self.interp.drain_jobs().map_err(vmkind)?;
+            }
+            let err = self
+                .interp
+                .global
+                .borrow()
+                .get("__ferrite_async_err__")
+                .unwrap_or(napi_vm::Value::Null);
             let err = napi_vm::value_to_json(&mut self.interp, &err).map_err(vmkind)?;
             if let Some(message) = err.as_str() {
                 return Err(format!("async guest error: {message}"));
             }
-            let settled = self.eval_source("globalThis.__ferrite_async__")?;
+            let settled = self
+                .interp
+                .global
+                .borrow()
+                .get("__ferrite_async__")
+                .unwrap_or(napi_vm::Value::Null);
             let settled = napi_vm::value_to_json(&mut self.interp, &settled).map_err(vmkind)?;
             match settled.as_str() {
                 Some(text) => serde_json::from_str(text)

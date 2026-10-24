@@ -697,6 +697,6 @@ mod standalone_tests {
         let html = response.into_string().await.unwrap();
         assert!(html.contains("<h1>packaged /app/</h1>"), "{html}");
         let main = std::fs::read_to_string(scaffold.join("src/main.rs")).unwrap();
-        assert!(main.contains("artifact.into_adapter"));
+        assert!(main.contains("artifact.into_streaming_adapter"));
     }
 }

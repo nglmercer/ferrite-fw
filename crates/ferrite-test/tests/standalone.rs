@@ -252,24 +252,35 @@ fn existing_ssr_output_is_not_embedded_or_packaged_as_static() {
 #[tokio::test]
 #[ignore = "slow: generated SSR Cargo build and HTTP server"]
 async fn standalone_ssr_build_compiles_and_renders_without_node() {
-    standalone_ssr_profile("napi-vm").await;
+    standalone_ssr_profile("napi-vm", false).await;
 }
 
 #[cfg(all(feature = "napi-vm", target_os = "linux"))]
 #[tokio::test]
 #[ignore = "slow: generated Linux process-runtime binary and HTTP recovery"]
 async fn standalone_process_runtime_renders_and_recovers_without_node() {
-    standalone_ssr_profile("napi-vm-process").await;
+    standalone_ssr_profile("napi-vm-process", false).await;
+}
+
+#[cfg(all(feature = "napi-vm", target_os = "linux"))]
+#[tokio::test]
+#[ignore = "slow: generated streaming binary without Node and HTTP recovery"]
+async fn standalone_streaming_renders_and_recovers_without_node() {
+    standalone_ssr_profile("napi-vm-process", true).await;
 }
 
 #[cfg(feature = "napi-vm")]
-async fn standalone_ssr_profile(backend: &str) {
+async fn standalone_ssr_profile(backend: &str, streaming: bool) {
     let project = TempProject::new(&[
         ("index.html", "<html><head></head><body><!--ssr-outlet--><script type=\"module\" src=\"/src/main.js\"></script></body></html>"),
         ("src/main.js", "globalThis.clientLoaded = true;"),
         ("src/entry-server.ts", "export function render(url: string, request: any) { if (url === '/app/slow') { while (true) {} } return { html: `<h1>embedded ${request.method} ${url}</h1>`, status: 202, headers: [['x-renderer', 'compiled']] }; }"),
     ]);
+    if streaming {
+        std::fs::write(project.root.join("src/entry-server.ts"), "export function render(url: string, request: any) { if (url === '/app/slow') { while (true) {} } return { body: new ReadableStream({ start(c) { c.enqueue(`<h1>embedded ${request.method} ${url}</h1>`); c.close(); } }), status: 202, headers: [['x-renderer', 'compiled']] }; }").unwrap();
+    }
     let mut config = standalone_config(&project, None);
+    config.ssr.streaming = streaming;
     config.runtime.backend = backend.into();
     if backend == "napi-vm-process" {
         config.runtime.request_timeout_ms = 750;

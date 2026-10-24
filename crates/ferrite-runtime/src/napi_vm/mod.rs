@@ -30,6 +30,7 @@
 mod jobs;
 mod options;
 mod runtime;
+mod stream_bytes;
 mod syntax_cache;
 mod util;
 mod worker;
