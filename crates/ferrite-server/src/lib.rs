@@ -12,6 +12,7 @@ mod pipeline_transform;
 mod proxy;
 mod routes;
 mod server;
+mod ssr_islands;
 mod ssr_router;
 mod ssr_tools;
 mod state;
@@ -37,6 +38,53 @@ mod tests {
     use std::sync::Arc;
     use std::sync::Mutex;
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn missing_browser_media_does_not_cover_ssr_with_a_compile_overlay() {
+        let root = tempfile::tempdir().unwrap();
+        let config = ferrite_config::resolve_config(
+            Default::default(),
+            Some(root.path().into()),
+            Default::default(),
+        )
+        .unwrap();
+        let server = DevServer::new_without_watcher(config, vec![])
+            .await
+            .unwrap();
+        for (path, destination) in [
+            ("/favicon.ico", "image"),
+            ("/missing.svg", "image"),
+            ("/font.woff2", "font"),
+        ] {
+            let mut headers = axum::http::HeaderMap::new();
+            headers.insert("sec-fetch-dest", destination.parse().unwrap());
+            let response = crate::routes::fallback_handler(
+                axum::extract::State(server.inner().clone()),
+                axum::http::Method::GET,
+                axum::extract::OriginalUri(path.parse().unwrap()),
+                path.parse().unwrap(),
+                headers,
+                axum::body::Bytes::new(),
+            )
+            .await;
+            assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+            assert!(server.inner().hmr_error.lock().unwrap().is_none());
+        }
+        let response = crate::routes::fallback_handler(
+            axum::extract::State(server.inner().clone()),
+            axum::http::Method::GET,
+            axum::extract::OriginalUri("/src/missing.js".parse().unwrap()),
+            "/src/missing.js".parse().unwrap(),
+            Default::default(),
+            axum::body::Bytes::new(),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert!(server.inner().hmr_error.lock().unwrap().is_some());
+    }
 
     #[test]
     fn dotenv_parses() {

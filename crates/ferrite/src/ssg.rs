@@ -334,22 +334,14 @@ impl Builder {
             .build_app()
             .await?;
         let server = stage.path().join("server");
-        let graph = crate::load_built_ssr_graph(&server)?;
-        let styles = crate::ssr_build::built_ssr_styles(&server, &config.base)?;
+        let artifact = crate::SsrRendererArtifact::read(&server)?;
         let shell = std::fs::read_to_string(stage.path().join("index.html"))?;
-        let adapter = Arc::new(
-            ferrite_ssr::JsSsrAdapter::from_resolved_graph(&config, graph)?.with_shell(shell),
-        );
-        let renderer = Arc::new(ferrite_ssr::FnAdapter::new(
-            move |request, mut context: SsrContext| {
-                let adapter = adapter.clone();
-                let styles = styles.clone();
-                async move {
-                    context.preload.extend(styles);
-                    adapter.render(request, context).await
-                }
-            },
-        ));
+        let renderer = artifact.into_streaming_adapter(
+            ferrite_ssr::JsSsrAdapter::runtime_for_resolved(&config),
+            shell,
+            &config.base,
+            config.ssr.streaming,
+        )?;
         let report = render_into(renderer, stage.path(), routes, &config.base).await?;
         remove_private_output(stage.path())?;
         publish(stage.path(), &output)?;

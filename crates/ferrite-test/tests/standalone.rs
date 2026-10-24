@@ -279,12 +279,26 @@ async fn standalone_ssr_profile(backend: &str, streaming: bool) {
     if streaming {
         std::fs::write(project.root.join("src/entry-server.ts"), "export function render(url: string, request: any) { if (url === '/app/slow') { while (true) {} } return { body: new ReadableStream({ start(c) { c.enqueue(`<h1>embedded ${request.method} ${url}</h1>`); c.close(); } }), status: 202, headers: [['x-renderer', 'compiled']] }; }").unwrap();
     }
+    let server = project.root.join("src/entry-server.ts");
+    let source = std::fs::read_to_string(&server).unwrap();
+    std::fs::write(server, format!("import './home.css';\n{source}")).unwrap();
+    std::fs::write(project.root.join("src/home.css"), "h1{color:red}").unwrap();
+    std::fs::write(project.root.join("src/special.css"), "h1{color:blue}").unwrap();
+    std::fs::write(
+        project.root.join("special.html"),
+        "<html><head><title>SPECIAL</title></head><body><!--ssr-outlet--></body></html>",
+    )
+    .unwrap();
     let mut config = standalone_config(&project, None);
     config.ssr.streaming = streaming;
     std::fs::write(project.root.join("src/special.ts"), if streaming {
         "export function render(){return {status:203,body:new ReadableStream({start(c){c.enqueue('<h1>special route</h1>');c.close();}})}}"
     } else {"export function render(){return {status:203,html:'<h1>special route</h1>'}}"}).unwrap();
+    let special = project.root.join("src/special.ts");
+    let source = std::fs::read_to_string(&special).unwrap();
+    std::fs::write(special, format!("import './special.css';\n{source}")).unwrap();
     config.ssr.entries = vec![ferrite::config::SsrRouteEntry {
+        shell: Some("special.html".into()),
         route: "/special.json".into(),
         entry: "src/special.ts".into(),
     }];
@@ -305,7 +319,9 @@ async fn standalone_ssr_profile(backend: &str, streaming: bool) {
         .unwrap();
     assert_eq!(reports.len(), 2);
     let scaffold = reports[0].out_dir.join("standalone");
-    let target = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target");
+    let target = std::env::var_os("FERRITE_STANDALONE_TARGET_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target"));
     let status = std::process::Command::new("cargo")
         .args(["build", "--offline", "--manifest-path"])
         .arg(scaffold.join("Cargo.toml"))
@@ -355,6 +371,12 @@ async fn standalone_ssr_profile(backend: &str, streaming: bool) {
     let special = http_get(port, "/app/special.json?query=retained");
     assert!(
         special.starts_with("HTTP/1.0 203") && special.contains("<h1>special route</h1>"),
+        "{special}"
+    );
+    assert!(
+        special.contains("<title>SPECIAL</title>")
+            && special.contains("special-")
+            && !special.contains("home-"),
         "{special}"
     );
     let response = http_get(port, "/app/");

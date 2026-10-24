@@ -209,6 +209,12 @@ impl DevServer {
                 Arc::new(crate::ssr_router::SsrRouterPlugin::new(&config)?),
             );
         }
+        if !config.ssr.islands.is_empty() {
+            plugins.insert(
+                0,
+                Arc::new(crate::ssr_islands::IslandsPlugin::new(&config)?),
+            );
+        }
         let container = PluginContainer::new(plugins, mode);
         container.hook_config_resolved(&config).await?;
         let compiler = match compiler_override {

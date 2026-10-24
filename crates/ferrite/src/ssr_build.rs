@@ -10,6 +10,9 @@ use std::path::{Component, Path};
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SsrRendererArtifact {
+    /// Version 2 route-specific emitted graphs, style closures and document shells.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub documents: Vec<crate::ssr_documents::SsrDocumentArtifact>,
     pub version: u32,
     pub graph: CompiledModuleGraph,
     /// Extracted stylesheet output paths in dependency order.
@@ -17,14 +20,15 @@ pub struct SsrRendererArtifact {
 }
 
 impl SsrRendererArtifact {
-    pub const VERSION: u32 = 1;
+    pub const VERSION: u32 = 2;
     pub const FILE_NAME: &'static str = "renderer.json";
 
     /// Validate before executing or embedding an artifact.
     pub fn validate(&self) -> Result<()> {
-        if self.version != Self::VERSION {
+        if !matches!(self.version, 1 | 2) {
             return Err(FerriteError::Ssr(format!("unsupported SSR renderer artifact version {}; expected {}; rebuild with this Ferrite version", self.version, Self::VERSION)));
         }
+        crate::ssr_documents::validate_documents(self)?;
         self.graph.validate()?;
         let ids: HashSet<_> = self
             .graph
@@ -83,6 +87,15 @@ impl SsrRendererArtifact {
         streaming: bool,
     ) -> Result<std::sync::Arc<dyn ferrite_ssr::SsrAdapter>> {
         self.validate()?;
+        if !self.documents.is_empty() {
+            return crate::ssr_documents::document_adapter(
+                self.documents,
+                runtime,
+                shell,
+                base,
+                streaming,
+            );
+        }
         let adapter = std::sync::Arc::new(
             ferrite_ssr::JsSsrAdapter::new_graph(runtime, self.graph)?
                 .with_shell(shell)
@@ -112,8 +125,50 @@ impl SsrRendererArtifact {
         )))
     }
 
+    /// Validate published styles for every document before serving or packaging.
+    pub fn validate_published_styles(&self, server_dir: &Path) -> Result<()> {
+        let parent = server_dir
+            .parent()
+            .ok_or_else(|| FerriteError::Ssr("server output has no parent".into()))?;
+        for style in self
+            .stylesheets
+            .iter()
+            .chain(self.documents.iter().flat_map(|doc| doc.stylesheets.iter()))
+        {
+            if !parent.join("ssr-assets").join(style).is_file() {
+                return Err(FerriteError::Ssr(format!(
+                    "missing published SSR stylesheet `{style}`; rebuild SSR output"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     pub fn read(server_dir: &Path) -> Result<Self> {
-        Self::from_bytes(&std::fs::read(server_dir.join(Self::FILE_NAME))?)
+        match std::fs::read(server_dir.join(Self::FILE_NAME)) {
+            Ok(bytes) => Self::from_bytes(&bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let graph = load_emitted_ssr_graph(server_dir)?;
+                let manifest =
+                    ferrite_manifest::BuildManifest::read(&server_dir.join("manifest.json"))?;
+                let stylesheets = manifest
+                    .entries
+                    .values()
+                    .find(|entry| entry.is_entry == Some(true))
+                    .expect("validated entry")
+                    .css
+                    .clone();
+                let artifact = Self {
+                    version: 1,
+                    documents: vec![],
+                    graph,
+                    stylesheets,
+                };
+                artifact.validate()?;
+                Ok(artifact)
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 }
 
@@ -132,6 +187,7 @@ pub fn write_built_ssr_artifact(server_dir: &Path) -> Result<SsrRendererArtifact
         .find(|entry| entry.is_entry == Some(true))
         .expect("validated single entry");
     let artifact = SsrRendererArtifact {
+        documents: Vec::new(),
         version: SsrRendererArtifact::VERSION,
         graph,
         stylesheets: entry.css.clone(),
@@ -169,6 +225,15 @@ fn load_emitted_ssr_graph(server_dir: &Path) -> Result<CompiledModuleGraph> {
         )));
     }
     let entry = output_id(&entries[0].file)?;
+    load_emitted_ssr_entry(&root, &entry)
+}
+
+pub(crate) fn load_emitted_ssr_entry(
+    server_dir: &Path,
+    entry: &str,
+) -> Result<CompiledModuleGraph> {
+    let root = server_dir.canonicalize()?;
+    let entry = output_id(entry.trim_start_matches('/'))?;
     let compiler = OxcCompiler::new(OxcOptions::default());
     let mut queue = VecDeque::from([entry.clone()]);
     let mut seen = HashSet::new();
@@ -221,6 +286,7 @@ fn load_emitted_ssr_graph(server_dir: &Path) -> Result<CompiledModuleGraph> {
 }
 
 /// Ordered extracted styles for the single emitted renderer entry.
+#[cfg(test)]
 pub(crate) fn built_ssr_styles(server_dir: &Path, base: &str) -> Result<Vec<String>> {
     let stylesheets = if server_dir.join(SsrRendererArtifact::FILE_NAME).exists() {
         SsrRendererArtifact::read(server_dir)?.stylesheets
@@ -274,6 +340,21 @@ fn output_id(file: &str) -> Result<String> {
         )));
     }
     Ok(format!("/{file}"))
+}
+
+/// Write selected document graphs from final emitted chunks and client shells.
+pub(crate) fn write_built_ssr_documents(
+    server_dir: &Path,
+    config: &ferrite_config::ResolvedConfig,
+) -> Result<SsrRendererArtifact> {
+    let mut artifact = write_built_ssr_artifact(server_dir)?;
+    crate::ssr_documents::write_documents(&mut artifact, server_dir, config)?;
+    artifact.validate()?;
+    std::fs::write(
+        server_dir.join(SsrRendererArtifact::FILE_NAME),
+        serde_json::to_vec_pretty(&artifact)?,
+    )?;
+    Ok(artifact)
 }
 
 #[cfg(all(test, feature = "napi-vm"))]
@@ -545,6 +626,7 @@ mod validation_tests {
     #[test]
     fn renderer_artifact_rejects_unknown_versions_and_incomplete_graphs() {
         let artifact = SsrRendererArtifact {
+            documents: Vec::new(),
             version: 1,
             graph: CompiledModuleGraph {
                 entry: "/server.js".into(),
@@ -559,12 +641,12 @@ mod validation_tests {
         let bytes = serde_json::to_vec(&artifact).unwrap();
         assert!(SsrRendererArtifact::from_bytes(&bytes).is_ok());
         let mut invalid = artifact.clone();
-        invalid.version = 2;
+        invalid.version = 3;
         assert!(invalid
             .validate()
             .unwrap_err()
             .to_string()
-            .contains("version 2"));
+            .contains("version 3"));
         invalid = artifact;
         invalid.graph.modules[0].code =
             "import '/missing.js'; export function render() { return 'ok'; }".into();

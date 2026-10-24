@@ -119,13 +119,15 @@ SDK source snapshot or final binary.
 
 - [x] Explicit routing policy for dotted routes shared by dev, preview and standalone.
 - [x] Base-relative route entries with lazy renderer selection shared by dev, built graphs, prerender and standalone.
-- [ ] Independent per-entry shells/runtime policies and per-route CSS isolation.
+- [x] Independent route shells and selected renderer style closures in dev, preview, prerender and standalone.
+- [ ] Independent per-entry runtime policies and wider external/native hosting contracts.
 - [x] HTTP disconnect drops pending SSR and cancels process-runtime invocation; recovery verified.
 - [x] Rust response streaming backpressure, HEAD, producer errors and disconnect teardown.
 - [x] Experimental Linux process-worker pull streaming bridge, deadlines, bounded bytes and teardown; official React/Vue production output.
 - [ ] Full Web Streams compatibility, broader framework versions and cross-platform streaming acceptance.
 - [x] SSG route enumeration, output paths, errors and deterministic builds.
-- [ ] Actual framework islands/hydration acceptance and lazy component preload closure.
+- [x] Configured selective hydration through official React/Vue/Svelte APIs; lazy hydrated-module CSS/assets and real browser/standalone acceptance.
+- [ ] Automatic framework component extraction, nested-island ownership and wider versions/platforms.
 - [ ] Runtime external/native profile contracts and artifact/source-map versioning.
 
 ## 8. Packaging and distribution

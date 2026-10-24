@@ -29,8 +29,9 @@ minified formatting. Code-changing `renderChunk` hooks currently cross a
 string-only bundler boundary without a composable map; their stale original maps
 are dropped. Full plugin render-map composition remains a separate open contract.
 
-SSR keeps eager all-graph style preloading and never imports the browser helper.
-Per-route SSR CSS isolation remains open. These fixtures do not establish full
+SSR never imports the browser helper. Renderer artifact v2 selects a document
+graph and its style closure; older single-entry artifacts retain their existing
+style contract. These fixtures do not establish full
 Vite/Rollup graph parity, arbitrary plugin behavior, external-map section loading,
 all worker/Wasm paths or complete unused-asset elimination.
 

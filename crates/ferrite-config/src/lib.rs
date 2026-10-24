@@ -256,6 +256,9 @@ impl Default for BuildConfig {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SsrRouteEntry {
+    /// Independent HTML shell, relative to the project root.
+    #[serde(default)]
+    pub shell: Option<String>,
     pub route: String,
     pub entry: String,
 }
@@ -267,6 +270,10 @@ pub const SSR_ROUTER_ENTRY: &str = "@ferrite/ssr-router";
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct SsrConfig {
+    /// Default HTML shell (index.html when omitted).
+    pub shell: Option<String>,
+    /// Named client hydration modules exporting hydrate(element, props).
+    pub islands: std::collections::BTreeMap<String, String>,
     /// Route-specific server entries. Exact paths win, then longest prefix, then * .
     pub entries: Vec<SsrRouteEntry>,
     /// Pull JavaScript response bytes through an explicitly stream-capable runtime.
@@ -288,6 +295,8 @@ pub struct SsrConfig {
 impl Default for SsrConfig {
     fn default() -> Self {
         Self {
+            shell: None,
+            islands: Default::default(),
             entries: Vec::new(),
             streaming: false,
             entry: Some("src/server.rs".to_string()),
@@ -302,6 +311,26 @@ impl Default for SsrConfig {
 
 impl SsrConfig {
     pub fn validate_routes(&self) -> Result<()> {
+        for shell in self
+            .shell
+            .iter()
+            .chain(self.entries.iter().filter_map(|entry| entry.shell.as_ref()))
+        {
+            validate_ssr_source_path(shell, true)?;
+        }
+        for (name, entry) in &self.islands {
+            if name.is_empty()
+                || !name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+            {
+                return Err(FerriteError::Config(format!(
+                    "invalid SSR island name `{name}`"
+                )));
+            }
+            validate_ssr_source_path(entry, false)?;
+        }
+
         let mut seen = std::collections::HashSet::new();
         for entry in &self.entries {
             if !seen.insert(&entry.route) {
@@ -344,6 +373,14 @@ impl SsrConfig {
         }
         Ok(())
     }
+    /// Select an exact route, longest prefix, then wildcard independently of order.
+    pub fn selected_entry(&self, path: &str) -> Option<&SsrRouteEntry> {
+        self.entries
+            .iter()
+            .filter(|entry| ssr_route_matches(&entry.route, path))
+            .min_by_key(|entry| ssr_route_priority(&entry.route))
+    }
+
     /// Reserved static/internal prefixes never reach the application renderer.
     #[must_use]
     pub fn matches_route(&self, path: &str) -> bool {
@@ -394,6 +431,45 @@ impl SsrConfig {
             },
         )
     }
+}
+
+pub fn validate_ssr_source_path(value: &str, html: bool) -> Result<()> {
+    let path = std::path::Path::new(value);
+    if value.is_empty()
+        || value.contains(['\\', '?', '#', '\0'])
+        || path.is_absolute()
+        || path
+            .components()
+            .any(|part| !matches!(part, std::path::Component::Normal(_)))
+        || if html {
+            !value.ends_with(".html")
+        } else {
+            !ferrite_core::ModuleType::from_path(value).is_js_like()
+        }
+    {
+        return Err(FerriteError::Config(format!(
+            "invalid SSR {} path `{value}`; use a project-relative file without traversal",
+            if html {
+                "HTML shell"
+            } else {
+                "hydration module"
+            }
+        )));
+    }
+    Ok(())
+}
+#[must_use]
+pub fn ssr_route_priority(route: &str) -> (u8, std::cmp::Reverse<usize>) {
+    (
+        if route == "*" {
+            2
+        } else if route.ends_with("/*") {
+            1
+        } else {
+            0
+        },
+        std::cmp::Reverse(route.len()),
+    )
 }
 
 /// Match a previously validated SSR route pattern.
@@ -1376,6 +1452,10 @@ fn merge_build(mut base: BuildConfig, over: BuildConfig) -> BuildConfig {
 }
 
 fn merge_ssr(mut base: SsrConfig, over: SsrConfig) -> SsrConfig {
+    if over.shell.is_some() {
+        base.shell = over.shell;
+    }
+    base.islands.extend(over.islands);
     if !over.entries.is_empty() {
         base.entries = over.entries;
     }
@@ -1386,7 +1466,8 @@ fn merge_ssr(mut base: SsrConfig, over: SsrConfig) -> SsrConfig {
     if !over.prerender.is_empty() {
         base.prerender = over.prerender;
     }
-    if over.entry.is_some() {
+    // A default programmatic config must not erase an explicit file renderer.
+    if over.entry.is_some() && over.entry != SsrConfig::default().entry {
         base.entry = over.entry;
     }
     if !over.external.is_empty() {
@@ -2164,6 +2245,27 @@ mod foreign_profile_tests {
 /// Explicit configuration wins; the legacy Rust default selects conventional
 /// discovery. This selects source, not a renderer or runtime backend.
 pub fn resolve_js_server_entry(config: &ResolvedConfig) -> Result<Option<String>> {
+    config.ssr.validate_routes()?;
+    for path in config
+        .ssr
+        .shell
+        .iter()
+        .chain(
+            config
+                .ssr
+                .entries
+                .iter()
+                .filter_map(|entry| entry.shell.as_ref()),
+        )
+        .chain(config.ssr.islands.values())
+    {
+        if !config.root.join(path).is_file() {
+            return Err(FerriteError::Build(format!(
+                "configured SSR input `{path}` is not a file"
+            )));
+        }
+    }
+
     if !config.ssr.entries.is_empty() {
         config.ssr.validate_routes()?;
         for entry in &config.ssr.entries {
@@ -2285,9 +2387,47 @@ mod ssr_package_tests {
 mod ssr_route_tests {
     use super::*;
     #[test]
+    fn default_programmatic_config_preserves_file_renderer_selection() {
+        let mut file = UserConfig::default();
+        file.ssr.entry = Some("src/custom-home.ts".into());
+        let merged = merge_user_config(file.clone(), UserConfig::default());
+        assert_eq!(merged.ssr.entry.as_deref(), Some("src/custom-home.ts"));
+        let mut over = UserConfig::default();
+        over.ssr.entry = Some("src/override.ts".into());
+        assert_eq!(
+            merge_user_config(file, over).ssr.entry.as_deref(),
+            Some("src/override.ts")
+        );
+    }
+
+    #[test]
+    fn document_shell_and_island_inputs_are_validated_before_serving() {
+        let mut config = SsrConfig::default();
+        for shell in [
+            "../shell.html",
+            "/root.html",
+            "shell.html?raw",
+            "src/shell.js",
+        ] {
+            config.shell = Some(shell.into());
+            assert!(config.validate_routes().is_err(), "{shell}");
+        }
+        config.shell = Some("layouts/admin.html".into());
+        config
+            .islands
+            .insert("counter".into(), "src/hydrate.ts".into());
+        config.validate_routes().unwrap();
+        config
+            .islands
+            .insert("unsafe/name".into(), "src/hydrate.ts".into());
+        assert!(config.validate_routes().is_err());
+    }
+
+    #[test]
     fn route_entries_validate_patterns_paths_and_explicit_allowlists() {
         let mut config = SsrConfig {
             entries: vec![SsrRouteEntry {
+                shell: None,
                 route: "/admin/report.json".into(),
                 entry: "src/admin.ts".into(),
             }],

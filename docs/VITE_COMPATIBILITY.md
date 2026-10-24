@@ -8,7 +8,7 @@ Vite applications or plugins can migrate unchanged.
 |---|---|---|
 | React / Vue / Svelte | Generated JS/TS SSR hydration and nested component edits in Chromium/Firefox; official compilers/renderers | Broader framework/version/component libraries; full checker integration |
 | Development HMR | React state preservation, official Svelte resets, Vue template/style rerender and script reload; nested props/lists/computed values and syntax recovery | Wider hook signatures, resources, async components and cross-platform matrix |
-| SSR hosting | Buffered/streamed rendering, request metadata, route-specific lazy entries, preview, static generation and embedded standalone | Islands, independent shells/runtime per entry, external/native contracts |
+| SSR hosting | Buffered/streamed rendering, isolated route documents/styles, selective framework islands, static generation and embedded standalone | Islands, independent shells/runtime per entry, external/native contracts |
 | Production output | Executed lazy CSS timing/retry, shared chunks, cascade order, assets and final native maps with minify/scope-hoist combinations | Broader cyclic/worker/Wasm closure, render-hook maps and plugin output validation |
 | Packages | Portable contextual lock graph, peers, optional dependencies and workspace links | Remaining package-map URL semantics and CJS/native interoperability |
 | Plugins | Explicit supported hook subset and bounded external host | Wider context/lifecycle parity; unsupported hooks must remain explicit |

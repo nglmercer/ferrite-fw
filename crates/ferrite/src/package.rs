@@ -452,6 +452,7 @@ pub fn write_ssr_standalone_with_routes(
     routes.validate_routes()?;
     let sdk = validate_ssr_standalone_inputs(opts, sdk, runtime, base)?;
     let artifact = crate::SsrRendererArtifact::read(&out_dir.join("server"))?;
+    artifact.validate_published_styles(&out_dir.join("server"))?;
     let _ = std::fs::read_to_string(out_dir.join("index.html"))?;
     for style in &artifact.stylesheets {
         if !out_dir.join("ssr-assets").join(style).is_file() {
@@ -1079,7 +1080,7 @@ mod tests {
         )
         .unwrap();
         std::fs::write(fixture.join("client.js"), "globalThis.client = true;").unwrap();
-        let artifact = crate::SsrRendererArtifact {
+        let artifact = crate::SsrRendererArtifact { documents: Vec::new(),
             version: 1, graph: ferrite_runtime::CompiledModuleGraph { entry: "/entry.js".into(), modules: vec![ferrite_runtime::CompiledModule {
                 id: "/entry.js".into(), code: "export function render(url, request) { return { html: `<h1>standalone ${request.method} ${url}</h1>`, status: 202, headers: [['x-renderer','standalone']] }; }".into(), url: None,
             }] }, stylesheets: Vec::new(),

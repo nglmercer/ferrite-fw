@@ -25,6 +25,7 @@ fn config(project: &ferrite_test::TempProject) -> ferrite::ResolvedConfig {
     ]
     .into_iter()
     .map(|(route, entry)| ferrite::config::SsrRouteEntry {
+        shell: None,
         route: route.into(),
         entry: entry.into(),
     })

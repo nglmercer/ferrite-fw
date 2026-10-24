@@ -32,6 +32,17 @@ impl Builder {
     #[must_use]
     pub fn new(mut config: ResolvedConfig, plugins: Vec<Arc<dyn Plugin>>) -> Self {
         config.is_production = true;
+        for shell in config.ssr.shell.iter().chain(
+            config
+                .ssr
+                .entries
+                .iter()
+                .filter_map(|entry| entry.shell.as_ref()),
+        ) {
+            if !config.build.entries.contains(shell) {
+                config.build.entries.push(shell.clone());
+            }
+        }
         Self { config, plugins }
     }
 
@@ -199,7 +210,11 @@ impl Builder {
         if env == "ssr" {
             Ok(self.ssr_entry()?.into_iter().collect())
         } else {
-            Ok(self.config.build.entries.clone())
+            let mut entries = self.config.build.entries.clone();
+            if !self.config.ssr.islands.is_empty() {
+                entries.push("@ferrite/islands-client".into());
+            }
+            Ok(entries)
         }
     }
 
@@ -320,7 +335,7 @@ impl Builder {
                 .ssr_manifest
                 .write(&out_dir.join("ssr-manifest.json"))?;
             if ferrite_runtime::compiled_graph_backend_available(&config.runtime.backend) {
-                crate::write_built_ssr_artifact(&out_dir)?;
+                crate::ssr_build::write_built_ssr_documents(&out_dir, config)?;
             }
         } else {
             output.manifest.write(&out_dir.join("manifest.json"))?;
@@ -443,7 +458,10 @@ impl Builder {
             if !file.exists() {
                 continue;
             }
-            let html = std::fs::read_to_string(&file)?;
+            let html = crate::ssr_islands::inject_build_bootstrap(
+                &std::fs::read_to_string(&file)?,
+                config,
+            );
             // Stylesheets for this page's entries (manifest css[], in order).
             let mut css_hrefs: Vec<String> = Vec::new();
             for discovered in ferrite_html::discover_entries(&html) {

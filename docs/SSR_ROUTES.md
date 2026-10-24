@@ -44,6 +44,6 @@ project source. Existing single-entry artifacts and configs remain supported.
 `ssr.streaming` is a global contract: every selected renderer must return a stream
 when it is enabled. The generated no-match response uses that same contract.
 
-Current CSS handling retains the existing eager graph closure. Per-route CSS
-isolation and client lazy CSS timing are production-correctness follow-ups; route
-entries do not claim separate document shells or independently configured runtimes.
+Route-specific style closures and independent shells are supported by renderer
+artifact v2. See [SSR_DOCUMENTS_AND_ISLANDS.md](SSR_DOCUMENTS_AND_ISLANDS.md) for
+configuration, selective hydration and the remaining runtime-policy limits.
