@@ -44,7 +44,8 @@ application profile passes. Compiler-only evidence belongs in compiler profiles.
 - [x] Execute the official Svelte server renderer through its emitted graph with meaningful HTML assertions.
 - [ ] Complete browser hydration and generated-application acceptance before enabling an SSR profile.
 - [x] Measure parser preflight overhead and add versioned syntax-result caching if justified.
-- [ ] Hard heap/native/process resource isolation with a separate explicit process profile.
+- [x] Explicit Linux process profile with address-space/CPU ceilings, deadline, cancellation and reaping tests.
+- [ ] Extend process isolation to Windows/macOS and validate native-addon fixtures.
 
 Cancellation is cooperative in the engine. Uninterruptible native calls are not
 forcibly killed; shutdown detaches after its wait bound. These controls are not a

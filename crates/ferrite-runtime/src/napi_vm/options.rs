@@ -6,7 +6,7 @@ use std::path::PathBuf;
 pub const NAPI_VM_PIN: &str = "7362971e7781c0c57b36c5a11813fff0e6bc3521";
 
 /// One allowlisted native addon.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct NativeAddonAllow {
     /// Addon path (absolute, or relative to the first configured root).
     pub path: PathBuf,
@@ -15,7 +15,7 @@ pub struct NativeAddonAllow {
 }
 
 /// napi-vm backend options.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct NapiVmOptions {
     /// End-to-end request deadline in milliseconds (0 disables the deadline).
     pub request_timeout_ms: u64,

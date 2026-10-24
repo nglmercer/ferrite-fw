@@ -12,6 +12,7 @@ serde_json = { workspace = true }
 indexmap = { workspace = true }
 tokio = { workspace = true }
 futures = { workspace = true }
+libc = { version = "0.2", optional = true }
 # Opt-in embedded JS + Node-API runtime. Pinned git rev; pure-Rust core only
 # (no N-API build layer) plus the in-process Node-API addon host. Timer
 # globals are selected explicitly from the matching runtime crate below.
@@ -23,4 +24,4 @@ napi-vm-host = { package = "napi-vm-runtime", git = "https://github.com/nglmerce
 [features]
 default = []
 # Disabled by default: embedded JS execution + in-process `.node` loading.
-napi-vm = ["dep:napi-vm", "dep:napi-vm-host"]
+napi-vm = ["dep:napi-vm", "dep:napi-vm-host", "dep:libc"]

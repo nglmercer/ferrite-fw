@@ -73,10 +73,10 @@ mod tests {
         )
         .unwrap();
         config.ssr.entry = Some("src/entry-server.ts".into());
-        for backend in ["napi-vm", "node", "auto", "unknown"] {
+        for backend in ["napi-vm", "napi-vm-process", "node", "auto", "unknown"] {
             config.runtime.backend = backend.into();
             let report = super::inspect_capabilities(&config).unwrap();
-            let available = backend == "napi-vm" && cfg!(feature = "napi-vm");
+            let available = ferrite_runtime::compiled_graph_backend_available(backend);
             assert_eq!(report.ssr_runtime, backend);
             assert_eq!(
                 report.ssr_runtime_probe,

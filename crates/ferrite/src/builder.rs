@@ -318,7 +318,7 @@ impl Builder {
             output
                 .ssr_manifest
                 .write(&out_dir.join("ssr-manifest.json"))?;
-            if config.runtime.backend == "napi-vm" {
+            if ferrite_runtime::compiled_graph_backend_available(&config.runtime.backend) {
                 crate::write_built_ssr_artifact(&out_dir)?;
             }
         } else {

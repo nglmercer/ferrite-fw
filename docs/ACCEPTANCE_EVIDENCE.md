@@ -111,3 +111,20 @@ Target URL queries/fragments, URL-scheme mappings and complete Node/CJS
 interoperability remain outside this profile. These are explicit failures rather
 than silent filesystem reinterpretations. Node-free distributed runtime claims
 are unchanged; Node is needed only for the explicit reference/compiler fixtures.
+
+## Linux process runtime and streamed HTTP lifecycle
+
+The explicit `napi-vm-process` backend executes fresh child processes with Linux
+address-space and CPU ceilings, bounded private-socket transport, shared admission
+and shutdown. The CLI and generated SSR servers recognize the worker entry point.
+See PROCESS_RUNTIME.md for configuration and containment limits.
+
+A clean restored checkout passed 145 config/runtime/server/SSR unit tests, including
+three new Rust-stream tests for HEAD, slow-consumer backpressure/disconnect drop,
+and stream errors. Two explicit process acceptance tests passed after rebuilding
+the CLI: request timeout/recovery, cancellation/reaping, shutdown, low-memory child
+failure, payload bounds and queue deadlines. These do not establish JavaScript
+framework streaming or cancellation during pending HTTP rendering.
+
+Development and standalone framework acceptance is being extended in this draft;
+new fixture definitions alone are not completion evidence.

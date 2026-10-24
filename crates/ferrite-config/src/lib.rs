@@ -585,10 +585,14 @@ impl Default for ReactConfig {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct RuntimeConfig {
-    /// Backend name (`auto`, `none`, `napi-vm`).
+    /// Backend name (`auto`, `none`, `napi-vm`, Linux `napi-vm-process`).
     pub backend: String,
     /// End-to-end embedded request deadline in milliseconds (0 disables it).
     pub request_timeout_ms: u64,
+    /// Process profile address-space limit (0 selects 2 GiB).
+    pub process_memory_limit_bytes: u64,
+    /// Process profile child concurrency (0 selects four).
+    pub process_concurrency: usize,
     /// Last-owner shutdown wait in milliseconds (0 selects 1000).
     pub shutdown_timeout_ms: u64,
     /// Maximum queued embedded-worker jobs (0 selects 64).
@@ -614,6 +618,8 @@ impl Default for RuntimeConfig {
         Self {
             backend: "auto".to_string(),
             request_timeout_ms: 0,
+            process_memory_limit_bytes: 0,
+            process_concurrency: 0,
             shutdown_timeout_ms: 0,
             queue_capacity: 0,
             max_request_bytes: 0,
@@ -1222,6 +1228,12 @@ fn merge_runtime(mut base: RuntimeConfig, over: RuntimeConfig) -> RuntimeConfig 
     if over.backend != defaults.backend {
         base.backend = over.backend;
     }
+    if over.process_memory_limit_bytes != 0 {
+        base.process_memory_limit_bytes = over.process_memory_limit_bytes;
+    }
+    if over.process_concurrency != 0 {
+        base.process_concurrency = over.process_concurrency;
+    }
     if over.request_timeout_ms != 0 {
         base.request_timeout_ms = over.request_timeout_ms;
     }
@@ -1796,6 +1808,8 @@ mod tests {
         let base = UserConfig::default();
         let mut over = UserConfig::default();
         over.runtime.backend = "napi-vm".to_string();
+        over.runtime.process_memory_limit_bytes = 512 * 1024 * 1024;
+        over.runtime.process_concurrency = 2;
         over.runtime.loop_budget = 5;
         over.runtime.queue_capacity = 4;
         over.runtime.request_timeout_ms = 250;
@@ -1807,6 +1821,11 @@ mod tests {
         assert_eq!(merged.runtime.queue_capacity, 4);
         assert_eq!(merged.runtime.max_request_bytes, 1024);
         let preserved = merge_user_config(merged, UserConfig::default());
+        assert_eq!(
+            preserved.runtime.process_memory_limit_bytes,
+            512 * 1024 * 1024
+        );
+        assert_eq!(preserved.runtime.process_concurrency, 2);
         assert_eq!(preserved.runtime.request_timeout_ms, 250);
         assert_eq!(preserved.runtime.shutdown_timeout_ms, 500);
         assert_eq!(preserved.runtime.queue_capacity, 4);

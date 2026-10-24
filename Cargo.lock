@@ -1162,6 +1162,7 @@ dependencies = [
  "ferrite-core",
  "futures",
  "indexmap",
+ "libc",
  "napi-vm-core",
  "napi-vm-runtime",
  "serde",

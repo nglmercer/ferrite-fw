@@ -540,7 +540,10 @@ pub(crate) fn validate_ssr_standalone_inputs(
             "SSR standalone currently requires embed_assets = true".into(),
         ));
     }
-    if runtime.backend != "napi-vm" || !runtime.native_allow.is_empty() {
+    if !matches!(runtime.backend.as_str(), "napi-vm" | "napi-vm-process")
+        || (runtime.backend == "napi-vm-process" && !cfg!(target_os = "linux"))
+        || !runtime.native_allow.is_empty()
+    {
         return Err(FerriteError::Build(
             "SSR standalone requires an explicit napi-vm runtime without native addons".into(),
         ));

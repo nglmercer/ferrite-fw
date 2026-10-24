@@ -462,7 +462,7 @@ async fn preview_with_control(
         }
     }
     let renderer = if !prerendered && (has_server || explicit_entry) {
-        if control.config.runtime.backend != "napi-vm" || !cfg!(feature = "napi-vm") {
+        if !ferrite_runtime::compiled_graph_backend_available(&control.config.runtime.backend) {
             return Err(FerriteError::Ssr(format!("built SSR preview requires the explicitly selected napi-vm runtime and its compiled feature; selected `{}`. Configure [runtime].backend = 'napi-vm' and build Ferrite with --features napi-vm", control.config.runtime.backend)));
         }
         let graph = crate::load_built_ssr_graph(&server_dir)?;

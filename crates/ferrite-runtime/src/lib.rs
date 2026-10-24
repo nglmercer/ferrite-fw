@@ -14,6 +14,10 @@ use ferrite_core::{FerriteError, Result};
 #[cfg(feature = "napi-vm")]
 pub mod napi_vm;
 
+/// Linux process-isolated graph invocation.
+#[cfg(all(feature = "napi-vm", target_os = "linux"))]
+pub mod process;
+
 /// A value crossing the Rust ↔ JS boundary (§87).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum JsValue {
@@ -124,7 +128,7 @@ impl CompiledModuleGraph {
 }
 
 /// Runtime environment flags.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RuntimeEnvironment {
     /// True for SSR evaluation.
     pub ssr: bool,
@@ -312,7 +316,8 @@ impl JsRuntime for UnavailableRuntime {
 /// establish compatibility with any particular framework or language feature.
 #[must_use]
 pub fn compiled_graph_backend_available(backend: &str) -> bool {
-    backend == "napi-vm" && cfg!(feature = "napi-vm")
+    (backend == "napi-vm" && cfg!(feature = "napi-vm"))
+        || (backend == "napi-vm-process" && cfg!(all(feature = "napi-vm", target_os = "linux")))
 }
 
 /// Build the runtime for a backend name (`auto`/`none` need no engine).
@@ -322,6 +327,8 @@ pub fn compiled_graph_backend_available(backend: &str) -> bool {
 #[must_use]
 pub fn runtime_for_backend(backend: &str) -> Arc<dyn JsRuntime> {
     match backend {
+        #[cfg(all(feature = "napi-vm", target_os = "linux"))]
+        "napi-vm-process" => Arc::new(process::ProcessRuntime::new(Default::default())),
         #[cfg(feature = "napi-vm")]
         "napi-vm" => Arc::new(napi_vm::NapiVmRuntime::with_defaults()),
         #[cfg(not(feature = "napi-vm"))]

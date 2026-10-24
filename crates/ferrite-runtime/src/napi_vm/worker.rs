@@ -190,6 +190,7 @@ impl WorkerState {
         let mut interp = napi_vm::Interpreter::with_builtins();
         // Preserve Ferrite's timer/microtask contract using the official,
         // explicitly selected host module; no filesystem/network host is enabled.
+        napi_vm_host::builtins::install_console(&mut interp.global.borrow_mut());
         napi_vm_host::builtins::install_timers(&mut interp.global.borrow_mut());
         napi_vm_host::builtins::install_web(&mut interp.global.borrow_mut());
         if options.fuel_budget > 0 {

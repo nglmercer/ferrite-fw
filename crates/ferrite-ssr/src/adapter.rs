@@ -155,7 +155,9 @@ impl JsSsrAdapter {
     #[must_use]
     pub fn from_resolved(resolved: &ResolvedConfig, module: CompiledModule) -> Self {
         #[cfg(feature = "napi-vm")]
-        if resolved.runtime.backend == "napi-vm" {
+        if resolved.runtime.backend == "napi-vm"
+            || (resolved.runtime.backend == "napi-vm-process" && cfg!(target_os = "linux"))
+        {
             let mut options = ferrite_runtime::napi_vm::NapiVmOptions {
                 roots: vec![resolved.root.clone()],
                 max_call_depth: resolved.runtime.max_call_depth,
@@ -176,8 +178,25 @@ impl JsSsrAdapter {
                         sha256_hex: resolved.runtime.native_integrity.get(entry).cloned(),
                     });
             }
-            let runtime: Arc<dyn JsRuntime> =
-                Arc::new(ferrite_runtime::napi_vm::NapiVmRuntime::new(options));
+            let runtime: Arc<dyn JsRuntime> = {
+                #[cfg(target_os = "linux")]
+                if resolved.runtime.backend == "napi-vm-process" {
+                    Arc::new(ferrite_runtime::process::ProcessRuntime::new(
+                        ferrite_runtime::process::ProcessOptions {
+                            engine: options,
+                            memory_limit_bytes: resolved.runtime.process_memory_limit_bytes,
+                            concurrency: resolved.runtime.process_concurrency,
+                            ..Default::default()
+                        },
+                    ))
+                } else {
+                    Arc::new(ferrite_runtime::napi_vm::NapiVmRuntime::new(options))
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    Arc::new(ferrite_runtime::napi_vm::NapiVmRuntime::new(options))
+                }
+            };
             return Self {
                 runtime,
                 render_lock: tokio::sync::Mutex::new(()),

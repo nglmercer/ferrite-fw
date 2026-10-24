@@ -34,6 +34,10 @@ def plan(profile):
         commands.append(["cargo", "test", "--locked", "-p", "ferrite-test", "--features", "napi-vm", "--test", "side_effects", "--test", "package_maps"])
     if profile in ("runtime", "all"):
         commands.append(["cargo", "test", "--locked", "-p", "ferrite-runtime", "-p", "ferrite-ssr", "-p", "ferrite-config", "--features", "ferrite-runtime/napi-vm,ferrite-ssr/napi-vm", "--lib"])
+    if profile in ("runtime", "all") and sys.platform.startswith("linux"):
+        commands.append(["cargo", "build", "--locked", "-p", "ferrite-cli", "--features", "napi-vm"])
+        for name in ("process_deadline_cancellation_limits_and_recovery", "process_queue_and_payload_are_bounded"):
+            commands.append(["cargo", "test", "--locked", "-p", "ferrite-runtime", "--features", "napi-vm", "--lib", f"process::tests::{name}", "--", "--ignored", "--exact", "--nocapture"])
     if profile in ("runtime", "all"):
         commands.append(["cargo", "test", "--locked", "-p", "ferrite-runtime", "--features", "napi-vm", "--lib", "napi_vm::syntax_cache::tests::parser_preflight_cold_and_cached_measurement", "--", "--ignored", "--exact", "--nocapture"])
     if profile in ("frameworks", "all"):

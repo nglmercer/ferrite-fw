@@ -6,14 +6,22 @@ use std::sync::Arc;
 struct AppState { renderer: Arc<dyn ferrite::ssr::SsrAdapter>, base: String, routes: ferrite::config::SsrConfig }
 #[tokio::main]
 async fn main() {
+    #[cfg(target_os = "linux")]
+    if ferrite::runtime::process::run_worker_if_requested().await { return; }
     let runtime: ferrite::config::RuntimeConfig = serde_json::from_str(__RUNTIME_JSON__).expect("embedded runtime configuration");
-    let engine = Arc::new(ferrite::runtime::napi_vm::NapiVmRuntime::new(ferrite::runtime::napi_vm::NapiVmOptions {
+    let options = ferrite::runtime::napi_vm::NapiVmOptions {
         queue_capacity: runtime.queue_capacity, max_request_bytes: runtime.max_request_bytes,
         request_timeout_ms: runtime.request_timeout_ms, shutdown_timeout_ms: runtime.shutdown_timeout_ms,
         fuel_budget: runtime.fuel_budget, loop_budget: runtime.loop_budget,
         max_call_depth: runtime.max_call_depth, max_jobs_per_drain: runtime.max_jobs_per_drain,
         ..Default::default()
-    }));
+    };
+    let engine: Arc<dyn ferrite::runtime::JsRuntime> = if runtime.backend == "napi-vm-process" {
+        #[cfg(target_os = "linux")]
+        { Arc::new(ferrite::runtime::process::ProcessRuntime::new(ferrite::runtime::process::ProcessOptions { engine: options, memory_limit_bytes: runtime.process_memory_limit_bytes, concurrency: runtime.process_concurrency, ..Default::default() })) }
+        #[cfg(not(target_os = "linux"))]
+        { panic!("process runtime requires Linux") }
+    } else { Arc::new(ferrite::runtime::napi_vm::NapiVmRuntime::new(options)) };
     let artifact = ferrite::SsrRendererArtifact::from_bytes(include_bytes!("renderer.json")).expect("embedded renderer artifact");
     let (_, shell) = assets::get("/index.html").expect("embedded shell");
     let base = format!("{}/", __BASE__.trim_end_matches('/'));
