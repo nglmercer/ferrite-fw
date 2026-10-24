@@ -53,8 +53,24 @@ pub(crate) fn find_node_modules(base: &Path, name: &str) -> Option<PathBuf> {
     }
 }
 
-/// Read and parse a package.json (best effort).
-pub(crate) fn read_package_json(dir: &Path) -> Option<PackageJson> {
-    let text = std::fs::read_to_string(dir.join("package.json")).ok()?;
-    serde_json::from_str(&text).ok()
+/// Missing manifests permit legacy index resolution; unreadable or malformed
+/// manifests must not silently disable package encapsulation.
+pub(crate) fn read_package_json(dir: &Path) -> ferrite_core::Result<Option<PackageJson>> {
+    let path = dir.join("package.json");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(ferrite_core::FerriteError::Resolve(format!(
+                "cannot read package manifest {}: {error}",
+                path.display()
+            )))
+        }
+    };
+    serde_json::from_str(&text).map(Some).map_err(|error| {
+        ferrite_core::FerriteError::Resolve(format!(
+            "invalid package manifest {}: {error}",
+            path.display()
+        ))
+    })
 }

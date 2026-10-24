@@ -31,7 +31,7 @@ def plan(profile):
     commands = []
     if profile in ("core", "all"):
         commands.append(["cargo", "test", "--workspace", "--exclude", "ferrite-e2e", "--locked"])
-        commands.append(["cargo", "test", "--locked", "-p", "ferrite-test", "--features", "napi-vm", "--test", "side_effects"])
+        commands.append(["cargo", "test", "--locked", "-p", "ferrite-test", "--features", "napi-vm", "--test", "side_effects", "--test", "package_maps"])
     if profile in ("runtime", "all"):
         commands.append(["cargo", "test", "--locked", "-p", "ferrite-runtime", "-p", "ferrite-ssr", "-p", "ferrite-config", "--features", "ferrite-runtime/napi-vm,ferrite-ssr/napi-vm", "--lib"])
     if profile in ("runtime", "all"):
@@ -39,6 +39,7 @@ def plan(profile):
     if profile in ("frameworks", "all"):
         commands.append(["cargo", "build", "--locked", "-p", "ferrite-cli", "--features", "napi-vm"])
         commands.append(exact("ferrite-frameworks", "compiler_host", "actual_project_matched_compilers_client_server_and_runes"))
+        commands.append(["cargo", "test", "--locked", "-p", "ferrite-resolver", "--lib", "map_tests::node_reference_exports_selection_and_target_validation", "--", "--ignored", "--exact"])
         for name in ("official_svelte_server_renderer_executes_emitted_graph", "official_vue_server_renderer_executes_emitted_graph", "official_components_resources_maps_cache_and_library_parity", "generated_vue_ssr_sources_install_build_and_render", "generated_svelte_ssr_sources_install_build_and_render", "generated_react_ssr_sources_install_build_and_render", "official_vue_ssr_hydrates_in_chromium", "official_vue_ssr_hydrates_in_firefox", "official_svelte_ssr_hydrates_in_chromium", "official_svelte_ssr_hydrates_in_firefox", "generated_vue_ssr_dev_graph_updates_and_recovers", "generated_vue_dev_ssr_chromium", "generated_vue_dev_ssr_firefox"):
             commands.append(exact("ferrite-test", "framework_compilers", name, "napi-vm"))
         commands.append(["cargo", "test", "--locked", "-p", "ferrite-test", "--features", "napi-vm", "--test", "prerender"])

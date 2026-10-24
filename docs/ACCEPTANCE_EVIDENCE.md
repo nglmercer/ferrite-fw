@@ -84,3 +84,30 @@ Validation of this batch:
   dynamic calls, and protect live star/namespace re-exports. These focused tests
   do not establish completeness of every bundler source-map path or URL-asset
   elimination contract.
+
+## Checked package-map follow-up
+
+Package resolution now validates selected exports/imports before filesystem
+access. Invalid target alternatives, null blocking, condition order and pattern
+specificity are distinct; valid but missing targets do not trigger fallback file
+probing. Traversal/encoded-separator targets, numeric conditions and mixed key
+styles fail explicitly. Invalid manifests no longer fall back to index files.
+Nearest package scope is enforced for #imports; dependency mappings resolve from
+the owning package's locked edge and retain npm module identity.
+
+Validation of this batch:
+
+- 118 facade/resolver/server regressions passed, plus the added malformed-manifest
+  regression (22 resolver unit tests now pass).
+- 12 build, emitted-package-map, side-effect and prerender integration tests passed.
+  The new emitted renderer selects dependency v2 from its owner's edge despite
+  the root selecting v1, and preserves client/server conditions in both production
+  bundling modes.
+- The explicit Node reference fixture passed all 15 supported-case comparisons.
+- All six generated-framework fixtures passed in Chromium/Firefox again.
+- Strict all-target Clippy and acceptance-runner regressions passed.
+
+Target URL queries/fragments, URL-scheme mappings and complete Node/CJS
+interoperability remain outside this profile. These are explicit failures rather
+than silent filesystem reinterpretations. Node-free distributed runtime claims
+are unchanged; Node is needed only for the explicit reference/compiler fixtures.

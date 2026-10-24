@@ -61,7 +61,8 @@ sandbox or a hard memory limit.
 - [ ] Transitive peer-context propagation and contextual ancestor instances.
 - [ ] Workspace discovery, local links, importer identity and project/editor resolution.
 - [ ] Root optional dependencies and a portable all-platform frozen graph.
-- [ ] Complete exports/imports validation, external imports targets and CJS helper interoperability.
+- [x] Checked exports/imports target validation, dependency-backed imports, nearest scopes and exact map files.
+- [ ] Package-map URL query/fragment targets and remaining CJS helper interoperability.
 
 Existing locks with SHA-256/384/512 remain valid. Old entries lacking integrity
 need a non-frozen install to obtain registry integrity/shasum before downloading.
@@ -248,3 +249,27 @@ hoisting and tree shaking independently enabled/disabled. It executes emitted
 SSR graphs through napi-vm and verifies effect counts, lazy evaluation and
 namespace values, rather than inferring correctness from chunk names alone.
 Run `cargo test -p ferrite-test --features napi-vm --test side_effects`.
+
+## Checked package maps
+
+Resolver package maps now distinguish invalid targets/configuration from absent
+or null mappings. Selected exports must be package-relative; imports may also
+name dependency packages. Arrays skip invalid target alternatives but do not
+retry another file after a valid target is missing. Conditional declaration order,
+null blocking and wildcard specificity are retained. Numeric conditions and mixed
+exports key styles fail explicitly. Decoded traversal, node_modules segments,
+encoded separators and malformed percent escapes are rejected before filesystem
+normalization; relative targets support encoded UTF-8 filenames. Malformed
+package manifests fail instead of silently falling back to index files.
+
+`#imports` stop at the nearest package scope and retain that package's locked
+dependency/peer context. Relative imports inside the npm store retain canonical
+npm identities. Package maps resolve exact files without extension/index probing.
+Aliases and mapped dependencies have a bounded redirect depth to diagnose cycles.
+URL-scheme targets and target URL queries/fragments remain explicitly unsupported;
+this is not complete Node resolution or CJS interoperability parity.
+
+The Node reference fixture compares supported exports cases using an explicitly
+installed Node executable. The emitted integration fixture verifies distinct
+client/server conditions and a mapped transitive dependency whose version differs
+from the root, with scope hoisting enabled and disabled.
