@@ -48,13 +48,9 @@ impl<L: ModuleLoader + 'static> Bundler for FerriteBundler<L> {
         // 1. Traverse from entries (parallel load).
         let mut modules = self.traverse(&request).await?;
         let visited = modules.len();
-        // 2. Tree-shake: drop unreachable + provably side-effect-free leaves.
-        let live = tree_shake(&request.entries, &modules);
+        // 2. Prune evaluation-only edges and unused exports to a fixed point.
+        let live = shake_modules(&mut modules, &request)?;
         let dropped = visited.saturating_sub(live.len());
-        // 2b. Statement-level shake: drop unused exports, re-minify (§38).
-        if request.treeshake {
-            shake_statements(&mut modules, &live, &request)?;
-        }
         // 2c. Render start (entries + live set known).
         hooks.render_start(&request.entries).await?;
         // 3. Chunk: one file per module; entries + dynamic boundaries marked.

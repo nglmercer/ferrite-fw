@@ -31,6 +31,7 @@ def plan(profile):
     commands = []
     if profile in ("core", "all"):
         commands.append(["cargo", "test", "--workspace", "--exclude", "ferrite-e2e", "--locked"])
+        commands.append(["cargo", "test", "--locked", "-p", "ferrite-test", "--features", "napi-vm", "--test", "side_effects"])
     if profile in ("runtime", "all"):
         commands.append(["cargo", "test", "--locked", "-p", "ferrite-runtime", "-p", "ferrite-ssr", "-p", "ferrite-config", "--features", "ferrite-runtime/napi-vm,ferrite-ssr/napi-vm", "--lib"])
     if profile in ("runtime", "all"):

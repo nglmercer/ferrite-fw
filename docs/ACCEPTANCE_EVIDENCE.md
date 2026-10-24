@@ -58,3 +58,29 @@ Hard process/heap isolation, full framework development/standalone matrices,
 streaming, contextual/workspace/portable optional package graphs and platform
 release execution remain open. No entire roadmap or framework parity claim is
 made by these results.
+
+## Production side-effect follow-up
+
+The next implementation batch adds actual effect-free module elimination,
+including propagation of local/linked package metadata. Effect-only edges and
+unused exports reach a fixed point before chunk and manifest generation.
+Namespace re-exports preserve their complete namespace; static and dynamic imports
+of the same URL retain distinct graph facts. Invalid sideEffects patterns remain
+unknown, while documented glob forms use the shared glob engine.
+
+Validation of this batch:
+
+- 188 facade/bundler/resolver/server/transform unit regressions passed; the
+  additional successive-removal map-chain regression also passed.
+- Eight build regressions, prerender acceptance and both new side_effects
+  integration tests passed (11 tests). The new tests each cover eight combinations
+  of local/npm metadata, scope hoisting and tree shaking. Emitted graphs execute
+  through napi-vm to verify effects and lazy evaluation; output checks verify
+  retained CSS and elimination of dead subtrees.
+- All six generated-project fixtures passed again, retaining actual Vue/Svelte/
+  React production hydration and Vue development recovery in Chromium/Firefox.
+- Strict all-target Clippy passed for the changed crates and integration targets.
+- New removal transforms retain and chain maps, preserve import-like strings and
+  dynamic calls, and protect live star/namespace re-exports. These focused tests
+  do not establish completeness of every bundler source-map path or URL-asset
+  elimination contract.

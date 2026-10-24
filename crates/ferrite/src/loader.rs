@@ -359,7 +359,11 @@ fn final_build_analysis(
         }
         let edge = edges
             .iter()
-            .find(|(specifier, _, _)| specifier == &import.specifier)
+            .find(|(specifier, _, kind)| {
+                specifier == &import.specifier
+                    && (*kind == ferrite_graph::ImportKind::Dynamic)
+                        == (import.kind == ferrite_transform::ParsedImportKind::Dynamic)
+            })
             .ok_or_else(|| {
                 FerriteError::Other(format!(
                     "minifier introduced unresolved import `{}` in `{}`",

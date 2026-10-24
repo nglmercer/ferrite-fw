@@ -10,6 +10,7 @@ ferrite-config = { workspace = true }
 ferrite-npm = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+globset = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

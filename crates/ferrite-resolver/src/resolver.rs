@@ -500,7 +500,7 @@ impl Resolver {
         let module_type = ModuleType::from_path(&probed);
         let mut resolved = ResolvedId::new(attach_query(&url, query));
         resolved.module_type = Some(module_type);
-        resolved.side_effects = side_effects;
+        resolved.side_effects = side_effects.or_else(|| package_side_effects(&canonical));
         Ok(resolved)
     }
 

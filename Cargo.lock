@@ -1148,6 +1148,7 @@ dependencies = [
  "ferrite-config",
  "ferrite-core",
  "ferrite-npm",
+ "globset",
  "serde",
  "serde_json",
  "tempfile",

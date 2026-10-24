@@ -93,7 +93,7 @@ SDK source snapshot or final binary.
 ## 6. Plugin and production contracts
 
 - [x] Existing explicit foreign hook subset, host identity/dependency tracking and bounded Node transport.
-- [ ] Verify official side-effect metadata against actual emitted production elimination.
+- [x] Verify side-effect metadata against actual emitted production elimination and execution.
 - [ ] Extend foreign context and lifecycle contracts one tested capability at a time.
 - [x] Flatten and compose embedded indexed source maps with nested offsets and unmapped boundaries.
 - [ ] Complete all emitted chunk/runtime map chains and external section loading contracts.
@@ -224,3 +224,27 @@ Acceptance reports additionally retain tool executable paths/version results,
 OS and architecture. A failed version probe remains explicitly failed; it does
 not become browser/framework execution evidence. Release promotion still requires
 running the full advertised matrix on each supported host.
+
+## Production side-effect elimination
+
+Production builds now remove static evaluation-only imports to JavaScript
+modules explicitly marked effect-free. After unused exports are pruned, the
+bundler repeats reachability and import pruning to a fixed point; dead barrels,
+cycles and their CSS dependencies no longer force output chunks. Emitted imports,
+chunk manifests and removal source maps are updated together. Namespace
+re-exports retain their full dependency namespace, and a static import is kept
+distinct from a dynamic import of the same URL.
+
+Package metadata applies to local/linked files as well as locked npm packages.
+`sideEffects` arrays support basename globs, path globs, globstars, alternatives
+and character classes. Invalid patterns leave effects unknown. Required effects,
+unknown metadata, live bindings, dynamic imports, entries, opaque importer facts
+and directly imported CSS are retained conservatively. Disabling tree shaking
+retains the original graph. This is not a claim of full Webpack/Rollup parity or
+complete unused URL-asset elimination.
+
+The side_effects integration target checks local and npm graphs with scope
+hoisting and tree shaking independently enabled/disabled. It executes emitted
+SSR graphs through napi-vm and verifies effect counts, lazy evaluation and
+namespace values, rather than inferring correctness from chunk names alone.
+Run `cargo test -p ferrite-test --features napi-vm --test side_effects`.
