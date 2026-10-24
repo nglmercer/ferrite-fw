@@ -45,6 +45,7 @@ def plan(profile):
         for name in ("stream_pull_unicode_metadata_and_large_chunk_boundaries", "stream_byte_views_bounds_and_recovery", "stream_drop_and_unpolled_deadline_release_admission", "stream_shell_errors_terminate_without_suffix_and_recover", "real_http_stream_head_disconnect_and_recovery", "progressive_bytes_arrive_before_unresolved_async_start"):
             commands.append(exact("ferrite-test", "streaming", name, "napi-vm"))
     if profile in ("frameworks", "all"):
+        commands.append(["cargo", "test", "--locked", "-p", "ferrite-test", "--features", "napi-vm", "--test", "ssr_routes"])
         commands.append(["cargo", "build", "--locked", "-p", "ferrite-cli", "--features", "napi-vm"])
         commands.append(exact("ferrite-frameworks", "compiler_host", "actual_project_matched_compilers_client_server_and_runes"))
         commands.append(["cargo", "test", "--locked", "-p", "ferrite-resolver", "--lib", "map_tests::node_reference_exports_selection_and_target_validation", "--", "--ignored", "--exact"])
@@ -54,7 +55,7 @@ def plan(profile):
         if sys.platform.startswith("linux"):
             commands.append(exact("ferrite-test", "streaming", "official_react_and_vue_renderers_execute_streamed_production_graphs", "napi-vm"))
         for engine in ("chromium", "firefox"):
-            commands.append(exact("ferrite-test", "dev_hmr", f"{engine}_react_svelte_ssr_hmr_and_recovery", "napi-vm"))
+            commands.append(exact("ferrite-test", "dev_hmr", f"{engine}_framework_ssr_nested_hmr_and_recovery", "napi-vm"))
         # Both engines and all existing generated-client/Refresh/foreign-hook
         # acceptance cases execute explicitly, rather than relying on unit tests.
         for engine in ("chromium", "firefox"):

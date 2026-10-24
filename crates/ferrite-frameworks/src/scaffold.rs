@@ -359,7 +359,7 @@ pub fn vue_ssr_files(
         "package.json".into(),
         format!("{}\n", serde_json::to_string_pretty(&manifest)?),
     );
-    generated.insert("README.md".into(), format!("# {name}\n\nExperimental Vue {} SSR sources. Install dependencies through Ferrite.\nNode is explicitly required for the official component compiler. Rendering uses\nthe separate in-process napi-vm backend and requires a Ferrite binary built with\nthat feature. Run ferrite ssr, ferrite build and ferrite preview.\nThe server entry renders App through Vue's real renderToString API; the client\nentry hydrates through createSSRApp. Transpilation does not perform type checking.\nThe current experimental development adapter reloads on edits and resets state.\nUse ferrite prerender --route / for static generation. Type-checker integration,\nstreaming and full framework/platform release matrices remain unfinished.\n", crate::registry::VUE_NODE.framework_version));
+    generated.insert("README.md".into(), format!("# {name}\n\nExperimental Vue {} SSR sources. Install dependencies through Ferrite.\nNode is explicitly required for the official component compiler. Rendering uses\nthe separate in-process napi-vm backend and requires a Ferrite binary built with\nthat feature. Run ferrite ssr, ferrite build and ferrite preview.\nThe server entry renders App through Vue's real renderToString API; the client\nentry hydrates through createSSRApp. Transpilation does not perform type checking.\nDevelopment template/style updates retain state; script changes reset component state through Vue HMR.\nUse ferrite prerender --route / for static generation. Type-checker integration,\nstreaming and full framework/platform release matrices remain unfinished.\n", crate::registry::VUE_NODE.framework_version));
     Ok(generated)
 }
 
@@ -443,7 +443,7 @@ pub fn svelte_ssr_files(
         "package.json".into(),
         format!("{}\n", serde_json::to_string_pretty(&manifest)?),
     );
-    generated.insert("README.md".into(), format!("# {name}\n\nExperimental Svelte {} SSR. Run `ferrite install`, `ferrite ssr`,\n`ferrite build` and `ferrite preview`. Node is explicitly required for the\nofficial component compiler; rendering uses the separate napi-vm runtime.\nThe server uses svelte/server render; the client hydrates the existing DOM.\nDevelopment edits reload and reset state. Transpilation does not type-check.\nPlatform release matrices and streaming remain unfinished.\n", crate::registry::SVELTE_NODE.framework_version));
+    generated.insert("README.md".into(), format!("# {name}\n\nExperimental Svelte {} SSR. Run `ferrite install`, `ferrite ssr`,\n`ferrite build` and `ferrite preview`. Node is explicitly required for the\nofficial component compiler; rendering uses the separate napi-vm runtime.\nThe server uses svelte/server render; the client hydrates the existing DOM.\nDevelopment edits use official Svelte HMR and reset component state. Transpilation does not type-check.\nPlatform release matrices and streaming remain unfinished.\n", crate::registry::SVELTE_NODE.framework_version));
     Ok(generated)
 }
 

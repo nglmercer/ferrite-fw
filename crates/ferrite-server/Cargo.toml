@@ -8,6 +8,7 @@ description = "Ferrite dev server: HTTP/WS, pipelines, watcher, middleware mode"
 swc = ["ferrite-transform/swc"]
 
 [dependencies]
+async-trait = { workspace = true }
 ferrite-core = { workspace = true }
 ferrite-config = { workspace = true }
 ferrite-resolver = { workspace = true }
@@ -38,4 +39,3 @@ url = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 oxc_sourcemap = { workspace = true }
-async-trait = { workspace = true }

@@ -3,7 +3,7 @@
 use ferrite_e2e::{Browser, BrowserKind, LaunchOptions};
 use std::time::Duration;
 async fn matrix(kind: BrowserKind) {
-    for framework in ["react", "svelte"] {
+    for framework in ["react", "svelte", "vue"] {
         for language in ["js", "ts"] {
             let mut files = ferrite::frameworks::scaffold::files(
                 ferrite::frameworks::scaffold::select(framework, language, "ssr").unwrap(),
@@ -19,6 +19,7 @@ async fn matrix(kind: BrowserKind) {
             } else {
                 language
             };
+            nested_components(&mut files, framework, language, extension);
             *files.get_mut("index.html").unwrap()=files["index.html"].replace("<script type=","<script>globalThis.__ssrButton=document.querySelector('#counter');</script><script type=");
             files
                 .get_mut(&format!("src/main.{extension}"))
@@ -110,11 +111,26 @@ async fn matrix(kind: BrowserKind) {
             )
             .await
             .unwrap();
+            assert_eq!(
+                page.locator("#parent-value")
+                    .text_content()
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                "parent: 1"
+            );
+            page.locator("#nested-counter").click().await.unwrap();
+            page.wait_for_function(
+                "document.querySelector('#nested-counter').textContent==='nested: 1'",
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
             page.evaluate::<bool>("globalThis.__hmrMarker=true")
                 .await
                 .unwrap();
-            let component = if framework == "svelte" {
-                "src/App.svelte".into()
+            let component = if framework != "react" {
+                format!("src/App.{framework}")
             } else {
                 format!("src/App.{extension}")
             };
@@ -139,7 +155,7 @@ async fn matrix(kind: BrowserKind) {
                     .unwrap(),
                 "component edit reloaded the document"
             );
-            let expected = if framework == "react" {
+            let expected = if framework != "svelte" {
                 "count: 1"
             } else {
                 "count: 0"
@@ -153,7 +169,7 @@ async fn matrix(kind: BrowserKind) {
                 expected,
                 "{framework}/{language}: state/reset contract"
             );
-            let style = if framework == "svelte" {
+            let style = if framework != "react" {
                 component.clone()
             } else {
                 "src/style.css".into()
@@ -175,10 +191,49 @@ async fn matrix(kind: BrowserKind) {
                 .evaluate::<bool>("globalThis.__hmrMarker===true")
                 .await
                 .unwrap());
+            let child = if framework == "react" {
+                format!("src/Child.{extension}")
+            } else {
+                format!("src/Child.{framework}")
+            };
+            let current = std::fs::read_to_string(project.root.join(&child)).unwrap();
+            std::fs::write(
+                project.root.join(&child),
+                current.replace("nested:", "updated nested:"),
+            )
+            .unwrap();
+            page.wait_for_function("document.querySelector('#nested-counter')?.textContent.startsWith('updated nested:')", Duration::from_secs(15)).await.unwrap();
+            assert!(
+                page.evaluate::<bool>("globalThis.__hmrMarker===true")
+                    .await
+                    .unwrap(),
+                "nested component edit reloaded document"
+            );
+            if framework == "vue" {
+                let current = std::fs::read_to_string(project.root.join(&component)).unwrap();
+                assert!(current.contains("(0)"));
+                std::fs::write(
+                    project.root.join(&component),
+                    current.replacen("(0)", "(5)", 1),
+                )
+                .unwrap();
+                page.wait_for_function(
+                    "document.querySelector('#counter')?.textContent==='count: 5'",
+                    Duration::from_secs(15),
+                )
+                .await
+                .unwrap();
+                assert!(
+                    page.evaluate::<bool>("globalThis.__hmrMarker===true")
+                        .await
+                        .unwrap(),
+                    "Vue script edit reloaded document"
+                );
+            }
             let recovered = std::fs::read_to_string(project.root.join(&component)).unwrap();
             std::fs::write(
                 project.root.join(&component),
-                if framework == "svelte" {
+                if framework != "react" {
                     "<script>const broken=;</script>"
                 } else {
                     "export default function App( {"
@@ -208,11 +263,55 @@ async fn matrix(kind: BrowserKind) {
 }
 #[tokio::test]
 #[ignore = "registry packages, Node compiler host, real Chromium"]
-async fn chromium_react_svelte_ssr_hmr_and_recovery() {
+async fn chromium_framework_ssr_nested_hmr_and_recovery() {
     matrix(BrowserKind::Chromium).await;
 }
 #[tokio::test]
 #[ignore = "registry packages, Node compiler host, real Firefox"]
-async fn firefox_react_svelte_ssr_hmr_and_recovery() {
+async fn firefox_framework_ssr_nested_hmr_and_recovery() {
     matrix(BrowserKind::Firefox).await;
+}
+
+fn nested_components(
+    files: &mut std::collections::BTreeMap<String, String>,
+    framework: &str,
+    language: &str,
+    extension: &str,
+) {
+    let typed = language == "ts";
+    let component = if framework == "react" {
+        format!("src/App.{extension}")
+    } else {
+        format!("src/App.{framework}")
+    };
+    let app = files.get_mut(&component).unwrap();
+    match framework {
+        "react" => {
+            *app = format!(
+                "import Child from './Child.{extension}';\n{}",
+                app.replace("return <>", "return <><Child parent={count}/>")
+            );
+            files.insert(format!("src/Child.{extension}"),format!("import {{useState,useMemo}} from 'react'; export default function Child(props{}) {{ const [count,setCount]=useState(0);const items=useMemo(()=>[1,2,3].map(n=>n+props.parent),[props.parent]); return <section><span id=\"parent-value\">parent: {{props.parent}}</span><button id=\"nested-counter\" onClick={{()=>setCount(count+1)}}>nested: {{count}}</button><ul>{{items.map(n=><li key={{n}}>{{n}}</li>)}}</ul></section>; }}",if typed {": {parent:number}"} else {""}));
+        }
+        "vue" => {
+            *app = app
+                .replace(
+                    "import { ref }",
+                    "import Child from './Child.vue';\nimport { ref }",
+                )
+                .replace("</template>", "<Child :parent=\"count\" /></template>");
+            files.insert("src/Child.vue".into(),format!("<script setup{}>import {{ref,computed}} from 'vue'; const props=defineProps({{parent:Number}});const count=ref(0);const items=computed(()=>[1,2,3].map(n=>n+props.parent));</script><template><section><span id=\"parent-value\">parent: {{{{props.parent}}}}</span><button id=\"nested-counter\" @click=\"count++\">nested: {{{{count}}}}</button><ul><li v-for=\"n in items\" :key=\"n\">{{{{n}}}}</li></ul></section></template>",if typed {" lang=\"ts\""} else {""}));
+        }
+        "svelte" => {
+            *app = app
+                .replacen(
+                    "\nlet count",
+                    "\nimport Child from './Child.svelte';\nlet count",
+                    1,
+                )
+                .replacen("</script>", "</script><Child parent={count}/>", 1);
+            files.insert("src/Child.svelte".into(),format!("<script{}>let {{parent}} = $props();let count=$state(0);let items=$derived([1,2,3].map(n=>n+parent));</script><section><span id=\"parent-value\">parent: {{parent}}</span><button id=\"nested-counter\" onclick={{()=>count++}}>nested: {{count}}</button><ul>{{#each items as n (n)}}<li>{{n}}</li>{{/each}}</ul></section>",if typed {" lang=\"ts\""} else {""}));
+        }
+        _ => unreachable!(),
+    }
 }
