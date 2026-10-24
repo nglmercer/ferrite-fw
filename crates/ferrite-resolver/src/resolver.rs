@@ -301,6 +301,7 @@ impl Resolver {
         ferrite_npm::validate_package_name(&name)?;
         if self.lockfile.exists() {
             let lock = ferrite_npm::Lockfile::read(&self.lockfile)?;
+            let active = lock.active_graph(&ferrite_npm::InstallPlatform::current())?;
             let base = request
                 .importer
                 .map(|importer| self.importer_dir(importer))
@@ -308,12 +309,23 @@ impl Resolver {
             let owner = lock
                 .package
                 .iter()
-                .find(|package| base.starts_with(self.npm_store.join(package.id())));
+                .filter(|package| {
+                    base.starts_with(self.npm_store.join(package.id()))
+                        || package
+                            .path
+                            .as_ref()
+                            .is_some_and(|path| base.starts_with(self.root.join(path)))
+                })
+                .max_by_key(|package| package.path.as_ref().map_or(0, String::len));
             let target = if let Some(owner) = owner {
                 if owner.name == name {
                     Some(owner.id())
                 } else {
-                    owner.dependencies.get(&name).cloned()
+                    active
+                        .dependencies
+                        .get(&owner.id())
+                        .and_then(|edges| edges.get(&name))
+                        .cloned()
                 }
             } else {
                 let importer = lock
@@ -321,19 +333,29 @@ impl Resolver {
                     .iter()
                     .filter(|(path, _)| base.starts_with(self.root.join(path)))
                     .max_by_key(|(path, _)| path.len());
-                importer.and_then(|(_, root)| root.dependencies.get(&name).cloned())
+                importer.and_then(|(path, _)| {
+                    active
+                        .importers
+                        .get(path)
+                        .and_then(|edges| edges.get(&name))
+                        .cloned()
+                })
             };
             let id = target.ok_or_else(|| FerriteError::Resolve(format!(
                 "no locked dependency edge for `{name}` from {}; run ferrite install to record importer dependencies",
                 base.display()
             )))?;
-            let dir = self.npm_store.join(&id);
+            let package = lock.package_by_id(&id).expect("validated edge");
+            let dir = package
+                .path
+                .as_ref()
+                .map_or_else(|| self.npm_store.join(&id), |path| self.root.join(path));
             if !dir.join("package.json").exists() {
                 return Err(FerriteError::Resolve(format!(
                     "locked package {id} is missing; run ferrite install --frozen-lockfile"
                 )));
             }
-            return self.resolve_in_package(&dir, &name, &subpath, query, true);
+            return self.resolve_in_package(&dir, &name, &subpath, query, package.path.is_none());
         }
         // Legacy manually populated stores remain usable only when unambiguous.
         if let Some(dir) = self.find_store_package(&name)? {
@@ -621,22 +643,8 @@ impl Resolver {
             });
             Ok(resolved)
         } else {
-            // node_modules fallback: still serve through the npm URL space when
-            // the package has a name, otherwise as a file URL.
-            if let Some(name) = pkg.and_then(|p| p.name.clone()) {
-                let version = pkg
-                    .and_then(|p| p.version.clone())
-                    .unwrap_or_else(|| "0.0.0".to_string());
-                let relative = probed.strip_prefix(dir).unwrap_or(&probed);
-                let url = format!(
-                    "/@npm/{name}@{version}/{}",
-                    relative.to_string_lossy().replace('\\', "/")
-                );
-                let mut resolved = ResolvedId::new(attach_query(&url, query));
-                resolved.module_type = Some(module_type);
-                resolved.side_effects = side_effects;
-                return Ok(resolved);
-            }
+            // Local and node_modules sources keep their actual file identity;
+            // a fabricated store URL cannot be loaded or watched reliably.
             self.finalize_file(&probed, query, side_effects)
         }
     }

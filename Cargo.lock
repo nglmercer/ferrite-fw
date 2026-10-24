@@ -1109,6 +1109,7 @@ dependencies = [
  "ferrite-core",
  "flate2",
  "futures",
+ "globset",
  "node-semver",
  "reqwest",
  "serde",

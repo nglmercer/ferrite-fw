@@ -14,12 +14,6 @@ pub struct Installer {
     pub tarball_cache: PathBuf,
 }
 
-#[derive(Clone)]
-struct Provider {
-    version: String,
-    id: String,
-}
-
 impl Installer {
     pub fn new(client: RegistryClient, npm_root: PathBuf) -> Self {
         Self {
@@ -44,13 +38,21 @@ impl Installer {
             manifest.dependencies.extend(root.specifiers.clone());
         }
         manifest.dependencies.insert(name.into(), range.into());
-        if optional_ok {
-            let info = self.select(name, range, None, None, lockfile).await?;
-            if !platform_matches(&info.os, &info.cpu) {
-                return Err(FerriteError::Npm(format!(
-                    "optional root `{name}` is unavailable on this platform"
-                )));
+        if let Some(root) = lockfile.importers.get(".") {
+            for name in &root.optional_dependencies {
+                if let Some(range) = root.specifiers.get(name) {
+                    manifest
+                        .optional_dependencies
+                        .insert(name.clone(), range.clone());
+                }
             }
+        }
+        if optional_ok {
+            manifest
+                .optional_dependencies
+                .insert(name.into(), range.into());
+        } else {
+            manifest.optional_dependencies.remove(name);
         }
         self.install_manifest(&manifest, lockfile, false).await?;
         Ok(lockfile.find(name).expect("installed root").version.clone())
@@ -65,120 +67,142 @@ impl Installer {
         lockfile: &mut Lockfile,
         frozen: bool,
     ) -> Result<()> {
-        for field in ["workspaces", "optionalDependencies"] {
-            if manifest.rest.get(field).is_some_and(|value| {
-                !value.is_null()
-                    && value.as_object().is_none_or(|map| !map.is_empty())
-                    && value.as_array().is_none_or(|array| !array.is_empty())
-            }) {
-                return Err(FerriteError::Npm(format!("root {field} installation is unavailable in this graph profile; this field cannot be silently omitted")));
-            }
+        self.install_manifest_for_platform(
+            manifest,
+            lockfile,
+            frozen,
+            &crate::InstallPlatform::current(),
+        )
+        .await
+    }
+
+    pub async fn install_manifest_for_platform(
+        &self,
+        manifest: &JsPackageJson,
+        lockfile: &mut Lockfile,
+        frozen: bool,
+        platform: &crate::InstallPlatform,
+    ) -> Result<()> {
+        if manifest.rest.get("workspaces").is_some_and(|value| {
+            !value.is_null() && value.as_array().is_none_or(|array| !array.is_empty())
+        }) {
+            return Err(FerriteError::Npm(
+                "workspaces manifests require project-aware installation".into(),
+            ));
         }
         for (name, range) in &manifest.dependencies {
-            if manifest
-                .dev_dependencies
-                .get(name)
-                .is_some_and(|dev| dev != range)
+            if !manifest.optional_dependencies.contains_key(name)
+                && manifest
+                    .dev_dependencies
+                    .get(name)
+                    .is_some_and(|dev| dev != range)
             {
-                return Err(FerriteError::Npm(format!("conflicting dependency and devDependency requests for {name}; each importer must select one root version")));
+                return Err(FerriteError::Npm(format!(
+                    "conflicting dependency and devDependency requests for {name}"
+                )));
             }
         }
+        if manifest.rest.contains_key("optionalDependencies") {
+            return Err(FerriteError::Npm(
+                "reserved optionalDependencies must use the typed manifest field".into(),
+            ));
+        }
         let specifiers = manifest_requests(manifest);
+        let optional: Vec<_> = manifest
+            .optional_dependencies
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
         if frozen {
             lockfile.validate()?;
-            let importer = lockfile.importers.get(".").ok_or_else(|| FerriteError::Npm("frozen install needs a v2 importer graph; run a non-frozen install to migrate ferrite.lock".into()))?;
-            if importer.specifiers != specifiers {
-                return Err(FerriteError::Npm("frozen install: package.json requests differ from ferrite.lock; run ferrite install without --frozen-lockfile and review the lock change".into()));
-            }
-            if importer.dependencies.keys().ne(specifiers.keys()) {
+            if !lockfile.portable {
                 return Err(FerriteError::Npm(
-                    "frozen install: root dependency edges are incomplete".into(),
+                    "frozen install needs a portable v3 graph; run a non-frozen install to migrate"
+                        .into(),
+                ));
+            }
+            let importer = lockfile.importers.get(".").ok_or_else(|| {
+                FerriteError::Npm("frozen install needs a root importer graph".into())
+            })?;
+            if importer.specifiers != specifiers
+                || importer.optional_dependencies != optional
+                || importer.dependencies.keys().ne(specifiers.keys())
+            {
+                return Err(FerriteError::Npm(
+                    "frozen install: package.json requests differ from ferrite.lock".into(),
                 ));
             }
             self.validate_peers(lockfile)?;
-            for package in &lockfile.package {
-                let tarball = package.tarball.clone().ok_or_else(|| FerriteError::Npm(format!("frozen install: {} lacks a locked tarball URL; run a non-frozen install to migrate", package.id())))?;
-                self.fetch_extract(
-                    package,
-                    &RegistryDist {
-                        tarball,
-                        integrity: package.integrity.clone(),
-                        shasum: None,
-                    },
-                )
-                .await?;
-            }
-            return Ok(());
+            return self.fetch_active(lockfile, platform).await;
         }
-        let mut updated = lockfile.clone();
         let mut infos = BTreeMap::new();
-        let mut providers = BTreeMap::new();
         for (name, range) in &specifiers {
-            let old = updated
-                .importers
-                .get(".")
-                .and_then(|root| root.dependencies.get(name))
-                .cloned()
-                .or_else(|| {
-                    updated
-                        .importers
-                        .is_empty()
-                        .then(|| updated.find(name).map(LockedPackage::id))
-                        .flatten()
-                });
-            let info = self
-                .select(
+            let importer = lockfile.importers.get(".");
+            let old = importer.and_then(|importer| importer.dependencies.get(name));
+            let old_range = importer.and_then(|importer| importer.specifiers.get(name));
+            infos.insert(
+                name.clone(),
+                self.select(
                     name,
                     range,
-                    old.as_deref(),
-                    updated
-                        .importers
-                        .get(".")
-                        .and_then(|root| root.specifiers.get(name))
-                        .map(String::as_str),
-                    &updated,
+                    old.map(String::as_str),
+                    old_range.map(String::as_str),
+                    lockfile,
                 )
-                .await?;
-            providers.insert(
-                name.clone(),
-                Provider {
-                    version: info.version.clone(),
-                    id: format!("{}@{}", info.name, info.version),
-                },
+                .await?,
             );
-            infos.insert(name.clone(), info);
         }
-        let mut dependencies = BTreeMap::new();
-        let mut completed = BTreeMap::new();
-        for (name, info) in infos {
-            let id = self
-                .install_inner(
-                    info,
-                    &mut updated,
-                    &mut BTreeSet::new(),
-                    &mut completed,
-                    &providers,
-                    false,
-                )
-                .await?
-                .expect("required root");
-            dependencies.insert(name, id);
-        }
-        updated.importers.insert(
-            ".".into(),
-            LockedImporter {
-                specifiers,
-                dependencies,
-            },
-        );
-        prune_unreachable(&mut updated);
+        let (package, dependencies) = crate::context_graph::resolve(self, infos, lockfile).await?;
+        let updated = Lockfile {
+            portable: true,
+            package,
+            importers: BTreeMap::from([(
+                ".".into(),
+                LockedImporter {
+                    specifiers,
+                    dependencies,
+                    optional_dependencies: optional,
+                },
+            )]),
+            ..Default::default()
+        };
         updated.validate()?;
         self.validate_peers(&updated)?;
+        self.fetch_active(&updated, platform).await?;
         *lockfile = updated;
         Ok(())
     }
 
-    async fn select(
+    pub(crate) async fn fetch_active(
+        &self,
+        lock: &Lockfile,
+        platform: &crate::InstallPlatform,
+    ) -> Result<()> {
+        let active = lock.active_graph(platform)?;
+        for package in lock
+            .package
+            .iter()
+            .filter(|package| active.packages.contains(&package.id()))
+        {
+            self.fetch_extract(
+                package,
+                &RegistryDist {
+                    tarball: package
+                        .tarball
+                        .clone()
+                        .ok_or_else(|| FerriteError::Npm("locked tarball URL missing".into()))?,
+                    integrity: package.integrity.clone(),
+                    shasum: None,
+                },
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn select(
         &self,
         name: &str,
         range: &str,
@@ -222,140 +246,7 @@ impl Installer {
         Ok(info.clone())
     }
 
-    fn install_inner<'a>(
-        &'a self,
-        info: RegistryVersion,
-        lock: &'a mut Lockfile,
-        visiting: &'a mut BTreeSet<String>,
-        completed: &'a mut BTreeMap<String, LockedPackage>,
-        providers: &'a BTreeMap<String, Provider>,
-        optional: bool,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<String>>> + Send + 'a>>
-    {
-        Box::pin(async move {
-            if !platform_matches(&info.os, &info.cpu) {
-                if optional {
-                    return Ok(None);
-                }
-                return Err(FerriteError::Npm(format!(
-                    "{}@{} does not support this OS/CPU",
-                    info.name, info.version
-                )));
-            }
-            let mut package = LockedPackage {
-                name: info.name.clone(),
-                version: info.version.clone(),
-                source: "npm".into(),
-                integrity: Some(crate::package::distribution_integrity(&info.dist)?),
-                tarball: Some(info.dist.tarball.clone()),
-                peer_requirements: info
-                    .peer_dependencies
-                    .iter()
-                    .map(|(name, range)| (name.clone(), range.clone()))
-                    .collect(),
-                optional_peers: info
-                    .peer_dependencies_meta
-                    .iter()
-                    .filter(|(_, meta)| meta.optional)
-                    .map(|(name, _)| name.clone())
-                    .collect(),
-                ..Default::default()
-            };
-            package.optional_peers.sort();
-            for (name, range) in &package.peer_requirements {
-                match providers.get(name) {
-                    Some(provider) if range_satisfied(&provider.version, range) => { package.peers.insert(name.clone(), provider.id.clone()); },
-                    None if package.optional_peers.contains(name) => (),
-                    Some(provider) => return Err(FerriteError::Npm(format!("{}@{} needs peer {name}@{range}, but its importer provides {}; change the importer dependency", info.name, info.version, provider.version))),
-                    None => return Err(FerriteError::Npm(format!("{}@{} needs peer {name}@{range}; add it to this importer's package.json", info.name, info.version))),
-                }
-            }
-            let id = package.id();
-            if !visiting.insert(id.clone()) {
-                return Ok(Some(id));
-            }
-            let previous = lock.package_by_id(&id).cloned();
-            // Register the concrete identity before descending, so cycles close
-            // onto an existing node instead of leaving a range in the lock.
-            lock.upsert(package.clone());
-            self.fetch_extract(&package, &info.dist).await?;
-            let mut requests: BTreeMap<_, _> = info.dependencies.into_iter().collect();
-            requests.extend(info.optional_dependencies.clone());
-            package.dependency_specifiers = requests.clone();
-            let mut children = BTreeMap::new();
-            let mut child_providers = providers.clone();
-            child_providers.insert(
-                package.name.clone(),
-                Provider {
-                    version: package.version.clone(),
-                    id: id.clone(),
-                },
-            );
-            for (name, range) in &requests {
-                let old = previous.as_ref().and_then(|old| old.dependencies.get(name));
-                let child = self
-                    .select(
-                        name,
-                        range,
-                        old.map(String::as_str),
-                        previous
-                            .as_ref()
-                            .and_then(|old| old.dependency_specifiers.get(name))
-                            .map(String::as_str),
-                        lock,
-                    )
-                    .await?;
-                if !platform_matches(&child.os, &child.cpu)
-                    && info.optional_dependencies.contains_key(name)
-                {
-                    continue;
-                }
-                child_providers.insert(
-                    name.clone(),
-                    Provider {
-                        version: child.version.clone(),
-                        id: format!("{}@{}", child.name, child.version),
-                    },
-                );
-                children.insert(name.clone(), child);
-            }
-            for (name, child) in children {
-                if let Some(child_id) = self
-                    .install_inner(
-                        child,
-                        lock,
-                        visiting,
-                        completed,
-                        &child_providers,
-                        info.optional_dependencies.contains_key(&name),
-                    )
-                    .await?
-                {
-                    package.dependencies.insert(name, child_id);
-                }
-            }
-            // Peer edges are also module-resolution edges. They still have
-            // their own field for context identity and conformance validation.
-            for (name, peer) in &package.peers {
-                package
-                    .dependencies
-                    .entry(name.clone())
-                    .or_insert_with(|| peer.clone());
-            }
-            if completed
-                .get(&id)
-                .is_some_and(|old| old.dependencies != package.dependencies)
-            {
-                return Err(FerriteError::Npm(format!("{id} needs distinct transitive peer contexts; this combination is unavailable until contextual ancestor instances are implemented")));
-            }
-            completed.insert(id.clone(), package.clone());
-            lock.upsert(package);
-            visiting.remove(&id);
-            Ok(Some(id))
-        })
-    }
-
-    fn validate_peers(&self, lock: &Lockfile) -> Result<()> {
+    pub(crate) fn validate_peers(&self, lock: &Lockfile) -> Result<()> {
         for package in &lock.package {
             for (name, range) in &package.peer_requirements {
                 let peer = package
@@ -377,7 +268,11 @@ impl Installer {
         Ok(())
     }
 
-    async fn fetch_extract(&self, package: &LockedPackage, dist: &RegistryDist) -> Result<()> {
+    pub(crate) async fn fetch_extract(
+        &self,
+        package: &LockedPackage,
+        dist: &RegistryDist,
+    ) -> Result<()> {
         if package
             .integrity
             .as_deref()
@@ -438,59 +333,7 @@ pub fn manifest_requests(manifest: &JsPackageJson) -> BTreeMap<String, String> {
         .dependencies
         .iter()
         .chain(manifest.dev_dependencies.iter())
+        .chain(manifest.optional_dependencies.iter())
         .map(|(name, range)| (name.clone(), range.clone()))
         .collect()
-}
-
-fn prune_unreachable(lock: &mut Lockfile) {
-    let mut pending: Vec<_> = lock
-        .importers
-        .values()
-        .flat_map(|root| root.dependencies.values().cloned())
-        .collect();
-    let mut reachable = BTreeSet::new();
-    while let Some(id) = pending.pop() {
-        if !reachable.insert(id.clone()) {
-            continue;
-        }
-        if let Some(package) = lock.package_by_id(&id) {
-            pending.extend(package.dependencies.values().cloned());
-            pending.extend(package.peers.values().cloned());
-        }
-    }
-    lock.package
-        .retain(|package| reachable.contains(&package.id()));
-}
-
-fn platform_matches(os: &Option<Vec<String>>, cpu: &Option<Vec<String>>) -> bool {
-    let os_name = match std::env::consts::OS {
-        "macos" => "darwin",
-        other => other,
-    };
-    let cpu_name = match std::env::consts::ARCH {
-        "x86_64" => "x64",
-        "aarch64" => "arm64",
-        "x86" => "ia32",
-        other => other,
-    };
-    matches_list(os, os_name) && matches_list(cpu, cpu_name)
-}
-fn matches_list(list: &Option<Vec<String>>, current: &str) -> bool {
-    let Some(list) = list else {
-        return true;
-    };
-    if list
-        .iter()
-        .any(|entry| entry.strip_prefix('!') == Some(current))
-    {
-        return false;
-    }
-    let allowed: Vec<_> = list
-        .iter()
-        .filter(|entry| !entry.starts_with('!'))
-        .collect();
-    allowed.is_empty()
-        || allowed
-            .iter()
-            .any(|entry| entry.as_str() == current || entry.as_str() == "any")
 }

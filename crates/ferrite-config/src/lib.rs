@@ -587,7 +587,8 @@ impl Default for ReactConfig {
 pub struct RuntimeConfig {
     /// Backend name (`auto`, `none`, `napi-vm`, Linux `napi-vm-process`).
     pub backend: String,
-    /// End-to-end embedded request deadline in milliseconds (0 disables it).
+    /// End-to-end request deadline in milliseconds (0 disables the embedded
+    /// deadline; the process profile selects a five-second default).
     pub request_timeout_ms: u64,
     /// Process profile address-space limit (0 selects 2 GiB).
     pub process_memory_limit_bytes: u64,

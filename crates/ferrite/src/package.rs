@@ -548,6 +548,16 @@ pub(crate) fn validate_ssr_standalone_inputs(
             "SSR standalone requires an explicit napi-vm runtime without native addons".into(),
         ));
     }
+    if runtime.backend == "napi-vm-process"
+        && opts
+            .target
+            .as_deref()
+            .is_some_and(|target| !target.contains("-linux-"))
+    {
+        return Err(FerriteError::Build(
+            "process-runtime standalone requires a Linux target".into(),
+        ));
+    }
     if !base.starts_with('/')
         || base.contains(['?', '#'])
         || base.split('/').any(|part| matches!(part, "." | ".."))

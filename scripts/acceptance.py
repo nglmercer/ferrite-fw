@@ -31,7 +31,7 @@ def plan(profile):
     commands = []
     if profile in ("core", "all"):
         commands.append(["cargo", "test", "--workspace", "--exclude", "ferrite-e2e", "--locked"])
-        commands.append(["cargo", "test", "--locked", "-p", "ferrite-test", "--features", "napi-vm", "--test", "side_effects", "--test", "package_maps"])
+        commands.append(["cargo", "test", "--locked", "-p", "ferrite-test", "--features", "napi-vm", "--test", "side_effects", "--test", "package_maps", "--test", "workspaces"])
     if profile in ("runtime", "all"):
         commands.append(["cargo", "test", "--locked", "-p", "ferrite-runtime", "-p", "ferrite-ssr", "-p", "ferrite-config", "--features", "ferrite-runtime/napi-vm,ferrite-ssr/napi-vm", "--lib"])
     if profile in ("runtime", "all") and sys.platform.startswith("linux"):
@@ -40,11 +40,13 @@ def plan(profile):
             commands.append(["cargo", "test", "--locked", "-p", "ferrite-runtime", "--features", "napi-vm", "--lib", f"process::tests::{name}", "--", "--ignored", "--exact", "--nocapture"])
     if profile in ("runtime", "all"):
         commands.append(["cargo", "test", "--locked", "-p", "ferrite-runtime", "--features", "napi-vm", "--lib", "napi_vm::syntax_cache::tests::parser_preflight_cold_and_cached_measurement", "--", "--ignored", "--exact", "--nocapture"])
+    if profile in ("runtime", "all") and sys.platform.startswith("linux"):
+        commands.append(exact("ferrite-test", "process_runtime", "http_disconnect_kills_render_worker_and_next_request_recovers", "napi-vm"))
     if profile in ("frameworks", "all"):
         commands.append(["cargo", "build", "--locked", "-p", "ferrite-cli", "--features", "napi-vm"])
         commands.append(exact("ferrite-frameworks", "compiler_host", "actual_project_matched_compilers_client_server_and_runes"))
         commands.append(["cargo", "test", "--locked", "-p", "ferrite-resolver", "--lib", "map_tests::node_reference_exports_selection_and_target_validation", "--", "--ignored", "--exact"])
-        for name in ("official_svelte_server_renderer_executes_emitted_graph", "official_vue_server_renderer_executes_emitted_graph", "official_components_resources_maps_cache_and_library_parity", "generated_vue_ssr_sources_install_build_and_render", "generated_svelte_ssr_sources_install_build_and_render", "generated_react_ssr_sources_install_build_and_render", "official_vue_ssr_hydrates_in_chromium", "official_vue_ssr_hydrates_in_firefox", "official_svelte_ssr_hydrates_in_chromium", "official_svelte_ssr_hydrates_in_firefox", "generated_vue_ssr_dev_graph_updates_and_recovers", "generated_vue_dev_ssr_chromium", "generated_vue_dev_ssr_firefox"):
+        for name in ("official_svelte_server_renderer_executes_emitted_graph", "official_vue_server_renderer_executes_emitted_graph", "official_components_resources_maps_cache_and_library_parity", "generated_vue_ssr_sources_install_build_and_render", "generated_svelte_ssr_sources_install_build_and_render", "generated_react_ssr_sources_install_build_and_render", "official_vue_ssr_hydrates_in_chromium", "official_vue_ssr_hydrates_in_firefox", "official_svelte_ssr_hydrates_in_chromium", "official_svelte_ssr_hydrates_in_firefox", "generated_react_svelte_dev_graph_edits_and_recovers", "generated_framework_standalone_browser_matrix", "generated_vue_ssr_dev_graph_updates_and_recovers", "generated_vue_dev_ssr_chromium", "generated_vue_dev_ssr_firefox"):
             commands.append(exact("ferrite-test", "framework_compilers", name, "napi-vm"))
         commands.append(["cargo", "test", "--locked", "-p", "ferrite-test", "--features", "napi-vm", "--test", "prerender"])
         # Both engines and all existing generated-client/Refresh/foreign-hook
@@ -58,6 +60,8 @@ def plan(profile):
     if profile in ("standalone", "all"):
         for name in ("standalone_build_compiles_and_serves", "standalone_ssr_build_compiles_and_renders_without_node"):
             commands.append(exact("ferrite-test", "standalone", name, "napi-vm"))
+        if sys.platform.startswith("linux"):
+            commands.append(exact("ferrite-test", "standalone", "standalone_process_runtime_renders_and_recovers_without_node", "napi-vm"))
     if profile in ("e2e", "all"):
         commands.append(["cargo", "test", "--locked", "-p", "ferrite-e2e", "--", "--test-threads=1"])
     return commands
@@ -94,6 +98,7 @@ def run(args):
     if args.profile in ("frameworks", "all"):
         if not shutil.which("node"):
             raise RuntimeError("framework compiler/plugin acceptance requires explicitly installed Node")
+    if any(command[:2] == ["cargo", "build"] and "ferrite-cli" in command for command in commands):
         # Respect Cargo's target directory when locating the freshly built CLI.
         metadata = json.loads(subprocess.check_output(["cargo", "metadata", "--locked", "--no-deps", "--format-version=1"], cwd=ROOT, env=env))
         env["FERRITE_CLI_PATH"] = str(Path(metadata["target_directory"]) / "debug" / ("ferrite.exe" if os.name == "nt" else "ferrite"))

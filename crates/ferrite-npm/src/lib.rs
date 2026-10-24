@@ -5,9 +5,14 @@
 //! `package.json` compatibility (read/write, never requires npm itself).
 
 mod client;
+mod context_graph;
+mod workspace;
+pub use workspace::LocalSource;
 #[cfg(test)]
 mod graph_tests;
 mod installer;
+mod platform;
+pub use platform::{ActiveGraph, InstallPlatform};
 mod lockfile;
 mod manifest;
 mod metadata;
@@ -15,7 +20,8 @@ mod package;
 mod package_json;
 mod projection;
 pub use projection::{
-    project_editor_dependencies, project_node_modules, validate_editor_destination,
+    project_editor_dependencies, project_node_modules, project_node_modules_for_platform,
+    validate_editor_destination,
 };
 mod spec;
 
@@ -58,6 +64,8 @@ mod tests {
                             },
                             os: None,
                             cpu: None,
+                            libc: None,
+                            local: None,
                             binary: None,
                             gypfile: None,
                         },

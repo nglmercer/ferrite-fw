@@ -63,6 +63,7 @@ pub(crate) async fn add(
     let mut added = Vec::new();
     for spec in &args.specs {
         let (name, range) = ferrite::npm::parse_spec(spec);
+        pkg.optional_dependencies.remove(&name);
         if args.dev {
             pkg.dependencies.remove(&name);
             pkg.dev_dependencies.insert(name.clone(), range.clone());
@@ -72,7 +73,9 @@ pub(crate) async fn add(
         }
         added.push((name, range));
     }
-    installer.install_manifest(&pkg, &mut lock, false).await?;
+    installer
+        .install_project_manifest(&args.root, &pkg, &mut lock, false)
+        .await?;
     for (name, range) in added {
         let version = lock.find(&name).expect("installed root").version.clone();
         if range == "latest" {
@@ -107,11 +110,14 @@ pub(crate) async fn remove(
     let mut lock = ferrite::npm::Lockfile::read(&lock_path)?;
     let mut pkg = ferrite::npm::JsPackageJson::read(&pkg_path)?;
     for name in &args.names {
+        pkg.optional_dependencies.remove(name);
         pkg.dependencies.remove(name);
         pkg.dev_dependencies.remove(name);
     }
     // Recompute reachability; removed roots may still be transitive dependencies.
-    installer.install_manifest(&pkg, &mut lock, false).await?;
+    installer
+        .install_project_manifest(&args.root, &pkg, &mut lock, false)
+        .await?;
     lock.write(&lock_path)?;
     pkg.write(&pkg_path)?;
     ferrite::npm::project_editor_dependencies(&args.root, &lock)?;
@@ -144,16 +150,24 @@ pub(crate) async fn update(
             root.dependencies.remove(name);
         }
         let metadata_range = if range == "latest" {
-            pkg.dependencies
+            pkg.optional_dependencies
                 .get(name)
+                .or_else(|| pkg.dependencies.get(name))
                 .or_else(|| pkg.dev_dependencies.get(name))
                 .unwrap_or(range)
         } else {
             range
         };
+        if metadata_range.starts_with("workspace:") || metadata_range.starts_with("file:") {
+            continue;
+        }
         let (target, _) = ferrite::npm::registry_request(name, metadata_range)?;
         client.invalidate_metadata(&target)?;
-        if let Some(entry) = pkg.dependencies.get_mut(name) {
+        if let Some(entry) = pkg.optional_dependencies.get_mut(name) {
+            if range != "latest" {
+                *entry = range.clone();
+            }
+        } else if let Some(entry) = pkg.dependencies.get_mut(name) {
             if range != "latest" {
                 *entry = range.clone();
             }
@@ -167,7 +181,9 @@ pub(crate) async fn update(
             )));
         }
     }
-    installer.install_manifest(&pkg, &mut lock, false).await?;
+    installer
+        .install_project_manifest(&args.root, &pkg, &mut lock, false)
+        .await?;
     lock.write(&lock_path)?;
     pkg.write(&pkg_path)?;
     ferrite::npm::project_editor_dependencies(&args.root, &lock)?;
@@ -197,13 +213,19 @@ pub(crate) async fn install(
     let mut lock = ferrite::npm::Lockfile::read(&lock_path)?;
     let pkg = ferrite::npm::JsPackageJson::read(&pkg_path)?;
     installer
-        .install_manifest(&pkg, &mut lock, args.frozen_lockfile)
+        .install_project_manifest(&args.root, &pkg, &mut lock, args.frozen_lockfile)
         .await?;
     if !args.frozen_lockfile {
         lock.write(&lock_path)?;
     }
     ferrite::npm::project_editor_dependencies(&args.root, &lock)?;
-    println!("installed {} concrete packages", lock.package.len());
+    println!(
+        "installed {} active packages ({} locked across platforms)",
+        lock.active_graph(&ferrite::npm::InstallPlatform::current())?
+            .packages
+            .len(),
+        lock.package.len()
+    );
     Ok(())
 }
 

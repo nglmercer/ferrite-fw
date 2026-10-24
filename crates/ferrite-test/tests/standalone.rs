@@ -252,13 +252,30 @@ fn existing_ssr_output_is_not_embedded_or_packaged_as_static() {
 #[tokio::test]
 #[ignore = "slow: generated SSR Cargo build and HTTP server"]
 async fn standalone_ssr_build_compiles_and_renders_without_node() {
+    standalone_ssr_profile("napi-vm").await;
+}
+
+#[cfg(all(feature = "napi-vm", target_os = "linux"))]
+#[tokio::test]
+#[ignore = "slow: generated Linux process-runtime binary and HTTP recovery"]
+async fn standalone_process_runtime_renders_and_recovers_without_node() {
+    standalone_ssr_profile("napi-vm-process").await;
+}
+
+#[cfg(feature = "napi-vm")]
+async fn standalone_ssr_profile(backend: &str) {
     let project = TempProject::new(&[
         ("index.html", "<html><head></head><body><!--ssr-outlet--><script type=\"module\" src=\"/src/main.js\"></script></body></html>"),
         ("src/main.js", "globalThis.clientLoaded = true;"),
-        ("src/entry-server.ts", "export function render(url: string, request: any) { return { html: `<h1>embedded ${request.method} ${url}</h1>`, status: 202, headers: [['x-renderer', 'compiled']] }; }"),
+        ("src/entry-server.ts", "export function render(url: string, request: any) { if (url === '/app/slow') { while (true) {} } return { html: `<h1>embedded ${request.method} ${url}</h1>`, status: 202, headers: [['x-renderer', 'compiled']] }; }"),
     ]);
     let mut config = standalone_config(&project, None);
-    config.runtime.backend = "napi-vm".into();
+    config.runtime.backend = backend.into();
+    if backend == "napi-vm-process" {
+        config.runtime.request_timeout_ms = 750;
+        config.runtime.fuel_budget = u64::MAX;
+        config.runtime.loop_budget = u64::MAX;
+    }
     config.package.ssr_sdk =
         Some(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../ferrite"));
     config.base = "/app/".into();
@@ -277,9 +294,13 @@ async fn standalone_ssr_build_compiles_and_renders_without_node() {
         .status()
         .expect("build generated application");
     assert!(status.success(), "generated SSR application did not build");
-    let binary = target
+    let built = target
         .join("debug")
         .join(format!("ferrite-app{}", std::env::consts::EXE_SUFFIX));
+    let binary = project
+        .root
+        .join(format!("renderer{}", std::env::consts::EXE_SUFFIX));
+    std::fs::copy(built, &binary).unwrap();
     // Alter sources: request handling must use only the embedded emitted graph.
     std::fs::write(
         project.root.join("src/entry-server.ts"),
@@ -305,6 +326,13 @@ async fn standalone_ssr_build_compiles_and_renders_without_node() {
     }
     let _running = Running(child);
     wait_until_ready(port);
+    if backend == "napi-vm-process" {
+        let failed = http_get(port, "/app/slow");
+        assert!(
+            failed.starts_with("HTTP/1.0 500") && failed.contains("deadline"),
+            "{failed}"
+        );
+    }
     let response = http_get(port, "/app/");
     assert!(response.starts_with("HTTP/1.0 202"), "{response}");
     assert!(

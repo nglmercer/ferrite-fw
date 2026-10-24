@@ -204,6 +204,7 @@ fn mapped_dependencies_use_owning_locked_edges_and_store_local_identity() {
         importers: [(
             ".".into(),
             ferrite_npm::LockedImporter {
+                optional_dependencies: Vec::new(),
                 specifiers: [
                     ("owner".into(), "1.0.0".into()),
                     ("dep".into(), "1.0.0".into()),

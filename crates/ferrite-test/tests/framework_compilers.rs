@@ -957,25 +957,25 @@ async fn official_vue_ssr_hydrates_in_firefox() {
 #[tokio::test]
 #[ignore = "real registry/Node compiler host and both browsers; generated Vue SSR acceptance"]
 async fn generated_vue_ssr_sources_install_build_and_render() {
-    generated_ssr_sources("vue").await;
+    generated_ssr_sources("vue", false).await;
 }
 
 #[cfg(feature = "napi-vm")]
 #[tokio::test]
 #[ignore = "real registry, Node compiler and both browsers"]
 async fn generated_svelte_ssr_sources_install_build_and_render() {
-    generated_ssr_sources("svelte").await;
+    generated_ssr_sources("svelte", false).await;
 }
 
 #[cfg(feature = "napi-vm")]
 #[tokio::test]
 #[ignore = "real registry and both browsers; official React renderer"]
 async fn generated_react_ssr_sources_install_build_and_render() {
-    generated_ssr_sources("react").await;
+    generated_ssr_sources("react", false).await;
 }
 
 #[cfg(feature = "napi-vm")]
-async fn generated_ssr_sources(framework: &str) {
+async fn generated_ssr_sources(framework: &str, standalone: bool) {
     for language in ["js", "ts"] {
         let mut generated = ferrite::frameworks::scaffold::files(
             ferrite::frameworks::scaffold::select(framework, language, "ssr").unwrap(),
@@ -1052,6 +1052,13 @@ async fn generated_ssr_sources(framework: &str) {
         .await
         .unwrap();
         assert_eq!(builder.config.runtime.backend, "napi-vm");
+        let mut builder = builder;
+        if standalone {
+            builder.config.ssr.routes = Some(vec!["/".into(), "/users/*".into()]);
+            builder.config.package.standalone = true;
+            builder.config.package.ssr_sdk =
+                Some(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../ferrite"));
+        }
         let reports = builder.build_app().await.unwrap();
         assert_eq!(reports.len(), 2);
         let server = reports.iter().find(|report| report.env == "ssr").unwrap();
@@ -1121,8 +1128,55 @@ async fn generated_ssr_sources(framework: &str) {
         config.server.port = reservation.local_addr().unwrap().port();
         drop(reservation);
         let port = config.server.port;
-        let serving =
-            tokio::spawn(async move { ferrite::preview_with_plugins(&config, &[]).await });
+        let serving = if standalone {
+            let scaffold = reports
+                .iter()
+                .find(|report| report.env == "client")
+                .unwrap()
+                .out_dir
+                .join("standalone");
+            let target = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target");
+            let status = tokio::process::Command::new("cargo")
+                .args(["build", "--offline", "--manifest-path"])
+                .arg(scaffold.join("Cargo.toml"))
+                .env("CARGO_TARGET_DIR", &target)
+                .status()
+                .await
+                .unwrap();
+            assert!(
+                status.success(),
+                "{framework}/{language}: generated standalone must compile"
+            );
+            let binary = project
+                .root
+                .join(format!("server{}", std::env::consts::EXE_SUFFIX));
+            std::fs::copy(
+                target
+                    .join("debug")
+                    .join(format!("ferrite-app{}", std::env::consts::EXE_SUFFIX)),
+                &binary,
+            )
+            .unwrap();
+            let empty = tempfile::tempdir().unwrap();
+            let mut child = tokio::process::Command::new(binary)
+                .env("PATH", "")
+                .env("HOST", "127.0.0.1")
+                .env("PORT", port.to_string())
+                .current_dir(empty.path())
+                .stdout(std::process::Stdio::null())
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+            tokio::spawn(async move {
+                let _empty = empty;
+                let status = child.wait().await?;
+                Err(ferrite::FerriteError::Other(format!(
+                    "standalone exited: {status}"
+                )))
+            })
+        } else {
+            tokio::spawn(async move { ferrite::preview_with_plugins(&config, &[]).await })
+        };
         struct Preview(tokio::task::JoinHandle<ferrite::Result<()>>);
         impl Drop for Preview {
             fn drop(&mut self) {
@@ -1313,7 +1367,7 @@ async fn generated_vue_ssr_dev_graph_updates_and_recovers() {
         let initial = get(port).await;
         assert!(initial.starts_with("HTTP/1.0 200"), "{initial}");
         assert!(initial.contains("Hello Ferrite + Vue"));
-        assert!(initial.contains("count: 0"));
+        assert!(initial.replace("<!-- -->", "").contains("count: 0"));
         assert!(
             initial.contains("App.vue?ferrite-style=0&amp;direct")
                 || initial.contains("App.vue?ferrite-style=0&direct")
@@ -1717,4 +1771,144 @@ async fn official_svelte_ssr_hydrates_in_chromium() {
 #[ignore = "official Svelte compiler/renderer, registry and Firefox; real SSR hydration"]
 async fn official_svelte_ssr_hydrates_in_firefox() {
     framework_ssr_conformance("svelte", Some(ferrite_e2e::BrowserKind::Firefox)).await;
+}
+
+#[cfg(feature = "napi-vm")]
+#[tokio::test]
+#[ignore = "official packages, generated Cargo binaries and both real browsers"]
+async fn generated_framework_standalone_browser_matrix() {
+    for framework in ["vue", "react", "svelte"] {
+        generated_ssr_sources(framework, true).await;
+    }
+}
+
+#[cfg(feature = "napi-vm")]
+#[tokio::test]
+#[ignore = "official registry packages and explicit Node compiler for Svelte"]
+async fn generated_react_svelte_dev_graph_edits_and_recovers() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    for framework in ["react", "svelte"] {
+        for language in ["js", "ts"] {
+            let generated = ferrite::frameworks::scaffold::files(
+                ferrite::frameworks::scaffold::select(framework, language, "ssr").unwrap(),
+                "dev-matrix",
+            )
+            .unwrap();
+            let inputs: Vec<_> = generated
+                .iter()
+                .map(|(path, text)| (path.as_str(), text.as_str()))
+                .collect();
+            let project = TempProject::new(&inputs);
+            let manifest = serde_json::from_str(&generated["package.json"]).unwrap();
+            let npm = project.root.join(".ferrite/npm");
+            let installer = ferrite::npm::Installer::new(
+                ferrite::npm::RegistryClient::new(
+                    ferrite::npm::DEFAULT_REGISTRY,
+                    npm.join("metadata"),
+                )
+                .unwrap(),
+                npm,
+            );
+            let mut lock = ferrite::npm::Lockfile::default();
+            installer
+                .install_manifest(&manifest, &mut lock, false)
+                .await
+                .unwrap();
+            lock.write(&project.root.join("ferrite.lock")).unwrap();
+            let (config, plugins) = ferrite::Config {
+                root: Some(project.root.clone()),
+                ..Default::default()
+            }
+            .resolve()
+            .await
+            .unwrap();
+            let server = DevServer::new_without_watcher(config.clone(), plugins)
+                .await
+                .unwrap();
+            let shell = server.transform_index_html("/index.html").await.unwrap();
+            server
+                .set_ssr_adapter(
+                    ferrite::create_dev_ssr_adapter(&server, &config, &shell)
+                        .await
+                        .unwrap(),
+                )
+                .await;
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let router = server.router();
+            struct Serving(tokio::task::JoinHandle<()>);
+            impl Drop for Serving {
+                fn drop(&mut self) {
+                    self.0.abort();
+                }
+            }
+            let _serving = Serving(tokio::spawn(async move {
+                axum::serve(listener, router).await.unwrap();
+            }));
+            async fn get(address: std::net::SocketAddr) -> String {
+                let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+                socket
+                    .write_all(b"GET / HTTP/1.0\r\nHost: localhost\r\n\r\n")
+                    .await
+                    .unwrap();
+                let mut response = String::new();
+                tokio::time::timeout(
+                    Duration::from_secs(10),
+                    socket.read_to_string(&mut response),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                response
+            }
+            let component = if framework == "svelte" {
+                "src/App.svelte".to_string()
+            } else {
+                format!("src/App.{}", if language == "ts" { "tsx" } else { "jsx" })
+            };
+            let original = &generated[&component];
+            let label = if framework == "react" {
+                "Hello Ferrite + React"
+            } else {
+                "Hello Ferrite + Svelte"
+            };
+            assert!(original.contains(label), "fixture title changed");
+            let initial = get(address).await;
+            assert!(
+                initial.starts_with("HTTP/1.0 200")
+                    && initial.contains(label)
+                    && initial.replace("<!-- -->", "").contains("count: 0"),
+                "{framework}/{language}: {initial}"
+            );
+            std::fs::write(
+                project.root.join(&component),
+                original.replace(label, "Edited application"),
+            )
+            .unwrap();
+            let updated = get(address).await;
+            assert!(
+                updated.starts_with("HTTP/1.0 200")
+                    && updated.contains("Edited application")
+                    && !updated.contains(label),
+                "{framework}/{language}: {updated}"
+            );
+            let broken = if framework == "svelte" {
+                "<script>const broken = ;</script>"
+            } else {
+                "export default function App( {"
+            };
+            std::fs::write(project.root.join(&component), broken).unwrap();
+            let invalid = get(address).await;
+            assert!(
+                invalid.starts_with("HTTP/1.0 500"),
+                "{framework}/{language}: stale successful HTML on compilation failure: {invalid}"
+            );
+            std::fs::write(project.root.join(&component), original).unwrap();
+            let recovered = get(address).await;
+            assert!(
+                recovered.starts_with("HTTP/1.0 200") && recovered.contains(label),
+                "{framework}/{language}: {recovered}"
+            );
+        }
+    }
 }

@@ -63,6 +63,8 @@ impl Fixture {
             },
             os: None,
             cpu: None,
+            libc: None,
+            local: None,
             binary: None,
             gypfile: None,
         };
@@ -269,14 +271,7 @@ async fn optional_platform_dependencies_are_omitted_and_cached_integrity_is_veri
         .versions
         .get_mut("1.0.0")
         .unwrap()
-        .os = Some(vec![format!(
-        "!{}",
-        if std::env::consts::OS == "macos" {
-            "darwin"
-        } else {
-            std::env::consts::OS
-        }
-    )]);
+        .os = Some(vec![format!("!{}", InstallPlatform::current().os)]);
     fixture.save();
     let manifest = Fixture::manifest(&[("app", "1.0.0")]);
     let mut lock = Lockfile::default();
@@ -285,8 +280,10 @@ async fn optional_platform_dependencies_are_omitted_and_cached_integrity_is_veri
         .install_manifest(&manifest, &mut lock, false)
         .await
         .unwrap();
-    assert_eq!(lock.package.len(), 1);
-    assert!(lock.package[0].dependencies.is_empty());
+    assert_eq!(lock.package.len(), 2);
+    let active = lock.active_graph(&InstallPlatform::current()).unwrap();
+    assert_eq!(active.packages.len(), 1);
+    assert!(active.dependencies["app@1.0.0"].is_empty());
     std::fs::remove_dir_all(&fixture.installer.store).unwrap();
     std::fs::write(
         fixture.installer.tarball_cache.join("app-1.0.0.tgz"),
@@ -311,7 +308,7 @@ fn legacy_lock_migrates_edges_but_never_invents_lost_versions() {
     let text = "[[package]]\nname = 'a'\nversion = '1.0.0'\nsource = 'npm'\n[package.dependencies]\nb = '2.0.0'\n[[package]]\nname = 'b'\nversion = '2.0.0'\nsource = 'npm'\n";
     std::fs::write(&path, text).unwrap();
     let lock = Lockfile::read(&path).unwrap();
-    assert_eq!(lock.version, 2);
+    assert_eq!(lock.version, LOCKFILE_VERSION);
     assert_eq!(
         lock.package_by_id("a@1.0.0").unwrap().dependencies["b"],
         "b@2.0.0"
@@ -601,4 +598,284 @@ async fn shasum_only_registry_packages_replay_with_locked_integrity() {
         .unwrap_err()
         .to_string()
         .contains("lacks locked integrity"));
+}
+
+#[tokio::test]
+async fn portable_optional_variants_replay_without_metadata() {
+    let mut fixture = Fixture::new();
+    for name in ["linux-gnu", "linux-musl", "windows", "optional-parent"] {
+        fixture.package(name, "1.0.0", &[]);
+    }
+    for (name, os, libc) in [
+        ("linux-gnu", "linux", Some("glibc")),
+        ("linux-musl", "linux", Some("musl")),
+        ("windows", "win32", None),
+    ] {
+        let info = fixture
+            .metadata
+            .get_mut(name)
+            .unwrap()
+            .versions
+            .get_mut("1.0.0")
+            .unwrap();
+        info.os = Some(vec![os.into()]);
+        info.cpu = Some(vec!["x64".into()]);
+        info.libc = libc.map(|value| vec![value.into()]);
+    }
+    fixture
+        .metadata
+        .get_mut("optional-parent")
+        .unwrap()
+        .versions
+        .get_mut("1.0.0")
+        .unwrap()
+        .dependencies
+        .insert("linux-gnu".into(), "1".into());
+    fixture.save();
+    let mut manifest = Fixture::manifest(&[("windows", "missing-range-overridden")]);
+    for name in ["linux-gnu", "linux-musl", "windows", "optional-parent"] {
+        manifest
+            .optional_dependencies
+            .insert(name.into(), "1".into());
+    }
+    let linux = InstallPlatform {
+        os: "linux".into(),
+        cpu: "x64".into(),
+        libc: Some("glibc".into()),
+    };
+    let mut lock = Lockfile::default();
+    fixture
+        .installer
+        .install_manifest_for_platform(&manifest, &mut lock, false, &linux)
+        .await
+        .unwrap();
+    assert_eq!(lock.package.len(), 4);
+    assert_eq!(lock.active_graph(&linux).unwrap().packages.len(), 2);
+    let path = fixture.dir.path().join("ferrite.lock");
+    lock.write(&path).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::remove_dir_all(&fixture.installer.client.cache_dir).unwrap();
+    for (os, libc, name) in [
+        ("linux", Some("musl"), "linux-musl"),
+        ("win32", None, "windows"),
+    ] {
+        std::fs::remove_dir_all(&fixture.installer.store).unwrap();
+        let platform = InstallPlatform {
+            os: os.into(),
+            cpu: "x64".into(),
+            libc: libc.map(str::to_string),
+        };
+        let before = lock.clone();
+        fixture
+            .installer
+            .install_manifest_for_platform(&manifest, &mut lock, true, &platform)
+            .await
+            .unwrap();
+        assert_eq!(lock, before);
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert_eq!(
+            lock.active_graph(&platform).unwrap().packages,
+            std::collections::BTreeSet::from([format!("{name}@1.0.0")])
+        );
+        assert!(fixture
+            .installer
+            .store
+            .join(format!("{name}@1.0.0/package.json"))
+            .is_file());
+        assert!(!fixture
+            .installer
+            .store
+            .join("optional-parent@1.0.0")
+            .exists());
+    }
+}
+
+#[tokio::test]
+async fn transitive_peer_contexts_follow_contextual_providers_through_cycles() {
+    let mut fixture = Fixture::new();
+    fixture.package(
+        "legacy",
+        "1.0.0",
+        &[("runtime", "1"), ("tool", "1"), ("bridge", "1")],
+    );
+    fixture.package(
+        "modern",
+        "1.0.0",
+        &[("runtime", "2"), ("tool", "1"), ("bridge", "1")],
+    );
+    fixture.package("runtime", "1.0.0", &[]);
+    fixture.package("runtime", "2.0.0", &[]);
+    fixture.package("tool", "1.0.0", &[]);
+    fixture.package("bridge", "1.0.0", &[("runtime", "2"), ("mid", "1")]);
+    fixture.package("mid", "1.0.0", &[("bridge", "1"), ("consumer", "1")]);
+    fixture.package("consumer", "1.0.0", &[]);
+    for (name, peer, range) in [("tool", "runtime", "*"), ("consumer", "tool", "1")] {
+        fixture
+            .metadata
+            .get_mut(name)
+            .unwrap()
+            .versions
+            .get_mut("1.0.0")
+            .unwrap()
+            .peer_dependencies
+            .insert(peer.into(), range.into());
+    }
+    fixture.save();
+    let manifest = Fixture::manifest(&[("legacy", "1"), ("modern", "1")]);
+    let mut lock = Lockfile::default();
+    fixture
+        .installer
+        .install_manifest(&manifest, &mut lock, false)
+        .await
+        .unwrap();
+    for name in ["bridge", "mid", "tool", "consumer"] {
+        assert_eq!(
+            lock.package
+                .iter()
+                .filter(|package| package.name == name)
+                .count(),
+            2,
+            "{name}"
+        );
+    }
+    for (root, version) in [("legacy", "1.0.0"), ("modern", "2.0.0")] {
+        let root = lock.find(root).unwrap();
+        let bridge = lock.package_by_id(&root.dependencies["bridge"]).unwrap();
+        let mid = lock.package_by_id(&bridge.dependencies["mid"]).unwrap();
+        assert_eq!(mid.dependencies["bridge"], bridge.id());
+        let consumer = lock.package_by_id(&mid.dependencies["consumer"]).unwrap();
+        let tool = lock.package_by_id(&consumer.peers["tool"]).unwrap();
+        assert_eq!(tool.id(), root.dependencies["tool"]);
+        assert_eq!(
+            lock.package_by_id(&tool.peers["runtime"]).unwrap().version,
+            version
+        );
+        assert_eq!(
+            lock.package_by_id(&bridge.dependencies["runtime"])
+                .unwrap()
+                .version,
+            "2.0.0"
+        );
+    }
+    let ids: std::collections::BTreeSet<_> = lock.package.iter().map(LockedPackage::id).collect();
+    fixture.package("unrelated", "1.0.0", &[]);
+    fixture.save();
+    let mut extended = manifest.clone();
+    extended.dependencies.insert("unrelated".into(), "1".into());
+    fixture
+        .installer
+        .install_manifest(&extended, &mut lock, false)
+        .await
+        .unwrap();
+    assert!(
+        ids.is_subset(&lock.package.iter().map(LockedPackage::id).collect()),
+        "old: {ids:?} new: {:?}",
+        lock.package
+    );
+    std::fs::remove_dir_all(&fixture.installer.client.cache_dir).unwrap();
+    let before = lock.clone();
+    fixture
+        .installer
+        .install_manifest(&extended, &mut lock, true)
+        .await
+        .unwrap();
+    assert_eq!(lock, before);
+    project_node_modules(fixture.installer.store.parent().unwrap(), &lock).unwrap();
+}
+
+#[tokio::test]
+async fn conflicting_live_local_peer_views_fail_without_publishing_a_lock() {
+    let mut fixture = Fixture::new();
+    fixture.package("runtime", "1.0.0", &[]);
+    fixture.package("runtime", "2.0.0", &[]);
+    fixture.save();
+    fn write(root: &std::path::Path, path: &str, value: serde_json::Value) {
+        let path = root.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, serde_json::to_vec(&value).unwrap()).unwrap();
+    }
+    write(
+        fixture.dir.path(),
+        "package.json",
+        serde_json::json!({"workspaces":["packages/*"],"dependencies":{"runtime":"1"}}),
+    );
+    for (name, version) in [("legacy", "1"), ("modern", "2")] {
+        write(
+            fixture.dir.path(),
+            &format!("packages/{name}/package.json"),
+            serde_json::json!({"name":name,"version":"1.0.0","dependencies":{"runtime":version,"shared":"workspace:*"}}),
+        );
+    }
+    write(
+        fixture.dir.path(),
+        "packages/shared/package.json",
+        serde_json::json!({"name":"shared","version":"1.0.0","peerDependencies":{"runtime":"*"}}),
+    );
+    let mut lock = Lockfile::default();
+    let before = lock.clone();
+    let error = fixture
+        .installer
+        .install_project(fixture.dir.path(), &mut lock, false)
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("conflicting peer contexts"),
+        "{error}"
+    );
+    assert_eq!(lock, before);
+    assert!(!fixture
+        .dir
+        .path()
+        .join("packages/shared/node_modules")
+        .exists());
+}
+
+#[test]
+fn required_platform_incompatibility_propagates_through_optional_cycles() {
+    let package = |name: &str, edges: &[(&str, &str)]| LockedPackage {
+        name: name.into(),
+        version: "1.0.0".into(),
+        source: "npm".into(),
+        dependencies: edges
+            .iter()
+            .map(|(name, target)| (name.to_string(), format!("{target}@1.0.0")))
+            .collect(),
+        dependency_specifiers: edges
+            .iter()
+            .map(|(name, _)| (name.to_string(), "1".into()))
+            .collect(),
+        ..Default::default()
+    };
+    let a = package("a", &[("b", "b")]);
+    let mut b = package("b", &[("a", "a")]);
+    b.os = Some(vec!["win32".into()]);
+    let mut lock = Lockfile {
+        portable: true,
+        package: vec![a, b],
+        importers: BTreeMap::from([(
+            ".".into(),
+            LockedImporter {
+                dependencies: BTreeMap::from([("a".into(), "a@1.0.0".into())]),
+                specifiers: BTreeMap::from([("a".into(), "1".into())]),
+                optional_dependencies: vec!["a".into()],
+            },
+        )]),
+        ..Default::default()
+    };
+    let platform = InstallPlatform {
+        os: "linux".into(),
+        cpu: "x64".into(),
+        libc: Some("glibc".into()),
+    };
+    assert!(lock.active_graph(&platform).unwrap().packages.is_empty());
+    lock.importers
+        .get_mut(".")
+        .unwrap()
+        .dependencies
+        .insert("b".into(), "b@1.0.0".into());
+    assert!(lock
+        .active_graph(&platform)
+        .unwrap_err()
+        .to_string()
+        .contains("required dependency"));
 }

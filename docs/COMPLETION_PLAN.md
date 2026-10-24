@@ -12,10 +12,10 @@ coverage. It does not promote a whole framework or platform profile.
 | Vanilla JS/TS client | Experimental | Full clean-directory platform/release matrix |
 | React 19.2.0 JS/TS client | Experimental | Complete Refresh/component/hook matrix |
 | Vue 3.5.22 JS/TS client | Experimental, explicit Node compiler | Granular HMR and wider component coverage |
-| Vue 3.5.22 JS/TS SSR | Experimental, Node compiler + napi-vm runtime | Streaming, SSG, framework standalone/browser/platform coverage |
+| Vue 3.5.22 JS/TS SSR | Experimental, Node compiler + napi-vm runtime | Framework streaming and full version/platform acceptance |
 | Svelte 5.39.6 client | Experimental, explicit Node compiler | Wider runes/component/HMR coverage |
-| Svelte 5.39.6 JS/TS SSR | Experimental, Node compiler + napi-vm runtime | Development and standalone release matrix |
-| React 19.2.0 JS/TS SSR | Experimental, native compiler + napi-vm | Development and standalone release matrix; streaming |
+| Svelte 5.39.6 JS/TS SSR | Experimental, Node compiler + napi-vm runtime | Development HMR/component and cross-platform release matrix |
+| React 19.2.0 JS/TS SSR | Experimental, native compiler + napi-vm | Development HMR/component and cross-platform release matrix; streaming |
 | Preact/Solid/Qwik | Adapter unavailable | Explicit ownership/delegation and independent adapter acceptance |
 
 The registry's `tested_versions` remains empty until a complete declared
@@ -47,7 +47,7 @@ application profile passes. Compiler-only evidence belongs in compiler profiles.
 - [x] Explicit Linux process profile with address-space/CPU ceilings, deadline, cancellation and reaping tests.
 - [ ] Extend process isolation to Windows/macOS and validate native-addon fixtures.
 
-Cancellation is cooperative in the engine. Uninterruptible native calls are not
+The embedded profile uses cooperative engine cancellation. Uninterruptible native calls are not
 forcibly killed; shutdown detaches after its wait bound. These controls are not a
 sandbox or a hard memory limit.
 
@@ -59,15 +59,23 @@ sandbox or a hard memory limit.
 - [x] Verify multiple SRI hashes using the strongest supported algorithm and alternatives.
 - [x] Reject missing integrity metadata for downloaded tarballs instead of silently trusting bytes.
 - [x] Use rustls without reqwest's implicit OpenSSL/native-TLS build dependency.
-- [ ] Transitive peer-context propagation and contextual ancestor instances.
-- [ ] Workspace discovery, local links, importer identity and project/editor resolution.
-- [ ] Root optional dependencies and a portable all-platform frozen graph.
+- [x] Transitive peer-context propagation and contextual ancestor instances.
+- [x] Workspace discovery, local links, importer identity and project/editor resolution.
+- [x] Root optional dependencies and a portable all-platform frozen graph.
 - [x] Checked exports/imports target validation, dependency-backed imports, nearest scopes and exact map files.
 - [ ] Package-map URL query/fragment targets and remaining CJS helper interoperability.
 
 Existing locks with SHA-256/384/512 remain valid. Old entries lacking integrity
 need a non-frozen install to obtain registry integrity/shasum before downloading.
-Aliases use existing v2 specifier and edge fields; no schema bump is required.
+Portable graphs now write v3 locks. v1/v2 remain readable but require one
+non-frozen install before portable frozen replay. Optional OS/CPU/libc branches
+remain locked and inactive subtrees are omitted from download/projection.
+Metadata/download/integrity failures remain fail-closed for optional packages.
+Contextual registry peers propagate through transitive ancestors and cycles.
+Workspaces and in-project file links keep live source identities and relative
+editor views across relocation. Each local directory must have one peer context;
+conflicting views fail explicitly rather than overwriting one source directory.
+Use project-root installation for workspaces and file links.
 Standalone SSR scaffolds now retain the selected SDK lock, when available, and
 write `SDK-PROVENANCE.json` with manifest/source-lock hashes. The generated root
 may update its lock for its own package; these hashes identify inputs, not a signed
@@ -80,14 +88,16 @@ SDK source snapshot or final binary.
 - [ ] Slots, async components, directives, scoped/module styles, imported types and map diagnostics matrix.
 - [ ] Granular HMR behavior and explicit state/reset contracts.
 - [ ] Production dynamic style/preload tracking and no development code leakage.
-- [ ] Generated standalone framework binary with pre-JS HTML and real browser hydration.
+- [x] Generated standalone framework binaries with pre-JS HTML and real Chromium/Firefox hydration on Linux.
 - [ ] Run clean-directory acceptance on every advertised platform before promotion.
 
 ## 5. React and Svelte application completion
 
 - [ ] Finish React Refresh boundary/hook/component matrix, including unsupported patterns.
 - [x] Implement React JS/TS synchronous production rendering and Chromium/Firefox hydration.
-- [ ] Complete React SSR development, streaming and standalone acceptance.
+- [x] React/Svelte JS/TS development SSR edit, syntax-error and recovery checks.
+- [x] Generated Vue/React/Svelte JS/TS standalone hydration/interaction/CSS in Chromium and Firefox on Linux.
+- [ ] React/Svelte development hydration/HMR matrix and framework streaming.
 - [x] Verify Svelte SSR with official output, retaining meaningful HTML assertions.
 - [x] Add Svelte SSR JS/TS scaffolds only after renderer/hydration prerequisites pass.
 - [ ] Expand Svelte runes, component resources, diagnostics and state/reset coverage.
@@ -106,8 +116,9 @@ SDK source snapshot or final binary.
 
 - [x] Explicit routing policy for dotted routes shared by dev, preview and standalone.
 - [ ] Multiple server entry selection and per-entry artifact routing.
-- [ ] Request disconnect cancellation propagated from HTTP through SSR and guest invocation.
-- [ ] Streaming backpressure, abort/error behavior and request-resource teardown.
+- [x] HTTP disconnect drops pending SSR and cancels process-runtime invocation; recovery verified.
+- [x] Rust response streaming backpressure, HEAD, producer errors and disconnect teardown.
+- [ ] JavaScript framework streaming and ReadableStream bridge.
 - [x] SSG route enumeration, output paths, errors and deterministic builds.
 - [ ] Actual framework islands/hydration acceptance and lazy component preload closure.
 - [ ] Runtime external/native profile contracts and artifact/source-map versioning.

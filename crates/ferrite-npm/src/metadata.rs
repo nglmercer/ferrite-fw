@@ -28,6 +28,11 @@ pub struct RegistryVersion {
     pub os: Option<Vec<String>>,
     /// CPU allowlist.
     pub cpu: Option<Vec<String>>,
+    /// Linux C library allowlist.
+    pub libc: Option<Vec<String>>,
+    /// Host-owned project source; never accepted from registry JSON.
+    #[serde(skip)]
+    pub local: Option<crate::LocalSource>,
     /// Native binding metadata (`node-gyp` packages, §88).
     #[serde(default)]
     pub binary: Option<serde_json::Value>,

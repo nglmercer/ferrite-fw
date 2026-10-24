@@ -20,3 +20,5 @@ tokio = { workspace = true }
 futures = { workspace = true }
 tracing = { workspace = true }
 tempfile = { workspace = true }
+
+globset = { workspace = true }

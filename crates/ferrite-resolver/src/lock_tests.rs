@@ -51,6 +51,7 @@ fn resolver_follows_importer_edges_instead_of_highest_store_version() {
     lock.importers.insert(
         ".".into(),
         LockedImporter {
+            optional_dependencies: Vec::new(),
             specifiers: BTreeMap::from([
                 ("a".into(), "1.0.0".into()),
                 ("b".into(), "1.0.0".into()),
@@ -114,6 +115,7 @@ fn missing_or_ambiguous_store_versions_fail_and_custom_locks_work() {
     lock.importers.insert(
         ".".into(),
         LockedImporter {
+            optional_dependencies: Vec::new(),
             specifiers: BTreeMap::from([("pkg".into(), "1.0.0".into())]),
             dependencies: BTreeMap::from([("pkg".into(), one.id())]),
         },
@@ -285,6 +287,7 @@ fn registry_aliases_resolve_actual_store_identity_and_private_dependencies() {
     lock.importers.insert(
         ".".into(),
         LockedImporter {
+            optional_dependencies: Vec::new(),
             specifiers: BTreeMap::from([("alias".into(), "npm:actual@^1".into())]),
             dependencies: BTreeMap::from([("alias".into(), "actual@1.0.0".into())]),
         },

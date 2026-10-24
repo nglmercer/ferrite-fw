@@ -33,6 +33,7 @@ async fn emitted_import_maps_use_owner_edges_and_environment_conditions() {
         importers: [(
             ".".into(),
             ferrite::npm::LockedImporter {
+                optional_dependencies: Vec::new(),
                 specifiers: [
                     ("owner".into(), "1.0.0".into()),
                     ("dep".into(), "1.0.0".into()),

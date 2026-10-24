@@ -46,6 +46,7 @@ fn project(npm: bool) -> TempProject {
             importers: [(
                 ".".into(),
                 ferrite::npm::LockedImporter {
+                    optional_dependencies: Vec::new(),
                     specifiers: [("effect-fixture".into(), "1.0.0".into())].into(),
                     dependencies: [("effect-fixture".into(), "effect-fixture@1.0.0".into())].into(),
                 },

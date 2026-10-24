@@ -59,6 +59,12 @@ impl ProcessRuntime {
             }),
         }
     }
+    /// Registered child leaders; queued invocations are not included.
+    #[must_use]
+    pub fn active_children(&self) -> usize {
+        self.state.active.lock().unwrap().len()
+    }
+
     /// Reject queued/new work and kill active child process groups.
     pub fn shutdown(&self) {
         self.state.slots.close();

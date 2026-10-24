@@ -128,3 +128,58 @@ framework streaming or cancellation during pending HTTP rendering.
 
 Development and standalone framework acceptance is being extended in this draft;
 new fixture definitions alone are not completion evidence.
+
+## Portable project graph and framework/runtime acceptance
+
+Portable v3 locks retain optional OS/CPU/libc branches and activate compatible
+subgraphs without registry metadata during frozen replay. Required failure
+propagates through cycles. Context partitioning preserves transitive peer providers
+through dependency shadowing/cycles and stable IDs when unrelated roots are added.
+Canonical metadata ordering makes fingerprints independent of HashMap iteration.
+
+Project-aware CLI installation discovers workspace arrays/package patterns and
+in-project file links, records importer identities and frozen manifest hashes, and
+projects relocatable live source/editor views. Duplicate names, escaping paths,
+symlinked source directories/manifests and conflicting peer views fail explicitly.
+A single local source directory supports one dependency view; optional metadata,
+download and integrity failures still fail closed. Legacy locks need one normal
+install before portable frozen use.
+
+The restored implementation passed 31 package and 22 resolver tests, 20 CLI and
+38 framework tests. Four emitted integration tests passed, including workspace
+SSR before/after source edits without reinstalling. Subsequent platform-list
+matching coverage follows npm's installed checkPlatform implementation; final
+counts are recorded by the final gate run.
+
+React/Svelte JS/TS development rendering, edits, syntax failures and recovery
+passed through real HTTP. Missing console globals exposed by React development
+output are now supplied by the explicitly selected host. The generated standalone
+matrix passed all Vue/React/Svelte JS/TS combinations in Chromium 153.0.8010.0
+(headless shell) and official Firefox 157.0: empty PATH, server HTML, retained
+hydration DOM, interaction, CSS and dotted application routes. This does not
+establish a complete framework release/HMR/component/platform matrix.
+
+A real HTTP disconnect test passed: dropping a pending request cancels its
+process-runtime invocation before its ten-second deadline, then a following
+request succeeds. An independent server test verifies pending handler teardown.
+JavaScript framework streaming remains unimplemented; Rust response streaming
+backpressure/error/drop checks do not imply ReadableStream support in the engine.
+
+Final gates for this batch:
+
+- 369 unit tests passed across facade, CLI, config, frameworks, npm, resolver,
+  runtime, server, SSR, plugin and transform packages. The ordinary unit runs
+  reported 22 ignored tests, which are not included in that pass count.
+- Eight ordinary emitted/package-map/workspace/prerender/standalone integration
+  checks passed; slow ignored fixtures were selected separately.
+- Both process acceptance tests, real HTTP cancellation/recovery and the generated
+  process-runtime standalone binary passed explicitly. The latter renders with
+  empty PATH, times out an infinite render and serves the following request.
+- The six generated framework/language standalone combinations passed in both
+  browsers. React/Svelte development checks passed again after package changes.
+- Strict all-target Clippy passed for the implementation crates; formatting,
+  diff whitespace and four acceptance-runner regressions passed.
+
+These are scoped Linux checks, not an execution of every release gate on every
+host. Cross-platform process isolation, native-addon isolation fixtures, complete
+framework development/HMR matrices and JavaScript framework streaming remain open.

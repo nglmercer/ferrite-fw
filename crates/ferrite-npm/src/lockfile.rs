@@ -4,7 +4,7 @@ use ferrite_core::{FerriteError, Result};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-pub const LOCKFILE_VERSION: u32 = 2;
+pub const LOCKFILE_VERSION: u32 = 3;
 fn legacy_version() -> u32 {
     1
 }
@@ -32,11 +32,26 @@ pub struct LockedPackage {
     pub peer_requirements: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub optional_peers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub optional_dependencies: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub libc: Option<Vec<String>>,
 }
 
 impl LockedPackage {
     pub fn id(&self) -> String {
         let base = format!("{}@{}", self.name, self.version);
+        if let Some(context) = &self.context {
+            return format!("{base}__context_{context}");
+        }
         if self.peers.is_empty() {
             return base;
         }
@@ -48,6 +63,8 @@ impl LockedPackage {
 /// Manifest requests plus concrete root edges for an importing project.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct LockedImporter {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub optional_dependencies: Vec<String>,
     #[serde(default)]
     pub specifiers: BTreeMap<String, String>,
     #[serde(default)]
@@ -58,6 +75,9 @@ pub struct LockedImporter {
 pub struct Lockfile {
     #[serde(default = "legacy_version")]
     pub version: u32,
+    /// True when all platform variants and optional edges were resolved.
+    #[serde(default)]
+    pub portable: bool,
     #[serde(default)]
     pub importers: BTreeMap<String, LockedImporter>,
     #[serde(default)]
@@ -68,6 +88,7 @@ impl Default for Lockfile {
     fn default() -> Self {
         Self {
             version: LOCKFILE_VERSION,
+            portable: false,
             importers: BTreeMap::new(),
             package: Vec::new(),
         }
@@ -92,9 +113,11 @@ impl Lockfile {
                     }
                 }
                 lock.version = LOCKFILE_VERSION;
+                lock.portable = false;
                 // Roots cannot be inferred from a flat v1 list. The next install
                 // reads package.json and records its requests explicitly.
             }
+            2 => { lock.version = LOCKFILE_VERSION; lock.portable = false; }
             LOCKFILE_VERSION => (),
             version => return Err(FerriteError::Npm(format!("unsupported ferrite.lock version {version}; this build supports {LOCKFILE_VERSION}"))),
         }
@@ -158,6 +181,9 @@ impl Lockfile {
         self.package.retain(|package| package.name != name);
         for importer in self.importers.values_mut() {
             importer.dependencies.remove(name);
+            importer
+                .optional_dependencies
+                .retain(|optional| optional != name);
             importer.specifiers.remove(name);
         }
         self.package.len() != before
@@ -172,12 +198,36 @@ impl Lockfile {
         let mut ids = BTreeSet::new();
         for package in &self.package {
             validate_package_name(&package.name)?;
-            if package.source != "npm" {
+            if package.context.as_ref().is_some_and(|context| {
+                context.len() != 64 || !context.bytes().all(|byte| byte.is_ascii_hexdigit())
+            }) {
+                return Err(FerriteError::Npm(
+                    "invalid package context fingerprint".into(),
+                ));
+            }
+            validate_optional(&package.optional_dependencies, &package.dependencies)?;
+            if self.portable
+                && package
+                    .dependency_specifiers
+                    .keys()
+                    .any(|name| !package.dependencies.contains_key(name))
+            {
+                return Err(FerriteError::Npm(
+                    "incomplete portable dependency graph".into(),
+                ));
+            }
+            if !matches!(package.source.as_str(), "npm" | "workspace" | "link") {
                 return Err(FerriteError::Npm(format!(
                     "unsupported locked package source `{}` for {}",
                     package.source,
                     package.id()
                 )));
+            }
+            match (&package.path, package.source.as_str()) {
+                (None, "npm") => (),
+                (Some(path), "workspace" | "link")
+                    if crate::workspace::validate_source_path(path).is_ok() => {}
+                _ => return Err(FerriteError::Npm("invalid locked local source path".into())),
             }
             node_semver::Version::parse(&package.version).map_err(|_| {
                 FerriteError::Npm(format!(
@@ -201,6 +251,7 @@ impl Lockfile {
             self.validate_edges(&package.id(), &package.peers, &BTreeMap::new())?;
         }
         for (name, importer) in &self.importers {
+            validate_optional(&importer.optional_dependencies, &importer.dependencies)?;
             if name.is_empty()
                 || Path::new(name).components().any(|part| {
                     matches!(
@@ -228,6 +279,22 @@ impl Lockfile {
             let target = self.package_by_id(id).ok_or_else(|| FerriteError::Npm(format!("lockfile edge {importer} -> {name} references missing {id}; back up and rename ferrite.lock, then run ferrite install to regenerate it (legacy name collisions cannot be recovered from this lock)")))?;
             validate_package_name(name)?;
             let expected = match requests.get(name) {
+                Some(range) if range.starts_with("file:") => {
+                    if target.source == "npm" {
+                        return Err(FerriteError::Npm(
+                            "file edge targets a registry package".into(),
+                        ));
+                    }
+                    target.name.clone()
+                }
+                Some(range) if range.starts_with("workspace:") => {
+                    if target.source != "workspace" {
+                        return Err(FerriteError::Npm(
+                            "workspace edge targets a registry package".into(),
+                        ));
+                    }
+                    name.clone()
+                }
                 Some(range) => crate::registry_request(name, range)?.0,
                 None => name.clone(),
             };
@@ -266,4 +333,14 @@ pub fn validate_package_name(name: &str) -> Result<()> {
             "unsafe or unsupported package name `{name}`"
         )))
     }
+}
+
+fn validate_optional(optional: &[String], edges: &BTreeMap<String, String>) -> Result<()> {
+    let mut names = BTreeSet::new();
+    for name in optional {
+        if !edges.contains_key(name) || !names.insert(name) {
+            return Err(FerriteError::Npm("invalid optional dependency edge".into()));
+        }
+    }
+    Ok(())
 }

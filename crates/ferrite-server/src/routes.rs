@@ -458,4 +458,55 @@ mod streaming_tests {
             .unwrap_err();
         assert!(error.to_string().contains("producer failed"), "{error}");
     }
+    #[tokio::test]
+    async fn pending_http_render_is_dropped_when_connection_closes() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let started = Arc::new(tokio::sync::Notify::new());
+        let (handler_dropped, handler_started) = (dropped.clone(), started.clone());
+        struct PendingRender(Arc<AtomicBool>);
+        impl Drop for PendingRender {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        let router = axum::Router::new().route(
+            "/",
+            axum::routing::get(move || {
+                let (dropped, started) = (handler_dropped.clone(), handler_started.clone());
+                async move {
+                    let _render = PendingRender(dropped);
+                    started.notify_one();
+                    std::future::pending::<Response>().await
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        struct Serving(tokio::task::JoinHandle<()>);
+        impl Drop for Serving {
+            fn drop(&mut self) {
+                self.0.abort();
+            }
+        }
+        let _serving = Serving(server);
+        let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+        socket
+            .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), started.notified())
+            .await
+            .unwrap();
+        drop(socket);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !dropped.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("disconnect must cancel the pending render");
+    }
 }
