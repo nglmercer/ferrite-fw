@@ -234,6 +234,7 @@ impl Builder {
             sourcemap: options.sourcemap,
             base,
             assets: Mutex::new(HashMap::new()),
+            asset_owners: Mutex::new(HashMap::new()),
         });
         let bundler = FerriteBundler::new(loader.clone());
         let out_dir = if env == "ssr" {

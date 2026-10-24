@@ -216,8 +216,8 @@ mod tests {
         assert!(!main_code.contains("/a.css"), "{main_code}");
         assert!(!main_code.contains("/m.module.css"), "{main_code}");
         assert!(main_code.contains("./m-"), "{main_code}");
-        // Manifest links the entry stylesheets.
-        assert_eq!(main_entry.css.len(), 3, "{main_entry:?}");
+        // The imported b.css is already loaded by a.css; linking it again changes the cascade.
+        assert_eq!(main_entry.css.len(), 2, "{main_entry:?}");
         assert!(main_entry
             .css
             .iter()

@@ -27,6 +27,7 @@ pub struct BuildLoader {
     pub base: String,
     /// Loader-emitted assets (name → bytes).
     pub(crate) assets: Mutex<HashMap<String, Vec<u8>>>,
+    pub(crate) asset_owners: Mutex<HashMap<ModuleId, Vec<String>>>,
 }
 
 impl BuildLoader {
@@ -43,10 +44,22 @@ impl BuildLoader {
     ///
     /// Runs `resolveFileUrl` hooks over the default URL; the first `Some`
     /// wins, otherwise the hashed `assets/` URL is used.
-    async fn emit_url(&self, file_name: &str, bytes: Vec<u8>, env: &str) -> Result<String> {
+    async fn emit_url(
+        &self,
+        owner: &ModuleId,
+        file_name: &str,
+        bytes: Vec<u8>,
+        env: &str,
+    ) -> Result<String> {
         let hashed = ferrite_assets::hashed_name(file_name, &bytes);
         let name = format!("assets/{hashed}");
         let default_url = format!("{}{name}", self.base);
+        if let Ok(mut owners) = self.asset_owners.lock() {
+            let files = owners.entry(owner.clone()).or_default();
+            if !files.contains(&name) {
+                files.push(name.clone());
+            }
+        }
         if let Ok(mut assets) = self.assets.lock() {
             assets.insert(name.clone(), bytes);
         }
@@ -126,7 +139,7 @@ impl BuildLoader {
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "asset".to_string());
-            let url = self.emit_url(&name, bytes, env).await?;
+            let url = self.emit_url(id, &name, bytes, env).await?;
             url_mapping.insert(spec.clone(), url);
         }
         let text =
@@ -200,6 +213,13 @@ impl BuildLoader {
 
 #[async_trait::async_trait]
 impl ModuleLoader for BuildLoader {
+    fn asset_files(&self, id: &ModuleId) -> Vec<String> {
+        self.asset_owners
+            .lock()
+            .ok()
+            .and_then(|owners| owners.get(id).cloned())
+            .unwrap_or_default()
+    }
     async fn load(&self, id: &ModuleId, env: &str) -> Result<LoadedModule> {
         // CSS extraction (§29): plain styles ride `LoadedModule.css` into
         // hashed `.css` assets (query variants like `?inline` keep the
@@ -234,7 +254,7 @@ impl ModuleLoader for BuildLoader {
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "asset".to_string());
-            let url = self.emit_url(&name, bytes, env).await?;
+            let url = self.emit_url(id, &name, bytes, env).await?;
             return Ok(LoadedModule {
                 id: id.clone(),
                 code: ferrite_assets::asset_to_js(&url),
@@ -270,7 +290,7 @@ impl ModuleLoader for BuildLoader {
                     Ok((name, bytes))
                 }) {
                     Ok((name, bytes)) => {
-                        let url = self.emit_url(&name, bytes, env).await?;
+                        let url = self.emit_url(id, &name, bytes, env).await?;
                         for quote in ['"', '\'', '`'] {
                             code = code.replace(
                                 &format!("{quote}{}{quote}", dep.0),
