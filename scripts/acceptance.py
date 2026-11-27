@@ -128,8 +128,36 @@ def run(args):
         return 0
     env = dict(os.environ)
     if args.profile in ("core", "frameworks", "production", "ssr", "e2e", "rust-only", "all"):
-        for variable, names in (("FERRITE_CHROMIUM_PATH", ("chromium", "google-chrome", "chrome-headless-shell")), ("FERRITE_FIREFOX_PATH", ("firefox",))):
-            binary = env.get(variable) or next((path for name in names if (path := shutil.which(name))), None)
+        browser_locations = (
+            (
+                "FERRITE_CHROMIUM_PATH",
+                ("chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "chrome", "headless_shell", "chrome-headless-shell"),
+                (
+                    "/usr/bin/chromium",
+                    "/usr/bin/chromium-browser",
+                    "/usr/bin/google-chrome",
+                    "/usr/bin/google-chrome-stable",
+                    "/snap/bin/chromium",
+                    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+                    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+                ),
+            ),
+            (
+                "FERRITE_FIREFOX_PATH",
+                ("firefox", "firefox-esr"),
+                (
+                    "/usr/bin/firefox",
+                    "/usr/bin/firefox-esr",
+                    "/snap/bin/firefox",
+                    "/Applications/Firefox.app/Contents/MacOS/firefox",
+                    "C:\\Program Files\\Mozilla Firefox\\firefox.exe",
+                    "C:\\Program Files (x86)\\Mozilla Firefox\\firefox.exe",
+                ),
+            ),
+        )
+        for variable, names, paths in browser_locations:
+            binary = env.get(variable) or next((path for name in names if (path := shutil.which(name))), None) or next((path for path in paths if Path(path).is_file()), None)
             if not binary or not Path(binary).is_file():
                 raise RuntimeError(f"required real browser missing: set {variable}; no gate was run")
             env[variable] = str(Path(binary).resolve())
