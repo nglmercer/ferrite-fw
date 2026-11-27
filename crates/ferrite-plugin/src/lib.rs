@@ -210,6 +210,80 @@ mod tests {
         assert!(!result.full_reload);
     }
 
+    struct MapOnlyRenderPlugin;
+
+    #[async_trait::async_trait]
+    impl Plugin for MapOnlyRenderPlugin {
+        fn name(&self) -> &'static str {
+            "map-only-render"
+        }
+
+        async fn render_chunk(
+            &self,
+            _ctx: &PluginContext,
+            _chunk: RenderChunk,
+        ) -> ferrite_core::Result<Option<RenderChunkResult>> {
+            Ok(Some(RenderChunkResult {
+                code: None,
+                map: Some(ferrite_core::SourceMap::external(
+                    r#"{"version":3,"sources":["input.js"],"names":[],"mappings":"AAAA"}"#,
+                )),
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn render_chunk_map_without_code_replacement_is_preserved() {
+        let graph = ferrite_graph::ModuleGraph::new();
+        let resolver = ferrite_resolver::Resolver::for_environment(
+            std::path::PathBuf::from("/tmp/ferrite-render-map-test"),
+            &ferrite_config::ResolveConfig::default(),
+            &ferrite_core::EnvironmentKind::Client,
+        );
+        let environment =
+            ferrite_core::Environment::new("client", ferrite_core::EnvironmentKind::Client);
+        let emitted = std::sync::Mutex::new(std::collections::HashMap::new());
+        let watch_files = std::sync::Mutex::new(Vec::new());
+        let warnings = std::sync::Mutex::new(Vec::new());
+        let ctx = test_context(
+            &graph,
+            &resolver,
+            &environment,
+            &emitted,
+            &watch_files,
+            &warnings,
+        );
+        let container = PluginContainer::new(vec![Arc::new(MapOnlyRenderPlugin)], Apply::All);
+        let result = container
+            .hook_render_chunk(
+                &ctx,
+                RenderChunk {
+                    id: "/src/main.js".into(),
+                    code: "console.log(1);
+"
+                    .into(),
+                    is_entry: true,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            result.code.as_deref(),
+            Some(
+                "console.log(1);
+"
+            )
+        );
+        assert!(
+            result
+                .map
+                .as_ref()
+                .is_some_and(|map| map.mappings.contains("\"AAAA\"")),
+            "{:?}",
+            result.map.map(|map| map.mappings)
+        );
+    }
+
     #[test]
     fn preview_control_seeds_and_orders_proxies() {
         let mut user = ferrite_config::UserConfig::default();

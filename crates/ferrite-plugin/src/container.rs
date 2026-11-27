@@ -596,43 +596,35 @@ impl PluginContainer {
                 .await
                 .map_err(|error| wrap(plugin, "render_chunk", error))?
             {
-                if let Some(replacement) = result.code {
-                    if replacement != input || result.map.is_some() {
-                        map = if chain_broken {
-                            None
-                        } else {
-                            match result.map {
-                                Some(next) if next.inline => {
-                                    return Err(wrap(
-                                    plugin,
-                                    "render_chunk",
-                                    ferrite_core::FerriteError::Build(
-                                        "render_chunk maps must be external JSON, not inline data URLs"
-                                            .into(),
-                                    ),
-                                ));
-                                }
-                                Some(next) => {
-                                    let chained = match &map {
-                                        Some(existing) => ferrite_transform::chain_source_maps(
-                                            &next.mappings,
-                                            &existing.mappings,
-                                        )
-                                        .map_err(|error| wrap(plugin, "render_chunk", error))?,
-                                        None => next.mappings,
-                                    };
-                                    Some(ferrite_core::SourceMap::external(chained))
-                                }
-                                None if replacement != input => {
-                                    chain_broken = true;
-                                    None
-                                }
-                                None => map,
-                            }
-                        };
+                let replacement = result.code.clone().unwrap_or_else(|| input.clone());
+                let changed = replacement != input;
+                if let Some(next) = result.map {
+                    if next.inline {
+                        return Err(wrap(
+                            plugin,
+                            "render_chunk",
+                            ferrite_core::FerriteError::Build(
+                                "render_chunk maps must be external JSON, not inline data URLs"
+                                    .into(),
+                            ),
+                        ));
                     }
-                    code = replacement;
+                    if !chain_broken {
+                        let chained = match &map {
+                            Some(existing) => ferrite_transform::chain_source_maps(
+                                &next.mappings,
+                                &existing.mappings,
+                            )
+                            .map_err(|error| wrap(plugin, "render_chunk", error))?,
+                            None => next.mappings,
+                        };
+                        map = Some(ferrite_core::SourceMap::external(chained));
+                    }
+                } else if changed {
+                    chain_broken = true;
+                    map = None;
                 }
+                code = replacement;
             }
         }
         Ok(RenderChunkResult {
