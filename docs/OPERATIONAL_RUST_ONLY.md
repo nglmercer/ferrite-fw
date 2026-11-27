@@ -42,7 +42,7 @@ python3 scripts/acceptance.py --profile rust-only
 The profile intentionally does not require Node. It currently proves the parts
 that can execute without it: compiler-host reporting, generated vanilla
 applications in real Chromium/Firefox, generated React dev/refresh, client and SSR production builds/previews plus embedded Vue
-production builds/previews using only checked-in pinned package tarballs,
+client and SSR production builds/previews using only checked-in pinned package tarballs,
 embedded Svelte dev/HMR and SSR production builds/previews, embedded SSR packaging, streamed prerendering and standalone process/streaming
 recovery. The generated tests run
 their Ferrite child processes with an empty `PATH`.

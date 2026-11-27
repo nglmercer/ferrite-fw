@@ -487,7 +487,7 @@ async fn chromium_react_offline_fixture_ssr_build_and_preview() {
 
 #[tokio::test]
 #[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
-async fn chromium_vue_embedded_offline_fixture_build_and_preview() {
+async fn chromium_vue_embedded_offline_fixture_ssr_build_and_preview() {
     let binary = cli();
     let (_registry, registry) = fixture_registry("vue-registry").await;
     let project = ferrite_test::TempProject::new(&[]);
@@ -503,7 +503,9 @@ async fn chromium_vue_embedded_offline_fixture_build_and_preview() {
             "--language",
             "ts",
             "--rendering",
-            "client",
+            "ssr",
+            "--ssr-runtime",
+            "napi-vm",
             "--no-install",
         ],
         false,
@@ -545,6 +547,14 @@ async fn chromium_vue_embedded_offline_fixture_build_and_preview() {
     );
     assert_eq!(inspected["compilerHosts"][0]["externalNodeRequired"], false);
     command(&binary, &destination, &["build"], false).await;
+    assert!(destination.join("dist/server/renderer.json").exists());
+    assert!(std::fs::read_dir(destination.join("dist/server/assets"))
+        .unwrap()
+        .any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("entry-server-")));
     let assets = std::fs::read_dir(destination.join("dist/assets")).unwrap();
     assert!(assets.flatten().any(|entry| {
         entry
