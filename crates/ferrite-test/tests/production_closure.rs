@@ -635,3 +635,48 @@ async fn url_query_emits_hashed_asset_instead_of_source_path() {
         );
     }
 }
+
+#[tokio::test]
+async fn production_url_query_runs_resolve_file_url_with_emitted_name() {
+    struct Cdn;
+    #[async_trait::async_trait]
+    impl ferrite::plugin::Plugin for Cdn {
+        fn name(&self) -> &'static str {
+            "cdn-file-url"
+        }
+        async fn resolve_file_url(
+            &self,
+            _: &ferrite::plugin::PluginContext,
+            request: ferrite::plugin::ResolveFileUrlRequest,
+        ) -> ferrite::Result<Option<String>> {
+            Ok(Some(format!("https://cdn.example/{}", request.file_name)))
+        }
+    }
+    let project = ferrite_test::TempProject::new(&[
+        (
+            "index.html",
+            "<html><body><script type='module' src='/src/main.js'></script></body></html>",
+        ),
+        (
+            "src/main.js",
+            "import logo from './logo.svg?url';\nglobalThis.logo = logo;\n",
+        ),
+        ("src/logo.svg", "<svg xmlns='http://www.w3.org/2000/svg'/>"),
+    ]);
+    let mut config = project.resolve_config_mode("production");
+    config.build.minify = true;
+    ferrite::Builder::new(config.clone(), vec![std::sync::Arc::new(Cdn)])
+        .build("client")
+        .await
+        .unwrap();
+    let js: String = std::fs::read_dir(config.out_dir().join("assets"))
+        .unwrap()
+        .filter_map(|entry| {
+            let path = entry.unwrap().path();
+            path.extension()
+                .is_some_and(|extension| extension == "js")
+                .then(|| std::fs::read_to_string(path).unwrap())
+        })
+        .collect();
+    assert!(js.contains("https://cdn.example/assets/logo."), "{js}");
+}
