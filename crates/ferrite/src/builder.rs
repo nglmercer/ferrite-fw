@@ -80,7 +80,12 @@ impl Builder {
             let mut config = self.config.clone();
             config.package.standalone = false;
             let builder = Self::new(config, self.plugins.clone());
-            let mut reports = vec![builder.build("client").await?, builder.build("ssr").await?];
+            let mut reports = vec![
+                builder
+                    .build_with_document_completion("client", false)
+                    .await?,
+                builder.build_with_document_completion("ssr", false).await?,
+            ];
             let out = self.config.out_dir();
             let runtime = self.config.runtime.clone();
             let routes = self.config.ssr.clone();
@@ -97,9 +102,9 @@ impl Builder {
             reports.last_mut().expect("SSR report").standalone_binary = package.binary;
             return Ok(reports);
         }
-        let mut reports = vec![self.build("client").await?];
+        let mut reports = vec![self.build_with_document_completion("client", false).await?];
         if has_server_entry {
-            reports.push(self.build("ssr").await?);
+            reports.push(self.build_with_document_completion("ssr", false).await?);
         } else {
             tracing::info!("no SSR entry found; skipping ssr build");
         }
@@ -114,6 +119,14 @@ impl Builder {
     /// `buildEnd` runs with the error, then `closeBundle`, and the original
     /// error is returned.
     pub async fn build(&self, env: &str) -> Result<BuildReport> {
+        self.build_with_document_completion(env, true).await
+    }
+
+    async fn build_with_document_completion(
+        &self,
+        env: &str,
+        complete_existing_ssr_documents: bool,
+    ) -> Result<BuildReport> {
         if !matches!(env, "client" | "ssr") {
             return Err(FerriteError::Build(format!(
                 "unsupported build environment `{env}`; select `client` or `ssr`. Use mode to select environment files"
@@ -173,6 +186,7 @@ impl Builder {
                 env,
                 &options,
                 &output_options,
+                complete_existing_ssr_documents,
             )
             .await
         {
@@ -229,6 +243,7 @@ impl Builder {
         env: &str,
         options: &ferrite_plugin::BundleOptions,
         output_options: &ferrite_plugin::OutputOptions,
+        complete_existing_ssr_documents: bool,
     ) -> Result<BuildReport> {
         // Entries (honoring hooked `options.entries`).
         let entries = self.discover_entries(server, env, &options.entries).await?;
@@ -345,7 +360,8 @@ impl Builder {
             self.write_html(config, &output.manifest)?;
             copy_public(config)?;
             let server_dir = config.out_dir().join("server");
-            if server_dir.join("manifest.json").is_file()
+            if complete_existing_ssr_documents
+                && server_dir.join("manifest.json").is_file()
                 && server_dir
                     .join(crate::SsrRendererArtifact::FILE_NAME)
                     .is_file()
