@@ -344,6 +344,15 @@ impl Builder {
         if env == "client" {
             self.write_html(config, &output.manifest)?;
             copy_public(config)?;
+            let server_dir = config.out_dir().join("server");
+            if server_dir.join("manifest.json").is_file()
+                && server_dir
+                    .join(crate::SsrRendererArtifact::FILE_NAME)
+                    .is_file()
+                && ferrite_runtime::compiled_graph_backend_available(&config.runtime.backend)
+            {
+                crate::ssr_build::write_built_ssr_documents(&server_dir, config)?;
+            }
         }
         // Standalone single binary (§51–§54; blocking cargo builds run
         // off the async runtime).
