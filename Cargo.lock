@@ -1053,6 +1053,7 @@ dependencies = [
  "ferrite-resolver",
  "ferrite-runtime",
  "ferrite-transform",
+ "flate2",
  "oxc_sourcemap",
  "rustix",
  "serde",

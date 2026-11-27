@@ -537,6 +537,12 @@ async fn chromium_vue_embedded_offline_fixture_ssr_build_and_preview() {
         false,
     )
     .await;
+    std::fs::remove_file(
+        destination.join(
+            ".ferrite/npm/packages/@vue/compiler-sfc@3.5.22/dist/compiler-sfc.esm-browser.js",
+        ),
+    )
+    .unwrap();
     let inspected: serde_json::Value =
         serde_json::from_str(&command(&binary, &destination, &["inspect", "--json"], false).await)
             .unwrap();
@@ -780,6 +786,8 @@ async fn chromium_svelte_embedded_offline_fixture_ssr_build_and_preview() {
         false,
     )
     .await;
+    std::fs::remove_file(destination.join(".ferrite/npm/packages/svelte@5.39.6/compiler/index.js"))
+        .unwrap();
     let inspected: serde_json::Value =
         serde_json::from_str(&command(&binary, &destination, &["inspect", "--json"], false).await)
             .unwrap();

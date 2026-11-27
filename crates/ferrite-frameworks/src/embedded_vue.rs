@@ -15,6 +15,7 @@ use ferrite_runtime::{
 };
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -44,6 +45,16 @@ struct WorkerResult {
 struct Piece {
     code: String,
     map: Option<serde_json::Value>,
+}
+
+fn embedded_compressed_bundle(bytes: &[u8], description: &str) -> Result<String> {
+    let mut bundle = String::new();
+    flate2::read::GzDecoder::new(bytes)
+        .read_to_string(&mut bundle)
+        .map_err(|error| {
+            FerriteError::Build(format!("{description} cannot be decoded: {error}"))
+        })?;
+    Ok(bundle)
 }
 
 impl EmbeddedVueCompilerHost {
@@ -80,23 +91,17 @@ impl EmbeddedVueCompilerHost {
                 compiler_package.version
             )));
         }
-        let bundle_path = root
-            .join(".ferrite/npm/packages")
-            .join(compiler_package.id())
-            .join("dist/compiler-sfc.esm-browser.js");
-        let bundle = std::fs::read_to_string(&bundle_path).map_err(|error| {
-            FerriteError::Build(format!(
-                "embedded Vue compiler bundle {} cannot be read: {error}; run ferrite install --frozen-lockfile",
-                bundle_path.display()
-            ))
-        })?;
+        let bundle = embedded_compressed_bundle(
+            include_bytes!("embedded_compilers/vue-compiler-sfc-3.5.22.js.gz"),
+            "@vue/compiler-sfc@3.5.22 embedded browser compiler",
+        )?;
         let bundle = napi_compatible_bundle(bundle)?;
         let cache_identity = ferrite_core::Hash::of_str(
             &serde_json::json!({
                 "lock": lock,
                 "host": "napi-vm-embedded-vue",
                 "compilerWrapper": include_str!("embedded_vue_worker.mjs"),
-                "compilerBundle": bundle,
+                "compilerBundle": ferrite_core::Hash::of_str(&bundle).0,
             })
             .to_string(),
         )
@@ -110,7 +115,7 @@ impl EmbeddedVueCompilerHost {
                 CompiledModule {
                     id: "/vue-compiler.mjs".into(),
                     code: bundle,
-                    url: Some(bundle_path.to_string_lossy().into_owned()),
+                    url: Some("ferrite-embedded://vue/compiler-sfc-3.5.22.js".into()),
                 },
                 CompiledModule {
                     id: "/embedded-vue-worker.mjs".into(),

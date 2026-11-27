@@ -15,7 +15,10 @@ does not yet mean every framework profile satisfies that requirement.
 
 The SSR embedded runtime remains separate from framework compilation. Vue 3.5.22
 and Svelte 5.39.6 use the same embedded runtime technology for their official
-compilers by default. Selecting `runtime.backend = "napi-vm"` or `napi-vm-process` never by itself
+compilers by default. The exact validated compiler JavaScript payloads are
+compressed into the Ferrite binary with their MIT license texts; acceptance
+deletes the corresponding installed compiler files before building, proving the
+toolchain does not execute or read a project-side compiler program. Selecting `runtime.backend = "napi-vm"` or `napi-vm-process` never by itself
 implies that a framework compiler is embedded.
 
 ## Inspect contract

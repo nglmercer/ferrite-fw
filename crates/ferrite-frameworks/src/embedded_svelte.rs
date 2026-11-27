@@ -14,6 +14,7 @@ use ferrite_runtime::{
     RuntimeEnvironment,
 };
 use serde::Deserialize;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -43,6 +44,16 @@ struct WorkerResult {
 struct Piece {
     code: String,
     map: Option<serde_json::Value>,
+}
+
+fn embedded_compressed_bundle(bytes: &[u8], description: &str) -> Result<String> {
+    let mut bundle = String::new();
+    flate2::read::GzDecoder::new(bytes)
+        .read_to_string(&mut bundle)
+        .map_err(|error| {
+            FerriteError::Build(format!("{description} cannot be decoded: {error}"))
+        })?;
+    Ok(bundle)
 }
 
 impl EmbeddedSvelteCompilerHost {
@@ -79,22 +90,16 @@ impl EmbeddedSvelteCompilerHost {
                 compiler_package.version
             )));
         }
-        let bundle_path = root
-            .join(".ferrite/npm/packages")
-            .join(compiler_package.id())
-            .join("compiler/index.js");
-        let bundle = std::fs::read_to_string(&bundle_path).map_err(|error| {
-            FerriteError::Build(format!(
-                "embedded Svelte compiler bundle {} cannot be read: {error}; run ferrite install --frozen-lockfile",
-                bundle_path.display()
-            ))
-        })?;
+        let bundle = embedded_compressed_bundle(
+            include_bytes!("embedded_compilers/svelte-compiler-5.39.6.js.gz"),
+            "svelte@5.39.6 embedded compiler",
+        )?;
         let cache_identity = ferrite_core::Hash::of_str(
             &serde_json::json!({
                 "lock": lock,
                 "host": "napi-vm-embedded-svelte",
                 "compilerWrapper": include_str!("embedded_svelte_worker.mjs"),
-                "compilerBundle": bundle,
+                "compilerBundle": ferrite_core::Hash::of_str(&bundle).0,
             })
             .to_string(),
         )
@@ -108,7 +113,7 @@ impl EmbeddedSvelteCompilerHost {
                 CompiledModule {
                     id: "/svelte-compiler.mjs".into(),
                     code: bundle,
-                    url: Some(bundle_path.to_string_lossy().into_owned()),
+                    url: Some("ferrite-embedded://svelte/compiler-5.39.6.js".into()),
                 },
                 CompiledModule {
                     id: "/embedded-svelte-worker.mjs".into(),
