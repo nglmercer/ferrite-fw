@@ -41,13 +41,13 @@ python3 scripts/acceptance.py --profile rust-only
 
 The profile intentionally does not require Node. It currently proves the parts
 that can execute without it: compiler-host reporting, generated vanilla
-applications in real Chromium/Firefox, embedded SSR packaging, streamed
-prerendering and standalone process/streaming recovery. The generated tests run
+applications in real Chromium/Firefox, a generated React production build and
+preview using only checked-in pinned package tarballs, embedded SSR packaging,
+streamed prerendering and standalone process/streaming recovery. The generated tests run
 their Ferrite child processes with an empty `PATH`.
 
-The profile is a baseline, not final production proof. Generated React/Vue/
-Svelte applications still depend on registry-backed package installation for
-their official runtime packages, and Vue/Svelte compilation still requires the
-explicit external Node compiler host. A no-network fixture registry is still
-required before framework acceptance can be reproducible on a clean offline
-machine.
+The profile is a baseline, not final production proof. Vue/Svelte
+compilation still requires the explicit external Node compiler host. React
+acceptance has a pinned no-network tarball fixture, but equivalent Vue/Svelte
+framework fixtures and their compiler replacement remain required before full
+framework acceptance is reproducible on a clean offline machine.

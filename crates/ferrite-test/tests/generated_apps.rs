@@ -129,6 +129,121 @@ async fn configured_react_selection_matches_inspect_and_transform() {
     );
 }
 
+struct FixtureRegistry(tokio::task::JoinHandle<()>);
+impl Drop for FixtureRegistry {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+async fn react_fixture_registry() -> (FixtureRegistry, String) {
+    use axum::{body::Body, response::Response, Router};
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/react-registry");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let app = Router::new().fallback(move |uri: axum::http::Uri| {
+        let root = root.clone();
+        async move {
+            let mut path = root;
+            let mut valid = true;
+            for component in Path::new(uri.path().trim_start_matches('/')).components() {
+                match component {
+                    std::path::Component::Normal(part) => path.push(part),
+                    std::path::Component::CurDir => {}
+                    _ => valid = false,
+                }
+            }
+            if valid {
+                if let Ok(bytes) = tokio::fs::read(&path).await {
+                    return Response::new(Body::from(bytes));
+                }
+            }
+            Response::builder().status(404).body(Body::empty()).unwrap()
+        }
+    });
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (FixtureRegistry(server), format!("http://127.0.0.1:{port}"))
+}
+
+#[tokio::test]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
+async fn chromium_react_offline_fixture_build_and_preview() {
+    let binary = cli();
+    let (_registry, registry) = react_fixture_registry().await;
+    let project = ferrite_test::TempProject::new(&[]);
+    let destination = project.root.join("app");
+    command(
+        &binary,
+        &project.root,
+        &[
+            "create",
+            destination.to_str().unwrap(),
+            "--framework",
+            "react",
+            "--language",
+            "ts",
+            "--rendering",
+            "client",
+            "--compiler-host",
+            "native",
+            "--no-install",
+        ],
+        false,
+    )
+    .await;
+    let lock = include_str!("fixtures/react.lock").replace("https://registry.npmjs.org", &registry);
+    std::fs::write(destination.join("ferrite.lock"), lock).unwrap();
+    command(
+        &binary,
+        &destination,
+        &["install", "--frozen-lockfile"],
+        false,
+    )
+    .await;
+    let inspected: serde_json::Value =
+        serde_json::from_str(&command(&binary, &destination, &["inspect", "--json"], false).await)
+            .unwrap();
+    assert_eq!(inspected["compilerHosts"][0]["framework"], "react");
+    assert_eq!(inspected["compilerHosts"][0]["execution"], "rust");
+    assert_eq!(inspected["compilerHosts"][0]["externalNodeRequired"], false);
+    command(&binary, &destination, &["build"], false).await;
+    let executable =
+        ferrite_e2e::find_chromium(None).expect("offline React acceptance requires real Chromium");
+    let browser = Browser::launch(
+        LaunchOptions::default()
+            .browser(BrowserKind::Chromium)
+            .executable(executable),
+    )
+    .await
+    .unwrap();
+    let (mut preview, url) = server(&binary, &destination, "preview", false).await;
+    let page = browser.new_page().await.unwrap();
+    page.goto(&url).await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'count: 0'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "offline React preview: {error}; {:?}; {:?}",
+            page.page_errors(),
+            page.console_messages()
+        )
+    });
+    page.locator("#counter").click().await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'count: 1'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap();
+    preview.kill().await.unwrap();
+    preview.wait().await.unwrap();
+    browser.close().await.unwrap();
+}
+
 #[tokio::test]
 #[ignore = "requires freshly built FERRITE_CLI_PATH"]
 async fn rust_only_inspect_reports_compiler_hosts() {
