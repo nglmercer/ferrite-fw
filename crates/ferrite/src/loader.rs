@@ -27,6 +27,7 @@ pub struct BuildLoader {
     pub base: String,
     /// Loader-emitted assets (name → bytes).
     pub(crate) assets: Mutex<HashMap<String, Vec<u8>>>,
+    pub(crate) asset_owners: Mutex<HashMap<ModuleId, Vec<String>>>,
 }
 
 impl BuildLoader {
@@ -43,10 +44,22 @@ impl BuildLoader {
     ///
     /// Runs `resolveFileUrl` hooks over the default URL; the first `Some`
     /// wins, otherwise the hashed `assets/` URL is used.
-    async fn emit_url(&self, file_name: &str, bytes: Vec<u8>, env: &str) -> Result<String> {
+    async fn emit_url(
+        &self,
+        owner: &ModuleId,
+        file_name: &str,
+        bytes: Vec<u8>,
+        env: &str,
+    ) -> Result<String> {
         let hashed = ferrite_assets::hashed_name(file_name, &bytes);
         let name = format!("assets/{hashed}");
         let default_url = format!("{}{name}", self.base);
+        if let Ok(mut owners) = self.asset_owners.lock() {
+            let files = owners.entry(owner.clone()).or_default();
+            if !files.contains(&name) {
+                files.push(name.clone());
+            }
+        }
         if let Ok(mut assets) = self.assets.lock() {
             assets.insert(name.clone(), bytes);
         }
@@ -126,7 +139,7 @@ impl BuildLoader {
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "asset".to_string());
-            let url = self.emit_url(&name, bytes, env).await?;
+            let url = self.emit_url(id, &name, bytes, env).await?;
             url_mapping.insert(spec.clone(), url);
         }
         let text =
@@ -200,6 +213,13 @@ impl BuildLoader {
 
 #[async_trait::async_trait]
 impl ModuleLoader for BuildLoader {
+    fn asset_files(&self, id: &ModuleId) -> Vec<String> {
+        self.asset_owners
+            .lock()
+            .ok()
+            .and_then(|owners| owners.get(id).cloned())
+            .unwrap_or_default()
+    }
     async fn load(&self, id: &ModuleId, env: &str) -> Result<LoadedModule> {
         // CSS extraction (§29): plain styles ride `LoadedModule.css` into
         // hashed `.css` assets (query variants like `?inline` keep the
@@ -234,7 +254,7 @@ impl ModuleLoader for BuildLoader {
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "asset".to_string());
-            let url = self.emit_url(&name, bytes, env).await?;
+            let url = self.emit_url(id, &name, bytes, env).await?;
             return Ok(LoadedModule {
                 id: id.clone(),
                 code: ferrite_assets::asset_to_js(&url),
@@ -270,7 +290,7 @@ impl ModuleLoader for BuildLoader {
                     Ok((name, bytes))
                 }) {
                     Ok((name, bytes)) => {
-                        let url = self.emit_url(&name, bytes, env).await?;
+                        let url = self.emit_url(id, &name, bytes, env).await?;
                         for quote in ['"', '\'', '`'] {
                             code = code.replace(
                                 &format!("{quote}{}{quote}", dep.0),
@@ -465,23 +485,19 @@ async fn preview_with_control(
         if !ferrite_runtime::compiled_graph_backend_available(&control.config.runtime.backend) {
             return Err(FerriteError::Ssr(format!("built SSR preview requires the explicitly selected napi-vm runtime and its compiled feature; selected `{}`. Configure [runtime].backend = 'napi-vm' and build Ferrite with --features napi-vm", control.config.runtime.backend)));
         }
-        let graph = crate::load_built_ssr_graph(&server_dir)?;
-        let styles = crate::ssr_build::built_ssr_styles(&server_dir, &control.config.base)?;
-        let shell = std::fs::read_to_string(dir.join("index.html"))?;
-        let adapter = ferrite_ssr::JsSsrAdapter::from_resolved_graph(&control.config, graph)?
-            .with_shell(shell);
-        let adapter = Arc::new(tokio::sync::Mutex::new(adapter));
-        Some(Arc::new(ferrite_ssr::FnAdapter::new(
-            move |request, mut context: ferrite_ssr::SsrContext| {
-                let adapter = adapter.clone();
-                let styles = styles.clone();
-                async move {
-                    context.preload.extend(styles);
-                    let adapter = adapter.lock().await;
-                    ferrite_ssr::SsrAdapter::render(&*adapter, request, context).await
-                }
-            },
-        )) as Arc<dyn ferrite_ssr::SsrAdapter>)
+        let artifact = crate::SsrRendererArtifact::read(&server_dir)?;
+        artifact.validate_published_styles(&server_dir)?;
+        let shell = if artifact.requires_default_shell() {
+            std::fs::read_to_string(dir.join("index.html"))?
+        } else {
+            String::new()
+        };
+        Some(artifact.into_streaming_adapter(
+            ferrite_ssr::JsSsrAdapter::runtime_for_resolved(&control.config),
+            shell,
+            &control.config.base,
+            control.config.ssr.streaming,
+        )?)
     } else {
         None
     };

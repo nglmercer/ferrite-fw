@@ -156,6 +156,12 @@ impl JsSsrAdapter {
     /// fail loudly at render, never silently).
     #[must_use]
     pub fn from_resolved(resolved: &ResolvedConfig, module: CompiledModule) -> Self {
+        Self::new(Self::runtime_for_resolved(resolved), module)
+            .with_streaming(resolved.ssr.streaming)
+    }
+
+    /// Create one configured runtime shared by route/document adapters.
+    pub fn runtime_for_resolved(resolved: &ResolvedConfig) -> Arc<dyn JsRuntime> {
         #[cfg(feature = "napi-vm")]
         if resolved.runtime.backend == "napi-vm"
             || (resolved.runtime.backend == "napi-vm-process" && cfg!(target_os = "linux"))
@@ -199,18 +205,9 @@ impl JsSsrAdapter {
                     Arc::new(ferrite_runtime::napi_vm::NapiVmRuntime::new(options))
                 }
             };
-            return Self {
-                runtime,
-                render_lock: tokio::sync::Mutex::new(()),
-                module,
-                graph: None,
-                export: "render".to_string(),
-                shell: None,
-                streaming: resolved.ssr.streaming,
-            };
+            return runtime;
         }
-        Self::new(runtime_for_backend(&resolved.runtime.backend), module)
-            .with_streaming(resolved.ssr.streaming)
+        runtime_for_backend(&resolved.runtime.backend)
     }
 
     /// Build from an explicitly compiled graph and the configured runtime.

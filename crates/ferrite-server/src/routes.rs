@@ -138,6 +138,7 @@ pub(crate) async fn rpc_handler(
 pub(crate) async fn fallback_handler(
     State(inner): State<Arc<DevServerInner>>,
     method: axum::http::Method,
+    axum::extract::OriginalUri(original_uri): axum::extract::OriginalUri,
     uri: Uri,
     headers: HeaderMap,
     body: axum::body::Bytes,
@@ -171,12 +172,22 @@ pub(crate) async fn fallback_handler(
         }
     }
     // Application routes must reach the renderer before index.html fallback.
-    // Axum's nested router strips the base from Uri; middleware callers may
-    // supply the full URL. Accept both without changing renderer request data.
-    let route = path
-        .strip_prefix(inner.config.base.trim_end_matches('/'))
-        .filter(|route| route.starts_with('/'))
-        .unwrap_or(&path);
+    // Axum's nested router strips the base from Uri; OriginalUri retains the
+    // mounted request path in both nested and middleware modes. Strip the
+    // configured base exactly once so an application path that itself starts
+    // with the base cannot be reinterpreted as a more privileged SSR route.
+    let original_path = original_uri.path();
+    let base = inner.config.base.trim_end_matches('/');
+    let route = if base.is_empty() || base == "/" {
+        original_path
+    } else if original_path == base {
+        "/"
+    } else {
+        original_path
+            .strip_prefix(base)
+            .filter(|route| route.starts_with('/'))
+            .unwrap_or(original_path)
+    };
     if inner.config.ssr.matches_route(route) {
         let adapter = inner.ssr_adapter.read().await.clone();
         if let Some(adapter) = adapter {
@@ -191,12 +202,12 @@ pub(crate) async fn fallback_handler(
                 .collect();
             let request = SsrHttpRequest {
                 method: method.to_string(),
-                uri: url.clone(),
+                uri: original_uri.to_string(),
                 headers: request_headers.clone(),
                 body: body.to_vec(),
             };
             let context = SsrContext {
-                url,
+                url: original_uri.to_string(),
                 headers: request_headers.into_iter().collect(),
                 ..Default::default()
             };
@@ -221,6 +232,18 @@ pub(crate) async fn fallback_handler(
         )
             .into_response(),
         Err(error) => {
+            let media = headers
+                .get("sec-fetch-dest")
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|destination| {
+                    matches!(
+                        destination,
+                        "image" | "font" | "audio" | "video" | "manifest"
+                    )
+                });
+            if matches!(&error, FerriteError::Resolve(_)) && (media || route == "/favicon.ico") {
+                return StatusCode::NOT_FOUND.into_response();
+            }
             if !inner.config.is_production && path.contains('.') && !path.starts_with("/@") {
                 // Failed first loads still need a source node so a correction
                 // or creation produces a reload instead of being untracked.

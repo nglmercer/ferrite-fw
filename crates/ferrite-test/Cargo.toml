@@ -15,6 +15,7 @@ serde_json = { workspace = true }
 tempfile = { workspace = true }
 
 [dev-dependencies]
+oxc_sourcemap = { workspace = true }
 ferrite = { workspace = true }
 ferrite-frameworks = { workspace = true }
 tokio = { workspace = true }

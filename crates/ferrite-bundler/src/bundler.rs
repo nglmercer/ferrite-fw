@@ -65,10 +65,11 @@ impl<L: ModuleLoader + 'static> Bundler for FerriteBundler<L> {
         // Plain-CSS modules carry extracted styles, not JS: they get no
         // chunk file (CSS-modules stubs stay — importers read the map).
         let is_plain_css = |id: &ModuleId| {
-            modules
-                .get(id)
-                .and_then(|module| module.css.as_ref())
-                .is_some_and(|css| !css.is_modules && !css.keep_js)
+            !dynamic_entries.contains(id)
+                && modules
+                    .get(id)
+                    .and_then(|module| module.css.as_ref())
+                    .is_some_and(|css| !css.is_modules && !css.keep_js)
         };
         // 3. Chunk: one file per module, or one scope-hoisted file per
         // entry closure (§91; shared/ineligible modules stay separate).
@@ -130,11 +131,16 @@ impl<L: ModuleLoader + 'static> Bundler for FerriteBundler<L> {
         //     content hash covers hooked code; wrappers are collected now
         //     (folded into the hash below) and applied at emit time.
         let mut wrappers: HashMap<String, ferrite_plugin::ChunkWrapper> = HashMap::new();
+        let mut unknown_hook_maps = HashSet::new();
         for chunk in chunks.values_mut() {
             if let Some(code) = hooks
                 .render_chunk(&chunk.id, chunk.code.clone(), chunk.entry)
                 .await?
             {
+                if chunk.code != code {
+                    chunk.map = None;
+                    unknown_hook_maps.insert(chunk.id.clone());
+                }
                 chunk.code = code;
             }
             wrappers.insert(
@@ -144,7 +150,34 @@ impl<L: ModuleLoader + 'static> Bundler for FerriteBundler<L> {
                     .await?,
             );
         }
-        // 4. Hash + file names. Each name embeds a content hash of the
+        // 4. Emit one hashed CSS file per CSS module, rewriting relative
+        //    `@import`s to relative CSS URLs in post-order (leaves first).
+        let mut css_file_names: HashMap<String, String> = HashMap::new();
+        let mut css_texts: HashMap<String, String> = HashMap::new();
+        let mut css_ids: Vec<&ModuleId> = live
+            .iter()
+            .filter(|id| {
+                modules
+                    .get(id)
+                    .and_then(|module| module.css.as_ref())
+                    .is_some()
+            })
+            .collect();
+        css_ids.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut css_done = HashSet::new();
+        for id in css_ids {
+            emit_css_module(
+                id,
+                &modules,
+                &live,
+                config,
+                &mut css_file_names,
+                &mut css_texts,
+                &mut css_done,
+                &mut Vec::new(),
+            )?;
+        }
+        // 5. Hash + file names. Each name embeds a content hash of the
         //    chunk's own code plus every transitively reachable chunk's
         //    content hash, so a change anywhere in the dependency cone
         //    renames the file (no stale caches). The hash intentionally
@@ -172,6 +205,15 @@ impl<L: ModuleLoader + 'static> Bundler for FerriteBundler<L> {
                 material.push('\0');
                 material.push_str(&extra);
             }
+            for css in entry_css_files(&ModuleId::new(chunk.id.clone()), &modules, &live, true) {
+                if let Some(file) = css_file_names.get(&css) {
+                    material.push('\0');
+                    material.push_str(file);
+                }
+            }
+            if request.env == "client" {
+                material.push_str(include_str!("css_preload.js"));
+            }
             let hash = Hash::of_str(&material).short(8);
             let file_name = config
                 .chunk_pattern
@@ -179,35 +221,14 @@ impl<L: ModuleLoader + 'static> Bundler for FerriteBundler<L> {
                 .replace("[hash]", &hash);
             file_names.insert(chunk.id.clone(), file_name);
         }
-        // 5. Emit one hashed CSS file per CSS module, rewriting relative
-        //    `@import`s to relative CSS URLs in post-order (leaves first).
-        let mut css_file_names: HashMap<String, String> = HashMap::new();
-        let mut css_texts: HashMap<String, String> = HashMap::new();
-        let mut css_ids: Vec<&ModuleId> = live
-            .iter()
-            .filter(|id| {
-                modules
-                    .get(id)
-                    .and_then(|module| module.css.as_ref())
-                    .is_some()
-            })
-            .collect();
-        css_ids.sort_by(|a, b| a.0.cmp(&b.0));
-        let mut css_done = HashSet::new();
-        for id in css_ids {
-            emit_css_module(
-                id,
-                &modules,
-                &live,
-                config,
-                &mut css_file_names,
-                &mut css_texts,
-                &mut css_done,
-                &mut Vec::new(),
-            )?;
-        }
         let mut bundle = OutputBundle::default();
         let mut bytes = 0;
+        let helper_code = include_str!("css_preload.js");
+        let helper_file = format!(
+            "assets/ferrite-preload-{}.js",
+            Hash::of_str(helper_code).short(8)
+        );
+        let mut helper_used = false;
         let mut css_files_sorted: Vec<(&String, &String)> = css_file_names.iter().collect();
         css_files_sorted.sort();
         for (id, file) in css_files_sorted {
@@ -238,6 +259,8 @@ impl<L: ModuleLoader + 'static> Bundler for FerriteBundler<L> {
             let file_name = file_names[&chunk_id].clone();
             let mut import_map: HashMap<String, String> = HashMap::new();
             let mut stripped_css: Vec<&str> = Vec::new();
+            let mut dynamic_css = HashMap::new();
+            let mut uses_helper = false;
             for member in &chunk.modules {
                 let module = &modules[member];
                 for (specifier, dep, kind) in &module.imports {
@@ -245,7 +268,18 @@ impl<L: ModuleLoader + 'static> Bundler for FerriteBundler<L> {
                         .get(dep)
                         .and_then(|dep_chunk| file_names.get(*dep_chunk));
                     if let Some(dep_file) = dep_file {
-                        import_map.insert(specifier.clone(), relative_url(&file_name, dep_file));
+                        let relative = relative_url(&file_name, dep_file);
+                        if request.env == "client" && *kind == ImportKind::Dynamic {
+                            let styles: Vec<_> = entry_css_files(dep, &modules, &live, false)
+                                .iter()
+                                .filter_map(|id| css_file_names.get(id))
+                                .map(|file| relative_url(&file_name, file))
+                                .collect();
+                            if !styles.is_empty() {
+                                dynamic_css.insert(relative.clone(), styles);
+                            }
+                        }
+                        import_map.insert(specifier.clone(), relative);
                     } else if *kind != ImportKind::Dynamic
                         && modules
                             .get(dep)
@@ -257,20 +291,75 @@ impl<L: ModuleLoader + 'static> Bundler for FerriteBundler<L> {
                     }
                 }
             }
-            let code = if import_map.is_empty() {
-                chunk.code.clone()
-            } else {
-                rewrite_imports_text(&chunk.code, &import_map)
-            };
-            let code = strip_bare_imports(&code, &stripped_css);
-            let code = match wrappers.get(&chunk_id) {
-                Some(wrapper) => wrapper.apply(&code),
-                None => code,
-            };
+            // The string-only hook boundary cannot compose replacement maps.
+            // Do not advertise stale original positions for changed hook code.
+            let want_map = request.sourcemap && !unknown_hook_maps.contains(&chunk_id);
+            let mut code = chunk.code.clone();
+            let mut final_map = chunk.map.clone();
+            let (stripped, strip_map) = ferrite_transform::strip_bare_imports_mapped(
+                &chunk.id,
+                &code,
+                &stripped_css.iter().map(|s| s.to_string()).collect(),
+                want_map,
+            )?;
+            code = stripped;
+            final_map = compose_final_map(strip_map, final_map)?;
+            let (rewritten, _, rewrite_map) = ferrite_transform::rewrite_specifiers_mapped(
+                &chunk.id,
+                &code,
+                &ferrite_core::ModuleType::Js,
+                &import_map,
+                want_map,
+            )?;
+            code = rewritten;
+            final_map = compose_final_map(rewrite_map, final_map)?;
+            if !dynamic_css.is_empty() {
+                let (rewritten, map) = ferrite_transform::preload_dynamic_imports(
+                    &chunk.id,
+                    &code,
+                    &dynamic_css,
+                    &relative_url(&file_name, &helper_file),
+                    want_map,
+                )?;
+                uses_helper = rewritten != code;
+                helper_used |= uses_helper;
+                code = rewritten;
+                final_map = compose_final_map(map, final_map)?;
+            }
+            if let Some(wrapper) = wrappers
+                .get(&chunk_id)
+                .filter(|wrapper| !wrapper.is_empty())
+            {
+                let mut prefix = String::new();
+                let mut suffix = String::new();
+                for text in [&wrapper.banner, &wrapper.intro].into_iter().flatten() {
+                    prefix.push_str(text);
+                    if !text.ends_with('\n') {
+                        prefix.push('\n');
+                    }
+                }
+                if !code.ends_with('\n') {
+                    suffix.push('\n');
+                }
+                for text in [&wrapper.outro, &wrapper.footer].into_iter().flatten() {
+                    suffix.push_str(text);
+                    if !text.ends_with('\n') {
+                        suffix.push('\n');
+                    }
+                }
+                let (rewritten, map) = ferrite_transform::apply_text_edits(
+                    &chunk.id,
+                    &code,
+                    &[(0, 0, prefix), (code.len(), code.len(), suffix)],
+                    want_map,
+                )?;
+                code = rewritten;
+                final_map = compose_final_map(map, final_map)?;
+            }
             bytes += code.len();
             let mut code_with_map = code.clone();
             if request.sourcemap {
-                if let Some(map) = &chunk.map {
+                if let Some(map) = &final_map {
                     let map_name = format!("{file_name}.map");
                     bundle.insert(EmittedFile {
                         name: map_name.clone(),
@@ -288,15 +377,40 @@ impl<L: ModuleLoader + 'static> Bundler for FerriteBundler<L> {
                 contents: code_with_map.into_bytes(),
                 is_entry: chunk.entry,
             });
-            // Extracted CSS files for this entry's closure (BFS order).
-            let css_files = if chunk.entry {
-                entry_css_files(&ModuleId::new(chunk_id.clone()), &modules, &live)
-                    .iter()
-                    .filter_map(|id| css_file_names.get(id).cloned())
-                    .collect()
-            } else {
-                Vec::new()
-            };
+            // Every chunk records its static stylesheet closure. SSR retains
+            // eager all-graph preloading; client lazy roots load on demand.
+            let css_files = entry_css_files(
+                &ModuleId::new(chunk_id.clone()),
+                &modules,
+                &live,
+                request.env == "ssr",
+            )
+            .iter()
+            .filter_map(|id| css_file_names.get(id).cloned())
+            .collect();
+            let mut assets = Vec::new();
+            let mut asset_seen = HashSet::new();
+            let mut asset_stack = vec![ModuleId::new(chunk_id.clone())];
+            let mut asset_modules = HashSet::new();
+            while let Some(id) = asset_stack.pop() {
+                if !live.contains(&id) || !asset_modules.insert(id.clone()) {
+                    continue;
+                }
+                for asset in self.loader.asset_files(&id) {
+                    if asset_seen.insert(asset.clone()) {
+                        assets.push(asset);
+                    }
+                }
+                if let Some(module) = modules.get(&id) {
+                    for (_, dep, kind) in module.imports.iter().rev() {
+                        if *kind == ImportKind::Static
+                            || (request.env == "ssr" && *kind == ImportKind::Dynamic)
+                        {
+                            asset_stack.push(dep.clone());
+                        }
+                    }
+                }
+            }
             manifest_entries.insert(
                 chunk_id.clone(),
                 ManifestEntry {
@@ -317,10 +431,37 @@ impl<L: ModuleLoader + 'static> Bundler for FerriteBundler<L> {
                         .iter()
                         .filter_map(|dep| file_names.get(dep).cloned())
                         .collect(),
-                    assets: Vec::new(),
+                    assets,
                 },
             );
+            if uses_helper {
+                let entry = manifest_entries.get_mut(&chunk_id).expect("inserted chunk");
+                if !entry.imports.contains(&helper_file) {
+                    entry.imports.push(helper_file.clone());
+                }
+            }
             ssr_entries.insert(chunk_id.clone(), vec![file_name]);
+        }
+        if helper_used {
+            bytes += helper_code.len();
+            bundle.insert(EmittedFile {
+                name: helper_file.clone(),
+                contents: helper_code.as_bytes().to_vec(),
+                is_entry: false,
+            });
+            manifest_entries.insert(
+                "\0ferrite:css-preload".into(),
+                ManifestEntry {
+                    file: helper_file,
+                    src: None,
+                    is_entry: None,
+                    is_dynamic_entry: None,
+                    css: vec![],
+                    imports: vec![],
+                    dynamic_imports: vec![],
+                    assets: vec![],
+                },
+            );
         }
         Ok(BundleOutput {
             chunks,
@@ -392,5 +533,14 @@ impl<L: ModuleLoader> FerriteBundler<L> {
             }
         }
         Ok(modules)
+    }
+}
+
+fn compose_final_map(outer: Option<String>, inner: Option<String>) -> Result<Option<String>> {
+    match (outer, inner) {
+        (Some(outer), Some(inner)) => {
+            Ok(Some(ferrite_transform::chain_source_maps(&outer, &inner)?))
+        }
+        (outer, inner) => Ok(outer.or(inner)),
     }
 }

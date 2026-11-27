@@ -32,12 +32,29 @@ impl Builder {
     #[must_use]
     pub fn new(mut config: ResolvedConfig, plugins: Vec<Arc<dyn Plugin>>) -> Self {
         config.is_production = true;
+        for shell in config.ssr.shell.iter().chain(
+            config
+                .ssr
+                .entries
+                .iter()
+                .filter_map(|entry| entry.shell.as_ref()),
+        ) {
+            if !config.build.entries.contains(shell) {
+                config.build.entries.push(shell.clone());
+            }
+        }
         Self { config, plugins }
     }
 
     /// Build every configured environment (client + SSR when present).
     pub async fn build_app(&self) -> Result<Vec<BuildReport>> {
         let has_server_entry = self.ssr_entry()?.is_some();
+        if !has_server_entry {
+            let server_dir = self.config.out_dir().join("server");
+            if server_dir.exists() {
+                std::fs::remove_dir_all(&server_dir)?;
+            }
+        }
         if has_server_entry && self.config.package.standalone {
             let sdk = self.config.package.ssr_sdk.as_ref().ok_or_else(|| {
                 FerriteError::Build("SSR standalone requires explicit package.ssr_sdk pointing to a Ferrite SDK crate; build without standalone for preview".into())
@@ -69,7 +86,12 @@ impl Builder {
             let mut config = self.config.clone();
             config.package.standalone = false;
             let builder = Self::new(config, self.plugins.clone());
-            let mut reports = vec![builder.build("client").await?, builder.build("ssr").await?];
+            let mut reports = vec![
+                builder
+                    .build_with_document_completion("client", false)
+                    .await?,
+                builder.build_with_document_completion("ssr", false).await?,
+            ];
             let out = self.config.out_dir();
             let runtime = self.config.runtime.clone();
             let routes = self.config.ssr.clone();
@@ -86,9 +108,9 @@ impl Builder {
             reports.last_mut().expect("SSR report").standalone_binary = package.binary;
             return Ok(reports);
         }
-        let mut reports = vec![self.build("client").await?];
+        let mut reports = vec![self.build_with_document_completion("client", false).await?];
         if has_server_entry {
-            reports.push(self.build("ssr").await?);
+            reports.push(self.build_with_document_completion("ssr", false).await?);
         } else {
             tracing::info!("no SSR entry found; skipping ssr build");
         }
@@ -103,6 +125,14 @@ impl Builder {
     /// `buildEnd` runs with the error, then `closeBundle`, and the original
     /// error is returned.
     pub async fn build(&self, env: &str) -> Result<BuildReport> {
+        self.build_with_document_completion(env, true).await
+    }
+
+    async fn build_with_document_completion(
+        &self,
+        env: &str,
+        complete_existing_ssr_documents: bool,
+    ) -> Result<BuildReport> {
         if !matches!(env, "client" | "ssr") {
             return Err(FerriteError::Build(format!(
                 "unsupported build environment `{env}`; select `client` or `ssr`. Use mode to select environment files"
@@ -162,6 +192,7 @@ impl Builder {
                 env,
                 &options,
                 &output_options,
+                complete_existing_ssr_documents,
             )
             .await
         {
@@ -199,7 +230,11 @@ impl Builder {
         if env == "ssr" {
             Ok(self.ssr_entry()?.into_iter().collect())
         } else {
-            Ok(self.config.build.entries.clone())
+            let mut entries = self.config.build.entries.clone();
+            if !self.config.ssr.islands.is_empty() {
+                entries.push("@ferrite/islands-client".into());
+            }
+            Ok(entries)
         }
     }
 
@@ -214,6 +249,7 @@ impl Builder {
         env: &str,
         options: &ferrite_plugin::BundleOptions,
         output_options: &ferrite_plugin::OutputOptions,
+        complete_existing_ssr_documents: bool,
     ) -> Result<BuildReport> {
         // Entries (honoring hooked `options.entries`).
         let entries = self.discover_entries(server, env, &options.entries).await?;
@@ -234,6 +270,7 @@ impl Builder {
             sourcemap: options.sourcemap,
             base,
             assets: Mutex::new(HashMap::new()),
+            asset_owners: Mutex::new(HashMap::new()),
         });
         let bundler = FerriteBundler::new(loader.clone());
         let out_dir = if env == "ssr" {
@@ -319,7 +356,7 @@ impl Builder {
                 .ssr_manifest
                 .write(&out_dir.join("ssr-manifest.json"))?;
             if ferrite_runtime::compiled_graph_backend_available(&config.runtime.backend) {
-                crate::write_built_ssr_artifact(&out_dir)?;
+                crate::ssr_build::write_built_ssr_documents(&out_dir, config)?;
             }
         } else {
             output.manifest.write(&out_dir.join("manifest.json"))?;
@@ -328,6 +365,16 @@ impl Builder {
         if env == "client" {
             self.write_html(config, &output.manifest)?;
             copy_public(config)?;
+            let server_dir = config.out_dir().join("server");
+            if complete_existing_ssr_documents
+                && server_dir.join("manifest.json").is_file()
+                && server_dir
+                    .join(crate::SsrRendererArtifact::FILE_NAME)
+                    .is_file()
+                && ferrite_runtime::compiled_graph_backend_available(&config.runtime.backend)
+            {
+                crate::ssr_build::write_built_ssr_documents(&server_dir, config)?;
+            }
         }
         // Standalone single binary (§51–§54; blocking cargo builds run
         // off the async runtime).
@@ -442,7 +489,10 @@ impl Builder {
             if !file.exists() {
                 continue;
             }
-            let html = std::fs::read_to_string(&file)?;
+            let html = crate::ssr_islands::inject_build_bootstrap(
+                &std::fs::read_to_string(&file)?,
+                config,
+            );
             // Stylesheets for this page's entries (manifest css[], in order).
             let mut css_hrefs: Vec<String> = Vec::new();
             for discovered in ferrite_html::discover_entries(&html) {
