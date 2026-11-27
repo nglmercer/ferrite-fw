@@ -106,6 +106,18 @@ impl Builder {
         if has_server_entry {
             reports.push(self.build_with_document_completion("ssr", false).await?);
         } else {
+            let server_dir = self.config.out_dir().join("server");
+            for file in [
+                crate::SsrRendererArtifact::FILE_NAME,
+                "manifest.json",
+                "ssr-manifest.json",
+            ] {
+                match std::fs::remove_file(server_dir.join(file)) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
             tracing::info!("no SSR entry found; skipping ssr build");
         }
         Ok(reports)
