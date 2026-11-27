@@ -174,9 +174,9 @@ pub fn find_chromium(hint: Option<&Path>) -> Option<PathBuf> {
         &["FERRITE_CHROMIUM_PATH", "CHROME_PATH", "CHROMIUM_PATH"],
         &[
             "chromium",
-            "chromium-browser",
             "google-chrome",
             "google-chrome-stable",
+            "chromium-browser",
             "chrome",
             "headless_shell",
         ],

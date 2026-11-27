@@ -131,7 +131,7 @@ def run(args):
         browser_locations = (
             (
                 "FERRITE_CHROMIUM_PATH",
-                ("chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "chrome", "headless_shell", "chrome-headless-shell"),
+                ("chromium", "google-chrome", "google-chrome-stable", "chromium-browser", "chrome", "headless_shell", "chrome-headless-shell"),
                 (
                     "/usr/bin/chromium",
                     "/usr/bin/chromium-browser",
