@@ -4,39 +4,97 @@
 //! embedded compiler workloads. Native `.node` addons are intentionally not
 //! supported by this backend.
 
-use crate::{CompiledModuleGraph, JsHandle, JsRuntime, JsStreamResponse, JsValue, ModuleNamespace, RuntimeEnvironment};
+use crate::{
+    CompiledModuleGraph, JsHandle, JsRuntime, JsStreamResponse, JsValue, ModuleNamespace,
+    RuntimeEnvironment,
+};
 use ferrite_core::{FerriteError, Result};
+use rquickjs::function::Args;
 use rquickjs::loader::{ImportAttributes, Loader, Resolver};
-use rquickjs::{Array, Context, Function, Module, Object, Persistent, Runtime, Value};
-use std::cell::{Cell, RefCell};
+use rquickjs::{Array, Context, Function, IntoJs, Module, Object, Persistent, Runtime, Value};
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 type Reply<T> = tokio::sync::oneshot::Sender<std::result::Result<T, String>>;
 
+#[derive(Clone)]
+struct ExecutionControl {
+    cancelled: Arc<AtomicBool>,
+    shutdown: Arc<AtomicBool>,
+    deadline: Option<Instant>,
+}
+
+impl ExecutionControl {
+    fn new(timeout_ms: u64, shutdown: Arc<AtomicBool>) -> Self {
+        Self {
+            cancelled: Arc::new(AtomicBool::new(false)),
+            shutdown,
+            deadline: (timeout_ms != 0).then(|| Instant::now() + Duration::from_millis(timeout_ms)),
+        }
+    }
+
+    fn interrupted(&self) -> bool {
+        self.cancelled.load(Ordering::Relaxed)
+            || self.shutdown.load(Ordering::Relaxed)
+            || self
+                .deadline
+                .is_some_and(|deadline| Instant::now() >= deadline)
+    }
+
+    fn error(&self) -> String {
+        if self.cancelled.load(Ordering::Relaxed) || self.shutdown.load(Ordering::Relaxed) {
+            "rquickjs request cancelled or worker shut down".into()
+        } else {
+            "rquickjs request deadline exceeded (including queue time)".into()
+        }
+    }
+}
+
 enum Job {
-    EvalGraph { graph: CompiledModuleGraph, fresh: bool, reply: Reply<serde_json::Value> },
-    InvokeGraph { graph: CompiledModuleGraph, export: String, args: Vec<JsValue>, fresh: bool, reply: Reply<serde_json::Value> },
-    Call { handle: u64, args: Vec<JsValue>, reply: Reply<serde_json::Value> },
+    EvalGraph {
+        graph: CompiledModuleGraph,
+        reply: Reply<serde_json::Value>,
+    },
+    InvokeGraph {
+        graph: CompiledModuleGraph,
+        export: String,
+        args: Vec<JsValue>,
+        reply: Reply<serde_json::Value>,
+    },
+    Call {
+        handle: u64,
+        args: Vec<JsValue>,
+        reply: Reply<serde_json::Value>,
+    },
 }
 
 impl Job {
     fn cancelled(&self) -> bool {
         match self {
-            Self::EvalGraph { reply, .. } | Self::InvokeGraph { reply, .. } | Self::Call { reply, .. } => reply.is_closed(),
+            Self::EvalGraph { reply, .. }
+            | Self::InvokeGraph { reply, .. }
+            | Self::Call { reply, .. } => reply.is_closed(),
         }
     }
 }
 
-struct Cancel(Arc<AtomicBool>);
-impl Drop for Cancel {
-    fn drop(&mut self) { self.0.store(true, Ordering::Relaxed); }
+struct Request {
+    job: Job,
+    control: ExecutionControl,
 }
 
-/// Options retained for API compatibility during the engine migration.
+struct CancelGuard(Arc<AtomicBool>);
+impl Drop for CancelGuard {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Options for the embedded QuickJS runtime.
 #[derive(Debug, Clone, Default)]
 pub struct QuickJsOptions {
     /// End-to-end request timeout in milliseconds; zero means no timeout.
@@ -46,111 +104,225 @@ pub struct QuickJsOptions {
 /// QuickJS [`JsRuntime`] backend.
 #[derive(Clone)]
 pub struct QuickJsRuntime {
-    jobs: Arc<Mutex<Option<mpsc::SyncSender<Job>>>>,
-    cancel: Arc<AtomicBool>,
+    jobs: Arc<Mutex<Option<mpsc::SyncSender<Request>>>>,
+    shutdown: Arc<AtomicBool>,
     timeout_ms: u64,
 }
 
 impl QuickJsRuntime {
     #[must_use]
     pub fn new(options: QuickJsOptions) -> Self {
-        let (tx, rx) = mpsc::sync_channel::<Job>(64);
-        let cancel = Arc::new(AtomicBool::new(false));
-        let worker_cancel = cancel.clone();
+        let (tx, rx) = mpsc::sync_channel::<Request>(64);
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let worker_shutdown = shutdown.clone();
         thread::Builder::new()
             .name("ferrite-rquickjs".into())
             .stack_size(16 * 1024 * 1024)
-            .spawn(move || worker_loop(rx, worker_cancel))
+            .spawn(move || worker_loop(rx, worker_shutdown))
             .expect("spawn rquickjs worker");
-        Self { jobs: Arc::new(Mutex::new(Some(tx))), cancel, timeout_ms: options.request_timeout_ms }
+        Self {
+            jobs: Arc::new(Mutex::new(Some(tx))),
+            shutdown,
+            timeout_ms: options.request_timeout_ms,
+        }
     }
 
     #[must_use]
-    pub fn with_defaults() -> Self { Self::new(QuickJsOptions::default()) }
-
-    pub fn shutdown(&self) {
-        self.cancel.store(true, Ordering::Relaxed);
-        self.jobs.lock().unwrap_or_else(|e| e.into_inner()).take();
+    pub fn with_defaults() -> Self {
+        Self::new(QuickJsOptions::default())
     }
 
-    fn send(&self, job: Job) -> Result<Cancel> {
-        if self.cancel.load(Ordering::Relaxed) {
+    /// Stop accepting requests and cooperatively interrupt active guest code.
+    pub fn shutdown(&self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+        self.jobs
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
+    }
+
+    fn send(&self, job: Job) -> Result<CancelGuard> {
+        if self.shutdown.load(Ordering::Relaxed) {
             return Err(FerriteError::Runtime("rquickjs worker shut down".into()));
         }
-        self.jobs.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
+        let control = ExecutionControl::new(self.timeout_ms, self.shutdown.clone());
+        let guard = CancelGuard(control.cancelled.clone());
+        self.jobs
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
             .ok_or_else(|| FerriteError::Runtime("rquickjs worker stopped".into()))?
-            .try_send(job)
-            .map_err(|e| FerriteError::Runtime(format!("rquickjs worker queue unavailable: {e}")))?;
-        Ok(Cancel(Arc::new(AtomicBool::new(false))))
+            .try_send(Request { job, control })
+            .map_err(|error| {
+                FerriteError::Runtime(format!("rquickjs worker queue unavailable: {error}"))
+            })?;
+        Ok(guard)
     }
 
-    async fn receive<T>(&self, rx: tokio::sync::oneshot::Receiver<std::result::Result<T, String>>) -> Result<T> {
-        rx.await.map_err(|_| FerriteError::Runtime("rquickjs worker stopped".into()))?
+    async fn receive<T>(
+        &self,
+        rx: tokio::sync::oneshot::Receiver<std::result::Result<T, String>>,
+    ) -> Result<T> {
+        rx.await
+            .map_err(|_| FerriteError::Runtime("rquickjs worker stopped".into()))?
             .map_err(FerriteError::Runtime)
     }
 }
 
-fn encode_args(args: &[JsValue]) -> Result<Vec<serde_json::Value>> {
-    args.iter().map(crate::js_value_to_json).collect()
-}
-
 #[async_trait::async_trait]
 impl JsRuntime for QuickJsRuntime {
-    fn name(&self) -> &'static str { "rquickjs" }
-
-    async fn evaluate_module(&self, module: crate::CompiledModule, env: RuntimeEnvironment) -> Result<ModuleNamespace> {
-        self.evaluate_module_graph(CompiledModuleGraph { entry: module.id.clone(), modules: vec![module] }, env).await
+    fn name(&self) -> &'static str {
+        "rquickjs"
     }
 
-    async fn evaluate_module_graph(&self, graph: CompiledModuleGraph, env: RuntimeEnvironment) -> Result<ModuleNamespace> {
+    async fn evaluate_module(
+        &self,
+        module: crate::CompiledModule,
+        env: RuntimeEnvironment,
+    ) -> Result<ModuleNamespace> {
+        self.evaluate_module_graph(
+            CompiledModuleGraph {
+                entry: module.id.clone(),
+                modules: vec![module],
+            },
+            env,
+        )
+        .await
+    }
+
+    async fn evaluate_module_graph(
+        &self,
+        graph: CompiledModuleGraph,
+        _env: RuntimeEnvironment,
+    ) -> Result<ModuleNamespace> {
         graph.validate()?;
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let _guard = self.send(Job::EvalGraph { graph, fresh: env.ssr, reply: tx })?;
+        let _guard = self.send(Job::EvalGraph { graph, reply: tx })?;
         let json = self.receive(rx).await?;
         namespace_from_json(&json)
     }
 
-    async fn invoke_module_graph(&self, graph: CompiledModuleGraph, export: &str, args: Vec<JsValue>, env: RuntimeEnvironment) -> Result<JsValue> {
+    async fn invoke_module_graph(
+        &self,
+        graph: CompiledModuleGraph,
+        export: &str,
+        args: Vec<JsValue>,
+        _env: RuntimeEnvironment,
+    ) -> Result<JsValue> {
         graph.validate()?;
-        let args = encode_args(&args)?.iter().map(|v| JsValue::from(v.clone())).collect();
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let _guard = self.send(Job::InvokeGraph { graph, export: export.into(), args, fresh: env.ssr, reply: tx })?;
+        let _guard = self.send(Job::InvokeGraph {
+            graph,
+            export: export.into(),
+            args,
+            reply: tx,
+        })?;
         Ok(JsValue::from(self.receive::<serde_json::Value>(rx).await?))
     }
 
-    async fn invoke_module_graph_stream(&self, graph: CompiledModuleGraph, _export: &str, _args: Vec<JsValue>, _env: RuntimeEnvironment) -> Result<JsStreamResponse> {
+    async fn invoke_module_graph_stream(
+        &self,
+        graph: CompiledModuleGraph,
+        _export: &str,
+        _args: Vec<JsValue>,
+        _env: RuntimeEnvironment,
+    ) -> Result<JsStreamResponse> {
         graph.validate()?;
-        Err(FerriteError::Runtime("rquickjs streaming invocation is not implemented yet; use the non-streaming SSR path explicitly".into()))
+        Err(FerriteError::Runtime(
+            "rquickjs streaming invocation is not implemented yet; use the non-streaming SSR path explicitly"
+                .into(),
+        ))
     }
 
     async fn call(&self, handle: &JsHandle, args: Vec<JsValue>) -> Result<JsValue> {
-        let args = encode_args(&args)?.iter().map(|v| JsValue::from(v.clone())).collect();
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let _guard = self.send(Job::Call { handle: handle.id, args, reply: tx })?;
+        let _guard = self.send(Job::Call {
+            handle: handle.id,
+            args,
+            reply: tx,
+        })?;
         Ok(JsValue::from(self.receive::<serde_json::Value>(rx).await?))
     }
 }
 
 fn namespace_from_json(json: &serde_json::Value) -> Result<ModuleNamespace> {
     let mut namespace = ModuleNamespace::default();
-    let object = json.as_object().ok_or_else(|| FerriteError::Runtime("rquickjs malformed export record".into()))?;
+    let object = json
+        .as_object()
+        .ok_or_else(|| FerriteError::Runtime("rquickjs malformed export record".into()))?;
     for (name, entry) in object {
         let value = match entry.get("handle").and_then(serde_json::Value::as_u64) {
-            Some(id) => JsValue::Handle(JsHandle { id, label: Some(format!("function {name}")) }),
-            None => entry.get("value").cloned().map(JsValue::from).unwrap_or(JsValue::Undefined),
+            Some(id) => JsValue::Handle(JsHandle {
+                id,
+                label: Some(format!("function {name}")),
+            }),
+            None => entry
+                .get("value")
+                .cloned()
+                .map(JsValue::from)
+                .unwrap_or(JsValue::Undefined),
         };
         namespace.exports.insert(name.clone(), value);
     }
     Ok(namespace)
 }
 
+fn explain_error(
+    ctx: &rquickjs::Ctx<'_>,
+    error: rquickjs::Error,
+    control: &ExecutionControl,
+) -> String {
+    let mut detail = if matches!(error, rquickjs::Error::Exception) {
+        let exception = ctx.catch();
+        if let Some(exception) = exception.as_exception() {
+            let message = exception
+                .message()
+                .unwrap_or_else(|| "uncatchable exception".into());
+            let stack = exception.stack().unwrap_or_default();
+            if stack.is_empty() {
+                message
+            } else {
+                format!("{message}\n{stack}")
+            }
+        } else {
+            format!("uncatchable or non-error exception: {exception:?}")
+        }
+    } else {
+        format!("{error:?}")
+    };
+    if control.interrupted() {
+        detail.push_str(&format!("; {}", control.error()));
+    }
+    detail
+}
+
 struct GraphResolver;
 impl Resolver for GraphResolver {
-    fn resolve<'js>(&mut self, _ctx: &rquickjs::Ctx<'js>, base: &str, name: &str, _attributes: Option<ImportAttributes<'js>>) -> rquickjs::Result<String> {
-        if !name.starts_with('.') { return Ok(name.into()); }
-        let mut parts: Vec<&str> = base.rsplit_once('/').map(|x| x.0).unwrap_or("").split('/').filter(|x| !x.is_empty()).collect();
+    fn resolve<'js>(
+        &mut self,
+        _ctx: &rquickjs::Ctx<'js>,
+        base: &str,
+        name: &str,
+        _attributes: Option<ImportAttributes<'js>>,
+    ) -> rquickjs::Result<String> {
+        if !name.starts_with('.') {
+            return Ok(name.into());
+        }
+        let mut parts: Vec<&str> = base
+            .rsplit_once('/')
+            .map(|parts| parts.0)
+            .unwrap_or("")
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .collect();
         for part in name.split('/') {
-            match part { "" | "." => {}, ".." => { parts.pop(); }, x => parts.push(x) }
+            match part {
+                "" | "." => {}
+                ".." => {
+                    parts.pop();
+                }
+                part => parts.push(part),
+            }
         }
         Ok(format!("/{}", parts.join("/")))
     }
@@ -158,9 +330,21 @@ impl Resolver for GraphResolver {
 
 struct GraphLoader(Arc<Mutex<HashMap<String, String>>>);
 impl Loader for GraphLoader {
-    fn load<'js>(&mut self, ctx: &rquickjs::Ctx<'js>, name: &str, _attributes: Option<ImportAttributes<'js>>) -> rquickjs::Result<Module<'js, rquickjs::module::Declared>> {
-        let code = self.0.lock().unwrap().get(name).cloned()
-            .ok_or_else(|| rquickjs::Error::new_loading_message(name, "module missing from compiled graph"))?;
+    fn load<'js>(
+        &mut self,
+        ctx: &rquickjs::Ctx<'js>,
+        name: &str,
+        _attributes: Option<ImportAttributes<'js>>,
+    ) -> rquickjs::Result<Module<'js, rquickjs::module::Declared>> {
+        let code = self
+            .0
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(name)
+            .cloned()
+            .ok_or_else(|| {
+                rquickjs::Error::new_loading_message(name, "module missing from compiled graph")
+            })?;
         Module::declare(ctx.clone(), name, code)
     }
 }
@@ -169,7 +353,8 @@ struct Engine {
     runtime: Runtime,
     context: Context,
     handles: RefCell<HashMap<u64, Persistent<rquickjs::Function<'static>>>>,
-    next_handle: Cell<u64>,
+    next_handle: Arc<AtomicU64>,
+    active_control: Arc<Mutex<ExecutionControl>>,
 }
 
 impl Drop for Engine {
@@ -179,37 +364,103 @@ impl Drop for Engine {
 }
 
 impl Engine {
-    fn new(timeout_ms: u64, cancel: Arc<AtomicBool>) -> std::result::Result<Self, String> {
-        let runtime = Runtime::new().map_err(|e| format!("rquickjs runtime init: {e:?}"))?;
+    fn new(
+        control: ExecutionControl,
+        next_handle: Arc<AtomicU64>,
+    ) -> std::result::Result<Self, String> {
+        let runtime =
+            Runtime::new().map_err(|error| format!("rquickjs runtime init: {error:?}"))?;
         runtime.set_max_stack_size(4 * 1024 * 1024);
-        if timeout_ms != 0 {
-            let started = Instant::now();
-            let timeout = Duration::from_millis(timeout_ms);
-            runtime.set_interrupt_handler(Some(Box::new(move || cancel.load(Ordering::Relaxed) || started.elapsed() >= timeout)));
-        }
-        let context = Context::full(&runtime).map_err(|e| format!("rquickjs context init: {e:?}"))?;
-        context.with(|ctx| {
-            ctx.eval::<(), _>(r#"if (typeof console === 'undefined') globalThis.console = {log(){},info(){},warn(){},error(){},debug(){},trace(){}};"#)
-        }).map_err(|e| format!("rquickjs host init: {e:?}"))?;
-        Ok(Self { runtime, context, handles: RefCell::new(HashMap::new()), next_handle: Cell::new(1) })
+        let active_control = Arc::new(Mutex::new(control));
+        let interrupt_control = active_control.clone();
+        runtime.set_interrupt_handler(Some(Box::new(move || {
+            interrupt_control
+                .lock()
+                .map(|control| control.interrupted())
+                .unwrap_or(true)
+        })));
+        let context =
+            Context::full(&runtime).map_err(|error| format!("rquickjs context init: {error:?}"))?;
+        context
+            .with(|ctx| {
+                ctx.eval::<(), _>(
+                    r#"if (typeof console === 'undefined') globalThis.console = {log(){},info(){},warn(){},error(){},debug(){},trace(){}};"#,
+                )
+            })
+            .map_err(|error| format!("rquickjs host init: {error:?}"))?;
+        Ok(Self {
+            runtime,
+            context,
+            handles: RefCell::new(HashMap::new()),
+            next_handle,
+            active_control,
+        })
     }
 
-    fn eval_graph(&mut self, graph: &CompiledModuleGraph, timeout_ms: u64, cancel: Arc<AtomicBool>) -> std::result::Result<serde_json::Value, String> {
-        *self = Self::new(timeout_ms, cancel)?;
-        let modules: HashMap<_, _> = graph.modules.iter().map(|m| (m.id.clone(), m.code.clone())).collect();
-        let shared = Arc::new(Mutex::new(modules));
-        self.runtime.set_loader(GraphResolver, GraphLoader(shared));
-        let entry = graph.modules.iter().find(|m| m.id == graph.entry).ok_or_else(|| format!("entry {} missing", graph.entry))?;
+    fn set_control(&self, control: ExecutionControl) {
+        *self
+            .active_control
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = control;
+    }
+
+    fn check_control(&self) -> std::result::Result<(), String> {
+        let control = self
+            .active_control
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        (!control.interrupted())
+            .then_some(())
+            .ok_or_else(|| control.error())
+    }
+
+    fn eval_graph(
+        &mut self,
+        graph: &CompiledModuleGraph,
+        control: ExecutionControl,
+    ) -> std::result::Result<serde_json::Value, String> {
+        self.set_control(control.clone());
+        self.check_control()?;
+        let modules: HashMap<_, _> = graph
+            .modules
+            .iter()
+            .map(|module| (module.id.clone(), module.code.clone()))
+            .collect();
+        self.runtime
+            .set_loader(GraphResolver, GraphLoader(Arc::new(Mutex::new(modules))));
+        let entry = graph
+            .modules
+            .iter()
+            .find(|module| module.id == graph.entry)
+            .ok_or_else(|| format!("entry {} missing", graph.entry))?;
         self.context.with(|ctx| {
-            let module = Module::declare(ctx.clone(), entry.id.clone(), entry.code.clone())
-                .and_then(|module| module.eval())
-                .map_err(|e| format!("rquickjs graph entry `{}` evaluation failed: {e:?}", graph.entry))?;
-            module.1.finish::<()>().map_err(|e| format!("rquickjs graph entry `{}` promise failed: {e:?}", graph.entry))?;
-            let namespace = module.0.namespace().map_err(|e| format!("rquickjs namespace failed: {e:?}"))?;
+            let (module, promise) =
+                Module::declare(ctx.clone(), entry.id.clone(), entry.code.clone())
+                    .and_then(Module::eval)
+                    .map_err(|error| {
+                        format!(
+                            "rquickjs graph entry `{}` evaluation failed: {}",
+                            graph.entry,
+                            explain_error(&ctx, error, &control)
+                        )
+                    })?;
+            promise.finish::<()>().map_err(|error| {
+                format!(
+                    "rquickjs graph entry `{}` promise failed: {}",
+                    graph.entry,
+                    explain_error(&ctx, error, &control)
+                )
+            })?;
+            self.check_control()?;
+            let namespace = module
+                .namespace()
+                .map_err(|error| format!("rquickjs namespace failed: {error:?}"))?;
             let mut out = serde_json::Map::new();
             for key in namespace.keys::<String>() {
-                let key = key.map_err(|e| format!("rquickjs export key failed: {e:?}"))?;
-                let value: Value = namespace.get(key.as_str()).map_err(|e| format!("rquickjs export `{key}` failed: {e:?}"))?;
+                let key = key.map_err(|error| format!("rquickjs export key failed: {error:?}"))?;
+                let value: Value = namespace
+                    .get(key.as_str())
+                    .map_err(|error| format!("rquickjs export `{key}` failed: {error:?}"))?;
                 out.insert(key.clone(), self.export_json(&ctx, value));
             }
             Ok::<_, String>(serde_json::Value::Object(out))
@@ -219,25 +470,46 @@ impl Engine {
     fn export_json<'js>(&self, ctx: &rquickjs::Ctx<'js>, value: Value<'js>) -> serde_json::Value {
         if value.is_function() {
             if let Ok(function) = Function::from_value(value.clone()) {
-                let id = self.next_handle.get();
-                self.next_handle.set(id + 1);
-                self.handles.borrow_mut().insert(id, Persistent::save(ctx, function));
-                return serde_json::json!({"handle": id});
+                let id = self.next_handle.fetch_add(1, Ordering::Relaxed) + 1;
+                self.handles
+                    .borrow_mut()
+                    .insert(id, Persistent::save(ctx, function));
+                return serde_json::json!({ "handle": id });
             }
         }
-        serde_json::json!({"value": self.json_value(&value)})
+        serde_json::json!({ "value": self.json_value(&value, 0) })
     }
 
-    fn json_value(&self, value: &Value<'_>) -> serde_json::Value {
-        if value.is_null() || value.is_undefined() { return serde_json::Value::Null; }
-        if let Some(v) = value.as_bool() { return serde_json::Value::Bool(v); }
-        if let Some(v) = value.as_number() { return serde_json::Number::from_f64(v).map(serde_json::Value::Number).unwrap_or(serde_json::Value::Null); }
-        if value.is_string() { return value.clone().into_string().and_then(|s| s.to_string().ok()).map(serde_json::Value::String).unwrap_or(serde_json::Value::Null); }
+    fn json_value(&self, value: &Value<'_>, depth: usize) -> serde_json::Value {
+        if depth > 64 {
+            return serde_json::Value::Null;
+        }
+        if value.is_null() || value.is_undefined() {
+            return serde_json::Value::Null;
+        }
+        if let Some(value) = value.as_bool() {
+            return serde_json::Value::Bool(value);
+        }
+        if let Some(value) = value.as_number() {
+            return serde_json::Number::from_f64(value)
+                .map(serde_json::Value::Number)
+                .unwrap_or(serde_json::Value::Null);
+        }
+        if value.is_string() {
+            return value
+                .clone()
+                .into_string()
+                .and_then(|value| value.to_string().ok())
+                .map(serde_json::Value::String)
+                .unwrap_or(serde_json::Value::Null);
+        }
         if value.is_array() {
             if let Some(array) = value.clone().into_array() {
                 let mut out = Vec::new();
-                for i in 0..array.len() {
-                    if let Ok(v) = array.get::<Value>(i) { out.push(self.json_value(&v)); }
+                for index in 0..array.len() {
+                    if let Ok(item) = array.get::<Value>(index) {
+                        out.push(self.json_value(&item, depth + 1));
+                    }
                 }
                 return serde_json::Value::Array(out);
             }
@@ -246,7 +518,9 @@ impl Engine {
             if let Some(object) = value.as_object() {
                 let mut out = serde_json::Map::new();
                 for key in object.keys::<String>().flatten() {
-                    if let Ok(v) = object.get::<_, Value>(key.as_str()) { out.insert(key, self.json_value(&v)); }
+                    if let Ok(item) = object.get::<_, Value>(key.as_str()) {
+                        out.insert(key, self.json_value(&item, depth + 1));
+                    }
                 }
                 return serde_json::Value::Object(out);
             }
@@ -254,53 +528,81 @@ impl Engine {
         serde_json::Value::Null
     }
 
-    fn js_value<'js>(&self, ctx: &rquickjs::Ctx<'js>, value: &JsValue) -> rquickjs::Result<Value<'js>> {
+    fn js_value<'js>(
+        &self,
+        ctx: &rquickjs::Ctx<'js>,
+        value: &JsValue,
+    ) -> rquickjs::Result<Value<'js>> {
         match value {
             JsValue::Undefined => Ok(Value::new_undefined(ctx.clone())),
             JsValue::Null => Ok(Value::new_null(ctx.clone())),
-            JsValue::Bool(v) => (*v).into_js(ctx),
-            JsValue::Number(v) => (*v).into_js(ctx),
-            JsValue::String(v) => v.clone().into_js(ctx),
+            JsValue::Bool(value) => (*value).into_js(ctx),
+            JsValue::Number(value) => (*value).into_js(ctx),
+            JsValue::String(value) => value.clone().into_js(ctx),
             JsValue::Array(items) => {
                 let array = Array::new(ctx.clone())?;
-                for (i, item) in items.iter().enumerate() { array.set(i, self.js_value(ctx, item)?)?; }
+                for (index, item) in items.iter().enumerate() {
+                    array.set(index, self.js_value(ctx, item)?)?;
+                }
                 Ok(array.into_value())
             }
             JsValue::Object(map) => {
                 let object = Object::new(ctx.clone())?;
-                for (key, item) in map { object.set(key, self.js_value(ctx, item)?)?; }
+                for (key, item) in map {
+                    object.set(key, self.js_value(ctx, item)?)?;
+                }
                 Ok(object.into_value())
             }
             JsValue::Bytes(bytes) => {
                 let array = Array::new(ctx.clone())?;
-                for (i, byte) in bytes.iter().enumerate() { array.set(i, *byte)?; }
+                for (index, byte) in bytes.iter().enumerate() {
+                    array.set(index, *byte)?;
+                }
                 Ok(array.into_value())
             }
             JsValue::Handle(_) => Err(rquickjs::Error::Unknown),
         }
     }
 
-    fn call(&mut self, handle: u64, args: &[JsValue]) -> std::result::Result<serde_json::Value, String> {
+    fn call(
+        &mut self,
+        handle: u64,
+        args: &[JsValue],
+        control: ExecutionControl,
+    ) -> std::result::Result<serde_json::Value, String> {
+        self.set_control(control.clone());
+        self.check_control()?;
         self.context.with(|ctx| {
-            let persistent = self.handles.borrow().get(&handle).cloned().ok_or_else(|| format!("rquickjs function handle {handle} is retired or unknown"))?;
-            let function = persistent.restore(&ctx).map_err(|e| format!("rquickjs handle restore failed: {e:?}"))?;
-            let mut converted = Vec::new();
-            for arg in args { converted.push(self.js_value(&ctx, arg).map_err(|e| format!("rquickjs argument conversion failed: {e:?}"))?); }
-            let result = call_with_args(&function, converted).map_err(|e| format!("rquickjs call failed: {e:?}"))?;
-            let result = settle(ctx.clone(), result).map_err(|e| format!("rquickjs promise failed: {e:?}"))?;
-            Ok(self.json_value(&result))
+            let persistent = self.handles.borrow().get(&handle).cloned().ok_or_else(|| {
+                format!("rquickjs function handle {handle} is retired or unknown")
+            })?;
+            let function = persistent
+                .restore(&ctx)
+                .map_err(|error| format!("rquickjs handle restore failed: {error:?}"))?;
+            let mut call_args = Args::new(ctx.clone(), args.len());
+            for arg in args {
+                let value = self
+                    .js_value(&ctx, arg)
+                    .map_err(|error| format!("rquickjs argument conversion failed: {error:?}"))?;
+                call_args
+                    .push_arg(value)
+                    .map_err(|error| format!("rquickjs argument passing failed: {error:?}"))?;
+            }
+            let result: Value = function.call_arg(call_args).map_err(|error| {
+                format!(
+                    "rquickjs call failed: {}",
+                    explain_error(&ctx, error, &control)
+                )
+            })?;
+            let result = settle(ctx.clone(), result).map_err(|error| {
+                format!(
+                    "rquickjs promise failed: {}",
+                    explain_error(&ctx, error, &control)
+                )
+            })?;
+            self.check_control()?;
+            Ok(self.json_value(&result, 0))
         })
-    }
-}
-
-fn call_with_args<'js>(function: &Function<'js>, args: Vec<Value<'js>>) -> rquickjs::Result<Value<'js>> {
-    match args.len() {
-        0 => function.call(()),
-        1 => function.call((args[0].clone(),)),
-        2 => function.call((args[0].clone(), args[1].clone())),
-        3 => function.call((args[0].clone(), args[1].clone(), args[2].clone())),
-        4 => function.call((args[0].clone(), args[1].clone(), args[2].clone(), args[3].clone())),
-        _ => Err(rquickjs::Error::Unknown),
     }
 }
 
@@ -313,64 +615,179 @@ fn settle<'js>(ctx: rquickjs::Ctx<'js>, value: Value<'js>) -> rquickjs::Result<V
     }
 }
 
-fn worker_loop(rx: mpsc::Receiver<Job>, shutdown: Arc<AtomicBool>) {
+fn worker_loop(rx: mpsc::Receiver<Request>, shutdown: Arc<AtomicBool>) {
     let mut engine: Option<Engine> = None;
-    for job in rx {
-        if job.cancelled() || shutdown.load(Ordering::Relaxed) { continue; }
+    let next_handle = Arc::new(AtomicU64::new(0));
+    for request in rx {
+        let Request { job, control } = request;
+        if job.cancelled() || control.interrupted() || shutdown.load(Ordering::Relaxed) {
+            continue;
+        }
         match job {
-            Job::EvalGraph { graph, fresh: _, reply } => {
-                let timeout = 15000;
-                let next = Engine::new(timeout, shutdown.clone()).map_err(|e| e);
-                let result = next.and_then(|mut eng| {
-                    let out = eng.eval_graph(&graph, timeout, shutdown.clone());
-                    engine = Some(eng);
-                    out
-                });
+            Job::EvalGraph { graph, reply } => {
+                let result =
+                    Engine::new(control.clone(), next_handle.clone()).and_then(|mut next| {
+                        let result = next.eval_graph(&graph, control.clone());
+                        if result.is_ok() {
+                            engine = Some(next);
+                        } else {
+                            engine = None;
+                        }
+                        result
+                    });
                 let _ = reply.send(result);
             }
-            Job::InvokeGraph { graph, export, args, fresh: _, reply } => {
-                let timeout = 15000;
-                let result = Engine::new(timeout, shutdown.clone()).and_then(|mut eng| {
-                    let ns = eng.eval_graph(&graph, timeout, shutdown.clone())?;
-                    let handle = ns.get(&export).and_then(|v| v.get("handle")).and_then(serde_json::Value::as_u64)
-                        .ok_or_else(|| format!("entry `{}` has no function export `{export}`", graph.entry))?;
-                    eng.call(handle, &args)
-                });
+            Job::InvokeGraph {
+                graph,
+                export,
+                args,
+                reply,
+            } => {
+                let result =
+                    Engine::new(control.clone(), next_handle.clone()).and_then(|mut engine| {
+                        let namespace = engine.eval_graph(&graph, control.clone())?;
+                        let handle = namespace
+                            .get(&export)
+                            .and_then(|value| value.get("handle"))
+                            .and_then(serde_json::Value::as_u64)
+                            .ok_or_else(|| {
+                                format!("entry `{}` has no function export `{export}`", graph.entry)
+                            })?;
+                        engine.call(handle, &args, control.clone())
+                    });
                 let _ = reply.send(result);
             }
-            Job::Call { handle, args, reply } => {
-                let result = engine.as_mut().ok_or_else(|| "rquickjs runtime state is unavailable".to_string())
-                    .and_then(|eng| eng.call(handle, &args));
+            Job::Call {
+                handle,
+                args,
+                reply,
+            } => {
+                let result = engine
+                    .as_mut()
+                    .ok_or_else(|| "rquickjs runtime state is unavailable".to_string())
+                    .and_then(|engine| engine.call(handle, &args, control.clone()));
                 let _ = reply.send(result);
             }
         }
     }
 }
 
-use rquickjs::IntoJs;
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{CompiledModule, JsRuntime};
 
+    fn graph(code: &str) -> CompiledModuleGraph {
+        CompiledModuleGraph {
+            entry: "/entry.js".into(),
+            modules: vec![
+                CompiledModule {
+                    id: "/entry.js".into(),
+                    code: code.into(),
+                    url: None,
+                },
+                CompiledModule {
+                    id: "/dep.js".into(),
+                    code: "export const value = 41;".into(),
+                    url: None,
+                },
+            ],
+        }
+    }
+
     #[tokio::test]
     async fn quickjs_evaluates_graph_and_calls_export() {
         let runtime = QuickJsRuntime::with_defaults();
-        let graph = CompiledModuleGraph {
-            entry: "/entry.js".into(),
-            modules: vec![
-                CompiledModule { id: "/entry.js".into(), code: "import { value } from './dep.js'; export const answer = value + 1; export function render(name) { return 'hello ' + name; }".into(), url: None },
-                CompiledModule { id: "/dep.js".into(), code: "export const value = 41;".into(), url: None },
-            ],
+        let graph = graph(
+            "import { value } from './dep.js'; export const answer = value + 1; export function render(name) { return 'hello ' + name; }",
+        );
+        let env = RuntimeEnvironment {
+            ssr: true,
+            request_id: None,
         };
-        let env = RuntimeEnvironment { ssr: true, request_id: None };
-        let namespace = runtime.evaluate_module_graph(graph.clone(), env.clone()).await.unwrap();
-        assert!(matches!(namespace.get("answer"), Some(JsValue::Number(v)) if *v == 42.0));
-        let result = runtime.call(namespace.get_function("render").unwrap(), vec![JsValue::String("ferrite".into())]).await.unwrap();
-        assert!(matches!(result, JsValue::String(v) if v == "hello ferrite"));
-        let invoked = runtime.invoke_module_graph(graph, "render", vec![JsValue::String("atomic".into())], env).await.unwrap();
-        assert!(matches!(invoked, JsValue::String(v) if v == "hello atomic"));
+        let namespace = runtime
+            .evaluate_module_graph(graph.clone(), env.clone())
+            .await
+            .unwrap();
+        assert!(matches!(namespace.get("answer"), Some(JsValue::Number(value)) if *value == 42.0));
+        let result = runtime
+            .call(
+                namespace.get_function("render").unwrap(),
+                vec![JsValue::String("ferrite".into())],
+            )
+            .await
+            .unwrap();
+        assert!(matches!(result, JsValue::String(value) if value == "hello ferrite"));
+        let invoked = runtime
+            .invoke_module_graph(graph, "render", vec![JsValue::String("atomic".into())], env)
+            .await
+            .unwrap();
+        assert!(matches!(invoked, JsValue::String(value) if value == "hello atomic"));
+    }
+
+    #[tokio::test]
+    async fn quickjs_settles_promises_and_supports_many_args() {
+        let runtime = QuickJsRuntime::with_defaults();
+        let graph = graph(
+            "export async function sum(a,b,c,d,e,f) { await Promise.resolve(); return [a,b,c,d,e,f].reduce((x,y)=>x+y,0); }",
+        );
+        let result = runtime
+            .invoke_module_graph(
+                graph,
+                "sum",
+                (1..=6).map(|value| JsValue::Number(value as f64)).collect(),
+                RuntimeEnvironment {
+                    ssr: true,
+                    request_id: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(result, JsValue::Number(value) if value == 21.0));
+    }
+
+    #[tokio::test]
+    async fn quickjs_retires_handles_across_replacement_graphs() {
+        let runtime = QuickJsRuntime::with_defaults();
+        let env = RuntimeEnvironment {
+            ssr: true,
+            request_id: None,
+        };
+        let first = runtime
+            .evaluate_module_graph(
+                graph("export function render() { return 'first'; }"),
+                env.clone(),
+            )
+            .await
+            .unwrap();
+        let old = first.get_function("render").unwrap().clone();
+        runtime
+            .evaluate_module_graph(graph("export function render() { return 'second'; }"), env)
+            .await
+            .unwrap();
+        assert!(runtime.call(&old, vec![]).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn quickjs_timeout_interrupts_guest_loop() {
+        let runtime = QuickJsRuntime::new(QuickJsOptions {
+            request_timeout_ms: 50,
+        });
+        let error = runtime
+            .invoke_module_graph(
+                graph("export function render() { while (true) {} }"),
+                "render",
+                vec![],
+                RuntimeEnvironment {
+                    ssr: true,
+                    request_id: None,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("deadline") || error.to_string().contains("interrupted"),
+            "{error}"
+        );
     }
 }
