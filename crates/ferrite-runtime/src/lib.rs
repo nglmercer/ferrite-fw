@@ -343,7 +343,8 @@ impl JsRuntime for UnavailableRuntime {
 /// establish compatibility with any particular framework or language feature.
 #[must_use]
 pub fn compiled_graph_backend_available(backend: &str) -> bool {
-    (backend == "napi-vm" && cfg!(feature = "napi-vm"))
+    (backend == "rquickjs" && cfg!(feature = "rquickjs"))
+        || (backend == "napi-vm" && cfg!(feature = "napi-vm"))
         || (backend == "napi-vm-process" && cfg!(all(feature = "napi-vm", target_os = "linux")))
 }
 
@@ -356,6 +357,8 @@ pub fn runtime_for_backend(backend: &str) -> Arc<dyn JsRuntime> {
     match backend {
         #[cfg(all(feature = "napi-vm", target_os = "linux"))]
         "napi-vm-process" => Arc::new(process::ProcessRuntime::new(Default::default())),
+        #[cfg(feature = "rquickjs")]
+        "rquickjs" => Arc::new(quickjs::QuickJsRuntime::with_defaults()),
         #[cfg(feature = "napi-vm")]
         "napi-vm" => Arc::new(napi_vm::NapiVmRuntime::with_defaults()),
         #[cfg(not(feature = "napi-vm"))]
