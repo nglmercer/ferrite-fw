@@ -162,6 +162,14 @@ impl JsSsrAdapter {
 
     /// Create one configured runtime shared by route/document adapters.
     pub fn runtime_for_resolved(resolved: &ResolvedConfig) -> Arc<dyn JsRuntime> {
+        #[cfg(feature = "rquickjs")]
+        if resolved.runtime.backend == "rquickjs" {
+            return Arc::new(ferrite_runtime::quickjs::QuickJsRuntime::new(
+                ferrite_runtime::quickjs::QuickJsOptions {
+                    request_timeout_ms: resolved.runtime.request_timeout_ms,
+                },
+            ));
+        }
         #[cfg(feature = "napi-vm")]
         if resolved.runtime.backend == "napi-vm"
             || (resolved.runtime.backend == "napi-vm-process" && cfg!(target_os = "linux"))
@@ -424,5 +432,53 @@ impl futures::Stream for ShellStream {
             }
         }
         std::task::Poll::Ready(self.suffix.take().map(Ok))
+    }
+}
+
+#[cfg(all(test, feature = "rquickjs"))]
+mod rquickjs_tests {
+    use super::*;
+    use ferrite_runtime::{CompiledModule, CompiledModuleGraph};
+
+    #[tokio::test]
+    async fn rquickjs_renders_compiled_graph() {
+        let graph = CompiledModuleGraph {
+            entry: "/entry.js".into(),
+            modules: vec![
+                CompiledModule {
+                    id: "/entry.js".into(),
+                    code: "import { label } from './dep.js'; export function render(url, request) { return { html: '<h1>' + label + ' ' + url + ' ' + request.method + '</h1>', status: 201, headers: [['x-engine','rquickjs']] }; }".into(),
+                    url: None,
+                },
+                CompiledModule {
+                    id: "/dep.js".into(),
+                    code: "export const label = 'ssr';".into(),
+                    url: None,
+                },
+            ],
+        };
+        let runtime: Arc<dyn JsRuntime> =
+            Arc::new(ferrite_runtime::quickjs::QuickJsRuntime::with_defaults());
+        let adapter = JsSsrAdapter::new_graph(runtime, graph).unwrap();
+        let response = adapter
+            .render(
+                SsrHttpRequest {
+                    method: "GET".into(),
+                    uri: "/hello".into(),
+                    headers: Vec::new(),
+                    body: Vec::new(),
+                },
+                SsrContext::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status, 201);
+        assert!(
+            matches!(&response.body, crate::RenderBody::Full(html) if html.contains("ssr /hello GET"))
+        );
+        assert!(response
+            .headers
+            .iter()
+            .any(|(name, value)| name == "x-engine" && value == "rquickjs"));
     }
 }

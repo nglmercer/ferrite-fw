@@ -60,7 +60,7 @@ pub const REACT_TEMPLATES: &[TemplateProfile] = &[
         language: "js",
         rendering: "ssr",
         compiler_host: "native",
-        ssr_runtime: Some("napi-vm"),
+        ssr_runtime: Some("rquickjs"),
         framework_version: Some(REACT_VERSION),
         support: crate::registry::Support::Experimental,
     },
@@ -69,7 +69,7 @@ pub const REACT_TEMPLATES: &[TemplateProfile] = &[
         language: "ts",
         rendering: "ssr",
         compiler_host: "native",
-        ssr_runtime: Some("napi-vm"),
+        ssr_runtime: Some("rquickjs"),
         framework_version: Some(REACT_VERSION),
         support: crate::registry::Support::Experimental,
     },
@@ -395,8 +395,8 @@ pub fn react_ssr_files(
     compiler_host: &str,
     ssr_runtime: &str,
 ) -> Result<BTreeMap<String, String>> {
-    if compiler_host != "native" || ssr_runtime != "napi-vm" {
-        return Err(FerriteError::Config("experimental React SSR generation requires explicit native compiler host and separate napi-vm SSR runtime".into()));
+    if compiler_host != "native" || ssr_runtime != "rquickjs" {
+        return Err(FerriteError::Config("experimental React SSR generation requires explicit native compiler host and separate rquickjs SSR runtime".into()));
     }
     let mut generated = files(select("react", language, "client")?, name)?;
     let extension = if language == "js" { "jsx" } else { "tsx" };
@@ -423,7 +423,7 @@ pub fn react_ssr_files(
         .get_mut("ferrite.toml")
         .unwrap()
         .push_str(&format!(
-        "\n[ssr]\nentry = \"src/entry-server.{extension}\"\n\n[runtime]\nbackend = \"napi-vm\"\n"
+        "\n[ssr]\nentry = \"src/entry-server.{extension}\"\n\n[runtime]\nbackend = \"rquickjs\"\n"
     ));
     let mut manifest: serde_json::Value = serde_json::from_str(&generated["package.json"])?;
     manifest["scripts"]["dev"] = serde_json::json!("ferrite ssr");
@@ -431,7 +431,7 @@ pub fn react_ssr_files(
         "package.json".into(),
         format!("{}\n", serde_json::to_string_pretty(&manifest)?),
     );
-    generated.insert("README.md".into(), format!("# {name}\n\nExperimental React {REACT_VERSION} synchronous SSR. Run `ferrite install`,\n`ferrite ssr`, `ferrite build` and `ferrite preview`. Native compilation and the\nnapi-vm renderer require no Node executable. The server uses the public\nreact-dom/server.edge renderToString API; the client uses hydrateRoot.\nStreaming and cross-platform standalone acceptance remain unfinished.\nTypeScript transpilation does not perform type checking.\n"));
+    generated.insert("README.md".into(), format!("# {name}\n\nExperimental React {REACT_VERSION} synchronous SSR. Run `ferrite install`,\n`ferrite ssr`, `ferrite build` and `ferrite preview`. Native compilation and the\nrquickjs renderer requires no Node executable. The server uses the public\nreact-dom/server.edge renderToString API; the client uses hydrateRoot.\nStreaming and cross-platform standalone acceptance remain unfinished.\nTypeScript transpilation does not perform type checking.\n"));
     Ok(generated)
 }
 
@@ -671,7 +671,7 @@ mod tests {
         }
         assert_eq!(
             select("react", "ts", "ssr").unwrap().ssr_runtime,
-            Some("napi-vm")
+            Some("rquickjs")
         );
     }
 
@@ -814,7 +814,7 @@ mod vue_ssr_generation_tests {
                 files[&format!("src/entry-server.{extension}")].contains("react-dom/server.edge")
             );
         }
-        assert!(super::react_ssr_files("app", "js", "node", "napi-vm").is_err());
+        assert!(super::react_ssr_files("app", "js", "node", "rquickjs").is_err());
         assert!(super::react_ssr_files("app", "js", "native", "node").is_err());
     }
 

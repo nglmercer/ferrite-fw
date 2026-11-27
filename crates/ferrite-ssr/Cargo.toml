@@ -19,4 +19,5 @@ rmp-serde = { workspace = true }
 ciborium = { workspace = true }
 
 [features]
+rquickjs = ["ferrite-runtime/rquickjs"]
 napi-vm = ["ferrite-runtime/napi-vm"]

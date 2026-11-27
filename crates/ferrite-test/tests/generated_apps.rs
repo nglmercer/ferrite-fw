@@ -424,7 +424,7 @@ async fn chromium_react_offline_fixture_ssr_build_and_preview() {
             "--rendering",
             "ssr",
             "--ssr-runtime",
-            "napi-vm",
+            "rquickjs",
             "--no-install",
         ],
         false,

@@ -80,8 +80,16 @@ pub(crate) async fn create(args: CreateArgs) -> ferrite::Result<()> {
             None => "--ssr-runtime requires an SSR template; client profiles have no server renderer".into(),
         }));
     }
-    if profile.ssr_runtime.is_some() && !cfg!(feature = "napi-vm") {
-        return Err(ferrite::FerriteError::Config("framework SSR requires a Ferrite binary built with --features napi-vm; no alternate runtime will be selected".into()));
+    let ssr_runtime_available = match profile.ssr_runtime {
+        Some("rquickjs") => cfg!(feature = "rquickjs"),
+        Some("napi-vm") => cfg!(feature = "napi-vm"),
+        Some(_) | None => true,
+    };
+    if profile.ssr_runtime.is_some() && !ssr_runtime_available {
+        return Err(ferrite::FerriteError::Config(format!(
+            "framework SSR runtime `{}` requires a Ferrite binary built with the matching runtime feature; no alternate runtime will be selected",
+            profile.ssr_runtime.unwrap_or("unknown")
+        )));
     }
     let name = args.name.ok_or_else(|| {
         ferrite::FerriteError::Config(
