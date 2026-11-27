@@ -430,3 +430,31 @@ async fn base_matching_directory_modules_keep_their_project_path() {
         "{response}"
     );
 }
+
+#[tokio::test]
+async fn adding_ssr_route_rebuilds_instead_of_using_stale_server_manifest() {
+    let p = fixture();
+    let mut c = config(&p);
+    ferrite::Builder::new(c.clone(), vec![])
+        .build_app()
+        .await
+        .unwrap();
+    std::fs::write(
+        p.root.join("src/users.ts"),
+        "export function render(){return '<h1>users</h1>'}",
+    )
+    .unwrap();
+    c.ssr.entries.push(ferrite::config::SsrRouteEntry {
+        route: "/users/*".into(),
+        entry: "src/users.ts".into(),
+        shell: None,
+    });
+    ferrite::Builder::new(c, vec![]).build_app().await.expect(
+        "integrated build must rebuild SSR instead of completing from the stale server manifest",
+    );
+    let artifact = ferrite::SsrRendererArtifact::read(&p.root.join("dist/server")).unwrap();
+    assert!(artifact
+        .documents
+        .iter()
+        .any(|document| document.route.as_deref() == Some("/users/*")));
+}
