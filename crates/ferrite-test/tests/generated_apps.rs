@@ -2301,7 +2301,7 @@ async fn firefox_generated_react_profiles() {
 
 #[cfg(feature = "rquickjs")]
 #[tokio::test]
-#[ignore = "fresh napi-vm CLI and real registry; Vue SSR generation and frozen reinstall"]
+#[ignore = "fresh rquickjs CLI and real registry; Vue SSR generation and frozen reinstall"]
 async fn cli_vue_ssr_generation_and_clean_frozen_reinstall() {
     let binary = cli();
     let listing = command(
@@ -2398,14 +2398,14 @@ async fn cli_vue_ssr_generation_and_clean_frozen_reinstall() {
 
 #[cfg(feature = "rquickjs")]
 #[tokio::test]
-#[ignore = "fresh napi-vm CLI, registry, Node compiler and both browsers"]
+#[ignore = "fresh rquickjs CLI, registry, Node compiler and both browsers"]
 async fn cli_vue_ssr_create_dev_build_preview_cycle() {
     cli_vue_ssr_cycle_at_base("/").await;
 }
 
 #[cfg(feature = "rquickjs")]
 #[tokio::test]
-#[ignore = "fresh napi-vm CLI, registry, Node compiler and both browsers"]
+#[ignore = "fresh rquickjs CLI, registry, Node compiler and both browsers"]
 async fn cli_vue_ssr_base_path_cycle() {
     cli_vue_ssr_cycle_at_base("/app/").await;
 }

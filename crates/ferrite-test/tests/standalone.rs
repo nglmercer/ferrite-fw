@@ -257,8 +257,8 @@ async fn standalone_ssr_build_compiles_and_renders_without_node() {
 
 #[cfg(all(feature = "rquickjs", target_os = "linux"))]
 #[tokio::test]
-#[ignore = "slow: generated Linux process-runtime binary and HTTP recovery"]
-async fn standalone_process_runtime_renders_and_recovers_without_node() {
+#[ignore = "slow: generated rquickjs binary and HTTP recovery"]
+async fn standalone_rquickjs_runtime_renders_and_recovers_without_node() {
     standalone_ssr_profile("rquickjs", false).await;
 }
 

@@ -10,15 +10,15 @@ does not yet mean every framework profile satisfies that requirement.
 |---|---|---:|---|
 | Vanilla generated applications | Rust | No | Covered by generated-app and SSR/standalone acceptance |
 | React generated applications | Rust/native transform | No for compilation and execution | Covered offline by checked-in pinned package tarballs; state-preserving refresh and synchronous SSR hydration are covered in Chromium |
-| Vue 3.5.22 | Official browser compiler embedded in napi-vm | No for the default embedded host | Experimental operational Rust-only profile; explicit Node remains a transitional fallback |
-| Svelte 5.39.6 | Official self-contained compiler embedded in napi-vm | No for the default embedded host | Experimental operational Rust-only profile; explicit Node remains a transitional fallback |
+| Vue 3.5.22 | Official browser compiler embedded in rquickjs | No for the default embedded host | Experimental operational Rust-only profile; explicit Node remains a transitional fallback |
+| Svelte 5.39.6 | Official self-contained compiler embedded in rquickjs | No for the default embedded host | Experimental operational Rust-only profile; explicit Node remains a transitional fallback |
 
 The SSR embedded runtime remains separate from framework compilation. Vue 3.5.22
 and Svelte 5.39.6 use the same embedded runtime technology for their official
 compilers by default. The exact validated compiler JavaScript payloads are
 compressed into the Ferrite binary with their MIT license texts; acceptance
 deletes the corresponding installed compiler files before building, proving the
-toolchain does not execute or read a project-side compiler program. Selecting `runtime.backend = "napi-vm"` or `napi-vm-process` never by itself
+toolchain does not execute or read a project-side compiler program. Selecting `runtime.backend = "rquickjs"` never by itself
 implies that a framework compiler is embedded.
 
 ## Inspect contract
@@ -28,7 +28,7 @@ profile. Each entry reports:
 
 - `framework`: the enabled framework or default `vanilla` pipeline;
 - `host`: `native`, `embedded`, `node` or `disabled`;
-- `execution`: `rust`, `embedded-napi-vm`, `external-node-process` or `unavailable`;
+- `execution`: `rust`, `embedded-rquickjs`, `external-node-process` or `unavailable`;
 - `externalNodeRequired`: whether normal component compilation requires an
   external Node executable;
 - `support`: the current evidence tier.
@@ -46,13 +46,13 @@ The profile intentionally does not require Node. It currently proves the parts
 that can execute without it: compiler-host reporting, generated vanilla
 applications in real Chromium/Firefox, generated React dev/refresh, client and SSR production builds/previews plus embedded Vue
 client and SSR production builds/previews using only checked-in pinned package tarballs,
-embedded Svelte dev/HMR and SSR production builds/previews, production module-worker, WASM and URL-asset packaging/execution, framework islands in dev/preview/prerender, embedded SSR packaging, streamed prerendering and standalone process/streaming
+embedded Svelte dev/HMR and SSR production builds/previews, production module-worker, WASM and URL-asset packaging/execution, framework islands in dev/preview/prerender, embedded SSR packaging, streamed prerendering and standalone streaming
 recovery. The generated tests run
 their Ferrite child processes with an empty `PATH`.
 
 The profile is a stronger baseline, not final production proof. Vue and Svelte
 are operational Rust-only through embedded official compilers, but those are
-transitional bridges rather than Rust-native compilers; embedded compiler
+embedded JavaScript runtimes rather than Rust-native compilers; embedded compiler
 performance, dev/HMR, SSR, type dependency edge cases and cross-platform
 release matrices require continued acceptance before the full production claim
 is complete.

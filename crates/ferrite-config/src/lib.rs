@@ -1953,7 +1953,7 @@ compiler_host='embedded'",
     fn runtime_toml_shape_parses() {
         let user: UserConfig = toml::from_str(
             "[runtime]\n\
-             backend = \"napi-vm\"\n\
+             backend = \"rquickjs\"\n\
              max_call_depth = 16\n\
              max_jobs_per_drain = 32\n\
              request_timeout_ms = 250\n\
@@ -1966,7 +1966,7 @@ compiler_host='embedded'",
              \"native/addon.node\" = \"ab12\"\n",
         )
         .unwrap();
-        assert_eq!(user.runtime.backend, "napi-vm");
+        assert_eq!(user.runtime.backend, "rquickjs");
         assert_eq!(user.runtime.max_call_depth, 16);
         assert_eq!(user.runtime.max_jobs_per_drain, 32);
         assert_eq!(user.runtime.request_timeout_ms, 250);
@@ -1990,7 +1990,7 @@ compiler_host='embedded'",
     fn runtime_merge_and_cli_override() {
         let base = UserConfig::default();
         let mut over = UserConfig::default();
-        over.runtime.backend = "napi-vm".to_string();
+        over.runtime.backend = "rquickjs".to_string();
         over.runtime.process_memory_limit_bytes = 512 * 1024 * 1024;
         over.runtime.process_concurrency = 2;
         over.runtime.loop_budget = 5;
@@ -1999,7 +1999,7 @@ compiler_host='embedded'",
         over.runtime.shutdown_timeout_ms = 500;
         over.runtime.max_request_bytes = 1024;
         let merged = merge_user_config(base, over);
-        assert_eq!(merged.runtime.backend, "napi-vm");
+        assert_eq!(merged.runtime.backend, "rquickjs");
         assert_eq!(merged.runtime.loop_budget, 5);
         assert_eq!(merged.runtime.queue_capacity, 4);
         assert_eq!(merged.runtime.max_request_bytes, 1024);

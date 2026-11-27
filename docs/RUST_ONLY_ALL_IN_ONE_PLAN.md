@@ -21,7 +21,7 @@ Repository state checked on 2026-11-27:
 - Already implemented: Rust-native dev server, Oxc/SWC transform backends,
   module graph, resolver, npm registry installation and locking, HMR, HTML,
   CSS, assets, production bundling/manifests/source maps, SSR adapters,
-  buffered/streamed rendering, static generation, embedded `napi-vm`, framework
+  buffered/streamed rendering, static generation, embedded `rquickjs`, framework
   scaffolds and Rust-native browser E2E infrastructure.
 - React uses the native compiler path, but Refresh coverage is incomplete.
 - Vue 3.5.22 and Svelte 5.39.6 still require an explicitly enabled external
