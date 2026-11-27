@@ -90,17 +90,49 @@ function cssModulesPlugin(css, id, capture) {
   };
 }
 
-function errors(values, filename, blockStart = null) {
-  if (values?.length) throw new Error(values.map(value => {
-    let start = typeof value === 'object' && value !== null ? value.loc?.start : null;
-    if (blockStart && Number.isInteger(value?.line) && Number.isInteger(value?.column)) {
-      start = { line: value.line, column: value.column + (value.line === blockStart.line ? blockStart.column - 1 : 0) };
+function validateCssBlocks(source, filename, start) {
+  let depth = 0;
+  let quote = null;
+  let comment = false;
+  for (let index = 0; index < source.length; index++) {
+    const char = source[index];
+    const next = source[index + 1];
+    if (comment) {
+      if (char === '*' && next === '/') { comment = false; index++; }
+      continue;
     }
-    const position = Number.isInteger(start?.line) && start.line > 0 && Number.isInteger(start?.column) && start.column > 0
-      ? `:${start.line}:${start.column}` : '';
-    const message = typeof value === 'string' ? value : blockStart && value.reason ? value.reason : value.message;
-    return `${filename}${position}: ${message}`;
-  }).join('\n'));
+    if (quote) {
+      if (char === '\\') index++;
+      else if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '/' && next === '*') { comment = true; index++; continue; }
+    if (char === '"' || char === "'") { quote = char; continue; }
+    if (char === '{') depth++;
+    if (char === '}') depth--;
+  }
+  if (depth > 0) {
+    const line = integer(start?.line) ? `:${start.line}` : '';
+    const column = integer(start?.column) ? `:${start.column}` : '';
+    throw new Error(`${filename}${line}${column}: Unclosed block`);
+  }
+}
+
+function integer(value) { return typeof value === 'number' && value % 1 === 0; }
+function errors(values, filename, blockStart = null) {
+  if (!values || !values.length) return;
+  const value = values[0];
+  let start = typeof value === 'object' && value !== null ? value.loc?.start : null;
+  if (blockStart && integer(value?.line) && integer(value?.column)) {
+    start = { line: value.line, column: value.column + (value.line === blockStart.line ? blockStart.column - 1 : 0) };
+  }
+  const position = integer(start?.line) && start.line > 0 && integer(start?.column) && start.column > 0
+    ? `:${start.line}:${start.column}` : '';
+  let message = typeof value === 'string' ? value : value?.reason || value?.message;
+  if (!message) {
+    try { message = JSON.stringify(values); } catch { message = 'compilation error'; }
+  }
+  throw new Error(`${filename}${position}: ${message}`);
 }
 // HMR signatures only need stable equality within one development session.
 // This avoids embedding a cryptographic dependency in the runtime.
@@ -161,6 +193,7 @@ export async function compile(request) {
     let moduleExports = null;
     const postcssPlugins = [];
     if (style.module) postcssPlugins.push(cssModulesPlugin(style.content, id, exports => { moduleExports = exports; }));
+    validateCssBlocks(style.content, filename, style.loc.start);
     const result = await compiler.compileStyleAsync({ source: style.content, filename, id: `data-v-${id}`, scoped: style.scoped, isProd: !development, modules: false, postcssPlugins, inMap: style.map });
     errors(result.errors, filename, style.loc.start);
     for (const dependency of result.dependencies || []) dependencies.add(dependency);

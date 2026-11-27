@@ -1462,7 +1462,7 @@ async fn generated_vue_dev_browser(kind: ferrite_e2e::BrowserKind) {
         let mut generated = ferrite::frameworks::scaffold::vue_ssr_files(
             "generated-dev-browser",
             language,
-            "node",
+            "embedded",
             "napi-vm",
         )
         .unwrap();
@@ -1613,10 +1613,9 @@ async fn generated_vue_dev_browser(kind: ferrite_e2e::BrowserKind) {
             .unwrap();
             page.wait_for_function("globalThis.__hydrated === true && document.querySelector('#counter')?.textContent === 'count: 0'", Duration::from_secs(20)).await.unwrap();
             assert!(page.evaluate::<bool>("fetch('/src/App.vue').then(r => r.text()).then(code => code.includes('type: Number') && !code.includes('type: String'))").await.unwrap());
-            assert!(page
-                .evaluate::<bool>("globalThis.__ssrButton === document.querySelector('#counter')")
-                .await
-                .unwrap());
+            // A runtime-affecting type edit rebuilds the component definition;
+            // Vue may reload the root instance, so DOM object identity from the
+            // initial SSR capture is not stable across this boundary.
             page.locator("#counter").click().await.unwrap();
             page.wait_for_function(
                 "document.querySelector('#counter').textContent === 'count: 1'",
@@ -1630,9 +1629,12 @@ async fn generated_vue_dev_browser(kind: ferrite_e2e::BrowserKind) {
             .replace("Hello Ferrite + Vue", "Hello updated Vue")
             .replace("rgb(128, 0, 0)", "rgb(0, 0, 128)");
         std::fs::write(project.root.join("src/App.vue"), &changed).unwrap();
-        // The existing experimental adapter declares full reload, so an edit
-        // intentionally resets state. Do not claim component state preservation.
-        page.wait_for_function("globalThis.__hydrated === true && document.querySelector('h1')?.textContent === 'Hello updated Vue' && document.querySelector('#counter')?.textContent === 'count: 0' && getComputedStyle(document.querySelector('#counter')).color === 'rgb(0, 0, 128)'", Duration::from_secs(20)).await.unwrap_or_else(|error| panic!("{language}/{kind:?}: {error}; {:?}; {:?}", page.page_errors(), page.console_messages()));
+        // Template/style-only edits use Vue's rerender path and intentionally
+        // retain component state. Reload once afterward so the error-recovery
+        // assertions below start from the scaffold's initial state.
+        page.wait_for_function("globalThis.__hydrated === true && document.querySelector('h1')?.textContent === 'Hello updated Vue' && document.querySelector('#counter')?.textContent === 'count: 1' && getComputedStyle(document.querySelector('#counter')).color === 'rgb(0, 0, 128)'", Duration::from_secs(20)).await.unwrap_or_else(|error| panic!("{language}/{kind:?}: {error}; {:?}; {:?}", page.page_errors(), page.console_messages()));
+        page.goto(&url).await.unwrap();
+        page.wait_for_function("globalThis.__hydrated === true && document.querySelector('h1')?.textContent === 'Hello updated Vue' && document.querySelector('#counter')?.textContent === 'count: 0' && getComputedStyle(document.querySelector('#counter')).color === 'rgb(0, 0, 128)'", Duration::from_secs(15)).await.unwrap();
         assert!(page
             .evaluate::<bool>("globalThis.__ssrButton === document.querySelector('#counter')")
             .await
@@ -1658,7 +1660,19 @@ async fn generated_vue_dev_browser(kind: ferrite_e2e::BrowserKind) {
             format!("{changed}<style>button {{ color: red;</style>\n"),
         )
         .unwrap();
-        page.wait_for_function(&format!("document.querySelector('#ferrite-error-overlay')?.textContent.includes('{}') && document.querySelector('#ferrite-error-overlay')?.textContent.includes('Unclosed block')", style_location), Duration::from_secs(15)).await.unwrap();
+        let style_overlay = page.wait_for_function(&format!("document.querySelector('#ferrite-error-overlay')?.textContent.includes('{}') && document.querySelector('#ferrite-error-overlay')?.textContent.includes('Unclosed block')", style_location), Duration::from_secs(15)).await;
+        if let Err(error) = style_overlay {
+            let overlay = page
+                .evaluate::<Option<String>>(
+                    "document.querySelector('#ferrite-error-overlay')?.textContent",
+                )
+                .await;
+            panic!(
+                "{language}/{kind:?}: {error}; overlay={overlay:?}; errors={:?}; console={:?}",
+                page.page_errors(),
+                page.console_messages()
+            );
+        }
         assert_eq!(
             page.evaluate::<String>("document.querySelector('#counter').textContent")
                 .await
@@ -1670,11 +1684,29 @@ async fn generated_vue_dev_browser(kind: ferrite_e2e::BrowserKind) {
             .iter()
             .filter(|message| message.kind == "error")
             .count();
-        std::fs::write(project.root.join("src/App.vue"), &changed).unwrap();
-        page.wait_for_function("globalThis.__hydrated === true && !document.querySelector('#ferrite-error-overlay') && document.querySelector('h1')?.textContent === 'Hello updated Vue' && document.querySelector('#counter')?.textContent === 'count: 0' && getComputedStyle(document.querySelector('#counter')).color === 'rgb(0, 0, 128)'", Duration::from_secs(20)).await.unwrap();
+        // Error clearing happens before the replacement module finishes
+        // importing. Wait for a recovery-only DOM marker so the next broken
+        // write cannot race that in-flight fixed-module import.
+        let recovered = changed.replace("<h1>", "<h1 data-recovered=\"yes\">");
+        std::fs::write(project.root.join("src/App.vue"), &recovered).unwrap();
+        let recovery = page.wait_for_function("globalThis.__hydrated === true && !document.querySelector('#ferrite-error-overlay') && document.querySelector('h1[data-recovered]')?.textContent === 'Hello updated Vue' && document.querySelector('#counter')?.textContent === 'count: 1' && getComputedStyle(document.querySelector('#counter')).color === 'rgb(0, 0, 128)'", Duration::from_secs(20)).await;
+        if let Err(error) = recovery {
+            let overlay = page
+                .evaluate::<Option<String>>(
+                    "document.querySelector('#ferrite-error-overlay')?.textContent",
+                )
+                .await;
+            let h1 = page
+                .evaluate::<Option<String>>("document.querySelector('h1')?.textContent")
+                .await;
+            let counter = page
+                .evaluate::<Option<String>>("document.querySelector('#counter')?.textContent")
+                .await;
+            panic!("{language}/{kind:?}: {error}; overlay={overlay:?}; h1={h1:?}; counter={counter:?}; errors={:?}; console={:?}", page.page_errors(), page.console_messages());
+        }
         page.locator("#counter").click().await.unwrap();
         page.wait_for_function(
-            "document.querySelector('#counter').textContent === 'count: 1'",
+            "document.querySelector('#counter').textContent === 'count: 2'",
             Duration::from_secs(5),
         )
         .await
@@ -1709,7 +1741,7 @@ async fn generated_vue_dev_browser(kind: ferrite_e2e::BrowserKind) {
             page.evaluate::<String>("document.querySelector('#counter').textContent")
                 .await
                 .unwrap(),
-            "count: 1"
+            "count: 2"
         );
         let expected_errors = page
             .console_messages()
@@ -1717,10 +1749,10 @@ async fn generated_vue_dev_browser(kind: ferrite_e2e::BrowserKind) {
             .filter(|message| message.kind == "error")
             .count();
         std::fs::write(project.root.join("src/App.vue"), &original).unwrap();
-        page.wait_for_function("globalThis.__hydrated === true && !document.querySelector('#ferrite-error-overlay') && document.querySelector('h1')?.textContent === 'Hello Ferrite + Vue' && document.querySelector('#counter')?.textContent === 'count: 0' && getComputedStyle(document.querySelector('#counter')).color === 'rgb(128, 0, 0)'", Duration::from_secs(20)).await.unwrap_or_else(|error| panic!("{language}/{kind:?}: {error}; {:?}; {:?}", page.page_errors(), page.console_messages()));
+        page.wait_for_function("globalThis.__hydrated === true && !document.querySelector('#ferrite-error-overlay') && document.querySelector('h1')?.textContent === 'Hello Ferrite + Vue' && document.querySelector('#counter')?.textContent === 'count: 2' && getComputedStyle(document.querySelector('#counter')).color === 'rgb(128, 0, 0)'", Duration::from_secs(20)).await.unwrap_or_else(|error| panic!("{language}/{kind:?}: {error}; {:?}; {:?}", page.page_errors(), page.console_messages()));
         page.locator("#counter").click().await.unwrap();
         page.wait_for_function(
-            "document.querySelector('#counter').textContent === 'count: 1'",
+            "document.querySelector('#counter').textContent === 'count: 3'",
             Duration::from_secs(5),
         )
         .await
@@ -1748,14 +1780,14 @@ async fn generated_vue_dev_browser(kind: ferrite_e2e::BrowserKind) {
 
 #[cfg(feature = "napi-vm")]
 #[tokio::test]
-#[ignore = "real registry, Node compiler host and Chromium; generated SSR watcher acceptance"]
+#[ignore = "real registry, embedded Vue compiler and Chromium; generated SSR watcher acceptance"]
 async fn generated_vue_dev_ssr_chromium() {
     generated_vue_dev_browser(ferrite_e2e::BrowserKind::Chromium).await;
 }
 
 #[cfg(feature = "napi-vm")]
 #[tokio::test]
-#[ignore = "real registry, Node compiler host and Firefox; generated SSR watcher acceptance"]
+#[ignore = "real registry, embedded Vue compiler and Firefox; generated SSR watcher acceptance"]
 async fn generated_vue_dev_ssr_firefox() {
     generated_vue_dev_browser(ferrite_e2e::BrowserKind::Firefox).await;
 }
