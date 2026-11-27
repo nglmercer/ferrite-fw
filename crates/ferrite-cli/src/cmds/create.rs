@@ -46,13 +46,13 @@ pub(crate) async fn create(args: CreateArgs) -> ferrite::Result<()> {
     let mut profile = scaffold::select(framework, &args.language, &args.rendering)?.clone();
     match args.compiler_host.as_deref() {
         Some(host) if host == profile.compiler_host => {}
-        Some("node") if framework == "vue" => {
+        Some("node") if matches!(framework, "vue" | "svelte") => {
             profile.compiler_host = "node";
         }
         Some(host) => {
             return Err(ferrite::FerriteError::Config(format!(
                 "{framework} does not support compiler host {host}; use {}. Compiler host does not select an SSR runtime",
-                if framework == "vue" {
+                if matches!(framework, "vue" | "svelte") {
                     "--compiler-host embedded (or transitional --compiler-host node)"
                 } else {
                     match profile.compiler_host {
@@ -71,7 +71,7 @@ pub(crate) async fn create(args: CreateArgs) -> ferrite::Result<()> {
     }
     if profile.compiler_host == "embedded" && !cfg!(feature = "napi-vm") {
         return Err(ferrite::FerriteError::Config(
-            "embedded Vue compilation requires a Ferrite binary built with --features napi-vm; use --compiler-host node for the transitional external host".into(),
+            "embedded framework compilation requires a Ferrite binary built with --features napi-vm; use --compiler-host node for the transitional external host".into(),
         ));
     }
     if args.ssr_runtime.as_deref() != profile.ssr_runtime {
@@ -81,7 +81,7 @@ pub(crate) async fn create(args: CreateArgs) -> ferrite::Result<()> {
         }));
     }
     if profile.ssr_runtime.is_some() && !cfg!(feature = "napi-vm") {
-        return Err(ferrite::FerriteError::Config("Vue SSR requires a Ferrite binary built with --features napi-vm; no alternate runtime will be selected".into()));
+        return Err(ferrite::FerriteError::Config("framework SSR requires a Ferrite binary built with --features napi-vm; no alternate runtime will be selected".into()));
     }
     let name = args.name.ok_or_else(|| {
         ferrite::FerriteError::Config(
@@ -187,6 +187,7 @@ mod tests {
         assert!(!path.exists());
         let mut request = args(&path);
         request.framework = Some("svelte".into());
+        request.compiler_host = Some("invalid".into());
         assert!(create(request).await.is_err());
         assert!(!path.exists());
         std::fs::create_dir(&path).unwrap();
@@ -206,11 +207,7 @@ mod tests {
             let mut request = args(&path);
             request.framework = Some(framework.into());
             request.no_install = true;
-            if framework == "svelte" {
-                let error = create(request).await.unwrap_err();
-                assert!(error.to_string().contains("--compiler-host node"));
-                assert!(!path.exists());
-            } else if cfg!(feature = "napi-vm") {
+            if cfg!(feature = "napi-vm") {
                 create(request).await.unwrap();
                 assert!(std::fs::read_to_string(path.join("ferrite.toml"))
                     .unwrap()

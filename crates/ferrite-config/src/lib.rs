@@ -99,7 +99,7 @@ impl Default for FrameworkConfig {
             enabled: Vec::new(),
             compiler_host: None,
             node: None,
-            timeout_ms: 10_000,
+            timeout_ms: 30_000,
         }
     }
 }
@@ -124,14 +124,9 @@ impl FrameworkConfig {
         } else if !self.enabled.is_empty() {
             match self.compiler_host.as_deref() {
                 Some("node") => {}
-                Some("embedded") if self.enabled.iter().all(|name| name == "vue") => {}
-                Some("embedded") => {
-                    return Err(FerriteError::Config(
-                        "embedded framework compilation currently supports Vue only; use compiler_host = \"node\" for Svelte or mixed framework profiles".into(),
-                    ));
-                }
+                Some("embedded") => {}
                 _ => {
-                    return Err(FerriteError::Config("official framework compilation requires explicit framework.compiler_host = \"node\" or, for Vue, \"embedded\"; SSR runtime is configured separately".into()));
+                    return Err(FerriteError::Config("official framework compilation requires explicit framework.compiler_host = \"node\" or \"embedded\"; SSR runtime is configured separately".into()));
                 }
             }
         }
@@ -1826,8 +1821,6 @@ mod tests {
         let parse = |text: &str| toml::from_str::<UserConfig>(text).unwrap();
         for text in [
             "[framework]\nenabled=['vue']",
-            "[framework]\nenabled=['svelte']\ncompiler_host='embedded'",
-            "[framework]\nenabled=['vue','svelte']\ncompiler_host='embedded'",
             "[framework]\nenabled=['angular']\ncompiler_host='node'",
             "[framework]\nenabled=['vue','vue']\ncompiler_host='node'",
             "[framework]\nenabled=['svelte']\ncompiler_host='node'\ntimeout_ms=0",

@@ -149,6 +149,14 @@ pub const SVELTE_NODE: CompilerProfile = CompilerProfile {
     requires_explicit_enable: true,
     conformance_fixture: "compiler_host::actual_project_matched_compilers_client_server_and_runes",
 };
+pub const SVELTE_EMBEDDED: CompilerProfile = CompilerProfile {
+    host: "embedded",
+    framework_version: "5.39.6",
+    client: Support::Experimental,
+    server: Support::Experimental,
+    requires_explicit_enable: false,
+    conformance_fixture: "embedded_svelte::official_umd_compiler_client_and_server",
+};
 
 /// Framework compiler requirements and current rendering evidence.
 #[derive(Debug)]
@@ -199,7 +207,7 @@ pub const FRAMEWORKS: &[FrameworkDescriptor] = &[
         name: "svelte",
         extensions: &["svelte", "svelte.js", "svelte.ts"],
         template_variants: crate::scaffold::SVELTE_TEMPLATES,
-        compiler_profiles: &[SVELTE_NODE],
+        compiler_profiles: &[SVELTE_EMBEDDED, SVELTE_NODE],
         compiler_package: Some("svelte/compiler"),
         client: Support::Experimental,
         ssr: Support::Experimental,

@@ -145,37 +145,6 @@ impl Config {
                         resolved.root.join(path)
                     }
                 });
-                let host: Arc<dyn crate::frameworks::compiler_host::FrameworkCompiler> =
-                    match profile.compiler_host.as_deref() {
-                        Some("embedded") => {
-                            #[cfg(feature = "napi-vm")]
-                            {
-                                Arc::new(
-                                    crate::frameworks::embedded_vue::EmbeddedVueCompilerHost::new(
-                                        resolved.root.clone(),
-                                        resolved.lockfile(),
-                                        std::time::Duration::from_millis(profile.timeout_ms),
-                                    )
-                                    .await?,
-                                )
-                            }
-                            #[cfg(not(feature = "napi-vm"))]
-                            {
-                                return Err(ferrite_core::FerriteError::Config(
-                                    "embedded framework compilation requires a Ferrite binary built with --features napi-vm".into(),
-                                ));
-                            }
-                        }
-                        _ => Arc::new(
-                            crate::frameworks::compiler_host::NodeCompilerHost::new(
-                                resolved.root.clone(),
-                                resolved.lockfile(),
-                                node,
-                                std::time::Duration::from_millis(profile.timeout_ms),
-                            )
-                            .await?,
-                        ),
-                    };
                 for name in &profile.enabled {
                     let legacy = format!("ferrite:{name}");
                     plugins.retain(|plugin| plugin.name() != legacy);
@@ -184,9 +153,50 @@ impl Config {
                         "svelte" => crate::frameworks::compiler_host::Framework::Svelte,
                         _ => unreachable!("validated framework profile"),
                     };
+                    let host: Arc<dyn crate::frameworks::compiler_host::FrameworkCompiler> =
+                        match profile.compiler_host.as_deref() {
+                            Some("embedded") => {
+                                #[cfg(feature = "napi-vm")]
+                                {
+                                    match framework {
+                                        crate::frameworks::compiler_host::Framework::Vue => Arc::new(
+                                            crate::frameworks::embedded_vue::EmbeddedVueCompilerHost::new(
+                                                resolved.root.clone(),
+                                                resolved.lockfile(),
+                                                std::time::Duration::from_millis(profile.timeout_ms),
+                                            )
+                                            .await?,
+                                        ),
+                                        crate::frameworks::compiler_host::Framework::Svelte => Arc::new(
+                                            crate::frameworks::embedded_svelte::EmbeddedSvelteCompilerHost::new(
+                                                resolved.root.clone(),
+                                                resolved.lockfile(),
+                                                std::time::Duration::from_millis(profile.timeout_ms),
+                                            )
+                                            .await?,
+                                        ),
+                                    }
+                                }
+                                #[cfg(not(feature = "napi-vm"))]
+                                {
+                                    return Err(ferrite_core::FerriteError::Config(
+                                        "embedded framework compilation requires a Ferrite binary built with --features napi-vm".into(),
+                                    ));
+                                }
+                            }
+                            _ => Arc::new(
+                                crate::frameworks::compiler_host::NodeCompilerHost::new(
+                                    resolved.root.clone(),
+                                    resolved.lockfile(),
+                                    node.clone(),
+                                    std::time::Duration::from_millis(profile.timeout_ms),
+                                )
+                                .await?,
+                            ),
+                        };
                     plugins.push(Arc::new(crate::frameworks::HostedFrameworkPlugin::new(
                         framework,
-                        host.clone(),
+                        host,
                         !resolved.is_production,
                     )));
                 }

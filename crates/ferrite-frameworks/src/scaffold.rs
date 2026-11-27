@@ -118,7 +118,7 @@ pub const SVELTE_TEMPLATES: &[TemplateProfile] = &[
         framework: "svelte",
         language: "js",
         rendering: "client",
-        compiler_host: "node",
+        compiler_host: "embedded",
         ssr_runtime: None,
         framework_version: Some(crate::registry::SVELTE_NODE.framework_version),
         support: crate::registry::Support::Experimental,
@@ -127,7 +127,7 @@ pub const SVELTE_TEMPLATES: &[TemplateProfile] = &[
         framework: "svelte",
         language: "ts",
         rendering: "client",
-        compiler_host: "node",
+        compiler_host: "embedded",
         ssr_runtime: None,
         framework_version: Some(crate::registry::SVELTE_NODE.framework_version),
         support: crate::registry::Support::Experimental,
@@ -136,7 +136,7 @@ pub const SVELTE_TEMPLATES: &[TemplateProfile] = &[
         framework: "svelte",
         language: "js",
         rendering: "ssr",
-        compiler_host: "node",
+        compiler_host: "embedded",
         ssr_runtime: Some("napi-vm"),
         framework_version: Some(crate::registry::SVELTE_NODE.framework_version),
         support: crate::registry::Support::Experimental,
@@ -145,7 +145,7 @@ pub const SVELTE_TEMPLATES: &[TemplateProfile] = &[
         framework: "svelte",
         language: "ts",
         rendering: "ssr",
-        compiler_host: "node",
+        compiler_host: "embedded",
         ssr_runtime: Some("napi-vm"),
         framework_version: Some(crate::registry::SVELTE_NODE.framework_version),
         support: crate::registry::Support::Experimental,
@@ -174,10 +174,10 @@ pub fn select(
 pub fn files(profile: &TemplateProfile, name: &str) -> Result<BTreeMap<String, String>> {
     // The public library API must validate, too; callers cannot invent profiles.
     let canonical = select(profile.framework, profile.language, profile.rendering)?;
-    let transitional_vue_node = profile.framework == "vue"
+    let transitional_node = matches!(profile.framework, "vue" | "svelte")
         && profile.compiler_host == "node"
         && canonical.compiler_host == "embedded";
-    let host_allowed = profile.compiler_host == canonical.compiler_host || transitional_vue_node;
+    let host_allowed = profile.compiler_host == canonical.compiler_host || transitional_node;
     let equivalent_except_host = profile.framework == canonical.framework
         && profile.language == canonical.language
         && profile.rendering == canonical.rendering
@@ -442,10 +442,16 @@ pub fn svelte_ssr_files(
     compiler_host: &str,
     ssr_runtime: &str,
 ) -> Result<BTreeMap<String, String>> {
-    if compiler_host != "node" || ssr_runtime != "napi-vm" {
-        return Err(FerriteError::Config("experimental Svelte SSR generation requires explicit Node compiler host and separate napi-vm SSR runtime".into()));
+    if !matches!(compiler_host, "embedded" | "node") || ssr_runtime != "napi-vm" {
+        return Err(FerriteError::Config("experimental Svelte SSR generation requires embedded compilation or transitional explicit Node compiler host, plus separate napi-vm SSR runtime; other combinations are unavailable".into()));
     }
-    let mut generated = files(select("svelte", language, "client")?, name)?;
+    let mut profile = select("svelte", language, "client")?.clone();
+    profile.compiler_host = if compiler_host == "node" {
+        "node"
+    } else {
+        "embedded"
+    };
+    let mut generated = files(&profile, name)?;
     let main = generated.get_mut(&format!("src/main.{language}")).unwrap();
     *main = main
         .replace("{ mount }", "{ hydrate }")
@@ -468,7 +474,12 @@ pub fn svelte_ssr_files(
         "package.json".into(),
         format!("{}\n", serde_json::to_string_pretty(&manifest)?),
     );
-    generated.insert("README.md".into(), format!("# {name}\n\nExperimental Svelte {} SSR. Run `ferrite install`, `ferrite ssr`,\n`ferrite build` and `ferrite preview`. Node is explicitly required for the\nofficial component compiler; rendering uses the separate napi-vm runtime.\nThe server uses svelte/server render; the client hydrates the existing DOM.\nDevelopment edits use official Svelte HMR and reset component state. Transpilation does not type-check.\nPlatform release matrices and streaming remain unfinished.\n", crate::registry::SVELTE_NODE.framework_version));
+    let compiler_note = if compiler_host == "embedded" {
+        "Compilation uses the official compiler embedded in Ferrite's napi-vm runtime; no Node executable is required."
+    } else {
+        "Node is explicitly required for the transitional official component compiler host."
+    };
+    generated.insert("README.md".into(), format!("# {name}\n\nExperimental Svelte {} SSR. Run `ferrite install`, `ferrite ssr`,\n`ferrite build` and `ferrite preview`. {compiler_note} Rendering uses the separate napi-vm runtime.\nThe server uses svelte/server render; the client hydrates the existing DOM.\nDevelopment edits use official Svelte HMR and reset component state. Transpilation does not type-check.\nPlatform release matrices and streaming remain unfinished.\n", crate::registry::SVELTE_NODE.framework_version));
     Ok(generated)
 }
 
@@ -688,11 +699,7 @@ mod tests {
         for framework in ["vue", "svelte"] {
             for language in ["js", "ts"] {
                 let profile = select(framework, language, "client").unwrap();
-                let expected_host = if framework == "vue" {
-                    "embedded"
-                } else {
-                    "node"
-                };
+                let expected_host = "embedded";
                 assert_eq!(profile.compiler_host, expected_host);
                 let files = files(profile, "app").unwrap();
                 let package: serde_json::Value =
@@ -822,6 +829,8 @@ mod vue_ssr_generation_tests {
             assert!(files["index.html"].contains("<!--ssr-outlet-->"));
             assert!(files["ferrite.toml"].contains("backend = \"napi-vm\""));
         }
+        let transitional = super::svelte_ssr_files("app", "js", "node", "napi-vm").unwrap();
+        assert!(transitional["ferrite.toml"].contains("compiler_host = \"node\""));
         assert!(super::svelte_ssr_files("app", "js", "native", "napi-vm").is_err());
         assert!(super::svelte_ssr_files("app", "js", "node", "node").is_err());
     }
