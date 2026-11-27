@@ -468,6 +468,12 @@ async fn removing_ssr_entry_discards_stale_server_output() {
         .await
         .unwrap();
     assert!(p.root.join("dist/server/renderer.json").is_file());
+    std::fs::create_dir_all(p.root.join("public/server")).unwrap();
+    std::fs::write(
+        p.root.join("public/server/ssr-manifest.json"),
+        "public asset, not SSR metadata",
+    )
+    .unwrap();
     c.ssr.entry = None;
     c.ssr.entries.clear();
     ferrite::Builder::new(c, vec![]).build_app().await.unwrap();
@@ -476,5 +482,22 @@ async fn removing_ssr_entry_discards_stale_server_output() {
             && !p.root.join("dist/server/manifest.json").exists(),
         "integrated client-only rebuild must disable stale SSR output"
     );
+    assert_eq!(
+        std::fs::read_to_string(p.root.join("dist/server/ssr-manifest.json")).unwrap(),
+        "public asset, not SSR metadata"
+    );
+    let mut stack = vec![p.root.join("dist/server")];
+    let mut files = Vec::new();
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                files.push(path);
+            }
+        }
+    }
+    assert_eq!(files, vec![p.root.join("dist/server/ssr-manifest.json")]);
     assert!(p.root.join("dist/index.html").is_file());
 }
