@@ -64,7 +64,7 @@ function rewriteModuleSelector(selector, css, hash, exports) {
   }
   return output;
 }
-function cssModulesPlugin(css, capture) {
+function cssModulesPlugin(css, id, capture) {
   return {
     postcssPlugin: 'ferrite-vue-css-modules',
     Once(root) {
@@ -72,7 +72,7 @@ function cssModulesPlugin(css, capture) {
       if (/(?:^|[^\w-])(?:composes|@value)\b|:(?:global|local)\s*\(/.test(text)) {
         throw new Error('embedded Vue CSS modules do not yet support composes, @value, or explicit :global/:local blocks');
       }
-      const hash = stringHash(text).toString(36).slice(0, 5);
+      const hash = stringHash(`${id}\0${text}`).toString(36).slice(0, 5);
       const exports = Object.create(null);
       root.walkRules(rule => {
         if (!rule.selector) return;
@@ -153,7 +153,7 @@ export async function compile(request) {
     if (style.lang && style.lang !== 'css') throw new Error(`${filename}: style language ${style.lang} requires a configured preprocessor`);
     let moduleExports = null;
     const postcssPlugins = [];
-    if (style.module) postcssPlugins.push(cssModulesPlugin(style.content, exports => { moduleExports = exports; }));
+    if (style.module) postcssPlugins.push(cssModulesPlugin(style.content, id, exports => { moduleExports = exports; }));
     const result = await compiler.compileStyleAsync({ source: style.content, filename, id: `data-v-${id}`, scoped: style.scoped, isProd: !development, modules: false, postcssPlugins, inMap: style.map });
     errors(result.errors, filename, style.loc.start);
     for (const dependency of result.dependencies || []) dependencies.add(dependency);
