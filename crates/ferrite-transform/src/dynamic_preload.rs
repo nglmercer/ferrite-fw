@@ -43,7 +43,7 @@ pub fn preload_dynamic_imports(
                 let start = expr.span.start as usize;
                 let end = expr.span.end as usize;
                 self.edits
-                    .push((start, start, format!("{}(()=>", self.binding)));
+                    .push((start, start, format!("{}(async()=>", self.binding)));
                 self.edits.push((
                     end,
                     end,
@@ -93,14 +93,13 @@ mod tests {
         let (output, map) =
             preload_dynamic_imports("/entry.js", code, &css, "./helper.js", true).unwrap();
         assert!(output.contains("const text = \"import('./a.js')\""));
-        assert!(
-            output.contains("__ferrite_css_preload___(()=>import(`./a.js`, {with:{type:'json'}})")
-        );
+        assert!(output
+            .contains("__ferrite_css_preload___(async()=>import(`./a.js`, {with:{type:'json'}})"));
         assert!(output.contains("import(variable)"));
         crate::parse::parse_module("/entry.js", &output, &ferrite_core::ModuleType::Js).unwrap();
         let json = map.unwrap();
         let decoded = oxc_sourcemap::SourceMap::from_json_string(&json).unwrap();
-        let position = output.find("__ferrite_css_preload___(()=>").unwrap();
+        let position = output.find("__ferrite_css_preload___(async()=>").unwrap();
         let prefix = &output[..position];
         let line = prefix.bytes().filter(|b| *b == b'\n').count() as u32;
         let col = prefix.rsplit('\n').next().unwrap().encode_utf16().count() as u32;
@@ -112,5 +111,18 @@ mod tests {
             None,
             "generated preload calls must be unmapped"
         );
+    }
+
+    #[test]
+    fn wrapped_import_options_may_use_await() {
+        let code = "export async function load(options){return import('./a.js', await options)}";
+        let css = HashMap::from([("./a.js".into(), vec!["./style.css".into()])]);
+        let (output, _) =
+            preload_dynamic_imports("/entry.js", code, &css, "./helper.js", false).unwrap();
+        assert!(
+            output.contains("async()=>import('./a.js', await options)"),
+            "{output}"
+        );
+        crate::parse::parse_module("/entry.js", &output, &ferrite_core::ModuleType::Js).unwrap();
     }
 }
