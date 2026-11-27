@@ -21,7 +21,10 @@ napi-vm = { package = "napi-vm-core", git = "https://github.com/nglmercer/napi-v
 # Explicit timer/microtask host APIs moved out of the interpreter core.
 napi-vm-host = { package = "napi-vm-runtime", git = "https://github.com/nglmercer/napi-vm", rev = "7362971e7781c0c57b36c5a11813fff0e6bc3521", default-features = false, features = ["runtime-web"], optional = true }
 
+rquickjs = { version = "0.14", default-features = false, features = ["std", "loader", "array-buffer", "parallel"], optional = true }
+
 [features]
 default = []
+rquickjs = ["dep:rquickjs"]
 # Disabled by default: embedded JS execution + in-process `.node` loading.
 napi-vm = ["dep:napi-vm", "dep:napi-vm-host", "dep:libc"]

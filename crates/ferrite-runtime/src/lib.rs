@@ -10,6 +10,10 @@ use std::sync::Arc;
 
 use ferrite_core::{FerriteError, Result};
 
+/// QuickJS embedded backend (feature `rquickjs`).
+#[cfg(feature = "rquickjs")]
+pub mod quickjs;
+
 /// napi-vm embedded backend (feature `napi-vm`, disabled by default).
 #[cfg(feature = "napi-vm")]
 pub mod napi_vm;
