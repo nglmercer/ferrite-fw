@@ -91,6 +91,16 @@ def plan(profile):
         commands.append(exact("ferrite-test", "generated_apps", "chromium_react_offline_fixture_dev_refresh_preserves_state", "napi-vm"))
         commands.append(exact("ferrite-test", "generated_apps", "chromium_react_offline_fixture_build_and_preview", "napi-vm"))
         commands.append(exact("ferrite-test", "generated_apps", "chromium_react_offline_fixture_ssr_build_and_preview", "napi-vm"))
+        for name in (
+            "chromium_react_refresh_dom",
+            "chromium_react_refresh_wrapped",
+            "chromium_react_refresh_imported_hook",
+            "chromium_react_refresh_hook_barrel",
+            "chromium_react_refresh_default_named",
+            "chromium_react_refresh_default_anonymous_memo",
+            "chromium_react_refresh_mixed_exports",
+        ):
+            commands.append(exact("ferrite-test", "generated_apps", name, "napi-vm"))
         commands.append(exact("ferrite-test", "generated_apps", "chromium_vue_embedded_offline_fixture_ssr_build_and_preview", "napi-vm"))
         commands.append(exact("ferrite-test", "ssr_islands", "chromium_framework_islands_dev_preview_and_static", "napi-vm"))
         commands.append(exact("ferrite-test", "generated_apps", "chromium_svelte_embedded_offline_fixture_dev_hmr", "napi-vm"))

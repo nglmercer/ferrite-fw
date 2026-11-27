@@ -1844,7 +1844,7 @@ async fn react_refresh_dom_acceptance(kind: BrowserKind, fixture: ReactFixture) 
     let barrel = matches!(fixture, ReactFixture::HookBarrel);
     let binary = cli();
     let project = ferrite_test::TempProject::new(&[
-        ("package.json", r#"{"private":true,"dependencies":{"react":"19.2.0","react-dom":"19.2.0","react-refresh":"0.17.0"}}"#),
+        ("package.json", r#"{"private":true,"dependencies":{"react":"19.2.0","react-dom":"19.2.0","react-refresh":"0.17.0"},"devDependencies":{"@types/react":"19.2.0","@types/react-dom":"19.2.0"}}"#),
         ("index.html", "<html><head><link rel='icon' href='data:,'></head><body><div id='root'></div><script type='module' src='/main.jsx'></script></body></html>"),
         ("main.jsx", "import {createRoot} from 'react-dom/client'; import {App} from './App.jsx'; globalThis.session = Math.random(); createRoot(document.querySelector('#root')).render(<App/>);"),
     ]);
@@ -1907,7 +1907,16 @@ async fn react_refresh_dom_acceptance(kind: BrowserKind, fixture: ReactFixture) 
     let source_variant = format!("const RefreshRuntime = 'application'; const __ferrite_refresh_exports__ = 1; const $RefreshReg$ = () => {{throw new Error('application binding was called');}};\n{source_variant}");
     let source = source_variant.as_str();
     std::fs::write(project.root.join("App.jsx"), source).unwrap();
-    command(&binary, &project.root, &["install"], false).await;
+    let (_registry, registry) = fixture_registry("react-registry").await;
+    let lock = include_str!("fixtures/react.lock").replace("https://registry.npmjs.org", &registry);
+    std::fs::write(project.root.join("ferrite.lock"), lock).unwrap();
+    command(
+        &binary,
+        &project.root,
+        &["install", "--frozen-lockfile"],
+        false,
+    )
+    .await;
     let executable = match kind {
         BrowserKind::Chromium => ferrite_e2e::find_chromium(None),
         BrowserKind::Firefox => ferrite_e2e::find_firefox(None),
@@ -2204,88 +2213,88 @@ async fn react_refresh_dom_acceptance(kind: BrowserKind, fixture: ReactFixture) 
 }
 
 #[tokio::test]
-#[ignore = "requires freshly built CLI, registry packages and Chromium"]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
 async fn chromium_react_refresh_dom() {
     react_refresh_dom_acceptance(BrowserKind::Chromium, ReactFixture::Plain).await;
 }
 #[tokio::test]
-#[ignore = "requires freshly built CLI, registry packages and Firefox"]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Firefox"]
 async fn firefox_react_refresh_dom() {
     react_refresh_dom_acceptance(BrowserKind::Firefox, ReactFixture::Plain).await;
 }
 
 #[tokio::test]
-#[ignore = "requires freshly built CLI, registry packages and Chromium"]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
 async fn chromium_react_refresh_wrapped() {
     react_refresh_dom_acceptance(BrowserKind::Chromium, ReactFixture::Memo).await;
 }
 #[tokio::test]
-#[ignore = "requires freshly built CLI, registry packages and Firefox"]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Firefox"]
 async fn firefox_react_refresh_wrapped() {
     react_refresh_dom_acceptance(BrowserKind::Firefox, ReactFixture::Memo).await;
 }
 
 #[tokio::test]
-#[ignore = "requires freshly built CLI, registry packages and Chromium"]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
 async fn chromium_react_refresh_imported_hook() {
     react_refresh_dom_acceptance(BrowserKind::Chromium, ReactFixture::ImportedHook).await;
 }
 #[tokio::test]
-#[ignore = "requires freshly built CLI, registry packages and Firefox"]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Firefox"]
 async fn firefox_react_refresh_imported_hook() {
     react_refresh_dom_acceptance(BrowserKind::Firefox, ReactFixture::ImportedHook).await;
 }
 
 #[tokio::test]
-#[ignore = "requires freshly built CLI, registry packages and Chromium"]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
 async fn chromium_react_refresh_hook_barrel() {
     react_refresh_dom_acceptance(BrowserKind::Chromium, ReactFixture::HookBarrel).await;
 }
 #[tokio::test]
-#[ignore = "requires freshly built CLI, registry packages and Firefox"]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Firefox"]
 async fn firefox_react_refresh_hook_barrel() {
     react_refresh_dom_acceptance(BrowserKind::Firefox, ReactFixture::HookBarrel).await;
 }
 
 #[tokio::test]
-#[ignore = "requires freshly built CLI, registry packages and Chromium"]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
 async fn chromium_react_refresh_default_named() {
     react_refresh_dom_acceptance(BrowserKind::Chromium, ReactFixture::NamedDefault).await;
 }
 #[tokio::test]
-#[ignore = "requires freshly built CLI, registry packages and Firefox"]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Firefox"]
 async fn firefox_react_refresh_default_named() {
     react_refresh_dom_acceptance(BrowserKind::Firefox, ReactFixture::NamedDefault).await;
 }
 #[tokio::test]
-#[ignore = "requires freshly built CLI, registry packages and Chromium"]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
 async fn chromium_react_refresh_default_anonymous_memo() {
     react_refresh_dom_acceptance(BrowserKind::Chromium, ReactFixture::AnonymousMemoDefault).await;
 }
 #[tokio::test]
-#[ignore = "requires freshly built CLI, registry packages and Firefox"]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Firefox"]
 async fn firefox_react_refresh_default_anonymous_memo() {
     react_refresh_dom_acceptance(BrowserKind::Firefox, ReactFixture::AnonymousMemoDefault).await;
 }
 
 #[tokio::test]
-#[ignore = "requires freshly built CLI, registry packages and Chromium"]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
 async fn chromium_react_refresh_mixed_exports() {
     react_refresh_dom_acceptance(BrowserKind::Chromium, ReactFixture::MixedExports).await;
 }
 #[tokio::test]
-#[ignore = "requires freshly built CLI, registry packages and Firefox"]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Firefox"]
 async fn firefox_react_refresh_mixed_exports() {
     react_refresh_dom_acceptance(BrowserKind::Firefox, ReactFixture::MixedExports).await;
 }
 
 #[tokio::test]
-#[ignore = "requires freshly built CLI, registry packages and Chromium"]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
 async fn chromium_generated_react_profiles() {
     acceptance(BrowserKind::Chromium, &["react"]).await;
 }
 #[tokio::test]
-#[ignore = "requires freshly built CLI, registry packages and Firefox"]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Firefox"]
 async fn firefox_generated_react_profiles() {
     acceptance(BrowserKind::Firefox, &["react"]).await;
 }
