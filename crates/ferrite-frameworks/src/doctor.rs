@@ -354,7 +354,7 @@ pub fn inspect_with_runtime(
             version: package.map(|package| package.version.clone()), identity: package.map(|package| package.id()),
             compiler_host: host, compiler_support: if available { "experimental" } else { "unavailable" },
             client: if available { descriptor.client.label() } else { "unavailable" }, ssr: if runtime_available == Some(true) && available && descriptor.template_variants.iter().any(|profile| profile.ssr_runtime == Some(config.runtime.backend.as_str())) { descriptor.ssr.label() } else { "unavailable" },
-            updates: if !available { "unavailable" } else if name == "react" && config.react.refresh { "experimental-refresh-incomplete" } else { "full-reload" }, checker: "unavailable",
+            updates: if !available { "unavailable" } else if name == "react" && config.react.refresh { "state-preserving-refresh" } else { "full-reload" }, checker: "unavailable",
             rendering_profiles: descriptor.template_variants.iter().map(|profile| serde_json::json!({
                 "language": profile.language, "rendering": profile.rendering,
                 "framework_version": profile.framework_version,

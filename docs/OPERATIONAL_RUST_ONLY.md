@@ -9,7 +9,7 @@ does not yet mean every framework profile satisfies that requirement.
 | Profile | Compiler execution | External Node required | Status |
 |---|---|---:|---|
 | Vanilla generated applications | Rust | No | Covered by generated-app and SSR/standalone acceptance |
-| React generated applications | Rust/native transform | No for compilation and execution | Registry-backed package installation remains network-dependent; refresh coverage is incomplete |
+| React generated applications | Rust/native transform | No for compilation and execution | Covered offline by checked-in pinned package tarballs; state-preserving refresh is covered in Chromium |
 | Vue 3.5.22 | Official browser compiler embedded in napi-vm | No for the default embedded host | Experimental operational Rust-only profile; explicit Node remains a transitional fallback |
 | Svelte 5.39.6 | Official self-contained compiler embedded in napi-vm | No for the default embedded host | Experimental operational Rust-only profile; explicit Node remains a transitional fallback |
 
@@ -41,7 +41,7 @@ python3 scripts/acceptance.py --profile rust-only
 
 The profile intentionally does not require Node. It currently proves the parts
 that can execute without it: compiler-host reporting, generated vanilla
-applications in real Chromium/Firefox, generated React and embedded Vue
+applications in real Chromium/Firefox, generated React dev/refresh and production builds/previews plus embedded Vue
 production builds/previews using only checked-in pinned package tarballs,
 embedded Svelte dev/HMR and SSR production builds/previews, embedded SSR packaging, streamed prerendering and standalone process/streaming
 recovery. The generated tests run

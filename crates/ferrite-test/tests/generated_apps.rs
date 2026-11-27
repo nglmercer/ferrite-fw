@@ -248,6 +248,157 @@ async fn chromium_react_offline_fixture_build_and_preview() {
 
 #[tokio::test]
 #[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
+async fn chromium_react_offline_fixture_dev_refresh_preserves_state() {
+    let binary = cli();
+    let (_registry, registry) = fixture_registry("react-registry").await;
+    let project = ferrite_test::TempProject::new(&[]);
+    let destination = project.root.join("app");
+    command(
+        &binary,
+        &project.root,
+        &[
+            "create",
+            destination.to_str().unwrap(),
+            "--framework",
+            "react",
+            "--language",
+            "ts",
+            "--rendering",
+            "client",
+            "--no-install",
+        ],
+        false,
+    )
+    .await;
+    let lock = include_str!("fixtures/react.lock").replace("https://registry.npmjs.org", &registry);
+    std::fs::write(destination.join("ferrite.lock"), lock).unwrap();
+    command(
+        &binary,
+        &destination,
+        &["install", "--frozen-lockfile"],
+        false,
+    )
+    .await;
+
+    let executable = ferrite_e2e::find_chromium(None)
+        .expect("offline React refresh acceptance requires real Chromium");
+    let browser = Browser::launch(
+        LaunchOptions::default()
+            .browser(BrowserKind::Chromium)
+            .executable(executable),
+    )
+    .await
+    .unwrap();
+    let (mut dev, url) = server(&binary, &destination, "dev", false).await;
+    let page = browser.new_page().await.unwrap();
+    page.goto(&url).await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'count: 0'",
+        Duration::from_secs(15),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "offline React dev initial render: {error}; {:?}; {:?}",
+            page.page_errors(),
+            page.console_messages()
+        )
+    });
+    page.locator("#counter").click().await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'count: 1'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap();
+
+    let component = destination.join("src/App.tsx");
+    let source = std::fs::read_to_string(&component).unwrap();
+    let changed = source
+        .replace("setCount(count + 1)", "setCount(count + 2)")
+        .replace("count: {count}", "edited count: {count}");
+    assert_ne!(changed, source);
+    std::fs::write(&component, &changed).unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'edited count: 1'",
+        Duration::from_secs(15),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "offline React refresh did not preserve state: {error}; {:?}; {:?}",
+            page.page_errors(),
+            page.console_messages()
+        )
+    });
+    page.locator("#counter").click().await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'edited count: 3'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap();
+
+    let hook_changed = changed
+        .replace(
+            "import { useState } from 'react';",
+            "import { useEffect, useState } from 'react';",
+        )
+        .replace(
+            "const [count, setCount] = useState<number>(0);",
+            "const [count, setCount] = useState<number>(0);\n  useEffect(() => {}, [count]);",
+        );
+    assert_ne!(hook_changed, changed);
+    page.evaluate::<bool>("window.__refresh_marker = true")
+        .await
+        .unwrap();
+    std::fs::write(&component, &hook_changed).unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'edited count: 0' && window.__refresh_marker === true",
+        Duration::from_secs(15),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "offline React hook-signature refresh did not reset in place: {error}; {:?}; {:?}",
+            page.page_errors(),
+            page.console_messages()
+        )
+    });
+    page.locator("#counter").click().await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'edited count: 2'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap();
+
+    std::fs::write(
+        &component,
+        format!("{hook_changed}\nexport const answer = 42;\n"),
+    )
+    .unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'edited count: 0' && window.__refresh_marker === undefined",
+        Duration::from_secs(15),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "offline React unsafe export boundary did not reload: {error}; {:?}; {:?}",
+            page.page_errors(),
+            page.console_messages()
+        )
+    });
+    assert!(page.page_errors().is_empty(), "{:?}", page.page_errors());
+
+    dev.kill().await.unwrap();
+    dev.wait().await.unwrap();
+    browser.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
 async fn chromium_vue_embedded_offline_fixture_build_and_preview() {
     let binary = cli();
     let (_registry, registry) = fixture_registry("vue-registry").await;
