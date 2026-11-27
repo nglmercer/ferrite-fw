@@ -47,7 +47,14 @@ function rewriteModuleSelector(selector, css, hash, exports) {
       index++;
       continue;
     }
-    if (char === '\\' && !brackets) throw new Error('embedded Vue CSS modules do not yet support escaped class names in selectors');
+    if (char === '\\') {
+      if (!brackets) throw new Error('embedded Vue CSS modules do not yet support escaped class names in selectors');
+      output += char;
+      index++;
+      if (index < selector.length) output += selector[index];
+      index++;
+      continue;
+    }
     if (char === '[') brackets++;
     if (char === ']') brackets = Math.max(0, brackets - 1);
     if (char !== '.' || brackets || index + 1 >= selector.length || !/^[-_a-zA-Z\u0080-\uFFFF]$/u.test(selector[index + 1])) {
