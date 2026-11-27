@@ -284,7 +284,7 @@ async fn chromium_vue_embedded_offline_fixture_build_and_preview() {
                 "const classes = useCssModule('accents');\n</script>",
             )
             .replace("id=\"counter\"", "id=\"counter\" :class=\"classes.accent\"")
-            + "\n<style module=\"accents\">.accent { background-color: rgb(0, 128, 0); }</style>\n",
+            + "\n<style module=\"accents\">.accent { background-color: rgb(0, 128, 0); } .accent::before { content: \"\\2192\"; }</style>\n",
     )
     .unwrap();
     let lock = include_str!("fixtures/vue.lock").replace("https://registry.npmjs.org", &registry);

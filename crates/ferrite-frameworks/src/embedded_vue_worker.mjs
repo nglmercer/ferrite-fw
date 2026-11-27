@@ -47,6 +47,7 @@ function rewriteModuleSelector(selector, css, hash, exports) {
       index++;
       continue;
     }
+    if (char === '\\' && !brackets) throw new Error('embedded Vue CSS modules do not yet support escaped class names in selectors');
     if (char === '[') brackets++;
     if (char === ']') brackets = Math.max(0, brackets - 1);
     if (char !== '.' || brackets || index + 1 >= selector.length || !/^[-_a-zA-Z]$/.test(selector[index + 1])) {
@@ -71,7 +72,6 @@ function cssModulesPlugin(css, capture) {
       if (/(?:^|[^\w-])(?:composes|@value)\b|:(?:global|local)\s*\(/.test(text)) {
         throw new Error('embedded Vue CSS modules do not yet support composes, @value, or explicit :global/:local blocks');
       }
-      if (/\\/.test(text)) throw new Error('embedded Vue CSS modules do not yet support escaped class names');
       const hash = stringHash(text).toString(36).slice(0, 5);
       const exports = Object.create(null);
       root.walkRules(rule => {
