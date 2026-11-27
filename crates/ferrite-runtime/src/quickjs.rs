@@ -63,6 +63,7 @@ impl ExecutionControl {
 }
 
 enum Job {
+    Reset,
     EvalGraph {
         graph: CompiledModuleGraph,
         reply: Reply<serde_json::Value>,
@@ -83,6 +84,7 @@ enum Job {
 impl Job {
     fn cancelled(&self) -> bool {
         match self {
+            Self::Reset => false,
             Self::EvalGraph { reply, .. }
             | Self::InvokeGraph { reply, .. }
             | Self::Call { reply, .. } => reply.is_closed(),
@@ -123,6 +125,7 @@ impl Job {
                     .sum::<usize>()
         }
         match self {
+            Self::Reset => 0,
             Self::EvalGraph { graph, .. } => graph_bytes(graph),
             Self::InvokeGraph {
                 graph,
@@ -189,6 +192,12 @@ struct StreamWorkerLease {
     _permit: OwnedSemaphorePermit,
 }
 
+impl Drop for StreamWorkerLease {
+    fn drop(&mut self) {
+        self.worker.runtime.reset_worker();
+    }
+}
+
 impl QuickJsRuntime {
     #[must_use]
     pub fn new(options: QuickJsOptions) -> Self {
@@ -228,6 +237,24 @@ impl QuickJsRuntime {
         }
     }
 
+    fn reset_worker(&self) {
+        if self.shutdown.load(Ordering::Relaxed) {
+            return;
+        }
+        let control = ExecutionControl::new(self.timeout_ms, self.shutdown.clone());
+        if let Some(sender) = self
+            .jobs
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+        {
+            let _ = sender.try_send(Request {
+                job: Job::Reset,
+                control,
+            });
+        }
+    }
+
     fn lease_stream_worker(&self) -> Result<StreamWorkerLease> {
         let mut workers = self
             .stream_workers
@@ -251,7 +278,7 @@ impl QuickJsRuntime {
             runtime: QuickJsRuntime::new_inner(
                 QuickJsOptions {
                     request_timeout_ms: self.timeout_ms,
-                    queue_capacity: 1,
+                    queue_capacity: 2,
                     max_request_bytes: self.max_request_bytes,
                 },
                 0,
@@ -1049,6 +1076,9 @@ fn worker_loop(rx: mpsc::Receiver<Request>, shutdown: Arc<AtomicBool>) {
             continue;
         }
         match job {
+            Job::Reset => {
+                engine = None;
+            }
             Job::EvalGraph { graph, reply } => {
                 let result =
                     Engine::new(control.clone(), next_handle.clone()).and_then(|mut next| {
