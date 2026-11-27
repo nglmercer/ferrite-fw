@@ -48,7 +48,7 @@ pub struct StandaloneReport {
 }
 
 pub(crate) fn unsupported_ssr_standalone() -> FerriteError {
-    FerriteError::Build("SSR standalone packaging is unavailable: the current scaffold serves static files and cannot execute a renderer. Build without --standalone and use ferrite preview with the explicitly selected napi-vm runtime; standalone SSR renderer packaging must be implemented before this profile can be advertised".into())
+    FerriteError::Build("SSR standalone packaging is unavailable: the current scaffold serves static files and cannot execute a renderer. Build without --standalone and use ferrite preview with the explicitly selected rquickjs runtime; standalone SSR renderer packaging must be implemented before this profile can be advertised".into())
 }
 
 /// MIME type for a web path (generated server + tests share this).
@@ -481,7 +481,7 @@ pub fn write_ssr_standalone_with_routes(
             &format!("{:?}", serde_json::to_string(routes)?),
         );
     let dependency = format!(
-        "ferrite = {{ path = {}, version = \"={}\", features = [\"napi-vm\"] }}\nserde_json = \"1\"\n",
+        "ferrite = {{ path = {}, version = \"={}\", features = [\"rquickjs\"] }}\nserde_json = \"1\"\n",
         serde_json::to_string(&sdk.to_string_lossy()).map_err(FerriteError::Json)?,
         env!("CARGO_PKG_VERSION")
     );
@@ -543,22 +543,9 @@ pub(crate) fn validate_ssr_standalone_inputs(
             "SSR standalone currently requires embed_assets = true".into(),
         ));
     }
-    if !matches!(runtime.backend.as_str(), "napi-vm" | "napi-vm-process")
-        || (runtime.backend == "napi-vm-process" && !cfg!(target_os = "linux"))
-        || !runtime.native_allow.is_empty()
-    {
+    if runtime.backend != "rquickjs" || !runtime.native_allow.is_empty() {
         return Err(FerriteError::Build(
-            "SSR standalone requires an explicit napi-vm runtime without native addons".into(),
-        ));
-    }
-    if runtime.backend == "napi-vm-process"
-        && opts
-            .target
-            .as_deref()
-            .is_some_and(|target| !target.contains("-linux-"))
-    {
-        return Err(FerriteError::Build(
-            "process-runtime standalone requires a Linux target".into(),
+            "SSR standalone requires the explicit rquickjs runtime without native addons".into(),
         ));
     }
     if !base.starts_with('/')
@@ -603,12 +590,12 @@ pub(crate) fn validate_ssr_standalone_inputs(
     }
     if manifest
         .get("features")
-        .and_then(|features| features.get("napi-vm"))
+        .and_then(|features| features.get("rquickjs"))
         .and_then(toml::Value::as_array)
         .is_none_or(Vec::is_empty)
     {
         return Err(FerriteError::Build(format!(
-            "Ferrite SDK {} must expose a nonempty napi-vm feature for embedded SSR",
+            "Ferrite SDK {} must expose a nonempty rquickjs feature for embedded SSR",
             sdk.display()
         )));
     }
@@ -1049,7 +1036,7 @@ mod tests {
             ),
             (
                 "[package]\nname='ferrite'\nversion='0.1.0'",
-                "nonempty napi-vm feature",
+                "nonempty rquickjs feature",
             ),
             ("not a valid manifest = [", "invalid Ferrite SDK manifest"),
         ] {
@@ -1059,7 +1046,7 @@ mod tests {
             std::fs::write(sdk.path().join("Cargo.toml"), manifest).unwrap();
             let output = tempfile::tempdir().unwrap();
             let runtime = ferrite_config::RuntimeConfig {
-                backend: "napi-vm".into(),
+                backend: "rquickjs".into(),
                 ..Default::default()
             };
             let error = write_ssr_standalone(output.path(), &options(), sdk.path(), &runtime, "/")
@@ -1093,7 +1080,7 @@ mod tests {
         )
         .unwrap();
         let runtime = ferrite_config::RuntimeConfig {
-            backend: "napi-vm".into(),
+            backend: "rquickjs".into(),
             ..Default::default()
         };
         let report = write_ssr_standalone(
@@ -1131,7 +1118,7 @@ mod tests {
         let assets = std::fs::read_to_string(report.dir.join("src/assets.rs")).unwrap();
         assert!(!assets.contains("/server/"), "{assets}");
         let cargo = std::fs::read_to_string(report.dir.join("Cargo.toml")).unwrap();
-        assert!(cargo.contains("features = [\"napi-vm\"]") && cargo.contains("[workspace]"));
+        assert!(cargo.contains("features = [\"rquickjs\"]") && cargo.contains("[workspace]"));
     }
 
     #[test]
