@@ -21,7 +21,7 @@ pub use bundle::{BuildBundleConfig, BundleOutput, BundleRequest, BundleStats, Bu
 pub use bundler::FerriteBundler;
 pub use chunks::{chunk_name, relative_url};
 pub use emit::rewrite_imports_text;
-pub use hooks::{BundleHooks, NoHooks};
+pub use hooks::{BundleHooks, NoHooks, RenderChunkOutput};
 pub use loader::{CssExtract, LoadedModule, ModuleLoader};
 pub use shake::{shake_statements, tree_shake, used_exports, UsedExports};
 
@@ -994,8 +994,11 @@ mod tests {
             _id: &str,
             code: String,
             _is_entry: bool,
-        ) -> Result<Option<String>> {
-            Ok(Some(format!("{code}\n// rendered\n")))
+        ) -> Result<Option<RenderChunkOutput>> {
+            Ok(Some(RenderChunkOutput {
+                code: format!("{code}\n// rendered\n"),
+                map: None,
+            }))
         }
 
         async fn chunk_hash_extra(&self, _chunk_id: &str) -> Result<Vec<String>> {

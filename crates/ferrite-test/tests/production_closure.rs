@@ -290,3 +290,72 @@ async fn code_replacement_without_composable_map_drops_stale_original_positions(
         );
     }
 }
+
+#[tokio::test]
+async fn composable_render_chunk_maps_chain_across_plugins_to_original_positions() {
+    struct Shift(u32);
+    fn line_shift_map(input: &str, shift: u32) -> String {
+        let mut builder = oxc_sourcemap::SourceMapBuilder::default();
+        let source = builder.set_source_and_content("render-chunk-input", "");
+        for (line, _) in input.lines().enumerate() {
+            builder.add_token(line as u32 + shift, 0, line as u32, 0, Some(source), None);
+        }
+        builder.into_sourcemap().to_json_string()
+    }
+    #[async_trait::async_trait]
+    impl ferrite::plugin::Plugin for Shift {
+        fn name(&self) -> &'static str {
+            "mapped-code-replacement"
+        }
+        async fn render_chunk(
+            &self,
+            _: &ferrite::plugin::PluginContext,
+            chunk: ferrite::plugin::RenderChunk,
+        ) -> ferrite::Result<Option<ferrite::plugin::RenderChunkResult>> {
+            let input = chunk.code.clone();
+            Ok(Some(ferrite::plugin::RenderChunkResult {
+                code: Some(format!(
+                    "{}{}",
+                    "// mapped shift\n".repeat(self.0 as usize),
+                    input
+                )),
+                map: Some(ferrite::SourceMap::external(line_shift_map(&input, self.0))),
+            }))
+        }
+    }
+
+    let project = fixture();
+    let mut config = project.resolve_config_mode("production");
+    config.build.sourcemap = ferrite::config::SourceMapConfig::Bool(true);
+    config.build.minify = false;
+    ferrite::Builder::new(
+        config.clone(),
+        vec![std::sync::Arc::new(Shift(1)), std::sync::Arc::new(Shift(2))],
+    )
+    .build("client")
+    .await
+    .unwrap();
+    let manifest =
+        ferrite::manifest::BuildManifest::read(&config.out_dir().join("manifest.json")).unwrap();
+    let entry = &manifest.entries["/src/main.ts"];
+    let code = std::fs::read_to_string(config.out_dir().join(&entry.file)).unwrap();
+    let offset = code.find("originalMarker").unwrap();
+    let prefix = &code[..offset];
+    let line = prefix.bytes().filter(|byte| *byte == b'\n').count() as u32;
+    let col = prefix.rsplit('\n').next().unwrap().encode_utf16().count() as u32;
+    let map_json =
+        std::fs::read_to_string(config.out_dir().join(format!("{}.map", entry.file))).unwrap();
+    let map = oxc_sourcemap::SourceMap::from_json_string(&map_json).unwrap();
+    let token = map
+        .lookup_token(&map.generate_lookup_table(), line, col)
+        .unwrap();
+    assert!(map
+        .get_source(token.get_source_id().unwrap())
+        .unwrap()
+        .ends_with("/src/main.ts"));
+    assert_eq!(
+        token.get_src_line(),
+        3,
+        "composed renderChunk maps must retain original TS positions"
+    );
+}

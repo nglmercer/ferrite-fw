@@ -582,11 +582,13 @@ impl PluginContainer {
         chunk: RenderChunk,
     ) -> Result<RenderChunkResult> {
         let mut code = chunk.code.clone();
-        let mut map = None;
+        let mut map: Option<ferrite_core::SourceMap> = None;
+        let mut chain_broken = false;
         for plugin in &self.plugins {
+            let input = code.clone();
             let hook_chunk = RenderChunk {
                 id: chunk.id.clone(),
-                code: code.clone(),
+                code: input.clone(),
                 is_entry: chunk.is_entry,
             };
             if let Some(result) = plugin
@@ -595,10 +597,41 @@ impl PluginContainer {
                 .map_err(|error| wrap(plugin, "render_chunk", error))?
             {
                 if let Some(replacement) = result.code {
+                    if replacement != input || result.map.is_some() {
+                        map = if chain_broken {
+                            None
+                        } else {
+                            match result.map {
+                                Some(next) if next.inline => {
+                                    return Err(wrap(
+                                    plugin,
+                                    "render_chunk",
+                                    ferrite_core::FerriteError::Build(
+                                        "render_chunk maps must be external JSON, not inline data URLs"
+                                            .into(),
+                                    ),
+                                ));
+                                }
+                                Some(next) => {
+                                    let chained = match &map {
+                                        Some(existing) => ferrite_transform::chain_source_maps(
+                                            &next.mappings,
+                                            &existing.mappings,
+                                        )
+                                        .map_err(|error| wrap(plugin, "render_chunk", error))?,
+                                        None => next.mappings,
+                                    };
+                                    Some(ferrite_core::SourceMap::external(chained))
+                                }
+                                None if replacement != input => {
+                                    chain_broken = true;
+                                    None
+                                }
+                                None => map,
+                            }
+                        };
+                    }
                     code = replacement;
-                }
-                if result.map.is_some() {
-                    map = result.map;
                 }
             }
         }

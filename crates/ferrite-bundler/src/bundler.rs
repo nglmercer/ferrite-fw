@@ -131,17 +131,20 @@ impl<L: ModuleLoader + 'static> Bundler for FerriteBundler<L> {
         //     content hash covers hooked code; wrappers are collected now
         //     (folded into the hash below) and applied at emit time.
         let mut wrappers: HashMap<String, ferrite_plugin::ChunkWrapper> = HashMap::new();
-        let mut unknown_hook_maps = HashSet::new();
+        let mut unmapped_hook_replacements = HashSet::new();
         for chunk in chunks.values_mut() {
-            if let Some(code) = hooks
+            if let Some(output) = hooks
                 .render_chunk(&chunk.id, chunk.code.clone(), chunk.entry)
                 .await?
             {
-                if chunk.code != code {
+                let changed = output.code != chunk.code;
+                if let Some(hook_map) = output.map {
+                    chunk.map = compose_final_map(Some(hook_map), chunk.map.take())?;
+                } else if changed {
                     chunk.map = None;
-                    unknown_hook_maps.insert(chunk.id.clone());
+                    unmapped_hook_replacements.insert(chunk.id.clone());
                 }
-                chunk.code = code;
+                chunk.code = output.code;
             }
             wrappers.insert(
                 chunk.id.clone(),
@@ -291,9 +294,9 @@ impl<L: ModuleLoader + 'static> Bundler for FerriteBundler<L> {
                     }
                 }
             }
-            // The string-only hook boundary cannot compose replacement maps.
-            // Do not advertise stale original positions for changed hook code.
-            let want_map = request.sourcemap && !unknown_hook_maps.contains(&chunk_id);
+            // Once replacement code loses its original-position chain, later
+            // import/wrapper edits must not emit a partial identity-looking map.
+            let want_map = request.sourcemap && !unmapped_hook_replacements.contains(&chunk_id);
             let mut code = chunk.code.clone();
             let mut final_map = chunk.map.clone();
             let (stripped, strip_map) = ferrite_transform::strip_bare_imports_mapped(
