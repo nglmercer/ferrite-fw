@@ -80,7 +80,7 @@ pub const VUE_TEMPLATES: &[TemplateProfile] = &[
         framework: "vue",
         language: "js",
         rendering: "client",
-        compiler_host: "node",
+        compiler_host: "embedded",
         ssr_runtime: None,
         framework_version: Some(crate::registry::VUE_NODE.framework_version),
         support: crate::registry::Support::Experimental,
@@ -89,7 +89,7 @@ pub const VUE_TEMPLATES: &[TemplateProfile] = &[
         framework: "vue",
         language: "ts",
         rendering: "client",
-        compiler_host: "node",
+        compiler_host: "embedded",
         ssr_runtime: None,
         framework_version: Some(crate::registry::VUE_NODE.framework_version),
         support: crate::registry::Support::Experimental,
@@ -98,7 +98,7 @@ pub const VUE_TEMPLATES: &[TemplateProfile] = &[
         framework: "vue",
         language: "js",
         rendering: "ssr",
-        compiler_host: "node",
+        compiler_host: "embedded",
         ssr_runtime: Some("napi-vm"),
         framework_version: Some(crate::registry::VUE_NODE.framework_version),
         support: crate::registry::Support::Experimental,
@@ -107,7 +107,7 @@ pub const VUE_TEMPLATES: &[TemplateProfile] = &[
         framework: "vue",
         language: "ts",
         rendering: "ssr",
-        compiler_host: "node",
+        compiler_host: "embedded",
         ssr_runtime: Some("napi-vm"),
         framework_version: Some(crate::registry::VUE_NODE.framework_version),
         support: crate::registry::Support::Experimental,
@@ -174,7 +174,17 @@ pub fn select(
 pub fn files(profile: &TemplateProfile, name: &str) -> Result<BTreeMap<String, String>> {
     // The public library API must validate, too; callers cannot invent profiles.
     let canonical = select(profile.framework, profile.language, profile.rendering)?;
-    if profile != canonical {
+    let transitional_vue_node = profile.framework == "vue"
+        && profile.compiler_host == "node"
+        && canonical.compiler_host == "embedded";
+    let host_allowed = profile.compiler_host == canonical.compiler_host || transitional_vue_node;
+    let equivalent_except_host = profile.framework == canonical.framework
+        && profile.language == canonical.language
+        && profile.rendering == canonical.rendering
+        && profile.ssr_runtime == canonical.ssr_runtime
+        && profile.framework_version == canonical.framework_version
+        && profile.support == canonical.support;
+    if !host_allowed || !equivalent_except_host {
         return Err(FerriteError::Config(format!(
             "unsupported generation profile {}/{}/{}: requested host={}, version={:?}, support={}; available host={}, version={:?}, support={}; use scaffold::select to obtain the supported profile",
             profile.framework, profile.language, profile.rendering,
@@ -312,14 +322,19 @@ fn component_files(
     files.insert("package.json".into(), format!("{}\n", serde_json::to_string_pretty(&serde_json::json!({
         "name": name, "private": true, "type": "module", "scripts": {"dev":"ferrite dev", "build":"ferrite build", "preview":"ferrite preview"}, "dependencies": {profile.framework: version}, "devDependencies": dev_dependencies
     }))?));
-    files.insert("ferrite.toml".into(), format!("[framework]\nenabled = [\"{}\"]\ncompiler_host = \"node\"\n\n[server]\nport = 5173\n\n[build]\nentries = [\"index.html\"]\n", profile.framework));
+    files.insert("ferrite.toml".into(), format!("[framework]\nenabled = [\"{}\"]\ncompiler_host = \"{}\"\n\n[server]\nport = 5173\n\n[build]\nentries = [\"index.html\"]\n", profile.framework, profile.compiler_host));
     let types = match profile.framework {
         "vue" => "declare module '*.css';\ndeclare module '*.vue' {\n  import type { DefineComponent } from 'vue';\n  const component: DefineComponent;\n  export default component;\n}\n",
         "svelte" => "/// <reference types=\"svelte\" />\ndeclare module '*.css';\n",
         _ => unreachable!(),
     };
     files.insert("src/ferrite-env.d.ts".into(), types.into());
-    files.insert("README.md".into(), format!("# {name}\n\nExperimental {framework} {version} client profile. Install Node explicitly for the\ncompiler host, then run `ferrite install` and `ferrite dev`. Node is used only\nfor official component compilation; it is not selected as an SSR runtime.\nClick the counter to verify interaction. Run `ferrite build` and\n`ferrite preview` to verify production behavior.\n\nSource edits currently perform full reloads and intentionally reset state.\nThis profile has no SSR renderer or hydration entry. Transpilation does not\nperform type checking. Use the framework's official editor extension; complete\nchecker integration remains unavailable.\n", framework = profile.framework));
+    let host_note = if profile.compiler_host == "embedded" {
+        "Compilation uses the official compiler embedded in Ferrite's napi-vm runtime; no Node executable is required. Explicit compiler_host=node remains a transitional fallback."
+    } else {
+        "Install Node explicitly for the compiler host. Node is used only for official component compilation; it is not selected as an SSR runtime."
+    };
+    files.insert("README.md".into(), format!("# {name}\n\nExperimental {framework} {version} client profile. {host_note}\nRun `ferrite install` and `ferrite dev`. Click the counter to verify interaction.\nRun `ferrite build` and `ferrite preview` to verify production behavior.\n\nSource edits currently perform full reloads and intentionally reset state.\nThis profile has no SSR renderer or hydration entry. Transpilation does not\nperform type checking. Use the framework's official editor extension; complete\nchecker integration remains unavailable.\n", framework = profile.framework));
     Ok(())
 }
 
@@ -332,11 +347,16 @@ pub fn vue_ssr_files(
     compiler_host: &str,
     ssr_runtime: &str,
 ) -> Result<BTreeMap<String, String>> {
-    if compiler_host != "node" || ssr_runtime != "napi-vm" {
-        return Err(FerriteError::Config("experimental Vue SSR generation requires explicit Node compiler host and separate napi-vm SSR runtime; other combinations are unavailable".into()));
+    if !matches!(compiler_host, "embedded" | "node") || ssr_runtime != "napi-vm" {
+        return Err(FerriteError::Config("experimental Vue SSR generation requires embedded compilation or transitional explicit Node compiler host, plus separate napi-vm SSR runtime; other combinations are unavailable".into()));
     }
-    let profile = select("vue", language, "client")?;
-    let mut generated = files(profile, name)?;
+    let mut profile = select("vue", language, "client")?.clone();
+    profile.compiler_host = if compiler_host == "node" {
+        "node"
+    } else {
+        "embedded"
+    };
+    let mut generated = files(&profile, name)?;
     let main = generated
         .get_mut(&format!("src/main.{language}"))
         .expect("Vue client entry");
@@ -359,7 +379,12 @@ pub fn vue_ssr_files(
         "package.json".into(),
         format!("{}\n", serde_json::to_string_pretty(&manifest)?),
     );
-    generated.insert("README.md".into(), format!("# {name}\n\nExperimental Vue {} SSR sources. Install dependencies through Ferrite.\nNode is explicitly required for the official component compiler. Rendering uses\nthe separate in-process napi-vm backend and requires a Ferrite binary built with\nthat feature. Run ferrite ssr, ferrite build and ferrite preview.\nThe server entry renders App through Vue's real renderToString API; the client\nentry hydrates through createSSRApp. Transpilation does not perform type checking.\nDevelopment template/style updates retain state; script changes reset component state through Vue HMR.\nUse ferrite prerender --route / for static generation. Type-checker integration,\nstreaming and full framework/platform release matrices remain unfinished.\n", crate::registry::VUE_NODE.framework_version));
+    let compiler_note = if compiler_host == "embedded" {
+        "Compilation uses the official compiler embedded in Ferrite's napi-vm runtime; no Node executable is required."
+    } else {
+        "Node is explicitly required for the transitional official component compiler host."
+    };
+    generated.insert("README.md".into(), format!("# {name}\n\nExperimental Vue {} SSR sources. Install dependencies through Ferrite.\n{compiler_note} Rendering uses\nthe separate in-process napi-vm backend and requires a Ferrite binary built with\nthat feature. Run ferrite ssr, ferrite build and ferrite preview.\nThe server entry renders App through Vue's real renderToString API; the client\nentry hydrates through createSSRApp. Transpilation does not perform type checking.\nDevelopment template/style updates retain state; script changes reset component state through Vue HMR.\nUse ferrite prerender --route / for static generation. Type-checker integration,\nstreaming and full framework/platform release matrices remain unfinished.\n", crate::registry::VUE_NODE.framework_version));
     Ok(generated)
 }
 
@@ -586,7 +611,7 @@ mod tests {
                 for field in ["host", "version", "support", "runtime"] {
                     let mut requested = canonical.clone();
                     match field {
-                        "host" => requested.compiler_host = "embedded",
+                        "host" => requested.compiler_host = "invalid",
                         "runtime" => requested.ssr_runtime = Some("node"),
                         "version" => requested.framework_version = Some("0.0.0"),
                         "support" => requested.support = crate::registry::Support::Tested,
@@ -663,7 +688,12 @@ mod tests {
         for framework in ["vue", "svelte"] {
             for language in ["js", "ts"] {
                 let profile = select(framework, language, "client").unwrap();
-                assert_eq!(profile.compiler_host, "node");
+                let expected_host = if framework == "vue" {
+                    "embedded"
+                } else {
+                    "node"
+                };
+                assert_eq!(profile.compiler_host, expected_host);
                 let files = files(profile, "app").unwrap();
                 let package: serde_json::Value =
                     serde_json::from_str(&files["package.json"]).unwrap();
@@ -686,7 +716,9 @@ mod tests {
                     files[&format!("src/main.{language}")].contains(&format!("./App.{framework}"))
                 );
                 assert!(!files["index.html"].contains("id=\"counter\""));
-                assert!(files["ferrite.toml"].contains("compiler_host = \"node\""));
+                assert!(
+                    files["ferrite.toml"].contains(&format!("compiler_host = \"{expected_host}\""))
+                );
                 assert!(!files["ferrite.toml"].contains("[runtime]"));
                 assert_eq!(
                     files[&format!("src/App.{framework}")].contains("lang=\"ts\""),
@@ -797,9 +829,12 @@ mod vue_ssr_generation_tests {
     #[test]
     fn explicit_hosts_generate_real_server_and_hydration_entries() {
         for language in ["js", "ts"] {
-            let files = super::vue_ssr_files("ssr-app", language, "node", "napi-vm").unwrap();
+            let files = super::vue_ssr_files("ssr-app", language, "embedded", "napi-vm").unwrap();
+            let transitional =
+                super::vue_ssr_files("ssr-app", language, "node", "napi-vm").unwrap();
+            assert!(transitional["ferrite.toml"].contains("compiler_host = \"node\""));
             let profile = super::select("vue", language, "ssr").unwrap();
-            assert_eq!(profile.compiler_host, "node");
+            assert_eq!(profile.compiler_host, "embedded");
             assert_eq!(profile.ssr_runtime, Some("napi-vm"));
             assert_eq!(profile.support, crate::registry::Support::Experimental);
             assert_eq!(super::files(profile, "ssr-app").unwrap(), files);

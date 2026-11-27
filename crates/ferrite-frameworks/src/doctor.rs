@@ -282,9 +282,19 @@ pub fn inspect_with_runtime(
                     }
                 }
             }
-            if !descriptor.compiler_profiles.is_empty() && host.as_deref() != Some("node") {
+            let host_validated = descriptor
+                .compiler_profiles
+                .iter()
+                .any(|profile| Some(profile.host) == host.as_deref());
+            if !descriptor.compiler_profiles.is_empty() && !host_validated {
                 available = false;
-                issues.push(Issue { severity: "error", message: format!("{name} compiler host is not enabled"), action: format!("configure framework.enabled = ['{name}'] and framework.compiler_host = 'node'; SSR runtime is separate") });
+                let hosts = descriptor
+                    .compiler_profiles
+                    .iter()
+                    .map(|profile| profile.host)
+                    .collect::<Vec<_>>()
+                    .join("' or '");
+                issues.push(Issue { severity: "error", message: format!("{name} compiler host is not enabled"), action: format!("configure framework.enabled = ['{name}'] and framework.compiler_host = '{hosts}'; SSR runtime is separate") });
             } else if host.as_deref() == Some("node") && node_executable.is_none() {
                 available = false;
                 issues.push(Issue {

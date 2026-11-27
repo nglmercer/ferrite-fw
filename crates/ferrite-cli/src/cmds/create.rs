@@ -43,16 +43,31 @@ pub(crate) async fn create(args: CreateArgs) -> ferrite::Result<()> {
         .as_deref()
         .or(args.template.as_deref())
         .unwrap_or("vanilla");
-    let profile = scaffold::select(framework, &args.language, &args.rendering)?;
-    if args
-        .compiler_host
-        .as_deref()
-        .is_some_and(|host| host != profile.compiler_host)
-        || (profile.compiler_host == "node" && args.compiler_host.as_deref() != Some("node"))
-    {
-        return Err(ferrite::FerriteError::Config(format!(
-            "{framework} requires --compiler-host {}; Node is an explicit compiler opt-in and does not select an SSR runtime", profile.compiler_host
-        )));
+    let mut profile = scaffold::select(framework, &args.language, &args.rendering)?.clone();
+    match args.compiler_host.as_deref() {
+        Some(host) if host == profile.compiler_host => {}
+        Some("node") if framework == "vue" => {
+            profile.compiler_host = "node";
+        }
+        Some(host) => {
+            return Err(ferrite::FerriteError::Config(format!(
+                "{framework} does not support compiler host {host}; use {}. Compiler host does not select an SSR runtime",
+                if framework == "vue" {
+                    "--compiler-host embedded (or transitional --compiler-host node)"
+                } else {
+                    match profile.compiler_host {
+                        "node" => "--compiler-host node",
+                        host => host,
+                    }
+                }
+            )));
+        }
+        None if profile.compiler_host == "node" => {
+            return Err(ferrite::FerriteError::Config(format!(
+                "{framework} requires --compiler-host node; Node is an explicit compiler opt-in and does not select an SSR runtime"
+            )));
+        }
+        None => {}
     }
     if args.ssr_runtime.as_deref() != profile.ssr_runtime {
         return Err(ferrite::FerriteError::Config(match profile.ssr_runtime {
@@ -84,7 +99,7 @@ pub(crate) async fn create(args: CreateArgs) -> ferrite::Result<()> {
             }
         })
         .collect::<String>();
-    let files = scaffold::files(profile, &package_name)?;
+    let files = scaffold::files(&profile, &package_name)?;
     if args.dry_run {
         println!(
             "would create {} ({framework}/{}/{})",
@@ -166,7 +181,7 @@ mod tests {
         create(request).await.unwrap();
         assert!(!path.exists());
         let mut request = args(&path);
-        request.framework = Some("vue".into());
+        request.framework = Some("svelte".into());
         assert!(create(request).await.is_err());
         assert!(!path.exists());
         std::fs::create_dir(&path).unwrap();
@@ -179,16 +194,24 @@ mod tests {
         assert_eq!(std::fs::read_dir(&path).unwrap().count(), 1);
     }
     #[tokio::test]
-    async fn component_generation_requires_explicit_host_and_installs_no_runtime_fallback() {
+    async fn component_generation_selects_compiler_hosts_without_runtime_fallback() {
         let root = tempfile::tempdir().unwrap();
         for framework in ["vue", "svelte"] {
-            let path = root.path().join(framework);
+            let path = root.path().join(format!("{framework}-default"));
             let mut request = args(&path);
             request.framework = Some(framework.into());
             request.no_install = true;
-            let error = create(request).await.unwrap_err();
-            assert!(error.to_string().contains("--compiler-host node"));
-            assert!(!path.exists());
+            if framework == "svelte" {
+                let error = create(request).await.unwrap_err();
+                assert!(error.to_string().contains("--compiler-host node"));
+                assert!(!path.exists());
+            } else {
+                create(request).await.unwrap();
+                assert!(std::fs::read_to_string(path.join("ferrite.toml"))
+                    .unwrap()
+                    .contains("compiler_host = \"embedded\""));
+            }
+            let path = root.path().join(format!("{framework}-node"));
             let mut request = args(&path);
             request.framework = Some(framework.into());
             request.compiler_host = Some("node".into());
@@ -205,7 +228,11 @@ mod tests {
     async fn vue_ssr_hosts_and_runtime_are_validated_before_publication() {
         let root = tempfile::tempdir().unwrap();
         for (compiler, runtime, expected) in [
-            (None, Some("napi-vm"), "--compiler-host node"),
+            (
+                Some("native"),
+                Some("napi-vm"),
+                "does not support compiler host",
+            ),
             (Some("node"), None, "--ssr-runtime napi-vm"),
             (Some("node"), Some("node"), "--ssr-runtime napi-vm"),
         ] {
@@ -238,7 +265,6 @@ mod tests {
             let mut request = args(&path);
             request.framework = Some("vue".into());
             request.rendering = "ssr".into();
-            request.compiler_host = Some("node".into());
             request.ssr_runtime = Some("napi-vm".into());
             request.language = language.into();
             request.no_install = true;
