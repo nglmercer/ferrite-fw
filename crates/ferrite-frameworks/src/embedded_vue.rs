@@ -393,10 +393,32 @@ fn resolve_typescript_candidate(importer: &Path, specifier: &str) -> Vec<PathBuf
         .join(specifier);
     let mut candidates = vec![base.clone()];
     for extension in ["ts", "tsx", "d.ts", "mts", "cts"] {
-        candidates.push(base.with_extension(extension));
+        let mut path = base.as_os_str().to_os_string();
+        path.push(".");
+        path.push(extension);
+        candidates.push(PathBuf::from(path));
     }
     for extension in ["ts", "tsx", "d.ts"] {
         candidates.push(base.join(format!("index.{extension}")));
     }
     candidates
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn typescript_candidates_preserve_dotted_basenames() {
+        let candidates = resolve_typescript_candidate(Path::new("/src/App.vue"), "./props.types");
+        assert!(candidates.contains(&PathBuf::from("/src/props.types.ts")));
+        assert!(!candidates.contains(&PathBuf::from("/src/props.ts")));
+    }
+
+    #[test]
+    fn typescript_candidates_cover_extensionless_and_index_imports() {
+        let candidates = resolve_typescript_candidate(Path::new("/src/App.vue"), "./types/props");
+        assert!(candidates.contains(&PathBuf::from("/src/types/props.ts")));
+        assert!(candidates.contains(&PathBuf::from("/src/types/props/index.d.ts")));
+    }
 }
