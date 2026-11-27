@@ -367,3 +367,66 @@ async fn dot_slash_fallback_ssr_entry_matches_built_manifest() {
         .iter()
         .any(|document| document.route.is_none()));
 }
+
+#[tokio::test]
+async fn client_build_after_ssr_completes_document_artifact() {
+    let p = fixture();
+    let c = config(&p);
+    let builder = ferrite::Builder::new(c, vec![]);
+    builder.build("ssr").await.unwrap();
+    assert!(
+        ferrite::SsrRendererArtifact::read(&p.root.join("dist/server"))
+            .unwrap()
+            .documents
+            .is_empty()
+    );
+    builder.build("client").await.unwrap();
+    let artifact = ferrite::SsrRendererArtifact::read(&p.root.join("dist/server")).unwrap();
+    assert_eq!(artifact.documents.len(), 2);
+    assert!(artifact
+        .documents
+        .iter()
+        .any(|document| document.route.as_deref() == Some("/admin/*") && document.shell.is_some()));
+}
+
+#[tokio::test]
+async fn base_matching_directory_modules_keep_their_project_path() {
+    let p = fixture();
+    std::fs::create_dir_all(p.root.join("app")).unwrap();
+    std::fs::write(p.root.join("app/main.js"), "console.log('base-collision');").unwrap();
+    std::fs::write(
+        p.root.join("collision.html"),
+        "<html><body><script type=\"module\" src=\"./app/main.js\"></script></body></html>",
+    )
+    .unwrap();
+    let c = config(&p);
+    let server = ferrite::DevServer::new_without_watcher(c, vec![])
+        .await
+        .unwrap();
+    let html = server
+        .transform_index_html("/collision.html")
+        .await
+        .unwrap();
+    assert!(
+        html.contains("src=\"/app/app/main.js\""),
+        "project /app/main.js needs the base added to its full root path: {html}"
+    );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let router = server.router();
+    let serving = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+    socket
+        .write_all(b"GET /app/app/main.js HTTP/1.0\r\nHost: localhost\r\n\r\n")
+        .await
+        .unwrap();
+    let mut response = String::new();
+    socket.read_to_string(&mut response).await.unwrap();
+    serving.abort();
+    assert!(
+        response.starts_with("HTTP/1.0 200") && response.contains("base-collision"),
+        "{response}"
+    );
+}
