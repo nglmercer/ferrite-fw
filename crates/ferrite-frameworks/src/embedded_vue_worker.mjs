@@ -50,13 +50,13 @@ function rewriteModuleSelector(selector, css, hash, exports) {
     if (char === '\\' && !brackets) throw new Error('embedded Vue CSS modules do not yet support escaped class names in selectors');
     if (char === '[') brackets++;
     if (char === ']') brackets = Math.max(0, brackets - 1);
-    if (char !== '.' || brackets || index + 1 >= selector.length || !/^[-_a-zA-Z]$/.test(selector[index + 1])) {
+    if (char !== '.' || brackets || index + 1 >= selector.length || !/^[-_a-zA-Z\u0080-\uFFFF]$/u.test(selector[index + 1])) {
       output += char;
       index++;
       continue;
     }
     let end = index + 1;
-    while (end < selector.length && /^[a-zA-Z0-9_-]$/.test(selector[end])) end++;
+    while (end < selector.length && /^[a-zA-Z0-9_\-\u0080-\uFFFF]$/u.test(selector[end])) end++;
     const name = selector.slice(index + 1, end);
     if (!exports[name]) exports[name] = `_${name}_${hash}_${cssClassLine(css, name)}`;
     output += `.${exports[name]}`;

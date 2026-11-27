@@ -283,8 +283,8 @@ async fn chromium_vue_embedded_offline_fixture_build_and_preview() {
                 "</script>",
                 "const classes = useCssModule('accents');\n</script>",
             )
-            .replace("id=\"counter\"", "id=\"counter\" :class=\"classes.accent\"")
-            + "\n<style module=\"accents\">.accent { background-color: rgb(0, 128, 0); } .accent::before { content: \"\\2192\"; }</style>\n",
+            .replace("id=\"counter\"", "id=\"counter\" :class=\"[classes.accent, classes.café]\"")
+            + "\n<style module=\"accents\">.accent { background-color: rgb(0, 128, 0); } .café { border-style: solid; } .accent::before { content: \"\\2192\"; }</style>\n",
     )
     .unwrap();
     let lock = include_str!("fixtures/vue.lock").replace("https://registry.npmjs.org", &registry);
@@ -306,6 +306,18 @@ async fn chromium_vue_embedded_offline_fixture_build_and_preview() {
     );
     assert_eq!(inspected["compilerHosts"][0]["externalNodeRequired"], false);
     command(&binary, &destination, &["build"], false).await;
+    let assets = std::fs::read_dir(destination.join("dist/assets")).unwrap();
+    assert!(assets.flatten().any(|entry| {
+        entry
+            .file_type()
+            .map(|kind| kind.is_file())
+            .unwrap_or(false)
+            && entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "js")
+            && std::fs::read_to_string(entry.path()).is_ok_and(|code| code.contains("_café_"))
+    }));
     let executable =
         ferrite_e2e::find_chromium(None).expect("offline Vue acceptance requires real Chromium");
     let browser = Browser::launch(
