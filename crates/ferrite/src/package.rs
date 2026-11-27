@@ -453,7 +453,9 @@ pub fn write_ssr_standalone_with_routes(
     let sdk = validate_ssr_standalone_inputs(opts, sdk, runtime, base)?;
     let artifact = crate::SsrRendererArtifact::read(&out_dir.join("server"))?;
     artifact.validate_published_styles(&out_dir.join("server"))?;
-    let _ = std::fs::read_to_string(out_dir.join("index.html"))?;
+    if artifact.requires_default_shell() {
+        let _ = std::fs::read_to_string(out_dir.join("index.html"))?;
+    }
     for style in &artifact.stylesheets {
         if !out_dir.join("ssr-assets").join(style).is_file() {
             return Err(FerriteError::Build(format!(

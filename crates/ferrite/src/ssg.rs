@@ -335,7 +335,11 @@ impl Builder {
             .await?;
         let server = stage.path().join("server");
         let artifact = crate::SsrRendererArtifact::read(&server)?;
-        let shell = std::fs::read_to_string(stage.path().join("index.html"))?;
+        let shell = if artifact.requires_default_shell() {
+            std::fs::read_to_string(stage.path().join("index.html"))?
+        } else {
+            String::new()
+        };
         let renderer = artifact.into_streaming_adapter(
             ferrite_ssr::JsSsrAdapter::runtime_for_resolved(&config),
             shell,

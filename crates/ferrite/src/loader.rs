@@ -487,7 +487,11 @@ async fn preview_with_control(
         }
         let artifact = crate::SsrRendererArtifact::read(&server_dir)?;
         artifact.validate_published_styles(&server_dir)?;
-        let shell = std::fs::read_to_string(dir.join("index.html"))?;
+        let shell = if artifact.requires_default_shell() {
+            std::fs::read_to_string(dir.join("index.html"))?
+        } else {
+            String::new()
+        };
         Some(artifact.into_streaming_adapter(
             ferrite_ssr::JsSsrAdapter::runtime_for_resolved(&control.config),
             shell,

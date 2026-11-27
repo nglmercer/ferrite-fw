@@ -125,6 +125,11 @@ impl SsrRendererArtifact {
         )))
     }
 
+    /// Whether any renderer path relies on the host's default HTML shell.
+    pub fn requires_default_shell(&self) -> bool {
+        self.documents.is_empty() || self.documents.iter().any(|doc| doc.shell.is_none())
+    }
+
     /// Validate published styles for every document before serving or packaging.
     pub fn validate_published_styles(&self, server_dir: &Path) -> Result<()> {
         let parent = server_dir
