@@ -160,7 +160,7 @@ def run(args):
             binary = env.get(variable) or next((path for name in names if (path := shutil.which(name))), None) or next((path for path in paths if Path(path).is_file()), None)
             if not binary or not Path(binary).is_file():
                 raise RuntimeError(f"required real browser missing: set {variable}; no gate was run")
-            env[variable] = str(Path(binary).resolve())
+            env[variable] = str(Path(binary).absolute())
         env["FERRITE_E2E_REQUIRE_BOTH_BROWSERS"] = "1"
     if args.profile in ("frameworks", "ssr", "all"):
         if not shutil.which("node"):
