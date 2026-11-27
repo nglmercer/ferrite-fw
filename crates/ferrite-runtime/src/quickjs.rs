@@ -1011,30 +1011,19 @@ if (typeof globalThis.__ferriteStreamBytes === 'undefined') {
         serde_json::Value::Null
     }
 
-    fn settle_value<'js>(
+    fn drain_ready_work<'js>(
         &self,
-        ctx: rquickjs::Ctx<'js>,
-        value: Value<'js>,
+        ctx: &rquickjs::Ctx<'js>,
         control: &ExecutionControl,
-    ) -> std::result::Result<Value<'js>, String> {
-        if !value.is_promise() {
-            while ctx.execute_pending_job() {
-                self.check_control()?;
-            }
-            return Ok(value);
-        }
-        let promise = value.into_promise().unwrap();
+    ) -> std::result::Result<(), String> {
         loop {
             self.check_control()?;
-            if let Some(result) = promise.result::<Value>() {
-                return result.map_err(|error| explain_error(&ctx, error, control));
-            }
-            let mut ran = false;
+            let mut ran_job = false;
             while ctx.execute_pending_job() {
-                ran = true;
+                ran_job = true;
                 self.check_control()?;
             }
-            if ran {
+            if ran_job {
                 continue;
             }
             let next = self
@@ -1045,25 +1034,57 @@ if (typeof globalThis.__ferriteStreamBytes === 'undefined') {
                 .map(|(id, timer)| (*id, timer.due))
                 .min_by_key(|(_, due)| *due);
             let Some((id, due)) = next else {
+                return Ok(());
+            };
+            if due > Instant::now() {
+                return Ok(());
+            }
+            let timer = self.timers.borrow_mut().timers.remove(&id).unwrap();
+            let callback = timer
+                .callback
+                .restore(ctx)
+                .map_err(|error| format!("rquickjs timer restore failed: {error:?}"))?;
+            let result: std::result::Result<Value, _> = callback.call(());
+            if let Err(error) = result {
+                return Err(format!(
+                    "rquickjs timer failed: {}",
+                    explain_error(ctx, error, control)
+                ));
+            }
+        }
+    }
+
+    fn settle_value<'js>(
+        &self,
+        ctx: rquickjs::Ctx<'js>,
+        value: Value<'js>,
+        control: &ExecutionControl,
+    ) -> std::result::Result<Value<'js>, String> {
+        if !value.is_promise() {
+            self.drain_ready_work(&ctx, control)?;
+            return Ok(value);
+        }
+        let promise = value.into_promise().unwrap();
+        loop {
+            self.check_control()?;
+            self.drain_ready_work(&ctx, control)?;
+            if let Some(result) = promise.result::<Value>() {
+                return result.map_err(|error| explain_error(&ctx, error, control));
+            }
+            let next = self
+                .timers
+                .borrow()
+                .timers
+                .iter()
+                .map(|(_, timer)| timer.due)
+                .min();
+            let Some(due) = next else {
                 return Err("rquickjs promise cannot settle: no pending jobs or timers".into());
             };
             let now = Instant::now();
             if due > now {
                 let wait = (due - now).min(Duration::from_millis(2));
                 thread::sleep(wait);
-                continue;
-            }
-            let timer = self.timers.borrow_mut().timers.remove(&id).unwrap();
-            let callback = timer
-                .callback
-                .restore(&ctx)
-                .map_err(|error| format!("rquickjs timer restore failed: {error:?}"))?;
-            let result: std::result::Result<Value, _> = callback.call(());
-            if let Err(error) = result {
-                return Err(format!(
-                    "rquickjs timer failed: {}",
-                    explain_error(&ctx, error, control)
-                ));
             }
         }
     }
@@ -1340,6 +1361,38 @@ mod tests {
             .unwrap()
             .concat();
         assert_eq!(body, b"<h1>/stream</h1>");
+    }
+
+    #[tokio::test]
+    async fn quickjs_stream_timers_close_even_while_chunks_are_ready() {
+        use futures::StreamExt;
+        let runtime = QuickJsRuntime::new(QuickJsOptions {
+            request_timeout_ms: 500,
+            ..Default::default()
+        });
+        let response = runtime
+            .invoke_module_graph_stream(
+                graph(
+                    r#"export function render() {
+                  return new ReadableStream({
+                    start(controller) { setTimeout(() => controller.close(), 10); },
+                    pull(controller) { for (let index = 0; index < 10; index++) controller.enqueue('x'); }
+                  });
+                }"#,
+                ),
+                "render",
+                vec![],
+                RuntimeEnvironment { ssr: true, request_id: None },
+            )
+            .await
+            .unwrap();
+        let chunks = response.body.collect::<Vec<_>>().await;
+        let bytes = chunks
+            .into_iter()
+            .collect::<Result<Vec<_>>>()
+            .unwrap()
+            .concat();
+        assert!(!bytes.is_empty());
     }
 
     #[tokio::test]
