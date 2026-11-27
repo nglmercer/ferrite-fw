@@ -24,7 +24,7 @@ fail explicitly. Output chunks are limited to 64 KiB; strings are UTF-8 encoded.
 The configured request timeout bounds the whole stream and the configured
 payload bound applies to the compiled graph plus arguments.
 
-Streaming runs inside the embedded rquickjs worker. The old `napi-vm-process`
+Streaming leases a reusable worker from a pool bounded by `queue_capacity`; when all pool workers hold open responses, new streaming renders fail explicitly instead of creating unbounded threads. The old `napi-vm-process`
 Linux worker protocol and native `.node` addon support were removed with the
 napi-vm backend. Framework-specific streaming acceptance remains narrower than
 buffered SSR acceptance; validate a framework renderer before advertising its

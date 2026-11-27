@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+use tokio::sync::OwnedSemaphorePermit;
 
 type Reply<T> = tokio::sync::oneshot::Sender<std::result::Result<T, String>>;
 
@@ -174,11 +175,32 @@ pub struct QuickJsRuntime {
     shutdown: Arc<AtomicBool>,
     timeout_ms: u64,
     max_request_bytes: usize,
+    stream_workers: Arc<Mutex<Vec<Arc<StreamWorker>>>>,
+    stream_worker_limit: usize,
+}
+
+struct StreamWorker {
+    runtime: QuickJsRuntime,
+    idle: Arc<tokio::sync::Semaphore>,
+}
+
+struct StreamWorkerLease {
+    worker: Arc<StreamWorker>,
+    _permit: OwnedSemaphorePermit,
 }
 
 impl QuickJsRuntime {
     #[must_use]
     pub fn new(options: QuickJsOptions) -> Self {
+        let capacity = if options.queue_capacity == 0 {
+            64
+        } else {
+            options.queue_capacity
+        };
+        Self::new_inner(options, capacity)
+    }
+
+    fn new_inner(options: QuickJsOptions, stream_worker_limit: usize) -> Self {
         let capacity = if options.queue_capacity == 0 {
             64
         } else {
@@ -201,7 +223,51 @@ impl QuickJsRuntime {
             } else {
                 options.max_request_bytes
             },
+            stream_workers: Arc::new(Mutex::new(Vec::new())),
+            stream_worker_limit,
         }
+    }
+
+    fn lease_stream_worker(&self) -> Result<StreamWorkerLease> {
+        let mut workers = self
+            .stream_workers
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        for worker in workers.iter() {
+            if let Ok(permit) = worker.idle.clone().try_acquire_owned() {
+                return Ok(StreamWorkerLease {
+                    worker: worker.clone(),
+                    _permit: permit,
+                });
+            }
+        }
+        if workers.len() >= self.stream_worker_limit {
+            return Err(FerriteError::Runtime(format!(
+                "rquickjs streaming capacity exhausted ({} concurrent streams); finish open responses or increase queue_capacity",
+                self.stream_worker_limit
+            )));
+        }
+        let worker = Arc::new(StreamWorker {
+            runtime: QuickJsRuntime::new_inner(
+                QuickJsOptions {
+                    request_timeout_ms: self.timeout_ms,
+                    queue_capacity: 1,
+                    max_request_bytes: self.max_request_bytes,
+                },
+                0,
+            ),
+            idle: Arc::new(tokio::sync::Semaphore::new(1)),
+        });
+        let permit = worker
+            .idle
+            .clone()
+            .try_acquire_owned()
+            .expect("new stream worker permit");
+        workers.push(worker.clone());
+        Ok(StreamWorkerLease {
+            worker,
+            _permit: permit,
+        })
     }
 
     #[must_use]
@@ -392,13 +458,11 @@ impl JsRuntime for QuickJsRuntime {
         let request_timeout_ms = self.timeout_ms;
         let deadline = (request_timeout_ms != 0)
             .then(|| Instant::now() + Duration::from_millis(request_timeout_ms));
-        // A stream owns a dedicated worker so a later graph cannot retire the
-        // context that its `next` handle still references.
-        let runtime = QuickJsRuntime::new(QuickJsOptions {
-            request_timeout_ms,
-            queue_capacity: 1,
-            max_request_bytes: self.max_request_bytes,
-        });
+        // A stream leases one bounded pool worker so a later graph cannot
+        // retire the context that its `next` handle still references. Workers
+        // are reused after the response instead of creating one thread per stream.
+        let lease = self.lease_stream_worker()?;
+        let runtime = lease.worker.runtime.clone();
         let namespace = runtime
             .evaluate_module_graph_with_deadline(graph, deadline)
             .await?;
@@ -407,16 +471,9 @@ impl JsRuntime for QuickJsRuntime {
         let head = runtime.call_with_deadline(&start, args, deadline).await?;
         crate::js_value_to_json(&head)?;
 
-        struct StreamRuntimeGuard(QuickJsRuntime);
-        impl Drop for StreamRuntimeGuard {
-            fn drop(&mut self) {
-                self.0.shutdown();
-            }
-        }
-        let guard = StreamRuntimeGuard(runtime.clone());
         let body = futures::stream::try_unfold(
-            (runtime, next, deadline, guard),
-            move |(runtime, next, deadline, guard)| async move {
+            (runtime, next, deadline, lease),
+            move |(runtime, next, deadline, lease)| async move {
                 if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                     return Err(FerriteError::Runtime(
                         "rquickjs stream deadline exceeded".into(),
@@ -427,7 +484,7 @@ impl JsRuntime for QuickJsRuntime {
                 if chunk.done {
                     Ok(None)
                 } else {
-                    Ok(Some((chunk.bytes, (runtime, next, deadline, guard))))
+                    Ok(Some((chunk.bytes, (runtime, next, deadline, lease))))
                 }
             },
         );
@@ -1347,5 +1404,34 @@ mod tests {
     #[test]
     fn quickjs_counts_binary_payload_bytes_exactly() {
         assert_eq!(js_value_bytes(&JsValue::Bytes(vec![0; 1024])), 1024);
+    }
+
+    #[tokio::test]
+    async fn quickjs_stream_workers_are_bounded_and_reused() {
+        let runtime = QuickJsRuntime::new(QuickJsOptions {
+            queue_capacity: 1,
+            ..Default::default()
+        });
+        let open = |runtime: QuickJsRuntime| async move {
+            runtime
+                .invoke_module_graph_stream(
+                    graph("export function render() { return new ReadableStream({start(c){c.enqueue('x')}}); }"),
+                    "render",
+                    vec![],
+                    RuntimeEnvironment { ssr: true, request_id: None },
+                )
+                .await
+        };
+        let first = open(runtime.clone()).await.unwrap();
+        let error = match open(runtime.clone()).await {
+            Ok(_) => panic!("second stream must respect the configured capacity"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("streaming capacity exhausted"),
+            "{error}"
+        );
+        drop(first);
+        open(runtime).await.unwrap();
     }
 }
