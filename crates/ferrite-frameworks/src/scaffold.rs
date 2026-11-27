@@ -99,7 +99,7 @@ pub const VUE_TEMPLATES: &[TemplateProfile] = &[
         language: "js",
         rendering: "ssr",
         compiler_host: "embedded",
-        ssr_runtime: Some("napi-vm"),
+        ssr_runtime: Some("rquickjs"),
         framework_version: Some(crate::registry::VUE_NODE.framework_version),
         support: crate::registry::Support::Experimental,
     },
@@ -108,7 +108,7 @@ pub const VUE_TEMPLATES: &[TemplateProfile] = &[
         language: "ts",
         rendering: "ssr",
         compiler_host: "embedded",
-        ssr_runtime: Some("napi-vm"),
+        ssr_runtime: Some("rquickjs"),
         framework_version: Some(crate::registry::VUE_NODE.framework_version),
         support: crate::registry::Support::Experimental,
     },
@@ -137,7 +137,7 @@ pub const SVELTE_TEMPLATES: &[TemplateProfile] = &[
         language: "js",
         rendering: "ssr",
         compiler_host: "embedded",
-        ssr_runtime: Some("napi-vm"),
+        ssr_runtime: Some("rquickjs"),
         framework_version: Some(crate::registry::SVELTE_NODE.framework_version),
         support: crate::registry::Support::Experimental,
     },
@@ -146,7 +146,7 @@ pub const SVELTE_TEMPLATES: &[TemplateProfile] = &[
         language: "ts",
         rendering: "ssr",
         compiler_host: "embedded",
-        ssr_runtime: Some("napi-vm"),
+        ssr_runtime: Some("rquickjs"),
         framework_version: Some(crate::registry::SVELTE_NODE.framework_version),
         support: crate::registry::Support::Experimental,
     },
@@ -330,7 +330,7 @@ fn component_files(
     };
     files.insert("src/ferrite-env.d.ts".into(), types.into());
     let host_note = if profile.compiler_host == "embedded" {
-        "Compilation uses the official compiler embedded in Ferrite's napi-vm runtime; no Node executable is required. Explicit compiler_host=node remains a transitional fallback."
+        "Compilation uses the official compiler embedded in Ferrite's rquickjs runtime; no Node executable is required. Explicit compiler_host=node remains a transitional fallback."
     } else {
         "Install Node explicitly for the compiler host. Node is used only for official component compilation; it is not selected as an SSR runtime."
     };
@@ -347,8 +347,8 @@ pub fn vue_ssr_files(
     compiler_host: &str,
     ssr_runtime: &str,
 ) -> Result<BTreeMap<String, String>> {
-    if !matches!(compiler_host, "embedded" | "node") || ssr_runtime != "napi-vm" {
-        return Err(FerriteError::Config("experimental Vue SSR generation requires embedded compilation or transitional explicit Node compiler host, plus separate napi-vm SSR runtime; other combinations are unavailable".into()));
+    if !matches!(compiler_host, "embedded" | "node") || ssr_runtime != "rquickjs" {
+        return Err(FerriteError::Config("experimental Vue SSR generation requires embedded compilation or transitional explicit Node compiler host, plus separate rquickjs SSR runtime; other combinations are unavailable".into()));
     }
     let mut profile = select("vue", language, "client")?.clone();
     profile.compiler_host = if compiler_host == "node" {
@@ -372,7 +372,7 @@ pub fn vue_ssr_files(
         ));
     }
     generated.insert(format!("src/entry-server.{language}"), "import { createSSRApp } from 'vue';\nimport { renderToString } from 'vue/server-renderer';\nimport App from './App.vue';\nexport async function render() {\n  return await renderToString(createSSRApp(App));\n}\n".into());
-    generated.get_mut("ferrite.toml").expect("Vue configuration").push_str(&format!("\n[ssr]\nentry = \"src/entry-server.{language}\"\n\n[runtime]\nbackend = \"napi-vm\"\n"));
+    generated.get_mut("ferrite.toml").expect("Vue configuration").push_str(&format!("\n[ssr]\nentry = \"src/entry-server.{language}\"\n\n[runtime]\nbackend = \"rquickjs\"\n"));
     let mut manifest: serde_json::Value = serde_json::from_str(&generated["package.json"])?;
     manifest["scripts"]["dev"] = serde_json::json!("ferrite ssr");
     generated.insert(
@@ -380,11 +380,11 @@ pub fn vue_ssr_files(
         format!("{}\n", serde_json::to_string_pretty(&manifest)?),
     );
     let compiler_note = if compiler_host == "embedded" {
-        "Compilation uses the official compiler embedded in Ferrite's napi-vm runtime; no Node executable is required."
+        "Compilation uses the official compiler embedded in Ferrite's rquickjs runtime; no Node executable is required."
     } else {
         "Node is explicitly required for the transitional official component compiler host."
     };
-    generated.insert("README.md".into(), format!("# {name}\n\nExperimental Vue {} SSR sources. Install dependencies through Ferrite.\n{compiler_note} Rendering uses\nthe separate in-process napi-vm backend and requires a Ferrite binary built with\nthat feature. Run ferrite ssr, ferrite build and ferrite preview.\nThe server entry renders App through Vue's real renderToString API; the client\nentry hydrates through createSSRApp. Transpilation does not perform type checking.\nDevelopment template/style updates retain state; script changes reset component state through Vue HMR.\nUse ferrite prerender --route / for static generation. Type-checker integration,\nstreaming and full framework/platform release matrices remain unfinished.\n", crate::registry::VUE_NODE.framework_version));
+    generated.insert("README.md".into(), format!("# {name}\n\nExperimental Vue {} SSR sources. Install dependencies through Ferrite.\n{compiler_note} Rendering uses\nthe separate in-process rquickjs backend and requires a Ferrite binary built with\nthat feature. Run ferrite ssr, ferrite build and ferrite preview.\nThe server entry renders App through Vue's real renderToString API; the client\nentry hydrates through createSSRApp. Transpilation does not perform type checking.\nDevelopment template/style updates retain state; script changes reset component state through Vue HMR.\nUse ferrite prerender --route / for static generation. Type-checker integration,\nstreaming and full framework/platform release matrices remain unfinished.\n", crate::registry::VUE_NODE.framework_version));
     Ok(generated)
 }
 
@@ -442,8 +442,8 @@ pub fn svelte_ssr_files(
     compiler_host: &str,
     ssr_runtime: &str,
 ) -> Result<BTreeMap<String, String>> {
-    if !matches!(compiler_host, "embedded" | "node") || ssr_runtime != "napi-vm" {
-        return Err(FerriteError::Config("experimental Svelte SSR generation requires embedded compilation or transitional explicit Node compiler host, plus separate napi-vm SSR runtime; other combinations are unavailable".into()));
+    if !matches!(compiler_host, "embedded" | "node") || ssr_runtime != "rquickjs" {
+        return Err(FerriteError::Config("experimental Svelte SSR generation requires embedded compilation or transitional explicit Node compiler host, plus separate rquickjs SSR runtime; other combinations are unavailable".into()));
     }
     let mut profile = select("svelte", language, "client")?.clone();
     profile.compiler_host = if compiler_host == "node" {
@@ -466,7 +466,7 @@ pub fn svelte_ssr_files(
         .get_mut("ferrite.toml")
         .unwrap()
         .push_str(&format!(
-        "\n[ssr]\nentry = \"src/entry-server.{language}\"\n\n[runtime]\nbackend = \"napi-vm\"\n"
+        "\n[ssr]\nentry = \"src/entry-server.{language}\"\n\n[runtime]\nbackend = \"rquickjs\"\n"
     ));
     let mut manifest: serde_json::Value = serde_json::from_str(&generated["package.json"])?;
     manifest["scripts"]["dev"] = serde_json::json!("ferrite ssr");
@@ -475,11 +475,11 @@ pub fn svelte_ssr_files(
         format!("{}\n", serde_json::to_string_pretty(&manifest)?),
     );
     let compiler_note = if compiler_host == "embedded" {
-        "Compilation uses the official compiler embedded in Ferrite's napi-vm runtime; no Node executable is required."
+        "Compilation uses the official compiler embedded in Ferrite's rquickjs runtime; no Node executable is required."
     } else {
         "Node is explicitly required for the transitional official component compiler host."
     };
-    generated.insert("README.md".into(), format!("# {name}\n\nExperimental Svelte {} SSR. Run `ferrite install`, `ferrite ssr`,\n`ferrite build` and `ferrite preview`. {compiler_note} Rendering uses the separate napi-vm runtime.\nThe server uses svelte/server render; the client hydrates the existing DOM.\nDevelopment edits use official Svelte HMR and reset component state. Transpilation does not type-check.\nPlatform release matrices and streaming remain unfinished.\n", crate::registry::SVELTE_NODE.framework_version));
+    generated.insert("README.md".into(), format!("# {name}\n\nExperimental Svelte {} SSR. Run `ferrite install`, `ferrite ssr`,\n`ferrite build` and `ferrite preview`. {compiler_note} Rendering uses the separate rquickjs runtime.\nThe server uses svelte/server render; the client hydrates the existing DOM.\nDevelopment edits use official Svelte HMR and reset component state. Transpilation does not type-check.\nPlatform release matrices and streaming remain unfinished.\n", crate::registry::SVELTE_NODE.framework_version));
     Ok(generated)
 }
 
@@ -827,24 +827,24 @@ mod vue_ssr_generation_tests {
             assert!(files[&format!("src/entry-server.{language}")]
                 .contains("renderComponent(App).body"));
             assert!(files["index.html"].contains("<!--ssr-outlet-->"));
-            assert!(files["ferrite.toml"].contains("backend = \"napi-vm\""));
+            assert!(files["ferrite.toml"].contains("backend = \"rquickjs\""));
         }
-        let transitional = super::svelte_ssr_files("app", "js", "node", "napi-vm").unwrap();
+        let transitional = super::svelte_ssr_files("app", "js", "node", "rquickjs").unwrap();
         assert!(transitional["ferrite.toml"].contains("compiler_host = \"node\""));
-        assert!(super::svelte_ssr_files("app", "js", "native", "napi-vm").is_err());
+        assert!(super::svelte_ssr_files("app", "js", "native", "rquickjs").is_err());
         assert!(super::svelte_ssr_files("app", "js", "node", "node").is_err());
     }
 
     #[test]
     fn explicit_hosts_generate_real_server_and_hydration_entries() {
         for language in ["js", "ts"] {
-            let files = super::vue_ssr_files("ssr-app", language, "embedded", "napi-vm").unwrap();
+            let files = super::vue_ssr_files("ssr-app", language, "embedded", "rquickjs").unwrap();
             let transitional =
-                super::vue_ssr_files("ssr-app", language, "node", "napi-vm").unwrap();
+                super::vue_ssr_files("ssr-app", language, "node", "rquickjs").unwrap();
             assert!(transitional["ferrite.toml"].contains("compiler_host = \"node\""));
             let profile = super::select("vue", language, "ssr").unwrap();
             assert_eq!(profile.compiler_host, "embedded");
-            assert_eq!(profile.ssr_runtime, Some("napi-vm"));
+            assert_eq!(profile.ssr_runtime, Some("rquickjs"));
             assert_eq!(profile.support, crate::registry::Support::Experimental);
             assert_eq!(super::files(profile, "ssr-app").unwrap(), files);
             let mut unsupported = profile.clone();
@@ -858,10 +858,10 @@ mod vue_ssr_generation_tests {
             );
             assert!(files[&format!("src/entry-server.{language}")]
                 .contains("renderToString(createSSRApp(App))"));
-            assert!(files["ferrite.toml"].contains("backend = \"napi-vm\""));
+            assert!(files["ferrite.toml"].contains("backend = \"rquickjs\""));
         }
-        assert!(super::vue_ssr_files("ssr-app", "ts", "native", "napi-vm").is_err());
+        assert!(super::vue_ssr_files("ssr-app", "ts", "native", "rquickjs").is_err());
         assert!(super::vue_ssr_files("ssr-app", "ts", "node", "node").is_err());
-        assert!(super::vue_ssr_files("ssr-app", "coffee", "node", "napi-vm").is_err());
+        assert!(super::vue_ssr_files("ssr-app", "coffee", "node", "rquickjs").is_err());
     }
 }

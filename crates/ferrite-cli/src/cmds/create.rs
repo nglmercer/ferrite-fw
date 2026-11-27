@@ -69,9 +69,9 @@ pub(crate) async fn create(args: CreateArgs) -> ferrite::Result<()> {
         }
         None => {}
     }
-    if profile.compiler_host == "embedded" && !cfg!(feature = "napi-vm") {
+    if profile.compiler_host == "embedded" && !cfg!(feature = "rquickjs") {
         return Err(ferrite::FerriteError::Config(
-            "embedded framework compilation requires a Ferrite binary built with --features napi-vm; use --compiler-host node for the transitional external host".into(),
+            "embedded framework compilation requires a Ferrite binary built with --features rquickjs; use --compiler-host node for the transitional external host".into(),
         ));
     }
     if args.ssr_runtime.as_deref() != profile.ssr_runtime {
@@ -215,7 +215,7 @@ mod tests {
             let mut request = args(&path);
             request.framework = Some(framework.into());
             request.no_install = true;
-            if cfg!(feature = "napi-vm") {
+            if cfg!(feature = "rquickjs") {
                 create(request).await.unwrap();
                 assert!(std::fs::read_to_string(path.join("ferrite.toml"))
                     .unwrap()
@@ -282,7 +282,7 @@ mod tests {
             request.ssr_runtime = Some("napi-vm".into());
             request.language = language.into();
             request.no_install = true;
-            if cfg!(feature = "napi-vm") {
+            if cfg!(feature = "rquickjs") {
                 create(request).await.unwrap();
                 let expected =
                     scaffold::files(scaffold::select("vue", language, "ssr").unwrap(), language)

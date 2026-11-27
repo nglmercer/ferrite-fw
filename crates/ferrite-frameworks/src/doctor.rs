@@ -295,12 +295,12 @@ pub fn inspect_with_runtime(
                     .collect::<Vec<_>>()
                     .join("' or '");
                 issues.push(Issue { severity: "error", message: format!("{name} compiler host is not enabled"), action: format!("configure framework.enabled = ['{name}'] and framework.compiler_host = '{hosts}'; SSR runtime is separate") });
-            } else if host.as_deref() == Some("embedded") && !cfg!(feature = "napi-vm") {
+            } else if host.as_deref() == Some("embedded") && !cfg!(feature = "rquickjs") {
                 available = false;
                 issues.push(Issue {
                     severity: "error",
                     message: format!("embedded {name} compiler is unavailable in this Ferrite binary"),
-                    action: "rebuild Ferrite with --features napi-vm or configure framework.compiler_host = 'node' for the transitional external host".into(),
+                    action: "rebuild Ferrite with --features rquickjs or configure framework.compiler_host = 'node' for the transitional external host".into(),
                 });
             } else if host.as_deref() == Some("node") && node_executable.is_none() {
                 available = false;
@@ -418,12 +418,12 @@ pub fn inspect_with_runtime(
         issues.push(Issue {
             severity: if runtime_available == Some(false) { "error" } else { "warning" },
             message: format!("selected SSR runtime `{}` is {}", config.runtime.backend, if runtime_available == Some(false) { "unavailable in this build" } else { "unverified by this embedding application" }),
-            action: if config.runtime.backend == "napi-vm" && runtime_available == Some(false) {
-                "rebuild Ferrite with --features napi-vm; the compiler host does not supply an SSR runtime".into()
+            action: if config.runtime.backend == "rquickjs" && runtime_available == Some(false) {
+                "rebuild Ferrite with --features rquickjs; the compiler host does not supply an SSR runtime".into()
             } else if runtime_available.is_none() {
                 "use ferrite::inspect_capabilities or supply compiled graph runtime availability to inspect_with_runtime".into()
             } else {
-                "select runtime.backend = 'napi-vm' and a Ferrite binary built with --features napi-vm; no runtime substitution is performed".into()
+                "select runtime.backend = 'rquickjs' and a Ferrite binary built with --features rquickjs; no runtime substitution is performed".into()
             },
         });
     }
@@ -649,7 +649,7 @@ mod tests {
                 .message
                 .contains("embedded vue compiler is unavailable")
         });
-        if cfg!(feature = "napi-vm") {
+        if cfg!(feature = "rquickjs") {
             assert!(embedded_issue.is_none(), "{embedded_issue:?}");
         } else {
             assert!(embedded_issue.is_some());
@@ -899,7 +899,7 @@ mod foreign_profile_tests {
             Default::default(),
         )
         .unwrap();
-        config.runtime.backend = "napi-vm".into();
+        config.runtime.backend = "rquickjs".into();
         config.ssr.entry = Some("src/entry-server.ts".into());
         for (availability, probe, severity) in [
             (None, "unverified", Some("warning")),
@@ -917,7 +917,7 @@ mod foreign_profile_tests {
                 assert!(issue
                     .unwrap()
                     .action
-                    .contains("rebuild Ferrite with --features napi-vm"));
+                    .contains("rebuild Ferrite with --features rquickjs"));
             }
             assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
         }

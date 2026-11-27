@@ -512,7 +512,7 @@ async fn chromium_vue_embedded_offline_fixture_ssr_build_and_preview() {
             "--rendering",
             "ssr",
             "--ssr-runtime",
-            "napi-vm",
+            "rquickjs",
             "--no-install",
         ],
         false,
@@ -556,7 +556,7 @@ async fn chromium_vue_embedded_offline_fixture_ssr_build_and_preview() {
     assert_eq!(inspected["compilerHosts"][0]["framework"], "vue");
     assert_eq!(
         inspected["compilerHosts"][0]["execution"],
-        "embedded-napi-vm"
+        "embedded-rquickjs"
     );
     assert_eq!(inspected["compilerHosts"][0]["externalNodeRequired"], false);
     command(&binary, &destination, &["build"], false).await;
@@ -774,7 +774,7 @@ async fn chromium_svelte_embedded_offline_fixture_ssr_build_and_preview() {
             "--rendering",
             "ssr",
             "--ssr-runtime",
-            "napi-vm",
+            "rquickjs",
             "--no-install",
         ],
         false,
@@ -801,7 +801,7 @@ async fn chromium_svelte_embedded_offline_fixture_ssr_build_and_preview() {
     assert_eq!(inspected["compilerHosts"][0]["framework"], "svelte");
     assert_eq!(
         inspected["compilerHosts"][0]["execution"],
-        "embedded-napi-vm"
+        "embedded-rquickjs"
     );
     assert_eq!(inspected["compilerHosts"][0]["externalNodeRequired"], false);
     command(&binary, &destination, &["build"], false).await;

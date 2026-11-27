@@ -1,5 +1,5 @@
-//! Svelte compilation through the official self-contained compiler inside napi-vm.
-#![cfg(feature = "napi-vm")]
+//! Svelte compilation through the official self-contained compiler inside rquickjs.
+#![cfg(feature = "rquickjs")]
 
 use crate::compiler_host::{
     selected_compiler_package, CompileDiagnostic, CompileRequest, CompileResult, Framework,
@@ -8,7 +8,7 @@ use crate::compiler_host::{
 use async_trait::async_trait;
 use ferrite_core::{FerriteError, ModuleType, Result, SourceMap};
 use ferrite_npm::Lockfile;
-use ferrite_runtime::napi_vm::{NapiVmOptions, NapiVmRuntime};
+use ferrite_runtime::quickjs::{QuickJsOptions, QuickJsRuntime};
 use ferrite_runtime::{
     js_value_to_json, CompiledModule, CompiledModuleGraph, JsHandle, JsRuntime, JsValue,
     RuntimeEnvironment,
@@ -22,7 +22,7 @@ use std::time::Duration;
 /// inside Ferrite's Rust process; no Node executable or external compiler
 /// process is started.
 pub struct EmbeddedSvelteCompilerHost {
-    runtime: NapiVmRuntime,
+    runtime: QuickJsRuntime,
     compile: JsHandle,
     root: PathBuf,
     lock: Lockfile,
@@ -77,16 +77,16 @@ impl EmbeddedSvelteCompilerHost {
         let cache_identity = ferrite_core::Hash::of_str(
             &serde_json::json!({
                 "lock": lock,
-                "host": "napi-vm-embedded-svelte",
+                "host": "rquickjs-embedded-svelte",
                 "compilerWrapper": include_str!("embedded_svelte_worker.mjs"),
                 "compilerBundle": ferrite_core::Hash::of_str(&bundle).0,
             })
             .to_string(),
         )
         .0;
-        let mut options = NapiVmOptions::default();
+        let mut options = QuickJsOptions::default();
         options.request_timeout_ms = timeout.as_millis() as u64;
-        let runtime = NapiVmRuntime::new(options);
+        let runtime = QuickJsRuntime::new(options);
         let graph = CompiledModuleGraph {
             entry: "/embedded-svelte-worker.mjs".into(),
             modules: vec![

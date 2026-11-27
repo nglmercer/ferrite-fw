@@ -1,5 +1,5 @@
-//! Vue compilation through the official browser compiler inside napi-vm.
-#![cfg(feature = "napi-vm")]
+//! Vue compilation through the official browser compiler inside rquickjs.
+#![cfg(feature = "rquickjs")]
 
 use crate::compiler_host::{
     selected_compiler_package, CompileDiagnostic, CompileRequest, CompileResult, Framework,
@@ -8,7 +8,7 @@ use crate::compiler_host::{
 use async_trait::async_trait;
 use ferrite_core::{FerriteError, ModuleType, Result, SourceMap};
 use ferrite_npm::Lockfile;
-use ferrite_runtime::napi_vm::{NapiVmOptions, NapiVmRuntime};
+use ferrite_runtime::quickjs::{QuickJsOptions, QuickJsRuntime};
 use ferrite_runtime::{
     js_value_to_json, CompiledModule, CompiledModuleGraph, JsHandle, JsRuntime, JsValue,
     RuntimeEnvironment,
@@ -23,7 +23,7 @@ use std::time::Duration;
 /// inside Ferrite's Rust process; no Node executable or external compiler
 /// process is started.
 pub struct EmbeddedVueCompilerHost {
-    runtime: NapiVmRuntime,
+    runtime: QuickJsRuntime,
     compile: JsHandle,
     root: PathBuf,
     lock: Lockfile,
@@ -79,20 +79,19 @@ impl EmbeddedVueCompilerHost {
             include_bytes!("embedded_compilers/vue-compiler-sfc-3.5.22.js.gz"),
             "@vue/compiler-sfc@3.5.22 embedded browser compiler",
         )?;
-        let bundle = napi_compatible_bundle(bundle)?;
         let cache_identity = ferrite_core::Hash::of_str(
             &serde_json::json!({
                 "lock": lock,
-                "host": "napi-vm-embedded-vue",
+                "host": "rquickjs-embedded-vue",
                 "compilerWrapper": include_str!("embedded_vue_worker.mjs"),
                 "compilerBundle": ferrite_core::Hash::of_str(&bundle).0,
             })
             .to_string(),
         )
         .0;
-        let mut options = NapiVmOptions::default();
+        let mut options = QuickJsOptions::default();
         options.request_timeout_ms = timeout.as_millis() as u64;
-        let runtime = NapiVmRuntime::new(options);
+        let runtime = QuickJsRuntime::new(options);
         let graph = CompiledModuleGraph {
             entry: "/embedded-vue-worker.mjs".into(),
             modules: vec![
@@ -220,46 +219,6 @@ fn integer_json(value: serde_json::Value) -> serde_json::Value {
         ),
         value => value,
     }
-}
-
-fn napi_compatible_bundle(mut bundle: String) -> Result<String> {
-    // napi-vm does not preserve exact Function.prototype.toString source, which
-    // the upstream source-map dependency uses to clone its quicksort template.
-    // Replace only that implementation with an equivalent bounded sort. The
-    // compiler output is unchanged because this code only sorts mappings.
-    let clone_sort = r#"	function cloneSort(comparator) {
-	  let template = SortTemplate.toString();
-	  let templateFn = new Function(`return ${template}`)();
-	  return templateFn(comparator);
-	}"#;
-    let replacement = r#"	function cloneSort(comparator) {
-	  return function(ary, _comparator, p, r) {
-	    if (p < r) {
-	      const values = ary.slice(p, r + 1);
-	      values.sort((left, right) => comparator(left, right, false));
-	      for (let index = 0; index < values.length; index++) ary[p + index] = values[index];
-	    }
-	  };
-	}"#;
-    let count = bundle.matches(clone_sort).count();
-    if count != 1 {
-        return Err(FerriteError::Build(format!(
-            "embedded Vue compiler bundle compatibility patch changed upstream: expected one source-map sorter, found {count}"
-        )));
-    }
-    bundle = bundle.replacen(clone_sort, replacement, 1);
-
-    // Constant-expression evaluation does not depend on function source
-    // preservation; indirect eval has the required non-local scope semantics.
-    let evaluate = "return new Function(`return (${exp.content})`)();";
-    let count = bundle.matches(evaluate).count();
-    if count != 1 {
-        return Err(FerriteError::Build(format!(
-            "embedded Vue compiler bundle compatibility patch changed upstream: expected one constant evaluator, found {count}"
-        )));
-    }
-    bundle = bundle.replacen(evaluate, "return (0, eval)(`(${exp.content})`);", 1);
-    Ok(bundle)
 }
 
 fn finish_output(output: WorkerResult) -> Result<CompileResult> {
@@ -396,6 +355,73 @@ fn resolve_typescript_candidate(importer: &Path, specifier: &str) -> Vec<PathBuf
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::compiler_host::CompileTarget;
+    use ferrite_npm::{LockedImporter, LockedPackage};
+    use std::time::Duration;
+
+    fn locked_project() -> tempfile::TempDir {
+        let root = tempfile::tempdir().unwrap();
+        let package = LockedPackage {
+            name: "@vue/compiler-sfc".into(),
+            version: "3.5.22".into(),
+            source: "npm".into(),
+            ..Default::default()
+        };
+        let directory = root.path().join(".ferrite/npm/packages").join(package.id());
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("package.json"),
+            r#"{"name":"@vue/compiler-sfc","version":"3.5.22"}"#,
+        )
+        .unwrap();
+        let vue = LockedPackage {
+            name: "vue".into(),
+            version: "3.5.22".into(),
+            source: "npm".into(),
+            ..Default::default()
+        };
+        let mut importer = LockedImporter::default();
+        importer
+            .specifiers
+            .insert("@vue/compiler-sfc".into(), "3.5.22".into());
+        importer.specifiers.insert("vue".into(), "3.5.22".into());
+        importer.dependencies.insert("vue".into(), vue.id());
+        let mut lock = Lockfile::default();
+        lock.package.push(package);
+        lock.package.push(vue);
+        lock.importers.insert(".".into(), importer);
+        lock.write(&root.path().join("ferrite.lock")).unwrap();
+        root
+    }
+
+    #[tokio::test]
+    async fn embedded_vue_compiles_component_through_rquickjs() {
+        let root = locked_project();
+        let host = EmbeddedVueCompilerHost::new(
+            root.path().into(),
+            root.path().join("ferrite.lock"),
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap();
+        let result = host
+            .compile(CompileRequest {
+                framework: Framework::Vue,
+                filename: root.path().join("App.vue"),
+                source: "<script setup>import { ref } from 'vue'; const count = ref(0);</script><template><button @click=\"count++\">{{ count }}</button></template><style scoped>button { color: red; }</style>".into(),
+                target: CompileTarget::Client,
+                development: true,
+                module: false,
+            })
+            .await
+            .unwrap();
+        assert!(result.code.contains("count"), "{}", result.code);
+        assert!(
+            result.css.iter().any(|css| css.code.contains("button")),
+            "{:?}",
+            result.css
+        );
+    }
 
     #[test]
     fn typescript_candidates_preserve_dotted_basenames() {
