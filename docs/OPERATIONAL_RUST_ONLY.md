@@ -46,7 +46,7 @@ The profile intentionally does not require Node. It currently proves the parts
 that can execute without it: compiler-host reporting, generated vanilla
 applications in real Chromium/Firefox, generated React dev/refresh, client and SSR production builds/previews plus embedded Vue
 client and SSR production builds/previews using only checked-in pinned package tarballs,
-embedded Svelte dev/HMR and SSR production builds/previews, framework islands in dev/preview/prerender, embedded SSR packaging, streamed prerendering and standalone process/streaming
+embedded Svelte dev/HMR and SSR production builds/previews, production module-worker packaging/execution, framework islands in dev/preview/prerender, embedded SSR packaging, streamed prerendering and standalone process/streaming
 recovery. The generated tests run
 their Ferrite child processes with an empty `PATH`.
 

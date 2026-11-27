@@ -359,3 +359,128 @@ async fn composable_render_chunk_maps_chain_across_plugins_to_original_positions
         "composed renderChunk maps must retain original TS positions"
     );
 }
+
+fn worker_fixture() -> ferrite_test::TempProject {
+    ferrite_test::TempProject::new(&[
+        ("index.html", "<html><head></head><body><script type='module' src='/src/main.js'></script></body></html>"),
+        ("src/main.js", "import WorkerConstructor from './worker.js?worker';\nconst worker = new WorkerConstructor();\nworker.onmessage = (event) => { globalThis.workerResult = event.data; };\nworker.postMessage('run');\nglobalThis.ready = true;\n"),
+        ("src/worker.js", "import { label } from './dep.js';\nself.onmessage = (event) => { self.postMessage(`${label}:${event.data}`); };\n"),
+        ("src/dep.js", "export const label = 'worker-ready';\n"),
+    ])
+}
+
+#[tokio::test]
+async fn worker_query_builds_independent_executable_chunks() {
+    for minify in [false, true] {
+        for scope_hoist in [false, true] {
+            let project = worker_fixture();
+            let mut config = project.resolve_config_mode("production");
+            config.build.minify = minify;
+            config.build.scope_hoist = scope_hoist;
+            config.build.sourcemap = ferrite::config::SourceMapConfig::Bool(true);
+            ferrite::Builder::new(config.clone(), vec![])
+                .build("client")
+                .await
+                .unwrap();
+            let manifest =
+                ferrite::manifest::BuildManifest::read(&config.out_dir().join("manifest.json"))
+                    .unwrap();
+            let worker = &manifest.entries["/src/worker.js"];
+            assert_eq!(
+                worker.is_dynamic_entry,
+                Some(true),
+                "worker target must be an independent lazy execution boundary"
+            );
+            let worker_file = config.out_dir().join(&worker.file);
+            assert!(worker_file.is_file(), "missing {}", worker.file);
+            let worker_name = std::path::Path::new(&worker.file)
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            let mut js = String::new();
+            let mut constructor_references = 0;
+            for entry in std::fs::read_dir(config.out_dir().join("assets")).unwrap() {
+                let path = entry.unwrap().path();
+                if path.extension().is_some_and(|extension| extension == "js") {
+                    let code = std::fs::read_to_string(path).unwrap();
+                    let executable: String = code
+                        .lines()
+                        .filter(|line| !line.starts_with("//# sourceMappingURL="))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    if executable.contains("super") && executable.contains(&worker_name) {
+                        constructor_references += 1;
+                    }
+                    js.push_str(&executable);
+                }
+            }
+            assert!(
+                !js.contains("__FERRITE_WORKER_URL__"),
+                "unresolved worker placeholder for minify={minify} scope={scope_hoist}: {js}"
+            );
+            for quote in ['"', '\'', '`'] {
+                assert!(
+                    !js.contains(&format!("{quote}/src/worker.js{quote}")),
+                    "unresolved source worker URL for minify={minify} scope={scope_hoist}: {js}"
+                );
+            }
+            assert_eq!(
+                constructor_references, 1,
+                "constructor chunks referencing {worker_name} for minify={minify} scope={scope_hoist}: {js}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+#[ignore = "real Chromium, emitted production worker graph"]
+async fn chromium_worker_query_production_execution() {
+    let executable = ferrite_e2e::find_chromium(None).expect("real Chromium required");
+    let browser = Browser::launch(
+        LaunchOptions::default()
+            .browser(BrowserKind::Chromium)
+            .executable(executable),
+    )
+    .await
+    .unwrap();
+    let project = worker_fixture();
+    let mut config = project.resolve_config_mode("production");
+    config.base = "/app/".into();
+    config.build.minify = true;
+    config.build.scope_hoist = true;
+    ferrite::Builder::new(config.clone(), vec![])
+        .build("client")
+        .await
+        .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    config.server.port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let serving_config = config.clone();
+    let _serving = Serving(tokio::spawn(async move {
+        ferrite::preview_with_plugins(&serving_config, &[]).await
+    }));
+    let url = format!("http://127.0.0.1:{}/app/", config.server.port);
+    ferrite_e2e::wait_for_url(&url, Duration::from_secs(10))
+        .await
+        .unwrap();
+    let page = browser.new_page().await.unwrap();
+    page.goto(&url).await.unwrap();
+    let worker_result = page
+        .wait_for_function(
+            "globalThis.workerResult === 'worker-ready:run'",
+            Duration::from_secs(10),
+        )
+        .await;
+    if let Err(error) = worker_result {
+        let state: serde_json::Value = page.evaluate("({ready:globalThis.ready,result:globalThis.workerResult,scripts:[...document.scripts].map(s=>s.src)})").await.unwrap();
+        panic!(
+            "{error}; state={state}; errors={:?}; console={:?}",
+            page.page_errors(),
+            page.console_messages()
+        );
+    }
+    assert!(page.page_errors().is_empty(), "{:?}", page.page_errors());
+    page.close().await.unwrap();
+    browser.close().await.unwrap();
+}

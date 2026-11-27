@@ -692,7 +692,7 @@ impl DevServer {
             }
             "worker" => {
                 let js = format!(
-                    "export default class FerriteWorker extends Worker {{\n  constructor(options) {{\n    super({path_part:?}, {{ type: \"module\", ...options }});\n  }}\n}}\n"
+                    "export default class FerriteWorker extends Worker {{\n  constructor(options) {{\n    super(new URL({path_part:?}, import.meta.url).href, {{ type: \"module\", ...options }});\n  }}\n}}\n"
                 );
                 Ok(Some(PipelineModule::code_only(
                     id.clone(),

@@ -91,6 +91,7 @@ def plan(profile):
         commands.append(exact("ferrite-test", "generated_apps", "chromium_react_offline_fixture_dev_refresh_preserves_state", "napi-vm"))
         commands.append(exact("ferrite-test", "generated_apps", "chromium_react_offline_fixture_build_and_preview", "napi-vm"))
         commands.append(exact("ferrite-test", "generated_apps", "chromium_react_offline_fixture_ssr_build_and_preview", "napi-vm"))
+        commands.append(exact("ferrite-test", "production_closure", "chromium_worker_query_production_execution", "napi-vm"))
         for name in (
             "chromium_react_refresh_dom",
             "chromium_react_refresh_wrapped",

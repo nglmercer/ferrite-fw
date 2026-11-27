@@ -25,6 +25,15 @@ pub use hooks::{BundleHooks, NoHooks, RenderChunkOutput};
 pub use loader::{CssExtract, LoadedModule, ModuleLoader};
 pub use shake::{shake_statements, tree_shake, used_exports, UsedExports};
 
+/// Marker replaced with the emitted worker chunk URL during production output.
+///
+/// Worker constructors are not module imports in the main thread, so their
+/// target URL cannot be rewritten by import-specifier rewriting alone.
+#[must_use]
+pub fn worker_url_placeholder(id: &ferrite_core::ModuleId) -> String {
+    format!("__FERRITE_WORKER_URL__:{}", id.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

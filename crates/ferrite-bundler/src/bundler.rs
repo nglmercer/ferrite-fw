@@ -58,7 +58,7 @@ impl<L: ModuleLoader + 'static> Bundler for FerriteBundler<L> {
             .values()
             .flat_map(|module| {
                 module.imports.iter().filter_map(|(_, id, kind)| {
-                    matches!(kind, ImportKind::Dynamic).then_some(id.clone())
+                    matches!(kind, ImportKind::Dynamic | ImportKind::Worker).then_some(id.clone())
                 })
             })
             .collect();
@@ -101,7 +101,7 @@ impl<L: ModuleLoader + 'static> Bundler for FerriteBundler<L> {
                     if dep_chunk == &group.id {
                         continue;
                     }
-                    if *kind == ImportKind::Dynamic {
+                    if matches!(*kind, ImportKind::Dynamic | ImportKind::Worker) {
                         if seen_dynamic.insert(dep_chunk.clone()) {
                             dynamic_imports.push(dep_chunk.clone());
                         }
@@ -263,6 +263,7 @@ impl<L: ModuleLoader + 'static> Bundler for FerriteBundler<L> {
             let mut import_map: HashMap<String, String> = HashMap::new();
             let mut stripped_css: Vec<&str> = Vec::new();
             let mut dynamic_css = HashMap::new();
+            let mut worker_urls: HashMap<String, String> = HashMap::new();
             let mut uses_helper = false;
             for member in &chunk.modules {
                 let module = &modules[member];
@@ -272,6 +273,9 @@ impl<L: ModuleLoader + 'static> Bundler for FerriteBundler<L> {
                         .and_then(|dep_chunk| file_names.get(*dep_chunk));
                     if let Some(dep_file) = dep_file {
                         let relative = relative_url(&file_name, dep_file);
+                        if *kind == ImportKind::Worker {
+                            worker_urls.insert(dep.0.clone(), relative.clone());
+                        }
                         if request.env == "client" && *kind == ImportKind::Dynamic {
                             let styles: Vec<_> = entry_css_files(dep, &modules, &live, false)
                                 .iter()
@@ -316,6 +320,24 @@ impl<L: ModuleLoader + 'static> Bundler for FerriteBundler<L> {
             )?;
             code = rewritten;
             final_map = compose_final_map(rewrite_map, final_map)?;
+            if !worker_urls.is_empty() {
+                let mut edits = Vec::new();
+                for (dep, url) in &worker_urls {
+                    let placeholder = crate::worker_url_placeholder(&ModuleId::new(dep));
+                    for (start, text) in code.match_indices(&placeholder) {
+                        edits.push((start, start + text.len(), url.clone()));
+                    }
+                }
+                if edits.is_empty() {
+                    return Err(FerriteError::Build(format!(
+                        "worker chunk `{chunk_id}` lost its emitted worker URL placeholder"
+                    )));
+                }
+                let (rewritten, map) =
+                    ferrite_transform::apply_text_edits(&chunk.id, &code, &edits, want_map)?;
+                code = rewritten;
+                final_map = compose_final_map(map, final_map)?;
+            }
             if !dynamic_css.is_empty() {
                 let (rewritten, map) = ferrite_transform::preload_dynamic_imports(
                     &chunk.id,
