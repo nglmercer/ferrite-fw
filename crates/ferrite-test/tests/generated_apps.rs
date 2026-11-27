@@ -399,6 +399,94 @@ async fn chromium_react_offline_fixture_dev_refresh_preserves_state() {
 
 #[tokio::test]
 #[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
+async fn chromium_react_offline_fixture_ssr_build_and_preview() {
+    let binary = cli();
+    let (_registry, registry) = fixture_registry("react-registry").await;
+    let project = ferrite_test::TempProject::new(&[]);
+    let destination = project.root.join("app");
+    command(
+        &binary,
+        &project.root,
+        &[
+            "create",
+            destination.to_str().unwrap(),
+            "--framework",
+            "react",
+            "--language",
+            "ts",
+            "--rendering",
+            "ssr",
+            "--ssr-runtime",
+            "napi-vm",
+            "--no-install",
+        ],
+        false,
+    )
+    .await;
+    let lock = include_str!("fixtures/react.lock").replace("https://registry.npmjs.org", &registry);
+    std::fs::write(destination.join("ferrite.lock"), lock).unwrap();
+    command(
+        &binary,
+        &destination,
+        &["install", "--frozen-lockfile"],
+        false,
+    )
+    .await;
+    let inspected: serde_json::Value =
+        serde_json::from_str(&command(&binary, &destination, &["inspect", "--json"], false).await)
+            .unwrap();
+    assert_eq!(inspected["compilerHosts"][0]["framework"], "react");
+    assert_eq!(inspected["compilerHosts"][0]["execution"], "rust");
+    assert_eq!(inspected["compilerHosts"][0]["externalNodeRequired"], false);
+    command(&binary, &destination, &["build"], false).await;
+    assert!(destination.join("dist/server/renderer.json").exists());
+    assert!(std::fs::read_dir(destination.join("dist/server/assets"))
+        .unwrap()
+        .any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("entry-server-")));
+
+    let executable = ferrite_e2e::find_chromium(None)
+        .expect("offline React SSR acceptance requires real Chromium");
+    let browser = Browser::launch(
+        LaunchOptions::default()
+            .browser(BrowserKind::Chromium)
+            .executable(executable),
+    )
+    .await
+    .unwrap();
+    let (mut preview, url) = server(&binary, &destination, "preview", false).await;
+    let page = browser.new_page().await.unwrap();
+    page.goto(&url).await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'count: 0' && getComputedStyle(document.querySelector('#counter')).color === 'rgb(128, 0, 0)'",
+        Duration::from_secs(15),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "offline React SSR preview: {error}; {:?}; {:?}",
+            page.page_errors(),
+            page.console_messages()
+        )
+    });
+    page.locator("#counter").click().await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'count: 1'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap();
+    assert!(page.page_errors().is_empty(), "{:?}", page.page_errors());
+    preview.kill().await.unwrap();
+    preview.wait().await.unwrap();
+    browser.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
 async fn chromium_vue_embedded_offline_fixture_build_and_preview() {
     let binary = cli();
     let (_registry, registry) = fixture_registry("vue-registry").await;

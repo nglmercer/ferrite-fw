@@ -431,7 +431,7 @@ pub fn react_ssr_files(
         "package.json".into(),
         format!("{}\n", serde_json::to_string_pretty(&manifest)?),
     );
-    generated.insert("README.md".into(), format!("# {name}\n\nExperimental React {REACT_VERSION} synchronous SSR. Run `ferrite install`,\n`ferrite ssr`, `ferrite build` and `ferrite preview`. Native compilation and the\nnapi-vm renderer require no Node executable. The server uses the public\nreact-dom/server.edge renderToString API; the client uses hydrateRoot.\nStreaming, complete Refresh and cross-platform standalone acceptance remain\nunfinished. TypeScript transpilation does not perform type checking.\n"));
+    generated.insert("README.md".into(), format!("# {name}\n\nExperimental React {REACT_VERSION} synchronous SSR. Run `ferrite install`,\n`ferrite ssr`, `ferrite build` and `ferrite preview`. Native compilation and the\nnapi-vm renderer require no Node executable. The server uses the public\nreact-dom/server.edge renderToString API; the client uses hydrateRoot.\nStreaming and cross-platform standalone acceptance remain unfinished.\nTypeScript transpilation does not perform type checking.\n"));
     Ok(generated)
 }
 
