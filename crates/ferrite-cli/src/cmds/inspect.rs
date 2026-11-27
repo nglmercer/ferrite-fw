@@ -59,7 +59,7 @@ pub(crate) async fn inspect(
                     serde_json::json!({
                         "framework": name,
                         "host": host,
-                        "execution": if host == "native" { "rust" } else if host == "node" { "external-node-process" } else { "unavailable" },
+                        "execution": if host == "native" { "rust" } else if host == "embedded" { "embedded-napi-vm" } else if host == "node" { "external-node-process" } else { "unavailable" },
                         "externalNodeRequired": host == "node",
                         "support": "experimental",
                     })

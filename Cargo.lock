@@ -1051,6 +1051,7 @@ dependencies = [
  "ferrite-npm",
  "ferrite-plugin",
  "ferrite-resolver",
+ "ferrite-runtime",
  "ferrite-transform",
  "oxc_sourcemap",
  "rustix",

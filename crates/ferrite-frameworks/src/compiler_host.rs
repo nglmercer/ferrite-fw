@@ -1,4 +1,5 @@
 //! Typed official compiler calls. Node construction is explicit; no host fallback.
+use async_trait::async_trait;
 use ferrite_core::{FerriteError, ModuleType, Result, SourceMap};
 use ferrite_npm::Lockfile;
 use ferrite_plugin::node_adapter::NodeAdapterHost;
@@ -75,6 +76,17 @@ struct WorkerResult {
 struct Piece {
     code: String,
     map: Option<serde_json::Value>,
+}
+
+/// Persistent framework compiler backend. Implementations may be external
+/// processes or embedded runtimes, but pipeline adapters only depend on this
+/// explicit contract.
+#[async_trait]
+pub trait FrameworkCompiler: Send + Sync {
+    fn cache_identity(&self) -> String;
+    fn root(&self) -> &Path;
+    fn host_kind(&self) -> &'static str;
+    async fn compile(&self, request: CompileRequest) -> Result<CompileResult>;
 }
 
 /// Persistent explicitly enabled Node compiler host. Separate from SSR runtime.
@@ -255,9 +267,25 @@ impl NodeCompilerHost {
     }
 }
 
+#[async_trait]
+impl FrameworkCompiler for NodeCompilerHost {
+    fn cache_identity(&self) -> String {
+        self.cache_identity()
+    }
+    fn root(&self) -> &Path {
+        self.root()
+    }
+    fn host_kind(&self) -> &'static str {
+        "node"
+    }
+    async fn compile(&self, request: CompileRequest) -> Result<CompileResult> {
+        NodeCompilerHost::compile(self, request).await
+    }
+}
+
 /// Select a concrete compiler edge from the component's package/importer owner.
 /// A unique transitive package is never a substitute for a missing owner edge.
-fn selected_compiler_package<'a>(
+pub(crate) fn selected_compiler_package<'a>(
     lock: &'a Lockfile,
     root: &Path,
     filename: &Path,

@@ -4,6 +4,8 @@
 
 pub mod compiler_host;
 pub mod doctor;
+#[cfg(feature = "napi-vm")]
+pub mod embedded_vue;
 pub mod hosted;
 pub mod react;
 pub mod registry;

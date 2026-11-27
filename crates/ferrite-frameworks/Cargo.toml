@@ -17,8 +17,12 @@ ferrite-npm = { workspace = true }
 tokio = { workspace = true }
 tempfile = { workspace = true }
 oxc_sourcemap = { workspace = true }
+ferrite-runtime = { workspace = true, optional = true }
 
 url = { workspace = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 rustix = { version = "=1.1.5", features = ["fs"] }
+
+[features]
+napi-vm = ["ferrite-runtime/napi-vm"]
