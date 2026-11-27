@@ -14,6 +14,7 @@ use rquickjs::loader::{ImportAttributes, Loader, Resolver};
 use rquickjs::{Array, Context, Function, IntoJs, Module, Object, Persistent, Runtime, Value};
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
@@ -690,9 +691,20 @@ impl Loader for GraphLoader {
     }
 }
 
+struct TimerState {
+    next_id: u64,
+    timers: std::collections::BTreeMap<u64, Timer>,
+}
+
+struct Timer {
+    due: Instant,
+    callback: Persistent<rquickjs::Function<'static>>,
+}
+
 struct Engine {
     runtime: Runtime,
     context: Context,
+    timers: Rc<RefCell<TimerState>>,
     handles: RefCell<HashMap<u64, Persistent<rquickjs::Function<'static>>>>,
     next_handle: Arc<AtomicU64>,
     active_control: Arc<Mutex<ExecutionControl>>,
@@ -701,6 +713,7 @@ struct Engine {
 impl Drop for Engine {
     fn drop(&mut self) {
         self.handles.borrow_mut().clear();
+        self.timers.borrow_mut().timers.clear();
     }
 }
 
@@ -722,24 +735,41 @@ impl Engine {
         })));
         let context =
             Context::full(&runtime).map_err(|error| format!("rquickjs context init: {error:?}"))?;
+        let timers = Rc::new(RefCell::new(TimerState {
+            next_id: 1,
+            timers: std::collections::BTreeMap::new(),
+        }));
         context
             .with(|ctx| {
+                let set_timers = timers.clone();
+                let set_timeout = Function::new(ctx.clone(), move |callback: Function, delay: Option<f64>| {
+                    let mut timers = set_timers.borrow_mut();
+                    let id = timers.next_id;
+                    timers.next_id += 1;
+                    let delay = delay.unwrap_or(0.0).clamp(0.0, 2_147_483_647.0);
+                    let due = Instant::now() + Duration::from_millis(delay as u64);
+                    let callback_ctx = callback.ctx().clone();
+                    let callback = Persistent::save(&callback_ctx, callback);
+                    timers.timers.insert(id, Timer { due, callback });
+                    id
+                })?;
+                let clear_timers = timers.clone();
+                let clear_timeout = Function::new(ctx.clone(), move |id: Option<f64>| {
+                    if let Some(id) = id {
+                        clear_timers.borrow_mut().timers.remove(&(id as u64));
+                    }
+                })?;
+                ctx.globals().set("__ferriteSetTimeout", set_timeout)?;
+                ctx.globals().set("__ferriteClearTimeout", clear_timeout)?;
                 ctx.eval::<(), _>(
                     r#"
 if (typeof console === 'undefined') globalThis.console = {log(){},info(){},warn(){},error(){},debug(){},trace(){}};
 if (typeof setTimeout === 'undefined') {
-  let ferriteNextTimerId = 1;
-  const ferriteCancelledTimers = new Set();
   globalThis.setTimeout = function setTimeout(callback, delay, ...args) {
     if (typeof callback !== 'function') throw new TypeError('setTimeout callback must be a function');
-    const id = ferriteNextTimerId++;
-    // QuickJS has no host timer thread. SSR renderers use timers as yield points,
-    // so schedule them cooperatively after pending jobs; deadline interruption
-    // remains the wall-clock bound.
-    queueMicrotask(() => { if (!ferriteCancelledTimers.has(id)) callback(...args); });
-    return id;
+    return globalThis.__ferriteSetTimeout(function ferriteTimer() { callback(...args); }, delay);
   };
-  globalThis.clearTimeout = function clearTimeout(id) { ferriteCancelledTimers.add(id); };
+  globalThis.clearTimeout = function clearTimeout(id) { globalThis.__ferriteClearTimeout(id); };
   globalThis.setInterval = function setInterval() { throw new TypeError('setInterval is unsupported in the SSR runtime'); };
   globalThis.clearInterval = function clearInterval() {};
 }
@@ -841,6 +871,7 @@ if (typeof globalThis.__ferriteStreamBytes === 'undefined') {
         Ok(Self {
             runtime,
             context,
+            timers,
             handles: RefCell::new(HashMap::new()),
             next_handle,
             active_control,
@@ -894,13 +925,13 @@ if (typeof globalThis.__ferriteStreamBytes === 'undefined') {
                             explain_error(&ctx, error, &control)
                         )
                     })?;
-            promise.finish::<()>().map_err(|error| {
-                format!(
-                    "rquickjs graph entry `{}` promise failed: {}",
-                    graph.entry,
-                    explain_error(&ctx, error, &control)
-                )
-            })?;
+            self.settle_value(ctx.clone(), promise.into_value(), &control)
+                .map_err(|error| {
+                    format!(
+                        "rquickjs graph entry `{}` promise failed: {error}",
+                        graph.entry
+                    )
+                })?;
             self.check_control()?;
             let namespace = module
                 .namespace()
@@ -980,6 +1011,63 @@ if (typeof globalThis.__ferriteStreamBytes === 'undefined') {
         serde_json::Value::Null
     }
 
+    fn settle_value<'js>(
+        &self,
+        ctx: rquickjs::Ctx<'js>,
+        value: Value<'js>,
+        control: &ExecutionControl,
+    ) -> std::result::Result<Value<'js>, String> {
+        if !value.is_promise() {
+            while ctx.execute_pending_job() {
+                self.check_control()?;
+            }
+            return Ok(value);
+        }
+        let promise = value.into_promise().unwrap();
+        loop {
+            self.check_control()?;
+            if let Some(result) = promise.result::<Value>() {
+                return result.map_err(|error| explain_error(&ctx, error, control));
+            }
+            let mut ran = false;
+            while ctx.execute_pending_job() {
+                ran = true;
+                self.check_control()?;
+            }
+            if ran {
+                continue;
+            }
+            let next = self
+                .timers
+                .borrow()
+                .timers
+                .iter()
+                .map(|(id, timer)| (*id, timer.due))
+                .min_by_key(|(_, due)| *due);
+            let Some((id, due)) = next else {
+                return Err("rquickjs promise cannot settle: no pending jobs or timers".into());
+            };
+            let now = Instant::now();
+            if due > now {
+                let wait = (due - now).min(Duration::from_millis(2));
+                thread::sleep(wait);
+                continue;
+            }
+            let timer = self.timers.borrow_mut().timers.remove(&id).unwrap();
+            let callback = timer
+                .callback
+                .restore(&ctx)
+                .map_err(|error| format!("rquickjs timer restore failed: {error:?}"))?;
+            let result: std::result::Result<Value, _> = callback.call(());
+            if let Err(error) = result {
+                return Err(format!(
+                    "rquickjs timer failed: {}",
+                    explain_error(&ctx, error, control)
+                ));
+            }
+        }
+    }
+
     fn js_value<'js>(
         &self,
         ctx: &rquickjs::Ctx<'js>,
@@ -1046,24 +1134,12 @@ if (typeof globalThis.__ferriteStreamBytes === 'undefined') {
                     explain_error(&ctx, error, &control)
                 )
             })?;
-            let result = settle(ctx.clone(), result).map_err(|error| {
-                format!(
-                    "rquickjs promise failed: {}",
-                    explain_error(&ctx, error, &control)
-                )
-            })?;
+            let result = self
+                .settle_value(ctx.clone(), result, &control)
+                .map_err(|error| format!("rquickjs promise failed: {error}"))?;
             self.check_control()?;
             Ok(self.json_value(&result, 0))
         })
-    }
-}
-
-fn settle<'js>(ctx: rquickjs::Ctx<'js>, value: Value<'js>) -> rquickjs::Result<Value<'js>> {
-    if value.is_promise() {
-        value.into_promise().unwrap().finish::<Value>()
-    } else {
-        while ctx.execute_pending_job() {}
-        Ok(value)
     }
 }
 
@@ -1463,5 +1539,35 @@ mod tests {
         );
         drop(first);
         open(runtime).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn quickjs_timers_wait_wall_clock_and_support_cancellation() {
+        let runtime = QuickJsRuntime::with_defaults();
+        let started = Instant::now();
+        let result = runtime
+            .invoke_module_graph(
+                graph("export async function render() { return await new Promise(resolve => setTimeout(() => resolve('delayed'), 25)); }"),
+                "render",
+                vec![],
+                RuntimeEnvironment { ssr: true, request_id: None },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(result, JsValue::String(value) if value == "delayed"));
+        assert!(
+            started.elapsed() >= Duration::from_millis(25),
+            "{:?}",
+            started.elapsed()
+        );
+        let result = runtime
+            .invoke_module_graph(
+                graph("export async function render() { const id = setTimeout(() => {}, 0); clearTimeout(id); return 'cancelled'; }"),
+                "render",
+                vec![],
+                RuntimeEnvironment { ssr: true, request_id: None },
+            )
+            .await;
+        assert!(result.is_ok());
     }
 }
