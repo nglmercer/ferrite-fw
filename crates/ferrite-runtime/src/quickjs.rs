@@ -1364,6 +1364,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn quickjs_stream_fast_producer_is_not_aborted_by_queue_bound() {
+        use futures::StreamExt;
+        let runtime = QuickJsRuntime::with_defaults();
+        let response = runtime
+            .invoke_module_graph_stream(
+                graph(
+                    r#"export function render() {
+                  return new ReadableStream({
+                    start(controller) {
+                      for (let index = 0; index < 32; index++) controller.enqueue(new Uint8Array(65536));
+                      controller.close();
+                    }
+                  });
+                }"#,
+                ),
+                "render",
+                vec![],
+                RuntimeEnvironment { ssr: true, request_id: None },
+            )
+            .await
+            .unwrap();
+        let chunks = response.body.collect::<Vec<_>>().await;
+        let bytes = chunks
+            .into_iter()
+            .collect::<Result<Vec<_>>>()
+            .unwrap()
+            .concat();
+        assert_eq!(bytes.len(), 32 * 65536);
+    }
+
+    #[tokio::test]
     async fn quickjs_stream_timers_close_even_while_chunks_are_ready() {
         use futures::StreamExt;
         let runtime = QuickJsRuntime::new(QuickJsOptions {
