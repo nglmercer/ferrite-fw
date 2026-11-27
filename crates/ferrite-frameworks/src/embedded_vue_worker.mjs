@@ -16,6 +16,73 @@ function makeFs(files) {
     realpath(path) { return normalize(path); },
   };
 }
+
+function stringHash(text) {
+  let hash = 5381;
+  let index = text.length;
+  while (index) hash = ((hash * 33) ^ text.charCodeAt(--index)) >>> 0;
+  return hash >>> 0;
+}
+function cssClassLine(css, name) {
+  const index = css.indexOf(`.${name}`);
+  return index < 0 ? 1 : css.slice(0, index).split(/[\r\n]/).length;
+}
+function rewriteModuleSelector(selector, css, hash, exports) {
+  let output = '';
+  let index = 0;
+  let quote = null;
+  let brackets = 0;
+  while (index < selector.length) {
+    const char = selector[index];
+    if (quote) {
+      output += char;
+      if (char === '\\') output += selector[++index] || '';
+      else if (char === quote) quote = null;
+      index++;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      output += char;
+      index++;
+      continue;
+    }
+    if (char === '[') brackets++;
+    if (char === ']') brackets = Math.max(0, brackets - 1);
+    if (char !== '.' || brackets || index + 1 >= selector.length || !/^[-_a-zA-Z]$/.test(selector[index + 1])) {
+      output += char;
+      index++;
+      continue;
+    }
+    let end = index + 1;
+    while (end < selector.length && /^[a-zA-Z0-9_-]$/.test(selector[end])) end++;
+    const name = selector.slice(index + 1, end);
+    if (!exports[name]) exports[name] = `_${name}_${hash}_${cssClassLine(css, name)}`;
+    output += `.${exports[name]}`;
+    index = end;
+  }
+  return output;
+}
+function cssModulesPlugin(css, capture) {
+  return {
+    postcssPlugin: 'ferrite-vue-css-modules',
+    Once(root) {
+      const text = root.source?.input?.css || css;
+      if (/(?:^|[^\w-])(?:composes|@value)\b|:(?:global|local)\s*\(/.test(text)) {
+        throw new Error('embedded Vue CSS modules do not yet support composes, @value, or explicit :global/:local blocks');
+      }
+      if (/\\/.test(text)) throw new Error('embedded Vue CSS modules do not yet support escaped class names');
+      const hash = stringHash(text).toString(36).slice(0, 5);
+      const exports = Object.create(null);
+      root.walkRules(rule => {
+        if (!rule.selector) return;
+        rule.selector = rewriteModuleSelector(rule.selector, text, hash, exports);
+      });
+      capture(exports);
+    }
+  };
+}
+
 function errors(values, filename, blockStart = null) {
   if (values?.length) throw new Error(values.map(value => {
     let start = typeof value === 'object' && value !== null ? value.loc?.start : null;
@@ -80,11 +147,14 @@ export async function compile(request) {
   const moduleStyles = Object.create(null);
   for (const [index, style] of descriptor.styles.entries()) {
     if (style.lang && style.lang !== 'css') throw new Error(`${filename}: style language ${style.lang} requires a configured preprocessor`);
-    const result = await compiler.compileStyleAsync({ source: style.content, filename, id: `data-v-${id}`, scoped: style.scoped, isProd: !development, modules: Boolean(style.module), inMap: style.map });
+    let moduleExports = null;
+    const postcssPlugins = [];
+    if (style.module) postcssPlugins.push(cssModulesPlugin(style.content, exports => { moduleExports = exports; }));
+    const result = await compiler.compileStyleAsync({ source: style.content, filename, id: `data-v-${id}`, scoped: style.scoped, isProd: !development, modules: false, postcssPlugins, inMap: style.map });
     errors(result.errors, filename, style.loc.start);
     for (const dependency of result.dependencies || []) dependencies.add(dependency);
-    css.push({ id: `style-${index}`, code: result.code, map: clone(result.map), modules: result.modules || null });
-    if (style.module) moduleStyles[typeof style.module === 'string' ? style.module : '$style'] = result.modules;
+    css.push({ id: `style-${index}`, code: result.code, map: clone(result.map), modules: moduleExports });
+    if (style.module) moduleStyles[typeof style.module === 'string' ? style.module : '$style'] = moduleExports;
   }
   if (descriptor.styles.some(style => style.scoped)) pieces.push({ code: `__sfc__.__scopeId = ${JSON.stringify(`data-v-${id}`)};`, map: null });
   if (Object.keys(moduleStyles).length) pieces.push({ code: `__sfc__.__cssModules = JSON.parse(${JSON.stringify(JSON.stringify(moduleStyles))});`, map: null });

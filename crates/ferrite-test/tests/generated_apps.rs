@@ -273,6 +273,20 @@ async fn chromium_vue_embedded_offline_fixture_build_and_preview() {
     assert!(std::fs::read_to_string(destination.join("ferrite.toml"))
         .unwrap()
         .contains("compiler_host = \"embedded\""));
+    let component_path = destination.join("src/App.vue");
+    let component = std::fs::read_to_string(&component_path).unwrap();
+    std::fs::write(
+        &component_path,
+        component
+            .replace("import { ref }", "import { ref, useCssModule }")
+            .replace(
+                "</script>",
+                "const classes = useCssModule('accents');\n</script>",
+            )
+            .replace("id=\"counter\"", "id=\"counter\" :class=\"classes.accent\"")
+            + "\n<style module=\"accents\">.accent { background-color: rgb(0, 128, 0); }</style>\n",
+    )
+    .unwrap();
     let lock = include_str!("fixtures/vue.lock").replace("https://registry.npmjs.org", &registry);
     std::fs::write(destination.join("ferrite.lock"), lock).unwrap();
     command(
@@ -305,7 +319,7 @@ async fn chromium_vue_embedded_offline_fixture_build_and_preview() {
     let page = browser.new_page().await.unwrap();
     page.goto(&url).await.unwrap();
     page.wait_for_function(
-        "document.querySelector('#counter')?.textContent === 'count: 0'",
+        "document.querySelector('#counter')?.textContent === 'count: 0' && getComputedStyle(document.querySelector('#counter')).backgroundColor === 'rgb(0, 128, 0)'",
         Duration::from_secs(10),
     )
     .await
@@ -574,7 +588,7 @@ async fn acceptance(kind: BrowserKind, frameworks: &[&str]) {
             let page = browser.new_page().await.unwrap();
             page.goto(&url).await.unwrap();
             page.wait_for_function(
-                "document.querySelector('#counter')?.textContent === 'count: 0'",
+                "document.querySelector('#counter')?.textContent === 'count: 0' && getComputedStyle(document.querySelector('#counter')).backgroundColor === 'rgb(0, 128, 0)'",
                 Duration::from_secs(15),
             )
             .await
