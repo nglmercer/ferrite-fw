@@ -65,30 +65,10 @@ impl EmbeddedSvelteCompilerHost {
             root.join(lock_path)
         };
         let lock = Lockfile::read(&lock_path)?;
-        let compilers: Vec<_> = lock
-            .package
-            .iter()
-            .filter(|package| package.name == "svelte")
-            .collect();
-        let compiler_package = match compilers.as_slice() {
-            [package] => *package,
-            [] => {
-                return Err(FerriteError::Build(
-                    "embedded Svelte compilation requires locked svelte".into(),
-                ))
-            }
-            _ => {
-                return Err(FerriteError::Build(
-                    "embedded Svelte compilation requires one project-wide svelte version".into(),
-                ))
-            }
-        };
-        let supported = crate::registry::SVELTE_NODE.framework_version;
-        if compiler_package.version != supported {
-            return Err(FerriteError::Build(format!(
-                "svelte@{} embedded host is unvalidated; this host validates {supported}",
-                compiler_package.version
-            )));
+        if !lock.package.iter().any(|package| package.name == "svelte") {
+            return Err(FerriteError::Build(
+                "embedded Svelte compilation requires locked svelte".into(),
+            ));
         }
         let bundle = embedded_compressed_bundle(
             include_bytes!("embedded_compilers/svelte-compiler-5.39.6.js.gz"),
@@ -325,8 +305,15 @@ mod tests {
         let mut importer = LockedImporter::default();
         importer.specifiers.insert("svelte".into(), "5.39.6".into());
         importer.dependencies.insert("svelte".into(), package.id());
+        let transitive = LockedPackage {
+            name: "svelte".into(),
+            version: "5.0.0".into(),
+            source: "npm".into(),
+            ..Default::default()
+        };
         let mut lock = Lockfile::default();
         lock.package.push(package);
+        lock.package.push(transitive);
         lock.importers.insert(".".into(), importer);
         lock.write(&root.path().join("ferrite.lock")).unwrap();
         root

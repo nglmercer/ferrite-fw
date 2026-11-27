@@ -66,30 +66,14 @@ impl EmbeddedVueCompilerHost {
             root.join(lock_path)
         };
         let lock = Lockfile::read(&lock_path)?;
-        let compilers: Vec<_> = lock
+        if !lock
             .package
             .iter()
-            .filter(|package| package.name == "@vue/compiler-sfc")
-            .collect();
-        let compiler_package =
-            match compilers.as_slice() {
-                [package] => *package,
-                [] => {
-                    return Err(FerriteError::Build(
-                        "embedded Vue compilation requires locked @vue/compiler-sfc".into(),
-                    ))
-                }
-                _ => return Err(FerriteError::Build(
-                    "embedded Vue compilation requires one project-wide @vue/compiler-sfc version"
-                        .into(),
-                )),
-            };
-        let supported = crate::registry::VUE_NODE.framework_version;
-        if compiler_package.version != supported {
-            return Err(FerriteError::Build(format!(
-                "@vue/compiler-sfc@{} embedded host is unvalidated; this host validates {supported}",
-                compiler_package.version
-            )));
+            .any(|package| package.name == "@vue/compiler-sfc")
+        {
+            return Err(FerriteError::Build(
+                "embedded Vue compilation requires locked @vue/compiler-sfc".into(),
+            ));
         }
         let bundle = embedded_compressed_bundle(
             include_bytes!("embedded_compilers/vue-compiler-sfc-3.5.22.js.gz"),
