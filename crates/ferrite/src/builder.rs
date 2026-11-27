@@ -49,6 +49,12 @@ impl Builder {
     /// Build every configured environment (client + SSR when present).
     pub async fn build_app(&self) -> Result<Vec<BuildReport>> {
         let has_server_entry = self.ssr_entry()?.is_some();
+        if !has_server_entry {
+            let server_dir = self.config.out_dir().join("server");
+            if server_dir.exists() {
+                std::fs::remove_dir_all(&server_dir)?;
+            }
+        }
         if has_server_entry && self.config.package.standalone {
             let sdk = self.config.package.ssr_sdk.as_ref().ok_or_else(|| {
                 FerriteError::Build("SSR standalone requires explicit package.ssr_sdk pointing to a Ferrite SDK crate; build without standalone for preview".into())
@@ -106,18 +112,6 @@ impl Builder {
         if has_server_entry {
             reports.push(self.build_with_document_completion("ssr", false).await?);
         } else {
-            let server_dir = self.config.out_dir().join("server");
-            for file in [
-                crate::SsrRendererArtifact::FILE_NAME,
-                "manifest.json",
-                "ssr-manifest.json",
-            ] {
-                match std::fs::remove_file(server_dir.join(file)) {
-                    Ok(()) => {}
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(error) => return Err(error.into()),
-                }
-            }
             tracing::info!("no SSR entry found; skipping ssr build");
         }
         Ok(reports)
