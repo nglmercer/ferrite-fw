@@ -124,6 +124,10 @@ export async function compile(request) {
   if (descriptor.template?.lang && descriptor.template.lang !== 'html') throw new Error(`${filename}: template language ${descriptor.template.lang} requires a configured preprocessor`);
   const id = request.scopeId;
   const fs = makeFs(request.files);
+  for (const [path, sourceText] of Object.entries(request.files || {})) {
+    const normalized = normalize(path);
+    if (!typeInputs.has(normalized)) typeInputs.set(normalized, sourceText ?? null);
+  }
   for (const [path, previous] of typeInputs) {
     const current = request.files?.[path] ?? null;
     if (current !== previous) {
