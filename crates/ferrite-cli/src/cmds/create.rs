@@ -69,6 +69,11 @@ pub(crate) async fn create(args: CreateArgs) -> ferrite::Result<()> {
         }
         None => {}
     }
+    if profile.compiler_host == "embedded" && !cfg!(feature = "napi-vm") {
+        return Err(ferrite::FerriteError::Config(
+            "embedded Vue compilation requires a Ferrite binary built with --features napi-vm; use --compiler-host node for the transitional external host".into(),
+        ));
+    }
     if args.ssr_runtime.as_deref() != profile.ssr_runtime {
         return Err(ferrite::FerriteError::Config(match profile.ssr_runtime {
             Some(runtime) => format!("{framework}/{}/{} requires --ssr-runtime {runtime}; compiler host and rendering runtime are separate", args.language, args.rendering),
@@ -205,11 +210,15 @@ mod tests {
                 let error = create(request).await.unwrap_err();
                 assert!(error.to_string().contains("--compiler-host node"));
                 assert!(!path.exists());
-            } else {
+            } else if cfg!(feature = "napi-vm") {
                 create(request).await.unwrap();
                 assert!(std::fs::read_to_string(path.join("ferrite.toml"))
                     .unwrap()
                     .contains("compiler_host = \"embedded\""));
+            } else {
+                let error = create(request).await.unwrap_err();
+                assert!(error.to_string().contains("--features napi-vm"));
+                assert!(!path.exists());
             }
             let path = root.path().join(format!("{framework}-node"));
             let mut request = args(&path);
