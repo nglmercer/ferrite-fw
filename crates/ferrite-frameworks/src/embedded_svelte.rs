@@ -201,6 +201,7 @@ impl FrameworkCompiler for EmbeddedSvelteCompilerHost {
             "source": request.source,
             "target": request.target,
             "development": request.development,
+            "module": request.module,
             "version": package.version,
         });
         let output = self
@@ -298,4 +299,61 @@ fn finish_output(output: WorkerResult, input_map: Option<SourceMap>) -> Result<C
         diagnostics: output.diagnostics,
         compiler_version: output.compiler_version,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::compiler_host::CompileTarget;
+    use ferrite_npm::{LockedImporter, LockedPackage};
+
+    fn locked_project() -> tempfile::TempDir {
+        let root = tempfile::tempdir().unwrap();
+        let package = LockedPackage {
+            name: "svelte".into(),
+            version: "5.39.6".into(),
+            source: "npm".into(),
+            ..Default::default()
+        };
+        let directory = root.path().join(".ferrite/npm/packages").join(package.id());
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("package.json"),
+            r#"{"name":"svelte","version":"5.39.6"}"#,
+        )
+        .unwrap();
+        let mut importer = LockedImporter::default();
+        importer.specifiers.insert("svelte".into(), "5.39.6".into());
+        importer.dependencies.insert("svelte".into(), package.id());
+        let mut lock = Lockfile::default();
+        lock.package.push(package);
+        lock.importers.insert(".".into(), importer);
+        lock.write(&root.path().join("ferrite.lock")).unwrap();
+        root
+    }
+
+    #[tokio::test]
+    async fn embedded_svelte_compiles_rune_modules_as_modules() {
+        let root = locked_project();
+        let host = EmbeddedSvelteCompilerHost::new(
+            root.path().into(),
+            root.path().join("ferrite.lock"),
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap();
+        let result = host
+            .compile(CompileRequest {
+                framework: Framework::Svelte,
+                filename: root.path().join("counter.svelte.ts"),
+                source: "let count: number = $state(0); export function increment() { count++; return count; }".into(),
+                target: CompileTarget::Client,
+                development: true,
+                module: true,
+            })
+            .await
+            .unwrap();
+        assert!(result.code.contains("increment"), "{}", result.code);
+        assert!(!result.code.contains(": number"), "{}", result.code);
+    }
 }
