@@ -356,6 +356,144 @@ async fn chromium_vue_embedded_offline_fixture_build_and_preview() {
 
 #[tokio::test]
 #[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
+async fn chromium_svelte_embedded_offline_fixture_dev_hmr() {
+    let binary = cli();
+    let (_registry, registry) = fixture_registry("svelte-registry").await;
+    let project = ferrite_test::TempProject::new(&[]);
+    let destination = project.root.join("app");
+    command(
+        &binary,
+        &project.root,
+        &[
+            "create",
+            destination.to_str().unwrap(),
+            "--framework",
+            "svelte",
+            "--language",
+            "ts",
+            "--rendering",
+            "client",
+            "--no-install",
+        ],
+        false,
+    )
+    .await;
+    let lock =
+        include_str!("fixtures/svelte.lock").replace("https://registry.npmjs.org", &registry);
+    std::fs::write(destination.join("ferrite.lock"), lock).unwrap();
+    command(
+        &binary,
+        &destination,
+        &["install", "--frozen-lockfile"],
+        false,
+    )
+    .await;
+
+    let executable = ferrite_e2e::find_chromium(None)
+        .expect("offline Svelte dev acceptance requires real Chromium");
+    let browser = Browser::launch(
+        LaunchOptions::default()
+            .browser(BrowserKind::Chromium)
+            .executable(executable),
+    )
+    .await
+    .unwrap();
+    let (mut dev, url) = server(&binary, &destination, "dev", false).await;
+    let page = browser.new_page().await.unwrap();
+    page.goto(&url).await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'count: 0' && getComputedStyle(document.querySelector('#counter')).color === 'rgb(128, 0, 0)'",
+        Duration::from_secs(30),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "offline embedded Svelte dev initial render: {error}; {:?}; {:?}",
+            page.page_errors(),
+            page.console_messages()
+        )
+    });
+    page.locator("#counter").click().await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'count: 1'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap();
+
+    let component = destination.join("src/App.svelte");
+    let source = std::fs::read_to_string(&component).unwrap();
+    let changed = source
+        .replace("count += 1", "count += 2")
+        .replace("count: {count}", "edited count: {count}")
+        .replace("rgb(128, 0, 0)", "rgb(0, 0, 128)");
+    assert_ne!(changed, source);
+    std::fs::write(&component, &changed).unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'edited count: 0' && getComputedStyle(document.querySelector('#counter')).color === 'rgb(0, 0, 128)'",
+        Duration::from_secs(30),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "offline embedded Svelte HMR update: {error}; {:?}; {:?}",
+            page.page_errors(),
+            page.console_messages()
+        )
+    });
+    page.locator("#counter").click().await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'edited count: 2'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap();
+
+    std::fs::write(
+        &component,
+        "<script lang='ts'>const broken: number = ;</script><button>broken</button>",
+    )
+    .unwrap();
+    page.wait_for_function(
+        "document.querySelector('#ferrite-error-overlay')?.textContent.length > 0",
+        Duration::from_secs(30),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "offline embedded Svelte error overlay: {error}; {:?}; {:?}",
+            page.page_errors(),
+            page.console_messages()
+        )
+    });
+    let overlay: String = page
+        .evaluate("document.querySelector('#ferrite-error-overlay').textContent")
+        .await
+        .unwrap();
+    assert!(overlay.contains("App.svelte"), "{overlay}");
+
+    let recovered = changed.replace("<button", "<button data-recovered=\"yes\"");
+    std::fs::write(&component, recovered).unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.dataset.recovered === 'yes' && document.querySelector('#counter')?.textContent === 'edited count: 0'",
+        Duration::from_secs(30),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "offline embedded Svelte HMR recovery: {error}; {:?}; {:?}",
+            page.page_errors(),
+            page.console_messages()
+        )
+    });
+
+    dev.kill().await.unwrap();
+    dev.wait().await.unwrap();
+    browser.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
 async fn chromium_svelte_embedded_offline_fixture_build_and_preview() {
     let binary = cli();
     let (_registry, registry) = fixture_registry("svelte-registry").await;
