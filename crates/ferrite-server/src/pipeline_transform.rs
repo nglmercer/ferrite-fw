@@ -769,13 +769,7 @@ impl DevServer {
                 } else {
                     resolved.id.0.clone()
                 };
-                if !base.is_empty()
-                    && base != "/"
-                    && url.starts_with('/')
-                    && !url
-                        .strip_prefix(base)
-                        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
-                {
+                if !base.is_empty() && base != "/" && url.starts_with('/') {
                     url = format!("{base}{url}");
                 }
                 mapping.insert(spec, url);
