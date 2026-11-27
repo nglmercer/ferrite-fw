@@ -458,3 +458,23 @@ async fn adding_ssr_route_rebuilds_instead_of_using_stale_server_manifest() {
         .iter()
         .any(|document| document.route.as_deref() == Some("/users/*")));
 }
+
+#[tokio::test]
+async fn removing_ssr_entry_discards_stale_server_output() {
+    let p = fixture();
+    let mut c = config(&p);
+    ferrite::Builder::new(c.clone(), vec![])
+        .build_app()
+        .await
+        .unwrap();
+    assert!(p.root.join("dist/server/renderer.json").is_file());
+    c.ssr.entry = None;
+    c.ssr.entries.clear();
+    ferrite::Builder::new(c, vec![]).build_app().await.unwrap();
+    assert!(
+        !p.root.join("dist/server/renderer.json").exists()
+            && !p.root.join("dist/server/manifest.json").exists(),
+        "integrated client-only rebuild must disable stale SSR output"
+    );
+    assert!(p.root.join("dist/index.html").is_file());
+}
