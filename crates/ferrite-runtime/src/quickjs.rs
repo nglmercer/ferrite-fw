@@ -30,10 +30,17 @@ struct ExecutionControl {
 
 impl ExecutionControl {
     fn new(timeout_ms: u64, shutdown: Arc<AtomicBool>) -> Self {
+        Self::with_deadline(
+            (timeout_ms != 0).then(|| Instant::now() + Duration::from_millis(timeout_ms)),
+            shutdown,
+        )
+    }
+
+    fn with_deadline(deadline: Option<Instant>, shutdown: Arc<AtomicBool>) -> Self {
         Self {
             cancelled: Arc::new(AtomicBool::new(false)),
             shutdown,
-            deadline: (timeout_ms != 0).then(|| Instant::now() + Duration::from_millis(timeout_ms)),
+            deadline,
         }
     }
 
@@ -212,16 +219,20 @@ impl QuickJsRuntime {
     }
 
     fn send(&self, job: Job) -> Result<CancelGuard> {
+        if self.shutdown.load(Ordering::Relaxed) {
+            return Err(FerriteError::Runtime("rquickjs worker shut down".into()));
+        }
+        let control = ExecutionControl::new(self.timeout_ms, self.shutdown.clone());
+        self.send_with_control(job, control)
+    }
+
+    fn send_with_control(&self, job: Job, control: ExecutionControl) -> Result<CancelGuard> {
         if job.payload_bytes() > self.max_request_bytes {
             return Err(FerriteError::Runtime(format!(
                 "rquickjs request payload exceeds {} bytes; reduce the graph/arguments or explicitly configure max_request_bytes",
                 self.max_request_bytes
             )));
         }
-        if self.shutdown.load(Ordering::Relaxed) {
-            return Err(FerriteError::Runtime("rquickjs worker shut down".into()));
-        }
-        let control = ExecutionControl::new(self.timeout_ms, self.shutdown.clone());
         let guard = CancelGuard(control.cancelled.clone());
         self.jobs
             .lock()
@@ -242,6 +253,38 @@ impl QuickJsRuntime {
         rx.await
             .map_err(|_| FerriteError::Runtime("rquickjs worker stopped".into()))?
             .map_err(FerriteError::Runtime)
+    }
+
+    async fn evaluate_module_graph_with_deadline(
+        &self,
+        graph: CompiledModuleGraph,
+        deadline: Option<Instant>,
+    ) -> Result<ModuleNamespace> {
+        graph.validate()?;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let control = ExecutionControl::with_deadline(deadline, self.shutdown.clone());
+        let _guard = self.send_with_control(Job::EvalGraph { graph, reply: tx }, control)?;
+        let json = self.receive(rx).await?;
+        namespace_from_json(&json)
+    }
+
+    async fn call_with_deadline(
+        &self,
+        handle: &JsHandle,
+        args: Vec<JsValue>,
+        deadline: Option<Instant>,
+    ) -> Result<JsValue> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let control = ExecutionControl::with_deadline(deadline, self.shutdown.clone());
+        let _guard = self.send_with_control(
+            Job::Call {
+                handle: handle.id,
+                args,
+                reply: tx,
+            },
+            control,
+        )?;
+        Ok(JsValue::from(self.receive::<serde_json::Value>(rx).await?))
     }
 }
 
@@ -301,7 +344,7 @@ impl JsRuntime for QuickJsRuntime {
         graph: CompiledModuleGraph,
         export: &str,
         args: Vec<JsValue>,
-        env: RuntimeEnvironment,
+        _env: RuntimeEnvironment,
     ) -> Result<JsStreamResponse> {
         graph.validate()?;
         const WRAPPER_ID: &str = "/@ferrite/stream-session";
@@ -329,31 +372,62 @@ impl JsRuntime for QuickJsRuntime {
         });
         graph.entry = WRAPPER_ID.into();
 
-        let namespace = self.evaluate_module_graph(graph, env).await?;
+        let payload = graph.entry.len()
+            + graph
+                .modules
+                .iter()
+                .map(|module| {
+                    module.id.len() + module.code.len() + module.url.as_deref().unwrap_or("").len()
+                })
+                .sum::<usize>()
+            + export.len()
+            + args.iter().map(js_value_bytes).sum::<usize>();
+        if payload > self.max_request_bytes {
+            return Err(FerriteError::Runtime(format!(
+                "rquickjs request payload exceeds {} bytes; reduce the graph/arguments or explicitly configure max_request_bytes",
+                self.max_request_bytes
+            )));
+        }
+
+        let request_timeout_ms = self.timeout_ms;
+        let deadline = (request_timeout_ms != 0)
+            .then(|| Instant::now() + Duration::from_millis(request_timeout_ms));
+        // A stream owns a dedicated worker so a later graph cannot retire the
+        // context that its `next` handle still references.
+        let runtime = QuickJsRuntime::new(QuickJsOptions {
+            request_timeout_ms,
+            queue_capacity: 1,
+            max_request_bytes: self.max_request_bytes,
+        });
+        let namespace = runtime
+            .evaluate_module_graph_with_deadline(graph, deadline)
+            .await?;
         let start = namespace.get_function("start")?.clone();
         let next = namespace.get_function("next")?.clone();
-        let head = self.call(&start, args).await?;
+        let head = runtime.call_with_deadline(&start, args, deadline).await?;
         crate::js_value_to_json(&head)?;
 
-        let runtime = self.clone();
-        let request_timeout_ms = self.timeout_ms;
-        let started = Instant::now();
+        struct StreamRuntimeGuard(QuickJsRuntime);
+        impl Drop for StreamRuntimeGuard {
+            fn drop(&mut self) {
+                self.0.shutdown();
+            }
+        }
+        let guard = StreamRuntimeGuard(runtime.clone());
         let body = futures::stream::try_unfold(
-            (runtime, next, started),
-            move |(runtime, next, started)| async move {
-                if request_timeout_ms != 0
-                    && started.elapsed() >= Duration::from_millis(request_timeout_ms)
-                {
+            (runtime, next, deadline, guard),
+            move |(runtime, next, deadline, guard)| async move {
+                if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                     return Err(FerriteError::Runtime(
                         "rquickjs stream deadline exceeded".into(),
                     ));
                 }
-                let value = runtime.call(&next, vec![]).await?;
+                let value = runtime.call_with_deadline(&next, vec![], deadline).await?;
                 let chunk = decode_stream_chunk(&value)?;
                 if chunk.done {
                     Ok(None)
                 } else {
-                    Ok(Some((chunk.bytes, (runtime, next, started))))
+                    Ok(Some((chunk.bytes, (runtime, next, deadline, guard))))
                 }
             },
         );
@@ -569,6 +643,22 @@ impl Engine {
                 ctx.eval::<(), _>(
                     r#"
 if (typeof console === 'undefined') globalThis.console = {log(){},info(){},warn(){},error(){},debug(){},trace(){}};
+if (typeof setTimeout === 'undefined') {
+  let ferriteNextTimerId = 1;
+  const ferriteCancelledTimers = new Set();
+  globalThis.setTimeout = function setTimeout(callback, delay, ...args) {
+    if (typeof callback !== 'function') throw new TypeError('setTimeout callback must be a function');
+    const id = ferriteNextTimerId++;
+    // QuickJS has no host timer thread. SSR renderers use timers as yield points,
+    // so schedule them cooperatively after pending jobs; deadline interruption
+    // remains the wall-clock bound.
+    queueMicrotask(() => { if (!ferriteCancelledTimers.has(id)) callback(...args); });
+    return id;
+  };
+  globalThis.clearTimeout = function clearTimeout(id) { ferriteCancelledTimers.add(id); };
+  globalThis.setInterval = function setInterval() { throw new TypeError('setInterval is unsupported in the SSR runtime'); };
+  globalThis.clearInterval = function clearInterval() {};
+}
 if (typeof TextEncoder === 'undefined') {
   class FerriteTextEncoder {
     encode(input) {
@@ -795,7 +885,9 @@ if (typeof globalThis.__ferriteStreamBytes === 'undefined') {
                 let mut out = serde_json::Map::new();
                 for key in object.keys::<String>().flatten() {
                     if let Ok(item) = object.get::<_, Value>(key.as_str()) {
-                        out.insert(key, self.json_value(&item, depth + 1));
+                        if !item.is_undefined() {
+                            out.insert(key, self.json_value(&item, depth + 1));
+                        }
                     }
                 }
                 return serde_json::Value::Object(out);
@@ -1109,5 +1201,151 @@ mod tests {
             error.to_string().contains("deadline") || error.to_string().contains("interrupted"),
             "{error}"
         );
+    }
+
+    #[tokio::test]
+    async fn quickjs_timeout_zero_timers_settle_renderer_promises() {
+        let runtime = QuickJsRuntime::with_defaults();
+        let result = runtime
+            .invoke_module_graph(
+                graph("export async function render() { return await new Promise(resolve => setTimeout(() => resolve('timer-ok'), 0)); }"),
+                "render",
+                vec![],
+                RuntimeEnvironment { ssr: true, request_id: None },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(result, JsValue::String(value) if value == "timer-ok"));
+    }
+
+    #[tokio::test]
+    async fn quickjs_concurrent_streams_do_not_retire_each_other() {
+        use futures::StreamExt;
+        let runtime = QuickJsRuntime::with_defaults();
+        let env = RuntimeEnvironment {
+            ssr: true,
+            request_id: None,
+        };
+        let source = r#"export function render(url) {
+          let index = 0;
+          const chunks = ['<' + url + '>', '</' + url + '>'];
+          return new ReadableStream({pull(controller) {
+            if (index < chunks.length) controller.enqueue(chunks[index++]);
+            else controller.close();
+          }});
+        }"#;
+        let mut first = runtime
+            .invoke_module_graph_stream(
+                graph(source),
+                "render",
+                vec![JsValue::String("one".into())],
+                env.clone(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(first.body.next().await.unwrap().unwrap(), b"<one>");
+        let mut second = runtime
+            .invoke_module_graph_stream(
+                graph(source),
+                "render",
+                vec![JsValue::String("two".into())],
+                env,
+            )
+            .await
+            .unwrap();
+        assert_eq!(second.body.next().await.unwrap().unwrap(), b"<two>");
+        assert_eq!(first.body.next().await.unwrap().unwrap(), b"</one>");
+        assert_eq!(second.body.next().await.unwrap().unwrap(), b"</two>");
+        assert!(first.body.next().await.is_none());
+        assert!(second.body.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn quickjs_stream_deadline_covers_all_body_reads() {
+        use futures::StreamExt;
+        let runtime = QuickJsRuntime::new(QuickJsOptions {
+            request_timeout_ms: 50,
+            ..Default::default()
+        });
+        let response = runtime
+            .invoke_module_graph_stream(
+                graph(
+                    r#"export function render() {
+                  return new ReadableStream({
+                    start(controller) { controller.enqueue('first'); },
+                    pull() { while (true) {} }
+                  });
+                }"#,
+                ),
+                "render",
+                vec![],
+                RuntimeEnvironment {
+                    ssr: true,
+                    request_id: None,
+                },
+            )
+            .await
+            .unwrap();
+        let chunks = response.body.collect::<Vec<_>>().await;
+        assert_eq!(chunks[0].as_ref().unwrap(), b"first");
+        let error = chunks[1].as_ref().unwrap_err().to_string();
+        assert!(
+            error.contains("deadline") || error.contains("interrupted"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn quickjs_omits_undefined_object_properties() {
+        let runtime = QuickJsRuntime::with_defaults();
+        let result = runtime
+            .invoke_module_graph(
+                graph("export function render() { return {html:'ok',status:undefined,headers:undefined}; }"),
+                "render",
+                vec![],
+                RuntimeEnvironment { ssr: true, request_id: None },
+            )
+            .await
+            .unwrap();
+        let JsValue::Object(object) = result else {
+            panic!("expected object")
+        };
+        assert!(object.contains_key("html"));
+        assert!(!object.contains_key("status"));
+        assert!(!object.contains_key("headers"));
+    }
+
+    #[tokio::test]
+    async fn quickjs_stream_payload_limit_is_combined() {
+        let graph = graph(&format!(
+            "export function render() {{ return '{}'; }}",
+            "g".repeat(900)
+        ));
+        let args = vec![JsValue::String("a".repeat(700))];
+        let runtime = QuickJsRuntime::new(QuickJsOptions {
+            max_request_bytes: 1400,
+            ..Default::default()
+        });
+        let result = runtime
+            .invoke_module_graph_stream(
+                graph,
+                "render",
+                args,
+                RuntimeEnvironment {
+                    ssr: true,
+                    request_id: None,
+                },
+            )
+            .await;
+        let error = match result {
+            Ok(_) => panic!("combined streaming payload must fail"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("payload exceeds"), "{error}");
+    }
+
+    #[test]
+    fn quickjs_counts_binary_payload_bytes_exactly() {
+        assert_eq!(js_value_bytes(&JsValue::Bytes(vec![0; 1024])), 1024);
     }
 }

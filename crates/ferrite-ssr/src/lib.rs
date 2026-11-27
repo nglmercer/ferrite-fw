@@ -267,14 +267,12 @@ mod tests {
 
     #[cfg(feature = "rquickjs")]
     #[tokio::test]
-    async fn configured_guest_depth_and_job_caps_fail_and_allow_recovery() {
+    async fn guest_stack_limit_fails_and_allows_recovery() {
         for (code, expected) in [
             ("function recurse() { return 1 + recurse(); } export function render() { return recurse(); }", "Maximum call stack"),
         ] {
             let mut resolved = test_resolved();
             resolved.runtime.backend = "rquickjs".into();
-            resolved.runtime.max_call_depth = 16;
-            resolved.runtime.max_jobs_per_drain = 16;
             let graph = ferrite_runtime::CompiledModuleGraph { entry: "limited".into(), modules: vec![CompiledModule { id: "limited".into(), code: code.into(), url: None }] };
             let mut adapter = JsSsrAdapter::from_resolved_graph(&resolved, graph.clone()).unwrap();
             let request = SsrHttpRequest { method: "GET".into(), uri: "/".into(), headers: Vec::new(), body: Vec::new() };
@@ -655,5 +653,63 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(missing.status, 404);
+    }
+
+    #[cfg(feature = "rquickjs")]
+    #[tokio::test]
+    async fn undefined_optional_response_fields_use_defaults() {
+        let mut resolved = test_resolved();
+        resolved.runtime.backend = "rquickjs".into();
+        let adapter = JsSsrAdapter::from_resolved(
+            &resolved,
+            CompiledModule {
+                id: "entry".into(),
+                code: "export function render() { return {html:'<h1>optional</h1>',status:undefined,headers:undefined}; }".into(),
+                url: None,
+            },
+        );
+        let response = adapter
+            .render(
+                SsrHttpRequest {
+                    method: "GET".into(),
+                    uri: "/".into(),
+                    headers: vec![],
+                    body: vec![],
+                },
+                Default::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status, 200);
+        assert_eq!(response.into_string().await.unwrap(), "<h1>optional</h1>");
+    }
+
+    #[cfg(feature = "rquickjs")]
+    #[tokio::test]
+    async fn unsupported_napi_execution_limits_fail_loudly() {
+        let mut resolved = test_resolved();
+        resolved.runtime.backend = "rquickjs".into();
+        resolved.runtime.max_call_depth = 16;
+        let adapter = JsSsrAdapter::from_resolved(
+            &resolved,
+            CompiledModule {
+                id: "entry".into(),
+                code: "export function render() { return 'x'; }".into(),
+                url: None,
+            },
+        );
+        let error = adapter
+            .render(
+                SsrHttpRequest {
+                    method: "GET".into(),
+                    uri: "/".into(),
+                    headers: vec![],
+                    body: vec![],
+                },
+                Default::default(),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("does not implement"), "{error}");
     }
 }

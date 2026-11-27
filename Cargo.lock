@@ -1122,6 +1122,7 @@ dependencies = [
  "ferrite-manifest",
  "ferrite-runtime",
  "futures",
+ "indexmap",
  "rmp-serde",
  "serde",
  "serde_json",

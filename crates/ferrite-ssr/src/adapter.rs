@@ -160,6 +160,17 @@ impl JsSsrAdapter {
     /// Create one configured runtime shared by route/document adapters.
     pub fn runtime_for_resolved(resolved: &ResolvedConfig) -> Arc<dyn JsRuntime> {
         #[cfg(feature = "rquickjs")]
+        if resolved.runtime.backend == "rquickjs"
+            && (resolved.runtime.max_call_depth != 0
+                || resolved.runtime.max_jobs_per_drain != 0
+                || !matches!(resolved.runtime.fuel_budget, 0 | u64::MAX)
+                || !matches!(resolved.runtime.loop_budget, 0 | u64::MAX))
+        {
+            return Arc::new(ferrite_runtime::UnavailableRuntime {
+                backend: "rquickjs does not implement napi-vm call-depth/job/fuel/loop limits; use request_timeout_ms, queue_capacity and max_request_bytes".into(),
+            });
+        }
+        #[cfg(feature = "rquickjs")]
         if resolved.runtime.backend == "rquickjs" && !resolved.runtime.native_allow.is_empty() {
             return Arc::new(ferrite_runtime::UnavailableRuntime {
                 backend: format!(
@@ -247,13 +258,27 @@ impl SsrAdapter for JsSsrAdapter {
             modules: vec![self.module.clone()],
         });
         // Keep the legacy URL argument, adding a lossless request payload.
-        // Bytes are an array rather than a lossy UTF-8 body conversion.
-        let request_value = JsValue::from(serde_json::json!({
-            "method": request.method,
-            "uri": request.uri,
-            "headers": request.headers,
-            "body": request.body,
-        }));
+        // Bytes stay binary here rather than a lossy UTF-8 body conversion.
+        let mut request_object = indexmap::IndexMap::new();
+        request_object.insert("method".into(), JsValue::String(request.method.clone()));
+        request_object.insert("uri".into(), JsValue::String(request.uri.clone()));
+        request_object.insert(
+            "headers".into(),
+            JsValue::Array(
+                request
+                    .headers
+                    .iter()
+                    .map(|(name, value)| {
+                        JsValue::Array(vec![
+                            JsValue::String(name.clone()),
+                            JsValue::String(value.clone()),
+                        ])
+                    })
+                    .collect(),
+            ),
+        );
+        request_object.insert("body".into(), JsValue::Bytes(request.body.clone()));
+        let request_value = JsValue::Object(request_object);
         if self.streaming {
             let stream = self
                 .runtime
