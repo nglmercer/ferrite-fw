@@ -384,7 +384,7 @@ pub fn vue_ssr_files(
     } else {
         "Node is explicitly required for the transitional official component compiler host."
     };
-    generated.insert("README.md".into(), format!("# {name}\n\nExperimental Vue {} SSR sources. Install dependencies through Ferrite.\n{compiler_note} Rendering uses\nthe separate in-process rquickjs backend and requires a Ferrite binary built with\nthat feature. Run ferrite ssr, ferrite build and ferrite preview.\nThe server entry renders App through Vue's real renderToString API; the client\nentry hydrates through createSSRApp. Transpilation does not perform type checking.\nDevelopment template/style updates retain state; script changes reset component state through Vue HMR.\nUse ferrite prerender --route / for static generation. Type-checker integration,\nstreaming and full framework/platform release matrices remain unfinished.\n", crate::registry::VUE_NODE.framework_version));
+    generated.insert("README.md".into(), format!("# {name}\n\nExperimental Vue {} SSR sources. Install dependencies through Ferrite.\n{compiler_note} Rendering uses\nthe separate in-process rquickjs backend and requires a Ferrite binary built with\nthat feature. Run ferrite ssr, ferrite build and ferrite preview.\nThe server entry renders App through Vue's real renderToString API; the client\nentry hydrates through createSSRApp. Transpilation does not perform type checking.\nDevelopment template/style updates retain state; script changes reset component state through Vue HMR.\nUse ferrite prerender --route / for static generation. Type-checker integration\nand full platform release matrices remain unfinished; streaming is an experimental\nopt-in through renderToWebStream.\n", crate::registry::VUE_NODE.framework_version));
     Ok(generated)
 }
 
@@ -431,7 +431,7 @@ pub fn react_ssr_files(
         "package.json".into(),
         format!("{}\n", serde_json::to_string_pretty(&manifest)?),
     );
-    generated.insert("README.md".into(), format!("# {name}\n\nExperimental React {REACT_VERSION} synchronous SSR. Run `ferrite install`,\n`ferrite ssr`, `ferrite build` and `ferrite preview`. Native compilation and the\nrquickjs renderer requires no Node executable. The server uses the public\nreact-dom/server.edge renderToString API; the client uses hydrateRoot.\nStreaming and cross-platform standalone acceptance remain unfinished.\nTypeScript transpilation does not perform type checking.\n"));
+    generated.insert("README.md".into(), format!("# {name}\n\nExperimental React {REACT_VERSION} synchronous SSR. Run `ferrite install`,\n`ferrite ssr`, `ferrite build` and `ferrite preview`. Native compilation and the\nrquickjs renderer requires no Node executable. The server uses the public\nreact-dom/server.edge renderToString API; the client uses hydrateRoot.\nStreaming is an experimental opt-in through renderToReadableStream; cross-platform\nstandalone acceptance remains unfinished. TypeScript transpilation does not perform type checking.\n"));
     Ok(generated)
 }
 
@@ -479,7 +479,7 @@ pub fn svelte_ssr_files(
     } else {
         "Node is explicitly required for the transitional official component compiler host."
     };
-    generated.insert("README.md".into(), format!("# {name}\n\nExperimental Svelte {} SSR. Run `ferrite install`, `ferrite ssr`,\n`ferrite build` and `ferrite preview`. {compiler_note} Rendering uses the separate rquickjs runtime.\nThe server uses svelte/server render; the client hydrates the existing DOM.\nDevelopment edits use official Svelte HMR and reset component state. Transpilation does not type-check.\nPlatform release matrices and streaming remain unfinished.\n", crate::registry::SVELTE_NODE.framework_version));
+    generated.insert("README.md".into(), format!("# {name}\n\nExperimental Svelte {} SSR. Run `ferrite install`, `ferrite ssr`,\n`ferrite build` and `ferrite preview`. {compiler_note} Rendering uses the separate rquickjs runtime.\nThe server uses svelte/server render; the client hydrates the existing DOM.\nDevelopment edits use official Svelte HMR and reset component state. Transpilation does not type-check.\nPlatform release matrices remain unfinished; pinned Svelte 5.39.6 has no public\nprogressive streaming SSR API.\n", crate::registry::SVELTE_NODE.framework_version));
     Ok(generated)
 }
 
