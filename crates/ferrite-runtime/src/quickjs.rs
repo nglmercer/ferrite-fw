@@ -82,6 +82,51 @@ impl Job {
     }
 }
 
+fn js_value_bytes(value: &JsValue) -> usize {
+    match value {
+        JsValue::Undefined | JsValue::Null => 4,
+        JsValue::Bool(_) => 1,
+        JsValue::Number(_) => 8,
+        JsValue::String(value) => value.len(),
+        JsValue::Bytes(bytes) => bytes.len(),
+        JsValue::Array(items) => items.iter().map(js_value_bytes).sum::<usize>() + 2,
+        JsValue::Object(map) => {
+            map.iter()
+                .map(|(key, value)| key.len() + js_value_bytes(value) + 2)
+                .sum::<usize>()
+                + 2
+        }
+        JsValue::Handle(_) => 8,
+    }
+}
+
+impl Job {
+    fn payload_bytes(&self) -> usize {
+        fn graph_bytes(graph: &CompiledModuleGraph) -> usize {
+            graph.entry.len()
+                + graph
+                    .modules
+                    .iter()
+                    .map(|module| {
+                        module.id.len()
+                            + module.code.len()
+                            + module.url.as_deref().unwrap_or("").len()
+                    })
+                    .sum::<usize>()
+        }
+        match self {
+            Self::EvalGraph { graph, .. } => graph_bytes(graph),
+            Self::InvokeGraph {
+                graph,
+                export,
+                args,
+                ..
+            } => graph_bytes(graph) + export.len() + args.iter().map(js_value_bytes).sum::<usize>(),
+            Self::Call { args, .. } => args.iter().map(js_value_bytes).sum::<usize>(),
+        }
+    }
+}
+
 struct Request {
     job: Job,
     control: ExecutionControl,
@@ -95,10 +140,24 @@ impl Drop for CancelGuard {
 }
 
 /// Options for the embedded QuickJS runtime.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct QuickJsOptions {
     /// End-to-end request timeout in milliseconds; zero means no timeout.
     pub request_timeout_ms: u64,
+    /// Maximum queued requests.
+    pub queue_capacity: usize,
+    /// Maximum serialized request payload bytes; zero uses 8 MiB.
+    pub max_request_bytes: usize,
+}
+
+impl Default for QuickJsOptions {
+    fn default() -> Self {
+        Self {
+            request_timeout_ms: 5000,
+            queue_capacity: 64,
+            max_request_bytes: 8 * 1024 * 1024,
+        }
+    }
 }
 
 /// QuickJS [`JsRuntime`] backend.
@@ -107,12 +166,18 @@ pub struct QuickJsRuntime {
     jobs: Arc<Mutex<Option<mpsc::SyncSender<Request>>>>,
     shutdown: Arc<AtomicBool>,
     timeout_ms: u64,
+    max_request_bytes: usize,
 }
 
 impl QuickJsRuntime {
     #[must_use]
     pub fn new(options: QuickJsOptions) -> Self {
-        let (tx, rx) = mpsc::sync_channel::<Request>(64);
+        let capacity = if options.queue_capacity == 0 {
+            64
+        } else {
+            options.queue_capacity
+        };
+        let (tx, rx) = mpsc::sync_channel::<Request>(capacity);
         let shutdown = Arc::new(AtomicBool::new(false));
         let worker_shutdown = shutdown.clone();
         thread::Builder::new()
@@ -124,6 +189,11 @@ impl QuickJsRuntime {
             jobs: Arc::new(Mutex::new(Some(tx))),
             shutdown,
             timeout_ms: options.request_timeout_ms,
+            max_request_bytes: if options.max_request_bytes == 0 {
+                8 * 1024 * 1024
+            } else {
+                options.max_request_bytes
+            },
         }
     }
 
@@ -142,6 +212,12 @@ impl QuickJsRuntime {
     }
 
     fn send(&self, job: Job) -> Result<CancelGuard> {
+        if job.payload_bytes() > self.max_request_bytes {
+            return Err(FerriteError::Runtime(format!(
+                "rquickjs request payload exceeds {} bytes; reduce the graph/arguments or explicitly configure max_request_bytes",
+                self.max_request_bytes
+            )));
+        }
         if self.shutdown.load(Ordering::Relaxed) {
             return Err(FerriteError::Runtime("rquickjs worker shut down".into()));
         }
@@ -235,7 +311,7 @@ impl JsRuntime for QuickJsRuntime {
             ));
         }
         let mut graph = graph;
-        let wrapper = include_str!("process/stream_wrapper.js")
+        let wrapper = include_str!("stream_wrapper.js")
             .replace(
                 "__ENTRY__",
                 &serde_json::to_string(&graph.entry)
@@ -1015,6 +1091,7 @@ mod tests {
     async fn quickjs_timeout_interrupts_guest_loop() {
         let runtime = QuickJsRuntime::new(QuickJsOptions {
             request_timeout_ms: 50,
+            ..Default::default()
         });
         let error = runtime
             .invoke_module_graph(

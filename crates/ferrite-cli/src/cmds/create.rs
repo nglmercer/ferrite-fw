@@ -82,7 +82,7 @@ pub(crate) async fn create(args: CreateArgs) -> ferrite::Result<()> {
     }
     let ssr_runtime_available = match profile.ssr_runtime {
         Some("rquickjs") => cfg!(feature = "rquickjs"),
-        Some("napi-vm") => cfg!(feature = "napi-vm"),
+        Some("napi-vm") | Some("napi-vm-process") => false,
         Some(_) | None => true,
     };
     if profile.ssr_runtime.is_some() && !ssr_runtime_available {
@@ -222,7 +222,7 @@ mod tests {
                     .contains("compiler_host = \"embedded\""));
             } else {
                 let error = create(request).await.unwrap_err();
-                assert!(error.to_string().contains("--features napi-vm"));
+                assert!(error.to_string().contains("--features rquickjs"));
                 assert!(!path.exists());
             }
             let path = root.path().join(format!("{framework}-node"));
@@ -299,7 +299,7 @@ mod tests {
                     .await
                     .unwrap_err()
                     .to_string()
-                    .contains("--features napi-vm"));
+                    .contains("--features rquickjs"));
                 assert!(!path.exists());
             }
         }

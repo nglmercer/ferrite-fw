@@ -1,8 +1,8 @@
 //! Tier-2 JS plugin host (spec §56–§57).
 //!
 //! [`JsPluginHost`] runs foreign (JS) plugins inside an embedded
-//! [`JsRuntime`](ferrite_runtime::JsRuntime) — e.g. napi-vm with feature
-//! `napi-vm` — and exposes the §56 hook bridge (`resolveId`, `load`,
+//! [`JsRuntime`](ferrite_runtime::JsRuntime) — e.g. rquickjs with feature
+//! `rquickjs` — and exposes the §56 hook bridge (`resolveId`, `load`,
 //! `transform`) through the §57 [`ForeignPluginHost`] interface.
 //!
 //! Guest contract: each hook is an exported function
@@ -290,13 +290,13 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "napi-vm")]
+    #[cfg(feature = "rquickjs")]
     #[tokio::test]
     async fn guest_transform_hook_runs() {
         let host = JsPluginHost::new(Arc::new(
-            ferrite_runtime::napi_vm::NapiVmRuntime::with_defaults(),
+            ferrite_runtime::quickjs::QuickJsRuntime::with_defaults(),
         ));
-        assert_eq!(host.backend(), "napi-vm");
+        assert_eq!(host.backend(), "rquickjs");
         host.register_plugin(
             "banner",
             CompiledModule {

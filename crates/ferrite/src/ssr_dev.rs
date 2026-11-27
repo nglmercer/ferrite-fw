@@ -85,7 +85,7 @@ pub fn inspect_capabilities(
     crate::frameworks::doctor::inspect_with_runtime(
         config,
         Some(
-            cfg!(feature = "napi-vm")
+            cfg!(feature = "rquickjs")
                 && ferrite_runtime::compiled_graph_backend_available(&config.runtime.backend),
         ),
     )
@@ -103,7 +103,7 @@ mod tests {
         )
         .unwrap();
         config.ssr.entry = Some("src/entry-server.ts".into());
-        for backend in ["napi-vm", "napi-vm-process", "node", "auto", "unknown"] {
+        for backend in ["rquickjs", "node", "auto", "unknown"] {
             config.runtime.backend = backend.into();
             let report = super::inspect_capabilities(&config).unwrap();
             let available = ferrite_runtime::compiled_graph_backend_available(backend);
@@ -126,7 +126,7 @@ mod tests {
                 let issue = issue.unwrap();
                 assert_eq!(issue.severity, "error");
                 assert!(issue.message.contains(backend));
-                assert!(issue.action.contains("--features napi-vm"));
+                assert!(issue.action.contains("--features rquickjs"));
             }
             assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
         }

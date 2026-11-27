@@ -368,7 +368,7 @@ pub(crate) fn write_built_ssr_documents(
     Ok(artifact)
 }
 
-#[cfg(all(test, feature = "napi-vm"))]
+#[cfg(all(test, feature = "rquickjs"))]
 mod tests {
     use super::*;
 
@@ -376,7 +376,8 @@ mod tests {
     async fn embedded_bytes_render_with_explicit_rootless_runtime_and_styles() {
         let bytes = br#"{"version":1,"graph":{"entry":"/entry.js","modules":[{"id":"/entry.js","code":"import { label } from '/label.js'; export function render(url, request) { return {html: `<h1>${label} ${request.method} ${url}</h1>`, status: 202, headers: [['x-renderer','embedded']]}; }","url":null},{"id":"/label.js","code":"export const label = 'embedded';","url":null}]},"stylesheets":["assets/style.css","assets/style.css"]}"#;
         let artifact = SsrRendererArtifact::from_bytes(bytes).unwrap();
-        let runtime = std::sync::Arc::new(ferrite_runtime::napi_vm::NapiVmRuntime::with_defaults());
+        let runtime =
+            std::sync::Arc::new(ferrite_runtime::quickjs::QuickJsRuntime::with_defaults());
         let adapter = artifact
             .into_adapter(
                 runtime,
@@ -439,7 +440,7 @@ mod tests {
                 Default::default(),
             )
             .unwrap();
-            config.runtime.backend = "napi-vm".into();
+            config.runtime.backend = "rquickjs".into();
             config.build.scope_hoist = scope_hoist;
             config.base = "/app/".into();
             std::fs::write(root.path().join("index.html"), "<html><head></head><body><main><!--ssr-outlet--></main><script type=\"module\" src=\"/src/main.js\"></script></body></html>").unwrap();
@@ -472,7 +473,7 @@ mod tests {
             )
             .unwrap();
             let runtime =
-                std::sync::Arc::new(ferrite_runtime::napi_vm::NapiVmRuntime::with_defaults());
+                std::sync::Arc::new(ferrite_runtime::quickjs::QuickJsRuntime::with_defaults());
             let adapter = embedded_artifact
                 .into_adapter(runtime, "<!--ssr-outlet-->".into(), &config.base)
                 .unwrap();

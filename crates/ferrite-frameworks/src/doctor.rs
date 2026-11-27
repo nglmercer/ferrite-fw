@@ -630,7 +630,7 @@ mod tests {
         assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
     }
     #[test]
-    fn embedded_vue_availability_matches_napi_vm_build() {
+    fn embedded_vue_availability_matches_rquickjs_build() {
         let root = tempfile::tempdir().unwrap();
         let user = UserConfig {
             framework: Some(FrameworkConfig {

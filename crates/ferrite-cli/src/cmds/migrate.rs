@@ -40,7 +40,7 @@ pub(crate) async fn migrate(args: MigrateArgs) -> ferrite::Result<()> {
         out.push_str(&format!("sourcemap = {map}\n"));
     }
     if text.contains("plugins") {
-        warnings.push("plugins: prefer Rust equivalents; JS plugins can run through the tier-2 host (`ferrite_plugin::js_host`, `--features napi-vm`, hooks resolveId/load/transform)");
+        warnings.push("plugins: prefer Rust equivalents; JS plugins can run through the tier-2 host (`ferrite_plugin::js_host`, `--features rquickjs`, hooks resolveId/load/transform)");
     }
     if text.contains("defineConfig") {
         // fine

@@ -11,7 +11,7 @@ async fn main() {
         panic!("standalone renderer requires runtime.backend = rquickjs");
     }
     let engine: Arc<dyn ferrite::runtime::JsRuntime> = Arc::new(ferrite::runtime::quickjs::QuickJsRuntime::new(
-        ferrite::runtime::quickjs::QuickJsOptions { request_timeout_ms: runtime.request_timeout_ms },
+        ferrite::runtime::quickjs::QuickJsOptions { request_timeout_ms: runtime.request_timeout_ms, queue_capacity: runtime.queue_capacity, max_request_bytes: runtime.max_request_bytes },
     ));
     let artifact = ferrite::SsrRendererArtifact::from_bytes(include_bytes!("renderer.json")).expect("embedded renderer artifact");
     let shell = if artifact.requires_default_shell() {

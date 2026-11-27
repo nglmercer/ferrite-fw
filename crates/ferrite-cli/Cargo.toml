@@ -19,7 +19,6 @@ serde_json = { workspace = true }
 
 [features]
 rquickjs = ["ferrite/rquickjs"]
-napi-vm = ["ferrite/napi-vm"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

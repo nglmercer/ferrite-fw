@@ -47,12 +47,6 @@ rquickjs = [
     "ferrite-plugin/rquickjs",
     "ferrite-frameworks/rquickjs",
 ]
-napi-vm = [
-    "ferrite-runtime/napi-vm",
-    "ferrite-ssr/napi-vm",
-    "ferrite-plugin/napi-vm",
-    "ferrite-frameworks/napi-vm",
-]
 swc = [
     "ferrite-bundler/swc",
     "ferrite-server/swc",

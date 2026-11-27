@@ -16,15 +16,11 @@ libc = { version = "0.2", optional = true }
 # Opt-in embedded JS + Node-API runtime. Pinned git rev; pure-Rust core only
 # (no N-API build layer) plus the in-process Node-API addon host. Timer
 # globals are selected explicitly from the matching runtime crate below.
-napi-vm = { package = "napi-vm-core", git = "https://github.com/nglmercer/napi-vm", rev = "7362971e7781c0c57b36c5a11813fff0e6bc3521", default-features = false, features = ["node-api-host"], optional = true }
 
 # Explicit timer/microtask host APIs moved out of the interpreter core.
-napi-vm-host = { package = "napi-vm-runtime", git = "https://github.com/nglmercer/napi-vm", rev = "7362971e7781c0c57b36c5a11813fff0e6bc3521", default-features = false, features = ["runtime-web"], optional = true }
 
 rquickjs = { version = "0.14", default-features = false, features = ["std", "loader", "array-buffer", "parallel"], optional = true }
 
 [features]
 default = []
 rquickjs = ["dep:rquickjs"]
-# Disabled by default: embedded JS execution + in-process `.node` loading.
-napi-vm = ["dep:napi-vm", "dep:napi-vm-host", "dep:libc"]

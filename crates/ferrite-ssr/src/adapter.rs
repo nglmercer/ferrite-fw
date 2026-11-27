@@ -9,8 +9,6 @@ use ferrite_runtime::JsRuntime;
 use ferrite_runtime::JsValue;
 use ferrite_runtime::RuntimeEnvironment;
 use ferrite_runtime::{CompiledModule, CompiledModuleGraph};
-#[cfg(feature = "napi-vm")]
-use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Framework SSR adapter (§46).
@@ -150,10 +148,9 @@ impl JsSsrAdapter {
 
     /// Build from resolved config.
     ///
-    /// The `napi-vm` backend maps fuel/loop budgets plus the native
-    /// allowlist/integrity pins onto the worker; every other name goes
-    /// through [`runtime_for_backend`] (unknown or unavailable backends
-    /// fail loudly at render, never silently).
+    /// The `rquickjs` backend maps the configured request timeout onto the
+    /// worker; every other name goes through [`runtime_for_backend`]
+    /// (unknown or unavailable backends fail loudly at render, never silently).
     #[must_use]
     pub fn from_resolved(resolved: &ResolvedConfig, module: CompiledModule) -> Self {
         Self::new(Self::runtime_for_resolved(resolved), module)
@@ -163,57 +160,23 @@ impl JsSsrAdapter {
     /// Create one configured runtime shared by route/document adapters.
     pub fn runtime_for_resolved(resolved: &ResolvedConfig) -> Arc<dyn JsRuntime> {
         #[cfg(feature = "rquickjs")]
+        if resolved.runtime.backend == "rquickjs" && !resolved.runtime.native_allow.is_empty() {
+            return Arc::new(ferrite_runtime::UnavailableRuntime {
+                backend: format!(
+                    "rquickjs native addon `{}` is unsupported; native .node loading was removed with napi-vm",
+                    resolved.runtime.native_allow[0]
+                ),
+            });
+        }
+        #[cfg(feature = "rquickjs")]
         if resolved.runtime.backend == "rquickjs" {
             return Arc::new(ferrite_runtime::quickjs::QuickJsRuntime::new(
                 ferrite_runtime::quickjs::QuickJsOptions {
                     request_timeout_ms: resolved.runtime.request_timeout_ms,
+                    queue_capacity: resolved.runtime.queue_capacity,
+                    max_request_bytes: resolved.runtime.max_request_bytes,
                 },
             ));
-        }
-        #[cfg(feature = "napi-vm")]
-        if resolved.runtime.backend == "napi-vm"
-            || (resolved.runtime.backend == "napi-vm-process" && cfg!(target_os = "linux"))
-        {
-            let mut options = ferrite_runtime::napi_vm::NapiVmOptions {
-                roots: vec![resolved.root.clone()],
-                max_call_depth: resolved.runtime.max_call_depth,
-                max_jobs_per_drain: resolved.runtime.max_jobs_per_drain,
-                request_timeout_ms: resolved.runtime.request_timeout_ms,
-                shutdown_timeout_ms: resolved.runtime.shutdown_timeout_ms,
-                queue_capacity: resolved.runtime.queue_capacity,
-                max_request_bytes: resolved.runtime.max_request_bytes,
-                fuel_budget: resolved.runtime.fuel_budget,
-                loop_budget: resolved.runtime.loop_budget,
-                ..Default::default()
-            };
-            for entry in &resolved.runtime.native_allow {
-                options
-                    .native_allow
-                    .push(ferrite_runtime::napi_vm::NativeAddonAllow {
-                        path: PathBuf::from(entry),
-                        sha256_hex: resolved.runtime.native_integrity.get(entry).cloned(),
-                    });
-            }
-            let runtime: Arc<dyn JsRuntime> = {
-                #[cfg(target_os = "linux")]
-                if resolved.runtime.backend == "napi-vm-process" {
-                    Arc::new(ferrite_runtime::process::ProcessRuntime::new(
-                        ferrite_runtime::process::ProcessOptions {
-                            engine: options,
-                            memory_limit_bytes: resolved.runtime.process_memory_limit_bytes,
-                            concurrency: resolved.runtime.process_concurrency,
-                            ..Default::default()
-                        },
-                    ))
-                } else {
-                    Arc::new(ferrite_runtime::napi_vm::NapiVmRuntime::new(options))
-                }
-                #[cfg(not(target_os = "linux"))]
-                {
-                    Arc::new(ferrite_runtime::napi_vm::NapiVmRuntime::new(options))
-                }
-            };
-            return runtime;
         }
         runtime_for_backend(&resolved.runtime.backend)
     }
