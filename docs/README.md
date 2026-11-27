@@ -7,8 +7,10 @@ for a first application.
 ## Current completion gates
 
 [Completion plan](COMPLETION_PLAN.md) records the current work packages and
-explicit acceptance runner. `IMPLEMENTATION_STATUS.md` retains historical evidence;
-older remaining-work paragraphs are not a current consolidated backlog.
+explicit acceptance runner. The [Rust-only all-in-one plan](RUST_ONLY_ALL_IN_ONE_PLAN.md)
+sequences the remaining work toward a self-contained Vite alternative.
+`IMPLEMENTATION_STATUS.md` retains historical evidence; older remaining-work
+paragraphs are not a current consolidated backlog.
 
 ## Framework guides
 

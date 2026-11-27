@@ -3,7 +3,9 @@
 This is the current consolidated backlog. `IMPLEMENTATION_STATUS.md` is an
 append-only history: its older “remaining” paragraphs describe earlier commits.
 A checked item means the named behavior has implementation and regression
-coverage. It does not promote a whole framework or platform profile.
+coverage. It does not promote a whole framework or platform profile. The
+sequenced product roadmap for a self-contained Rust-only Vite alternative is in
+[RUST_ONLY_ALL_IN_ONE_PLAN.md](RUST_ONLY_ALL_IN_ONE_PLAN.md).
 
 ## Current application profiles
 
