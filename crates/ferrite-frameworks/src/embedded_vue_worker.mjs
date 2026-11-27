@@ -108,6 +108,7 @@ function validateCssBlocks(source, filename, start) {
     }
     if (char === '/' && next === '*') { comment = true; index++; continue; }
     if (char === '"' || char === "'") { quote = char; continue; }
+    if (char === '\\') { index++; continue; }
     if (char === '{') depth++;
     if (char === '}') depth--;
   }
