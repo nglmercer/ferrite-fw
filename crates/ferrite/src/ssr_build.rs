@@ -353,7 +353,13 @@ pub(crate) fn write_built_ssr_documents(
     config: &ferrite_config::ResolvedConfig,
 ) -> Result<SsrRendererArtifact> {
     let mut artifact = write_built_ssr_artifact(server_dir)?;
-    crate::ssr_documents::write_documents(&mut artifact, server_dir, config)?;
+    if config.out_dir().join("manifest.json").is_file() {
+        crate::ssr_documents::write_documents(&mut artifact, server_dir, config)?;
+    } else if !config.ssr.entries.is_empty() || config.ssr.shell.is_some() {
+        tracing::warn!(
+            "skipping SSR document shells because client output is missing; run a client build or use build_app for the integrated document artifact"
+        );
+    }
     artifact.validate()?;
     std::fs::write(
         server_dir.join(SsrRendererArtifact::FILE_NAME),
