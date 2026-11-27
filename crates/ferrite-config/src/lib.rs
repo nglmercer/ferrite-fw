@@ -2305,7 +2305,11 @@ pub fn resolve_js_server_entry(config: &ResolvedConfig) -> Result<Option<String>
         if !ferrite_core::ModuleType::from_path(entry).is_js_like() {
             return Err(FerriteError::Build(format!("configured SSR entry `{entry}` requires a JavaScript/TypeScript module; Rust entries are unavailable in the JavaScript server pipeline")));
         }
-        return Ok(Some(entry.to_string()));
+        let mut normalized = entry;
+        while let Some(rest) = normalized.strip_prefix("./") {
+            normalized = rest;
+        }
+        return Ok(Some(normalized.to_string()));
     }
     for candidate in [
         "src/entry-server.ts",
@@ -2350,6 +2354,11 @@ mod server_entry_tests {
             )
             .unwrap();
             config.ssr.entry = Some("custom.ts".into());
+            assert_eq!(
+                resolve_js_server_entry(&config).unwrap(),
+                Some("custom.ts".into())
+            );
+            config.ssr.entry = Some("./custom.ts".into());
             assert_eq!(
                 resolve_js_server_entry(&config).unwrap(),
                 Some("custom.ts".into())
