@@ -1,7 +1,8 @@
 # Generated-app package fixtures
 
-`react.lock`/`react-registry/`, `vue.lock`/`vue-registry/` and
-`svelte.lock`/`svelte-registry/` contain the pinned React, Vue and Svelte acceptance closures used by the offline generated-app
+`react.lock`/`react-registry/`, `vue.lock`/`vue-registry/`,
+`svelte.lock`/`svelte-registry/` and `framework.lock`/`framework-registry/`
+contain the pinned React, Vue, Svelte and combined-framework acceptance closures used by the offline generated-app
 tests. The tarballs are unmodified npm artifacts for React 19.2.0, React DOM
 19.2.0, React Refresh 0.17.0, Vue 3.5.22, Svelte 5.39.6, TypeScript 5.9.3 and
 their locked transitive/type dependencies. Tests serve them from a
