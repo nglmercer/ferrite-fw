@@ -1,5 +1,5 @@
 //! Explicit official compiler integration with the shared dev/build pipeline.
-use crate::compiler_host::{CompileRequest, CompileTarget, Framework, NodeCompilerHost};
+use crate::compiler_host::{CompileRequest, CompileTarget, Framework, FrameworkCompiler};
 use ferrite_core::{FerriteError, ModuleId, ModuleType, Result, SourceMap};
 use ferrite_plugin::{Enforce, LoadRequest, LoadResult, Plugin, PluginContext, ResolveHookRequest};
 use std::sync::Arc;
@@ -9,11 +9,11 @@ use std::sync::Arc;
 /// protocol; SSR and production exclude HMR. The host supplies no SSR runtime.
 pub struct HostedFrameworkPlugin {
     framework: Framework,
-    host: Arc<NodeCompilerHost>,
+    host: Arc<dyn FrameworkCompiler>,
     development: bool,
 }
 impl HostedFrameworkPlugin {
-    pub fn new(framework: Framework, host: Arc<NodeCompilerHost>, development: bool) -> Self {
+    pub fn new(framework: Framework, host: Arc<dyn FrameworkCompiler>, development: bool) -> Self {
         Self {
             framework,
             host,
@@ -98,8 +98,9 @@ impl Plugin for HostedFrameworkPlugin {
     }
     fn cache_key(&self) -> String {
         format!(
-            "{}:node:{}:development={}:resources-v1",
+            "{}:{}:{}:development={}:resources-v1",
             self.name(),
+            self.host.host_kind(),
             self.host.cache_identity(),
             self.development
         )

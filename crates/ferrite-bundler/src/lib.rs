@@ -21,9 +21,18 @@ pub use bundle::{BuildBundleConfig, BundleOutput, BundleRequest, BundleStats, Bu
 pub use bundler::FerriteBundler;
 pub use chunks::{chunk_name, relative_url};
 pub use emit::rewrite_imports_text;
-pub use hooks::{BundleHooks, NoHooks};
+pub use hooks::{BundleHooks, NoHooks, RenderChunkOutput};
 pub use loader::{CssExtract, LoadedModule, ModuleLoader};
 pub use shake::{shake_statements, tree_shake, used_exports, UsedExports};
+
+/// Marker replaced with the emitted worker chunk URL during production output.
+///
+/// Worker constructors are not module imports in the main thread, so their
+/// target URL cannot be rewritten by import-specifier rewriting alone.
+#[must_use]
+pub fn worker_url_placeholder(id: &ferrite_core::ModuleId) -> String {
+    format!("__FERRITE_WORKER_URL__:{}", id.0)
+}
 
 #[cfg(test)]
 mod tests {
@@ -994,8 +1003,11 @@ mod tests {
             _id: &str,
             code: String,
             _is_entry: bool,
-        ) -> Result<Option<String>> {
-            Ok(Some(format!("{code}\n// rendered\n")))
+        ) -> Result<Option<RenderChunkOutput>> {
+            Ok(Some(RenderChunkOutput {
+                code: format!("{code}\n// rendered\n"),
+                map: None,
+            }))
         }
 
         async fn chunk_hash_extra(&self, _chunk_id: &str) -> Result<Vec<String>> {

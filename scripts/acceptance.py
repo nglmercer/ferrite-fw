@@ -85,6 +85,35 @@ def plan(profile):
             commands.append(["cargo", "test", "--locked", "-p", "ferrite-test", "--features", "napi-vm", "--test", "production_closure", name, "--", "--exact"])
         for engine in ("chromium", "firefox"):
             commands.append(exact("ferrite-test", "production_closure", f"{engine}_lazy_css_shared_chunks_assets_and_retry", "napi-vm"))
+    if profile in ("rust-only", "all"):
+        commands.append(["cargo", "build", "--locked", "-p", "ferrite-cli", "--features", "napi-vm"])
+        commands.append(exact("ferrite-test", "generated_apps", "rust_only_inspect_reports_compiler_hosts", "napi-vm"))
+        commands.append(exact("ferrite-test", "generated_apps", "chromium_react_offline_fixture_dev_refresh_preserves_state", "napi-vm"))
+        commands.append(exact("ferrite-test", "generated_apps", "chromium_react_offline_fixture_build_and_preview", "napi-vm"))
+        commands.append(exact("ferrite-test", "generated_apps", "chromium_react_offline_fixture_ssr_build_and_preview", "napi-vm"))
+        commands.append(exact("ferrite-test", "production_closure", "chromium_worker_query_production_execution", "napi-vm"))
+        commands.append(exact("ferrite-test", "production_closure", "chromium_wasm_query_production_execution", "napi-vm"))
+        for name in (
+            "chromium_react_refresh_dom",
+            "chromium_react_refresh_wrapped",
+            "chromium_react_refresh_imported_hook",
+            "chromium_react_refresh_hook_barrel",
+            "chromium_react_refresh_default_named",
+            "chromium_react_refresh_default_anonymous_memo",
+            "chromium_react_refresh_mixed_exports",
+        ):
+            commands.append(exact("ferrite-test", "generated_apps", name, "napi-vm"))
+        commands.append(exact("ferrite-test", "generated_apps", "chromium_vue_embedded_offline_fixture_ssr_build_and_preview", "napi-vm"))
+        commands.append(exact("ferrite-test", "ssr_islands", "chromium_framework_islands_dev_preview_and_static", "napi-vm"))
+        commands.append(exact("ferrite-test", "generated_apps", "chromium_svelte_embedded_offline_fixture_dev_hmr", "napi-vm"))
+        commands.append(exact("ferrite-test", "generated_apps", "chromium_svelte_embedded_offline_fixture_ssr_build_and_preview", "napi-vm"))
+        for engine in ("chromium", "firefox"):
+            commands.append(exact("ferrite-test", "generated_apps", f"{engine}_generated_profiles", "napi-vm"))
+        commands.append(exact("ferrite-test", "standalone", "standalone_ssr_build_compiles_and_renders_without_node", "napi-vm"))
+        if sys.platform.startswith("linux"):
+            commands.append(exact("ferrite-test", "ssr_documents", "cli_streamed_documents_prerender_without_node", "napi-vm"))
+            for name in ("standalone_process_runtime_renders_and_recovers_without_node", "standalone_streaming_renders_and_recovers_without_node"):
+                commands.append(exact("ferrite-test", "standalone", name, "napi-vm"))
     if profile in ("standalone", "all"):
         for name in ("standalone_build_compiles_and_serves", "standalone_ssr_build_compiles_and_renders_without_node"):
             commands.append(exact("ferrite-test", "standalone", name, "napi-vm"))
@@ -117,12 +146,40 @@ def run(args):
         print(json.dumps(commands, indent=2))
         return 0
     env = dict(os.environ)
-    if args.profile in ("core", "frameworks", "production", "ssr", "e2e", "all"):
-        for variable, names in (("FERRITE_CHROMIUM_PATH", ("chromium", "google-chrome", "chrome-headless-shell")), ("FERRITE_FIREFOX_PATH", ("firefox",))):
-            binary = env.get(variable) or next((path for name in names if (path := shutil.which(name))), None)
+    if args.profile in ("core", "frameworks", "production", "ssr", "e2e", "rust-only", "all"):
+        browser_locations = (
+            (
+                "FERRITE_CHROMIUM_PATH",
+                ("chromium", "google-chrome", "google-chrome-stable", "chromium-browser", "chrome", "headless_shell", "chrome-headless-shell"),
+                (
+                    "/usr/bin/chromium",
+                    "/usr/bin/chromium-browser",
+                    "/usr/bin/google-chrome",
+                    "/usr/bin/google-chrome-stable",
+                    "/snap/bin/chromium",
+                    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+                    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+                ),
+            ),
+            (
+                "FERRITE_FIREFOX_PATH",
+                ("firefox", "firefox-esr"),
+                (
+                    "/usr/bin/firefox",
+                    "/usr/bin/firefox-esr",
+                    "/snap/bin/firefox",
+                    "/Applications/Firefox.app/Contents/MacOS/firefox",
+                    "C:\\Program Files\\Mozilla Firefox\\firefox.exe",
+                    "C:\\Program Files (x86)\\Mozilla Firefox\\firefox.exe",
+                ),
+            ),
+        )
+        for variable, names, paths in browser_locations:
+            binary = env.get(variable) or next((path for name in names if (path := shutil.which(name))), None) or next((path for path in paths if Path(path).is_file()), None)
             if not binary or not Path(binary).is_file():
                 raise RuntimeError(f"required real browser missing: set {variable}; no gate was run")
-            env[variable] = str(Path(binary).resolve())
+            env[variable] = str(Path(binary).absolute())
         env["FERRITE_E2E_REQUIRE_BOTH_BROWSERS"] = "1"
     if args.profile in ("frameworks", "ssr", "all"):
         if not shutil.which("node"):
@@ -177,7 +234,7 @@ def run(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--profile", choices=("core", "runtime", "frameworks", "production", "ssr", "standalone", "e2e", "all"), default="runtime")
+    parser.add_argument("--profile", choices=("core", "runtime", "frameworks", "production", "ssr", "standalone", "e2e", "rust-only", "all"), default="runtime")
     parser.add_argument("--list", action="store_true")
     parser.add_argument("--report", type=Path, default=ROOT / ".ferrite/acceptance/report.json")
     parser.add_argument("--timeout", type=int, default=1800, help="maximum seconds per gate")

@@ -582,11 +582,13 @@ impl PluginContainer {
         chunk: RenderChunk,
     ) -> Result<RenderChunkResult> {
         let mut code = chunk.code.clone();
-        let mut map = None;
+        let mut map: Option<ferrite_core::SourceMap> = None;
+        let mut chain_broken = false;
         for plugin in &self.plugins {
+            let input = code.clone();
             let hook_chunk = RenderChunk {
                 id: chunk.id.clone(),
-                code: code.clone(),
+                code: input.clone(),
                 is_entry: chunk.is_entry,
             };
             if let Some(result) = plugin
@@ -594,12 +596,35 @@ impl PluginContainer {
                 .await
                 .map_err(|error| wrap(plugin, "render_chunk", error))?
             {
-                if let Some(replacement) = result.code {
-                    code = replacement;
+                let replacement = result.code.clone().unwrap_or_else(|| input.clone());
+                let changed = replacement != input;
+                if let Some(next) = result.map {
+                    if next.inline {
+                        return Err(wrap(
+                            plugin,
+                            "render_chunk",
+                            ferrite_core::FerriteError::Build(
+                                "render_chunk maps must be external JSON, not inline data URLs"
+                                    .into(),
+                            ),
+                        ));
+                    }
+                    if !chain_broken {
+                        let chained = match &map {
+                            Some(existing) => ferrite_transform::chain_source_maps(
+                                &next.mappings,
+                                &existing.mappings,
+                            )
+                            .map_err(|error| wrap(plugin, "render_chunk", error))?,
+                            None => next.mappings,
+                        };
+                        map = Some(ferrite_core::SourceMap::external(chained));
+                    }
+                } else if changed {
+                    chain_broken = true;
+                    map = None;
                 }
-                if result.map.is_some() {
-                    map = result.map;
-                }
+                code = replacement;
             }
         }
         Ok(RenderChunkResult {

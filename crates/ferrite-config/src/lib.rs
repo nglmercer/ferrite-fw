@@ -99,7 +99,7 @@ impl Default for FrameworkConfig {
             enabled: Vec::new(),
             compiler_host: None,
             node: None,
-            timeout_ms: 10_000,
+            timeout_ms: 30_000,
         }
     }
 }
@@ -121,8 +121,14 @@ impl FrameworkConfig {
             if self.enabled.len() != 1 || self.compiler_host.as_deref() != Some("native") {
                 return Err(FerriteError::Config("React requires framework.compiler_host = \"native\"; mixed native/Node framework profiles are unavailable in one framework configuration; SSR runtime is separate".into()));
             }
-        } else if !self.enabled.is_empty() && self.compiler_host.as_deref() != Some("node") {
-            return Err(FerriteError::Config("official framework compilation requires explicit framework.compiler_host = \"node\"; native and embedded compiler profiles are unavailable; SSR runtime is configured separately".into()));
+        } else if !self.enabled.is_empty() {
+            match self.compiler_host.as_deref() {
+                Some("node") => {}
+                Some("embedded") => {}
+                _ => {
+                    return Err(FerriteError::Config("official framework compilation requires explicit framework.compiler_host = \"node\" or \"embedded\"; SSR runtime is configured separately".into()));
+                }
+            }
         }
         if self.timeout_ms == 0 || self.timeout_ms > 300_000 {
             return Err(FerriteError::Config(
@@ -1815,7 +1821,6 @@ mod tests {
         let parse = |text: &str| toml::from_str::<UserConfig>(text).unwrap();
         for text in [
             "[framework]\nenabled=['vue']",
-            "[framework]\nenabled=['vue']\ncompiler_host='embedded'",
             "[framework]\nenabled=['angular']\ncompiler_host='node'",
             "[framework]\nenabled=['vue','vue']\ncompiler_host='node'",
             "[framework]\nenabled=['svelte']\ncompiler_host='node'\ntimeout_ms=0",
@@ -1828,6 +1833,20 @@ mod tests {
                 "{text}"
             );
         }
+        let embedded = resolve_config(
+            parse(
+                "[framework]
+enabled=['vue']
+compiler_host='embedded'",
+            ),
+            None,
+            CliOverrides::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            embedded.framework.unwrap().compiler_host.as_deref(),
+            Some("embedded")
+        );
         let enabled = parse(
             "[framework]\nenabled=['vue','svelte']\ncompiler_host='node'\n[runtime]\nbackend='boa'",
         );

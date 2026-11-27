@@ -661,18 +661,24 @@ impl DevServer {
                 ModuleType::Js,
             ))),
             "url" => {
-                // `resolveFileUrl` may rewrite the public URL.
-                let url = self
-                    .inner
-                    .plugins
-                    .hook_resolve_file_url(
-                        ctx,
-                        ferrite_plugin::ResolveFileUrlRequest {
-                            file_name: path_part.to_string(),
-                        },
-                    )
-                    .await?
-                    .unwrap_or_else(|| path_part.to_string());
+                // Development `resolveFileUrl` may rewrite the public URL. In
+                // production the build loader emits hashed bytes first and runs
+                // the hook with that output name, so the shim must retain the
+                // source URL here as a replaceable input.
+                let url = if self.inner.config.is_production {
+                    path_part.to_string()
+                } else {
+                    self.inner
+                        .plugins
+                        .hook_resolve_file_url(
+                            ctx,
+                            ferrite_plugin::ResolveFileUrlRequest {
+                                file_name: path_part.to_string(),
+                            },
+                        )
+                        .await?
+                        .unwrap_or_else(|| path_part.to_string())
+                };
                 Ok(Some(PipelineModule::code_only(
                     id.clone(),
                     asset_to_js(&url),
@@ -692,7 +698,7 @@ impl DevServer {
             }
             "worker" => {
                 let js = format!(
-                    "export default class FerriteWorker extends Worker {{\n  constructor(options) {{\n    super({path_part:?}, {{ type: \"module\", ...options }});\n  }}\n}}\n"
+                    "export default class FerriteWorker extends Worker {{\n  constructor(options) {{\n    super(new URL({path_part:?}, import.meta.url).href, {{ type: \"module\", ...options }});\n  }}\n}}\n"
                 );
                 Ok(Some(PipelineModule::code_only(
                     id.clone(),

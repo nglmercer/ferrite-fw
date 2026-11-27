@@ -112,8 +112,26 @@ function clearError() {
   document.getElementById("ferrite-error-overlay")?.remove();
 }
 
-async function fetchUpdate(path, timestamp) {
+function directCssUrl(path) {
+  if (!path.includes("?")) return false;
+  return path.slice(path.indexOf("?") + 1).split("&").some(part => part === "direct");
+}
+
+function updateDirectCss(path, url) {
+  for (const link of document.querySelectorAll('link[rel="stylesheet"]')) {
+    const href = new URL(link.href, location.href);
+    const local = `${href.pathname}${href.search}`;
+    if (local === path || local.startsWith(`${path}&t=`)) {
+      link.href = url;
+      return true;
+    }
+  }
+  return false;
+}
+
+async function fetchUpdate(path, timestamp, css = false) {
   const url = `${path}${path.includes("?") ? "&" : "?"}t=${timestamp}`;
+  if (css && directCssUrl(path) && updateDirectCss(path, url)) return null;
   return await import(/* @vite-ignore */ url);
 }
 
@@ -154,7 +172,7 @@ function connect() {
           try {
             for (const update of payload.updates) {
               if (update.type === "css-update") {
-                await fetchUpdate(update.path, update.timestamp);
+                await fetchUpdate(update.acceptedPath, update.timestamp, true);
               } else if (!loaded.has(update.acceptedPath)) {
                 console.log(`[ferrite] hmr update ${update.acceptedPath}`);
                 const accepted = hotModules.get(update.acceptedPath);

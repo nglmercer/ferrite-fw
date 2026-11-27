@@ -65,7 +65,15 @@ pub(crate) fn unvirtualize(id: &ModuleId) -> std::borrow::Cow<'_, ModuleId> {
 
 /// True when an imported URL should go through the `?asset-shim` path.
 pub(crate) fn should_shim_asset(url: &str) -> bool {
-    let path = url.split('?').next().unwrap_or(url);
+    let (path, query) = url
+        .split_once('?')
+        .map_or((url, None), |(path, query)| (path, Some(query)));
+    if query
+        .and_then(|query| query.split('&').next())
+        .is_some_and(|kind| matches!(kind, "raw" | "url" | "inline" | "worker" | "wasm"))
+    {
+        return false;
+    }
     matches!(ModuleType::from_path(path), ModuleType::Asset) || is_binary_extension(path)
 }
 

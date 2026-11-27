@@ -86,34 +86,32 @@ pub enum HmrPlan {
 /// Plan an HMR action for `changed` using the graph boundary walk (§34).
 pub fn plan_update(graph: &ModuleGraph, changed: &ModuleId, timestamp: u64) -> HmrPlan {
     match graph.hmr_accepting_updates(changed) {
-        Some(boundaries) => {
-            let node = graph.get(changed);
-            let is_css = node
-                .as_ref()
-                .is_some_and(|node| node.module_type == ferrite_core::ModuleType::Css);
-            HmrPlan::Update(
-                boundaries
-                    .into_iter()
-                    .map(|(boundary, accepted)| {
-                        let timestamp = graph
-                            .get(&accepted)
-                            .and_then(|node| node.last_invalidated)
-                            .unwrap_or(timestamp);
-                        HmrUpdate {
-                            kind: if is_css {
-                                "css-update".to_string()
-                            } else {
-                                "js-update".to_string()
-                            },
-                            path: boundary.0,
-                            accepted_path: accepted.0,
-                            timestamp,
-                            css_only: is_css,
-                        }
-                    })
-                    .collect(),
-            )
-        }
+        Some(boundaries) => HmrPlan::Update(
+            boundaries
+                .into_iter()
+                .map(|(boundary, accepted)| {
+                    let accepted_node = graph.get(&accepted);
+                    let is_css = accepted_node
+                        .as_ref()
+                        .is_some_and(|node| node.module_type == ferrite_core::ModuleType::Css);
+                    let timestamp = accepted_node
+                        .as_ref()
+                        .and_then(|node| node.last_invalidated)
+                        .unwrap_or(timestamp);
+                    HmrUpdate {
+                        kind: if is_css {
+                            "css-update".to_string()
+                        } else {
+                            "js-update".to_string()
+                        },
+                        path: boundary.0,
+                        accepted_path: accepted.0,
+                        timestamp,
+                        css_only: is_css,
+                    }
+                })
+                .collect(),
+        ),
         None => HmrPlan::FullReload,
     }
 }

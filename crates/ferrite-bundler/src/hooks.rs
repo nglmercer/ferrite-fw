@@ -10,6 +10,19 @@ use ferrite_core::ModuleId;
 use ferrite_core::Result;
 use ferrite_plugin::ChunkWrapper;
 
+/// Replacement chunk output from `renderChunk`.
+///
+/// `map` is the hook transformation map (replacement code → the input chunk
+/// code). The bundler chains it into the chunk's original module map; without
+/// a map, changed replacement code intentionally drops stale mappings.
+#[derive(Debug, Clone)]
+pub struct RenderChunkOutput {
+    /// Replacement code.
+    pub code: String,
+    /// Optional hook transformation map JSON.
+    pub map: Option<String>,
+}
+
 /// Render-pipeline hooks consulted while bundling.
 #[async_trait::async_trait]
 pub trait BundleHooks: Send + Sync {
@@ -30,7 +43,7 @@ pub trait BundleHooks: Send + Sync {
         _id: &str,
         _code: String,
         _is_entry: bool,
-    ) -> Result<Option<String>> {
+    ) -> Result<Option<RenderChunkOutput>> {
         Ok(None)
     }
 

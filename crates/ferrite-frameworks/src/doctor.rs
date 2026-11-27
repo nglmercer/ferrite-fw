@@ -282,9 +282,26 @@ pub fn inspect_with_runtime(
                     }
                 }
             }
-            if !descriptor.compiler_profiles.is_empty() && host.as_deref() != Some("node") {
+            let host_validated = descriptor
+                .compiler_profiles
+                .iter()
+                .any(|profile| Some(profile.host) == host.as_deref());
+            if !descriptor.compiler_profiles.is_empty() && !host_validated {
                 available = false;
-                issues.push(Issue { severity: "error", message: format!("{name} compiler host is not enabled"), action: format!("configure framework.enabled = ['{name}'] and framework.compiler_host = 'node'; SSR runtime is separate") });
+                let hosts = descriptor
+                    .compiler_profiles
+                    .iter()
+                    .map(|profile| profile.host)
+                    .collect::<Vec<_>>()
+                    .join("' or '");
+                issues.push(Issue { severity: "error", message: format!("{name} compiler host is not enabled"), action: format!("configure framework.enabled = ['{name}'] and framework.compiler_host = '{hosts}'; SSR runtime is separate") });
+            } else if host.as_deref() == Some("embedded") && !cfg!(feature = "napi-vm") {
+                available = false;
+                issues.push(Issue {
+                    severity: "error",
+                    message: format!("embedded {name} compiler is unavailable in this Ferrite binary"),
+                    action: "rebuild Ferrite with --features napi-vm or configure framework.compiler_host = 'node' for the transitional external host".into(),
+                });
             } else if host.as_deref() == Some("node") && node_executable.is_none() {
                 available = false;
                 issues.push(Issue {
@@ -337,7 +354,7 @@ pub fn inspect_with_runtime(
             version: package.map(|package| package.version.clone()), identity: package.map(|package| package.id()),
             compiler_host: host, compiler_support: if available { "experimental" } else { "unavailable" },
             client: if available { descriptor.client.label() } else { "unavailable" }, ssr: if runtime_available == Some(true) && available && descriptor.template_variants.iter().any(|profile| profile.ssr_runtime == Some(config.runtime.backend.as_str())) { descriptor.ssr.label() } else { "unavailable" },
-            updates: if !available { "unavailable" } else if name == "react" && config.react.refresh { "experimental-refresh-incomplete" } else { "full-reload" }, checker: "unavailable",
+            updates: if !available { "unavailable" } else if name == "react" && config.react.refresh { "state-preserving-refresh" } else { "full-reload" }, checker: "unavailable",
             rendering_profiles: descriptor.template_variants.iter().map(|profile| serde_json::json!({
                 "language": profile.language, "rendering": profile.rendering,
                 "framework_version": profile.framework_version,
@@ -612,6 +629,33 @@ mod tests {
         assert_eq!(report.node_probe, "not-located");
         assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
     }
+    #[test]
+    fn embedded_vue_availability_matches_napi_vm_build() {
+        let root = tempfile::tempdir().unwrap();
+        let user = UserConfig {
+            framework: Some(FrameworkConfig {
+                enabled: vec!["vue".into()],
+                compiler_host: Some("embedded".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let config =
+            ferrite_config::resolve_config(user, Some(root.path().into()), Default::default())
+                .unwrap();
+        let report = inspect(&config).unwrap();
+        let embedded_issue = report.issues.iter().find(|issue| {
+            issue
+                .message
+                .contains("embedded vue compiler is unavailable")
+        });
+        if cfg!(feature = "napi-vm") {
+            assert!(embedded_issue.is_none(), "{embedded_issue:?}");
+        } else {
+            assert!(embedded_issue.is_some());
+        }
+    }
+
     #[test]
     fn react_client_requires_concrete_runtime_and_refresh_dependencies() {
         use ferrite_npm::{LockedImporter, LockedPackage};

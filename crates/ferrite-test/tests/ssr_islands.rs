@@ -8,7 +8,7 @@ fn fixture() -> ferrite_test::TempProject {
         ("ferrite.toml",r#"base="/app/"
 [framework]
 enabled=["vue","svelte"]
-compiler_host="node"
+compiler_host="embedded"
 [ssr]
 entry="src/server.js"
 [ssr.islands]
@@ -40,6 +40,68 @@ export async function render(){return '<p id="static">server only</p>'+island('R
 "#),
     ])
 }
+struct FixtureRegistry(tokio::task::JoinHandle<()>);
+impl Drop for FixtureRegistry {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+async fn fixture_registry() -> (FixtureRegistry, String) {
+    use axum::{body::Body, response::Response, Router};
+    let root = std::fs::canonicalize(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/framework-registry"),
+    )
+    .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let app = Router::new().fallback(move |uri: axum::http::Uri| {
+        let root = root.clone();
+        async move {
+            let mut path = root.clone();
+            let mut valid = true;
+            for component in std::path::Path::new(uri.path().trim_start_matches('/')).components() {
+                match component {
+                    std::path::Component::Normal(part) => path.push(part),
+                    std::path::Component::CurDir => {}
+                    _ => valid = false,
+                }
+            }
+            if valid {
+                if let Ok(canonical) = tokio::fs::canonicalize(&path).await {
+                    if canonical.starts_with(&root) {
+                        if let Ok(bytes) = tokio::fs::read(&canonical).await {
+                            return Response::new(Body::from(bytes));
+                        }
+                    }
+                }
+            }
+            Response::builder().status(404).body(Body::empty()).unwrap()
+        }
+    });
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (FixtureRegistry(server), format!("http://127.0.0.1:{port}"))
+}
+async fn install_offline_fixture(root: &std::path::Path) {
+    let (_registry, registry) = fixture_registry().await;
+    let locked =
+        include_str!("fixtures/framework.lock").replace("https://registry.npmjs.org", &registry);
+    std::fs::write(root.join("ferrite.lock"), locked).unwrap();
+    let npm = root.join(".ferrite/npm");
+    let installer = ferrite::npm::Installer::new(
+        ferrite::npm::RegistryClient::new(registry, npm.join("metadata")).unwrap(),
+        npm,
+    );
+    let mut lock = ferrite::npm::Lockfile::read(&root.join("ferrite.lock")).unwrap();
+    installer
+        .install_project(root, &mut lock, true)
+        .await
+        .unwrap();
+    lock.write(&root.join("ferrite.lock")).unwrap();
+    ferrite::npm::project_editor_dependencies(root, &lock).unwrap();
+}
+
 struct Serving(tokio::task::JoinHandle<()>);
 impl Drop for Serving {
     fn drop(&mut self) {
@@ -158,19 +220,7 @@ async fn exercise(browser: &Browser, url: &str) {
 }
 async fn matrix(kind: BrowserKind) {
     let p = fixture();
-    let npm = p.root.join(".ferrite/npm");
-    let installer = ferrite::npm::Installer::new(
-        ferrite::npm::RegistryClient::new(ferrite::npm::DEFAULT_REGISTRY, npm.join("metadata"))
-            .unwrap(),
-        npm,
-    );
-    let mut lock = ferrite::npm::Lockfile::default();
-    installer
-        .install_project(&p.root, &mut lock, false)
-        .await
-        .unwrap();
-    lock.write(&p.root.join("ferrite.lock")).unwrap();
-    ferrite::npm::project_editor_dependencies(&p.root, &lock).unwrap();
+    install_offline_fixture(&p.root).await;
     let executable = match kind {
         BrowserKind::Chromium => ferrite_e2e::find_chromium(None),
         BrowserKind::Firefox => ferrite_e2e::find_firefox(None),
@@ -245,33 +295,21 @@ async fn matrix(kind: BrowserKind) {
     browser.close().await.unwrap();
 }
 #[tokio::test]
-#[ignore = "official React Vue Svelte packages, Node compiler and Chromium"]
+#[ignore = "offline official React Vue Svelte packages, embedded compilers and Chromium"]
 async fn chromium_framework_islands_dev_preview_and_static() {
     matrix(BrowserKind::Chromium).await;
 }
 #[tokio::test]
-#[ignore = "official React Vue Svelte packages, Node compiler and Firefox"]
+#[ignore = "offline official React Vue Svelte packages, embedded compilers and Firefox"]
 async fn firefox_framework_islands_dev_preview_and_static() {
     matrix(BrowserKind::Firefox).await;
 }
 
 #[tokio::test]
-#[ignore = "official framework packages, offline generated Cargo binary and both browsers"]
+#[ignore = "offline official framework packages, offline generated Cargo binary and both browsers"]
 async fn standalone_framework_islands_without_node() {
     let p = fixture();
-    let npm = p.root.join(".ferrite/npm");
-    let installer = ferrite::npm::Installer::new(
-        ferrite::npm::RegistryClient::new(ferrite::npm::DEFAULT_REGISTRY, npm.join("metadata"))
-            .unwrap(),
-        npm,
-    );
-    let mut lock = ferrite::npm::Lockfile::default();
-    installer
-        .install_project(&p.root, &mut lock, false)
-        .await
-        .unwrap();
-    lock.write(&p.root.join("ferrite.lock")).unwrap();
-    ferrite::npm::project_editor_dependencies(&p.root, &lock).unwrap();
+    install_offline_fixture(&p.root).await;
     let mut builder = ferrite::create_builder(ferrite::Config {
         root: Some(p.root.clone()),
         ..Default::default()

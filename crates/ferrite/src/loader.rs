@@ -246,6 +246,22 @@ impl ModuleLoader for BuildLoader {
             }
         }
         let module = self.server.pipeline_module(id, None, env).await?;
+        let asset_query_target = query
+            .and_then(|query| query.split('&').next())
+            .filter(|kind| matches!(*kind, "worker" | "wasm" | "url"))
+            .map(|kind| (kind, ModuleId::new(path)));
+        let worker_target = asset_query_target
+            .as_ref()
+            .filter(|(kind, _)| *kind == "worker")
+            .map(|(_, target)| target.clone());
+        let wasm_target = asset_query_target
+            .as_ref()
+            .filter(|(kind, _)| *kind == "wasm")
+            .map(|(_, target)| target.clone());
+        let url_target = asset_query_target
+            .as_ref()
+            .filter(|(kind, _)| *kind == "url")
+            .map(|(_, target)| target.clone());
         // Raw assets become hashed files + URL shims.
         if module.is_raw_bytes {
             let file = self.server.id_to_file(id)?;
@@ -270,6 +286,43 @@ impl ModuleLoader for BuildLoader {
         // bundler must key replacements by the *resolved* text present in
         // `code` (not the original specifier).
         let mut code = module.code.clone();
+        if let Some(target) = &worker_target {
+            let source_url = format!("{path:?}");
+            let placeholder = format!("{:?}", ferrite_bundler::worker_url_placeholder(target));
+            if !code.contains(&source_url) {
+                return Err(FerriteError::Build(format!(
+                    "worker shim for `{id}` no longer contains its source URL; cannot emit a production worker"
+                )));
+            }
+            code = code.replacen(&source_url, &placeholder, 1);
+        }
+        for (kind, target) in [("WASM", wasm_target), ("URL", url_target)] {
+            let Some(target) = target else { continue };
+            let file = self.server.id_to_file(&target)?;
+            let bytes = std::fs::read(&file).map_err(|error| {
+                FerriteError::Build(format!(
+                    "cannot read {kind} asset `{target}` at {}: {error}",
+                    file.display()
+                ))
+            })?;
+            let fallback = if kind == "WASM" {
+                "module.wasm"
+            } else {
+                "asset"
+            };
+            let name = file
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| fallback.to_string());
+            let url = self.emit_url(id, &name, bytes, env).await?;
+            let source_url = format!("{path:?}");
+            if !code.contains(&source_url) {
+                return Err(FerriteError::Build(format!(
+                    "{kind} shim for `{id}` no longer contains its source URL; cannot emit a production asset"
+                )));
+            }
+            code = code.replacen(&source_url, &format!("{url:?}"), 1);
+        }
         let mut imports = Vec::new();
         let mut import_bindings = Vec::new();
         for (index, (_specifier, dep, kind)) in module.imports.iter().enumerate() {
@@ -313,6 +366,14 @@ impl ModuleLoader for BuildLoader {
                 }
             }
         }
+        if let Some(target) = &worker_target {
+            imports.push((
+                target.0.clone(),
+                target.clone(),
+                ferrite_graph::ImportKind::Worker,
+            ));
+            import_bindings.push(vec![ferrite_transform::ImportBinding::SideEffect]);
+        }
         // Alignment is all-or-nothing: a partial binding list would
         // misattribute names, so a short list voids the shake facts.
         let mut shake = module.shake.as_ref().and_then(|shake| {
@@ -348,8 +409,21 @@ impl ModuleLoader for BuildLoader {
                     code: code.clone(),
                     module_type: ModuleType::Js,
                 })?;
-            let (final_imports, final_shake) = final_build_analysis(parsed, &imports)?;
+            let worker_edges: Vec<_> = imports
+                .iter()
+                .filter(|(_, _, kind)| *kind == ferrite_graph::ImportKind::Worker)
+                .cloned()
+                .collect();
+            let (final_imports, mut final_shake) = final_build_analysis(parsed, &imports)?;
             imports = final_imports;
+            for edge in worker_edges {
+                if !imports.iter().any(|(_, dep, _)| dep == &edge.1) {
+                    final_shake
+                        .import_bindings
+                        .push(vec![ferrite_transform::ImportBinding::SideEffect]);
+                    imports.push(edge);
+                }
+            }
             shake = Some(final_shake);
         }
         Ok(LoadedModule {

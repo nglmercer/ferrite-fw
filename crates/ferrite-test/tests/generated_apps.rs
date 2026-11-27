@@ -129,6 +129,772 @@ async fn configured_react_selection_matches_inspect_and_transform() {
     );
 }
 
+struct FixtureRegistry(tokio::task::JoinHandle<()>);
+impl Drop for FixtureRegistry {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+async fn fixture_registry(directory: &str) -> (FixtureRegistry, String) {
+    use axum::{body::Body, response::Response, Router};
+    let root = std::fs::canonicalize(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(directory),
+    )
+    .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let app = Router::new().fallback(move |uri: axum::http::Uri| {
+        let root = root.clone();
+        async move {
+            let mut path = root.clone();
+            let mut valid = true;
+            for component in Path::new(uri.path().trim_start_matches('/')).components() {
+                match component {
+                    std::path::Component::Normal(part) => path.push(part),
+                    std::path::Component::CurDir => {}
+                    _ => valid = false,
+                }
+            }
+            if valid {
+                if let Ok(canonical) = tokio::fs::canonicalize(&path).await {
+                    if canonical.starts_with(&root) {
+                        if let Ok(bytes) = tokio::fs::read(&canonical).await {
+                            return Response::new(Body::from(bytes));
+                        }
+                    }
+                }
+            }
+            Response::builder().status(404).body(Body::empty()).unwrap()
+        }
+    });
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (FixtureRegistry(server), format!("http://127.0.0.1:{port}"))
+}
+
+#[tokio::test]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
+async fn chromium_react_offline_fixture_build_and_preview() {
+    let binary = cli();
+    let (_registry, registry) = fixture_registry("react-registry").await;
+    let project = ferrite_test::TempProject::new(&[]);
+    let destination = project.root.join("app");
+    command(
+        &binary,
+        &project.root,
+        &[
+            "create",
+            destination.to_str().unwrap(),
+            "--framework",
+            "react",
+            "--language",
+            "ts",
+            "--rendering",
+            "client",
+            "--compiler-host",
+            "native",
+            "--no-install",
+        ],
+        false,
+    )
+    .await;
+    let lock = include_str!("fixtures/react.lock").replace("https://registry.npmjs.org", &registry);
+    std::fs::write(destination.join("ferrite.lock"), lock).unwrap();
+    command(
+        &binary,
+        &destination,
+        &["install", "--frozen-lockfile"],
+        false,
+    )
+    .await;
+    let inspected: serde_json::Value =
+        serde_json::from_str(&command(&binary, &destination, &["inspect", "--json"], false).await)
+            .unwrap();
+    assert_eq!(inspected["compilerHosts"][0]["framework"], "react");
+    assert_eq!(inspected["compilerHosts"][0]["execution"], "rust");
+    assert_eq!(inspected["compilerHosts"][0]["externalNodeRequired"], false);
+    command(&binary, &destination, &["build"], false).await;
+    let executable =
+        ferrite_e2e::find_chromium(None).expect("offline React acceptance requires real Chromium");
+    let browser = Browser::launch(
+        LaunchOptions::default()
+            .browser(BrowserKind::Chromium)
+            .executable(executable),
+    )
+    .await
+    .unwrap();
+    let (mut preview, url) = server(&binary, &destination, "preview", false).await;
+    let page = browser.new_page().await.unwrap();
+    page.goto(&url).await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'count: 0'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "offline React preview: {error}; {:?}; {:?}",
+            page.page_errors(),
+            page.console_messages()
+        )
+    });
+    page.locator("#counter").click().await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'count: 1'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap();
+    preview.kill().await.unwrap();
+    preview.wait().await.unwrap();
+    browser.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
+async fn chromium_react_offline_fixture_dev_refresh_preserves_state() {
+    let binary = cli();
+    let (_registry, registry) = fixture_registry("react-registry").await;
+    let project = ferrite_test::TempProject::new(&[]);
+    let destination = project.root.join("app");
+    command(
+        &binary,
+        &project.root,
+        &[
+            "create",
+            destination.to_str().unwrap(),
+            "--framework",
+            "react",
+            "--language",
+            "ts",
+            "--rendering",
+            "client",
+            "--no-install",
+        ],
+        false,
+    )
+    .await;
+    let lock = include_str!("fixtures/react.lock").replace("https://registry.npmjs.org", &registry);
+    std::fs::write(destination.join("ferrite.lock"), lock).unwrap();
+    command(
+        &binary,
+        &destination,
+        &["install", "--frozen-lockfile"],
+        false,
+    )
+    .await;
+
+    let executable = ferrite_e2e::find_chromium(None)
+        .expect("offline React refresh acceptance requires real Chromium");
+    let browser = Browser::launch(
+        LaunchOptions::default()
+            .browser(BrowserKind::Chromium)
+            .executable(executable),
+    )
+    .await
+    .unwrap();
+    let (mut dev, url) = server(&binary, &destination, "dev", false).await;
+    let page = browser.new_page().await.unwrap();
+    page.goto(&url).await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'count: 0'",
+        Duration::from_secs(15),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "offline React dev initial render: {error}; {:?}; {:?}",
+            page.page_errors(),
+            page.console_messages()
+        )
+    });
+    page.locator("#counter").click().await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'count: 1'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap();
+
+    let component = destination.join("src/App.tsx");
+    let source = std::fs::read_to_string(&component).unwrap();
+    let changed = source
+        .replace("setCount(count + 1)", "setCount(count + 2)")
+        .replace("count: {count}", "edited count: {count}");
+    assert_ne!(changed, source);
+    std::fs::write(&component, &changed).unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'edited count: 1'",
+        Duration::from_secs(15),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "offline React refresh did not preserve state: {error}; {:?}; {:?}",
+            page.page_errors(),
+            page.console_messages()
+        )
+    });
+    page.locator("#counter").click().await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'edited count: 3'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap();
+
+    let hook_changed = changed
+        .replace(
+            "import { useState } from 'react';",
+            "import { useEffect, useState } from 'react';",
+        )
+        .replace(
+            "const [count, setCount] = useState<number>(0);",
+            "const [count, setCount] = useState<number>(0);\n  useEffect(() => {}, [count]);",
+        );
+    assert_ne!(hook_changed, changed);
+    page.evaluate::<bool>("window.__refresh_marker = true")
+        .await
+        .unwrap();
+    std::fs::write(&component, &hook_changed).unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'edited count: 0' && window.__refresh_marker === true",
+        Duration::from_secs(15),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "offline React hook-signature refresh did not reset in place: {error}; {:?}; {:?}",
+            page.page_errors(),
+            page.console_messages()
+        )
+    });
+    page.locator("#counter").click().await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'edited count: 2'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap();
+
+    std::fs::write(
+        &component,
+        format!("{hook_changed}\nexport const answer = 42;\n"),
+    )
+    .unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'edited count: 0' && window.__refresh_marker === undefined",
+        Duration::from_secs(15),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "offline React unsafe export boundary did not reload: {error}; {:?}; {:?}",
+            page.page_errors(),
+            page.console_messages()
+        )
+    });
+    assert!(page.page_errors().is_empty(), "{:?}", page.page_errors());
+
+    dev.kill().await.unwrap();
+    dev.wait().await.unwrap();
+    browser.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
+async fn chromium_react_offline_fixture_ssr_build_and_preview() {
+    let binary = cli();
+    let (_registry, registry) = fixture_registry("react-registry").await;
+    let project = ferrite_test::TempProject::new(&[]);
+    let destination = project.root.join("app");
+    command(
+        &binary,
+        &project.root,
+        &[
+            "create",
+            destination.to_str().unwrap(),
+            "--framework",
+            "react",
+            "--language",
+            "ts",
+            "--rendering",
+            "ssr",
+            "--ssr-runtime",
+            "napi-vm",
+            "--no-install",
+        ],
+        false,
+    )
+    .await;
+    let lock = include_str!("fixtures/react.lock").replace("https://registry.npmjs.org", &registry);
+    std::fs::write(destination.join("ferrite.lock"), lock).unwrap();
+    command(
+        &binary,
+        &destination,
+        &["install", "--frozen-lockfile"],
+        false,
+    )
+    .await;
+    let inspected: serde_json::Value =
+        serde_json::from_str(&command(&binary, &destination, &["inspect", "--json"], false).await)
+            .unwrap();
+    assert_eq!(inspected["compilerHosts"][0]["framework"], "react");
+    assert_eq!(inspected["compilerHosts"][0]["execution"], "rust");
+    assert_eq!(inspected["compilerHosts"][0]["externalNodeRequired"], false);
+    command(&binary, &destination, &["build"], false).await;
+    assert!(destination.join("dist/server/renderer.json").exists());
+    assert!(std::fs::read_dir(destination.join("dist/server/assets"))
+        .unwrap()
+        .any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("entry-server-")));
+
+    let executable = ferrite_e2e::find_chromium(None)
+        .expect("offline React SSR acceptance requires real Chromium");
+    let browser = Browser::launch(
+        LaunchOptions::default()
+            .browser(BrowserKind::Chromium)
+            .executable(executable),
+    )
+    .await
+    .unwrap();
+    let (mut preview, url) = server(&binary, &destination, "preview", false).await;
+    let page = browser.new_page().await.unwrap();
+    page.goto(&url).await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'count: 0' && getComputedStyle(document.querySelector('#counter')).color === 'rgb(128, 0, 0)'",
+        Duration::from_secs(15),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "offline React SSR preview: {error}; {:?}; {:?}",
+            page.page_errors(),
+            page.console_messages()
+        )
+    });
+    page.locator("#counter").click().await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'count: 1'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap();
+    assert!(page.page_errors().is_empty(), "{:?}", page.page_errors());
+    preview.kill().await.unwrap();
+    preview.wait().await.unwrap();
+    browser.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
+async fn chromium_vue_embedded_offline_fixture_ssr_build_and_preview() {
+    let binary = cli();
+    let (_registry, registry) = fixture_registry("vue-registry").await;
+    let project = ferrite_test::TempProject::new(&[]);
+    let destination = project.root.join("app");
+    command(
+        &binary,
+        &project.root,
+        &[
+            "create",
+            destination.to_str().unwrap(),
+            "--framework",
+            "vue",
+            "--language",
+            "ts",
+            "--rendering",
+            "ssr",
+            "--ssr-runtime",
+            "napi-vm",
+            "--no-install",
+        ],
+        false,
+    )
+    .await;
+    assert!(std::fs::read_to_string(destination.join("ferrite.toml"))
+        .unwrap()
+        .contains("compiler_host = \"embedded\""));
+    let component_path = destination.join("src/App.vue");
+    let component = std::fs::read_to_string(&component_path).unwrap();
+    std::fs::write(
+        &component_path,
+        component
+            .replace("import { ref }", "import { ref, useCssModule }")
+            .replace(
+                "</script>",
+                "const classes = useCssModule('accents');\n</script>",
+            )
+            .replace("id=\"counter\"", "id=\"counter\" :class=\"[classes.accent, classes.café]\"")
+            + "\n<style module=\"accents\">.accent { background-color: rgb(0, 128, 0); } .café { border-style: solid; } [data-x=\\[] .café { border-width: 1px; } .accent::before { content: \"\\2192\"; }</style>\n<style>.escaped\\{literal { visibility: visible; }</style>\n",
+    )
+    .unwrap();
+    let lock = include_str!("fixtures/vue.lock").replace("https://registry.npmjs.org", &registry);
+    std::fs::write(destination.join("ferrite.lock"), lock).unwrap();
+    command(
+        &binary,
+        &destination,
+        &["install", "--frozen-lockfile"],
+        false,
+    )
+    .await;
+    std::fs::remove_file(
+        destination.join(
+            ".ferrite/npm/packages/@vue/compiler-sfc@3.5.22/dist/compiler-sfc.esm-browser.js",
+        ),
+    )
+    .unwrap();
+    let inspected: serde_json::Value =
+        serde_json::from_str(&command(&binary, &destination, &["inspect", "--json"], false).await)
+            .unwrap();
+    assert_eq!(inspected["compilerHosts"][0]["framework"], "vue");
+    assert_eq!(
+        inspected["compilerHosts"][0]["execution"],
+        "embedded-napi-vm"
+    );
+    assert_eq!(inspected["compilerHosts"][0]["externalNodeRequired"], false);
+    command(&binary, &destination, &["build"], false).await;
+    assert!(destination.join("dist/server/renderer.json").exists());
+    assert!(std::fs::read_dir(destination.join("dist/server/assets"))
+        .unwrap()
+        .any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("entry-server-")));
+    let assets = std::fs::read_dir(destination.join("dist/assets")).unwrap();
+    assert!(assets.flatten().any(|entry| {
+        entry
+            .file_type()
+            .map(|kind| kind.is_file())
+            .unwrap_or(false)
+            && entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "js")
+            && std::fs::read_to_string(entry.path()).is_ok_and(|code| code.contains("_café_"))
+    }));
+    let executable =
+        ferrite_e2e::find_chromium(None).expect("offline Vue acceptance requires real Chromium");
+    let browser = Browser::launch(
+        LaunchOptions::default()
+            .browser(BrowserKind::Chromium)
+            .executable(executable),
+    )
+    .await
+    .unwrap();
+    let (mut preview, url) = server(&binary, &destination, "preview", false).await;
+    let page = browser.new_page().await.unwrap();
+    page.goto(&url).await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'count: 0' && getComputedStyle(document.querySelector('#counter')).backgroundColor === 'rgb(0, 128, 0)'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "offline embedded Vue preview: {error}; {:?}; {:?}",
+            page.page_errors(),
+            page.console_messages()
+        )
+    });
+    page.locator("#counter").click().await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'count: 1'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap();
+    preview.kill().await.unwrap();
+    preview.wait().await.unwrap();
+    browser.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
+async fn chromium_svelte_embedded_offline_fixture_dev_hmr() {
+    let binary = cli();
+    let (_registry, registry) = fixture_registry("svelte-registry").await;
+    let project = ferrite_test::TempProject::new(&[]);
+    let destination = project.root.join("app");
+    command(
+        &binary,
+        &project.root,
+        &[
+            "create",
+            destination.to_str().unwrap(),
+            "--framework",
+            "svelte",
+            "--language",
+            "ts",
+            "--rendering",
+            "client",
+            "--no-install",
+        ],
+        false,
+    )
+    .await;
+    let lock =
+        include_str!("fixtures/svelte.lock").replace("https://registry.npmjs.org", &registry);
+    std::fs::write(destination.join("ferrite.lock"), lock).unwrap();
+    command(
+        &binary,
+        &destination,
+        &["install", "--frozen-lockfile"],
+        false,
+    )
+    .await;
+
+    let executable = ferrite_e2e::find_chromium(None)
+        .expect("offline Svelte dev acceptance requires real Chromium");
+    let browser = Browser::launch(
+        LaunchOptions::default()
+            .browser(BrowserKind::Chromium)
+            .executable(executable),
+    )
+    .await
+    .unwrap();
+    let (mut dev, url) = server(&binary, &destination, "dev", false).await;
+    let page = browser.new_page().await.unwrap();
+    page.goto(&url).await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'count: 0' && getComputedStyle(document.querySelector('#counter')).color === 'rgb(128, 0, 0)'",
+        Duration::from_secs(30),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "offline embedded Svelte dev initial render: {error}; {:?}; {:?}",
+            page.page_errors(),
+            page.console_messages()
+        )
+    });
+    page.locator("#counter").click().await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'count: 1'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap();
+
+    let component = destination.join("src/App.svelte");
+    let source = std::fs::read_to_string(&component).unwrap();
+    let changed = source
+        .replace("count += 1", "count += 2")
+        .replace("count: {count}", "edited count: {count}")
+        .replace("rgb(128, 0, 0)", "rgb(0, 0, 128)");
+    assert_ne!(changed, source);
+    std::fs::write(&component, &changed).unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'edited count: 0' && getComputedStyle(document.querySelector('#counter')).color === 'rgb(0, 0, 128)'",
+        Duration::from_secs(30),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "offline embedded Svelte HMR update: {error}; {:?}; {:?}",
+            page.page_errors(),
+            page.console_messages()
+        )
+    });
+    page.locator("#counter").click().await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'edited count: 2'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap();
+
+    std::fs::write(
+        &component,
+        "<script lang='ts'>const broken: number = ;</script><button>broken</button>",
+    )
+    .unwrap();
+    page.wait_for_function(
+        "document.querySelector('#ferrite-error-overlay')?.textContent.length > 0",
+        Duration::from_secs(30),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "offline embedded Svelte error overlay: {error}; {:?}; {:?}",
+            page.page_errors(),
+            page.console_messages()
+        )
+    });
+    let overlay: String = page
+        .evaluate("document.querySelector('#ferrite-error-overlay').textContent")
+        .await
+        .unwrap();
+    assert!(overlay.contains("App.svelte"), "{overlay}");
+
+    let recovered = changed.replace("<button", "<button data-recovered=\"yes\"");
+    std::fs::write(&component, recovered).unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.dataset.recovered === 'yes' && document.querySelector('#counter')?.textContent === 'edited count: 0'",
+        Duration::from_secs(30),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "offline embedded Svelte HMR recovery: {error}; {:?}; {:?}",
+            page.page_errors(),
+            page.console_messages()
+        )
+    });
+
+    dev.kill().await.unwrap();
+    dev.wait().await.unwrap();
+    browser.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
+async fn chromium_svelte_embedded_offline_fixture_ssr_build_and_preview() {
+    let binary = cli();
+    let (_registry, registry) = fixture_registry("svelte-registry").await;
+    let project = ferrite_test::TempProject::new(&[]);
+    let destination = project.root.join("app");
+    command(
+        &binary,
+        &project.root,
+        &[
+            "create",
+            destination.to_str().unwrap(),
+            "--framework",
+            "svelte",
+            "--language",
+            "ts",
+            "--rendering",
+            "ssr",
+            "--ssr-runtime",
+            "napi-vm",
+            "--no-install",
+        ],
+        false,
+    )
+    .await;
+    assert!(std::fs::read_to_string(destination.join("ferrite.toml"))
+        .unwrap()
+        .contains("compiler_host = \"embedded\""));
+    let lock =
+        include_str!("fixtures/svelte.lock").replace("https://registry.npmjs.org", &registry);
+    std::fs::write(destination.join("ferrite.lock"), lock).unwrap();
+    command(
+        &binary,
+        &destination,
+        &["install", "--frozen-lockfile"],
+        false,
+    )
+    .await;
+    std::fs::remove_file(destination.join(".ferrite/npm/packages/svelte@5.39.6/compiler/index.js"))
+        .unwrap();
+    let inspected: serde_json::Value =
+        serde_json::from_str(&command(&binary, &destination, &["inspect", "--json"], false).await)
+            .unwrap();
+    assert_eq!(inspected["compilerHosts"][0]["framework"], "svelte");
+    assert_eq!(
+        inspected["compilerHosts"][0]["execution"],
+        "embedded-napi-vm"
+    );
+    assert_eq!(inspected["compilerHosts"][0]["externalNodeRequired"], false);
+    command(&binary, &destination, &["build"], false).await;
+    assert!(destination.join("dist/server/renderer.json").exists());
+    assert!(std::fs::read_dir(destination.join("dist/server/assets"))
+        .unwrap()
+        .any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("entry-server-")));
+    let executable =
+        ferrite_e2e::find_chromium(None).expect("offline Svelte acceptance requires real Chromium");
+    let browser = Browser::launch(
+        LaunchOptions::default()
+            .browser(BrowserKind::Chromium)
+            .executable(executable),
+    )
+    .await
+    .unwrap();
+    let (mut preview, url) = server(&binary, &destination, "preview", false).await;
+    let page = browser.new_page().await.unwrap();
+    page.goto(&url).await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'count: 0' && getComputedStyle(document.querySelector('#counter')).color === 'rgb(128, 0, 0)'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "offline embedded Svelte preview: {error}; {:?}; {:?}",
+            page.page_errors(),
+            page.console_messages()
+        )
+    });
+    page.locator("#counter").click().await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'count: 1'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap();
+    preview.kill().await.unwrap();
+    preview.wait().await.unwrap();
+    browser.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires freshly built FERRITE_CLI_PATH"]
+async fn rust_only_inspect_reports_compiler_hosts() {
+    let binary = cli();
+    let project = ferrite_test::TempProject::new(&[]);
+    async fn inspect(binary: &Path, project: &Path) -> serde_json::Value {
+        serde_json::from_str::<serde_json::Value>(
+            &command(binary, project, &["inspect", "--json"], false).await,
+        )
+        .unwrap()
+    }
+    let vanilla = inspect(&binary, &project.root).await;
+    assert_eq!(vanilla["compilerHosts"][0]["framework"], "vanilla");
+    assert_eq!(vanilla["compilerHosts"][0]["execution"], "rust");
+    assert_eq!(vanilla["compilerHosts"][0]["externalNodeRequired"], false);
+
+    std::fs::write(
+        project.root.join("ferrite.toml"),
+        "[framework]
+enabled = ['react']
+compiler_host = 'native'
+",
+    )
+    .unwrap();
+    let react = inspect(&binary, &project.root).await;
+    assert_eq!(react["compilerHosts"][0]["framework"], "react");
+    assert_eq!(react["compilerHosts"][0]["execution"], "rust");
+    assert_eq!(react["compilerHosts"][0]["externalNodeRequired"], false);
+
+    std::fs::write(
+        project.root.join("ferrite.toml"),
+        "[framework]
+enabled = ['vue']
+compiler_host = 'node'
+",
+    )
+    .unwrap();
+    let vue = inspect(&binary, &project.root).await;
+    assert_eq!(vue["compilerHosts"][0]["framework"], "vue");
+    assert_eq!(
+        vue["compilerHosts"][0]["execution"],
+        "external-node-process"
+    );
+    assert_eq!(vue["compilerHosts"][0]["externalNodeRequired"], true);
+}
+
 #[tokio::test]
 #[ignore = "requires freshly built FERRITE_CLI_PATH"]
 async fn jsx_ownership_cli_reports_package_conflicts() {
@@ -329,7 +1095,7 @@ async fn acceptance(kind: BrowserKind, frameworks: &[&str]) {
             let page = browser.new_page().await.unwrap();
             page.goto(&url).await.unwrap();
             page.wait_for_function(
-                "document.querySelector('#counter')?.textContent === 'count: 0'",
+                "document.querySelector('#counter')?.textContent === 'count: 0' && getComputedStyle(document.querySelector('#counter')).backgroundColor === 'rgb(0, 128, 0)'",
                 Duration::from_secs(15),
             )
             .await
@@ -1078,7 +1844,7 @@ async fn react_refresh_dom_acceptance(kind: BrowserKind, fixture: ReactFixture) 
     let barrel = matches!(fixture, ReactFixture::HookBarrel);
     let binary = cli();
     let project = ferrite_test::TempProject::new(&[
-        ("package.json", r#"{"private":true,"dependencies":{"react":"19.2.0","react-dom":"19.2.0","react-refresh":"0.17.0"}}"#),
+        ("package.json", r#"{"private":true,"dependencies":{"react":"19.2.0","react-dom":"19.2.0","react-refresh":"0.17.0"},"devDependencies":{"@types/react":"19.2.0","@types/react-dom":"19.2.0"}}"#),
         ("index.html", "<html><head><link rel='icon' href='data:,'></head><body><div id='root'></div><script type='module' src='/main.jsx'></script></body></html>"),
         ("main.jsx", "import {createRoot} from 'react-dom/client'; import {App} from './App.jsx'; globalThis.session = Math.random(); createRoot(document.querySelector('#root')).render(<App/>);"),
     ]);
@@ -1141,7 +1907,16 @@ async fn react_refresh_dom_acceptance(kind: BrowserKind, fixture: ReactFixture) 
     let source_variant = format!("const RefreshRuntime = 'application'; const __ferrite_refresh_exports__ = 1; const $RefreshReg$ = () => {{throw new Error('application binding was called');}};\n{source_variant}");
     let source = source_variant.as_str();
     std::fs::write(project.root.join("App.jsx"), source).unwrap();
-    command(&binary, &project.root, &["install"], false).await;
+    let (_registry, registry) = fixture_registry("react-registry").await;
+    let lock = include_str!("fixtures/react.lock").replace("https://registry.npmjs.org", &registry);
+    std::fs::write(project.root.join("ferrite.lock"), lock).unwrap();
+    command(
+        &binary,
+        &project.root,
+        &["install", "--frozen-lockfile"],
+        false,
+    )
+    .await;
     let executable = match kind {
         BrowserKind::Chromium => ferrite_e2e::find_chromium(None),
         BrowserKind::Firefox => ferrite_e2e::find_firefox(None),
@@ -1438,88 +2213,88 @@ async fn react_refresh_dom_acceptance(kind: BrowserKind, fixture: ReactFixture) 
 }
 
 #[tokio::test]
-#[ignore = "requires freshly built CLI, registry packages and Chromium"]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
 async fn chromium_react_refresh_dom() {
     react_refresh_dom_acceptance(BrowserKind::Chromium, ReactFixture::Plain).await;
 }
 #[tokio::test]
-#[ignore = "requires freshly built CLI, registry packages and Firefox"]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Firefox"]
 async fn firefox_react_refresh_dom() {
     react_refresh_dom_acceptance(BrowserKind::Firefox, ReactFixture::Plain).await;
 }
 
 #[tokio::test]
-#[ignore = "requires freshly built CLI, registry packages and Chromium"]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
 async fn chromium_react_refresh_wrapped() {
     react_refresh_dom_acceptance(BrowserKind::Chromium, ReactFixture::Memo).await;
 }
 #[tokio::test]
-#[ignore = "requires freshly built CLI, registry packages and Firefox"]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Firefox"]
 async fn firefox_react_refresh_wrapped() {
     react_refresh_dom_acceptance(BrowserKind::Firefox, ReactFixture::Memo).await;
 }
 
 #[tokio::test]
-#[ignore = "requires freshly built CLI, registry packages and Chromium"]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
 async fn chromium_react_refresh_imported_hook() {
     react_refresh_dom_acceptance(BrowserKind::Chromium, ReactFixture::ImportedHook).await;
 }
 #[tokio::test]
-#[ignore = "requires freshly built CLI, registry packages and Firefox"]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Firefox"]
 async fn firefox_react_refresh_imported_hook() {
     react_refresh_dom_acceptance(BrowserKind::Firefox, ReactFixture::ImportedHook).await;
 }
 
 #[tokio::test]
-#[ignore = "requires freshly built CLI, registry packages and Chromium"]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
 async fn chromium_react_refresh_hook_barrel() {
     react_refresh_dom_acceptance(BrowserKind::Chromium, ReactFixture::HookBarrel).await;
 }
 #[tokio::test]
-#[ignore = "requires freshly built CLI, registry packages and Firefox"]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Firefox"]
 async fn firefox_react_refresh_hook_barrel() {
     react_refresh_dom_acceptance(BrowserKind::Firefox, ReactFixture::HookBarrel).await;
 }
 
 #[tokio::test]
-#[ignore = "requires freshly built CLI, registry packages and Chromium"]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
 async fn chromium_react_refresh_default_named() {
     react_refresh_dom_acceptance(BrowserKind::Chromium, ReactFixture::NamedDefault).await;
 }
 #[tokio::test]
-#[ignore = "requires freshly built CLI, registry packages and Firefox"]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Firefox"]
 async fn firefox_react_refresh_default_named() {
     react_refresh_dom_acceptance(BrowserKind::Firefox, ReactFixture::NamedDefault).await;
 }
 #[tokio::test]
-#[ignore = "requires freshly built CLI, registry packages and Chromium"]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
 async fn chromium_react_refresh_default_anonymous_memo() {
     react_refresh_dom_acceptance(BrowserKind::Chromium, ReactFixture::AnonymousMemoDefault).await;
 }
 #[tokio::test]
-#[ignore = "requires freshly built CLI, registry packages and Firefox"]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Firefox"]
 async fn firefox_react_refresh_default_anonymous_memo() {
     react_refresh_dom_acceptance(BrowserKind::Firefox, ReactFixture::AnonymousMemoDefault).await;
 }
 
 #[tokio::test]
-#[ignore = "requires freshly built CLI, registry packages and Chromium"]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
 async fn chromium_react_refresh_mixed_exports() {
     react_refresh_dom_acceptance(BrowserKind::Chromium, ReactFixture::MixedExports).await;
 }
 #[tokio::test]
-#[ignore = "requires freshly built CLI, registry packages and Firefox"]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Firefox"]
 async fn firefox_react_refresh_mixed_exports() {
     react_refresh_dom_acceptance(BrowserKind::Firefox, ReactFixture::MixedExports).await;
 }
 
 #[tokio::test]
-#[ignore = "requires freshly built CLI, registry packages and Chromium"]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
 async fn chromium_generated_react_profiles() {
     acceptance(BrowserKind::Chromium, &["react"]).await;
 }
 #[tokio::test]
-#[ignore = "requires freshly built CLI, registry packages and Firefox"]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Firefox"]
 async fn firefox_generated_react_profiles() {
     acceptance(BrowserKind::Firefox, &["react"]).await;
 }

@@ -584,7 +584,12 @@ impl BundleHooks for ContainerRenderHooks<'_> {
             .await
     }
 
-    async fn render_chunk(&self, id: &str, code: String, is_entry: bool) -> Result<Option<String>> {
+    async fn render_chunk(
+        &self,
+        id: &str,
+        code: String,
+        is_entry: bool,
+    ) -> Result<Option<ferrite_bundler::RenderChunkOutput>> {
         if self.container.is_empty() {
             return Ok(None);
         }
@@ -599,7 +604,10 @@ impl BundleHooks for ContainerRenderHooks<'_> {
                 },
             )
             .await?;
-        Ok(result.code)
+        Ok(result.code.map(|code| ferrite_bundler::RenderChunkOutput {
+            code,
+            map: result.map.map(|map| map.mappings),
+        }))
     }
 
     async fn chunk_hash_extra(&self, chunk_id: &str) -> Result<Vec<String>> {
