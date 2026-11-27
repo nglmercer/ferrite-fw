@@ -607,7 +607,7 @@ async fn firefox_framework_dev_edit_build_preview_interaction() {
     browser_interaction(ferrite_e2e::BrowserKind::Firefox).await;
 }
 
-#[cfg(feature = "napi-vm")]
+#[cfg(feature = "rquickjs")]
 #[tokio::test]
 #[ignore = "requires official packages and explicit Node compiler host; embedded SSR conformance"]
 async fn official_svelte_server_renderer_executes_emitted_graph() {
@@ -625,7 +625,7 @@ async fn official_svelte_server_renderer_executes_emitted_graph() {
         .unwrap(),
     );
     let mut config = project.resolve_config_mode("production");
-    config.runtime.backend = "napi-vm".into();
+    config.runtime.backend = "rquickjs".into();
     config.build.minify = false;
     let builder =
         ferrite::Builder::new(config, vec![Arc::new(SveltePlugin::with_host(host, false))]);
@@ -637,7 +637,7 @@ async fn official_svelte_server_renderer_executes_emitted_graph() {
 
     let adapter = artifact
         .into_adapter(
-            Arc::new(ferrite::runtime::napi_vm::NapiVmRuntime::with_defaults()),
+            Arc::new(ferrite::runtime::quickjs::QuickJsRuntime::with_defaults()),
             "<!--ssr-outlet-->".into(),
             "/",
         )
@@ -663,19 +663,19 @@ async fn official_svelte_server_renderer_executes_emitted_graph() {
     );
 }
 
-#[cfg(feature = "napi-vm")]
+#[cfg(feature = "rquickjs")]
 #[tokio::test]
 #[ignore = "requires official packages and explicit Node compiler host; embedded Vue SSR conformance"]
 async fn official_vue_server_renderer_executes_emitted_graph() {
     vue_ssr_conformance(None).await;
 }
 
-#[cfg(feature = "napi-vm")]
+#[cfg(feature = "rquickjs")]
 async fn vue_ssr_conformance(kind: Option<ferrite_e2e::BrowserKind>) {
     framework_ssr_conformance("vue", kind).await;
 }
 
-#[cfg(feature = "napi-vm")]
+#[cfg(feature = "rquickjs")]
 async fn framework_ssr_conformance(framework: &str, kind: Option<ferrite_e2e::BrowserKind>) {
     let project = fixture().await;
     std::fs::create_dir_all(project.root.join("src")).unwrap();
@@ -697,7 +697,7 @@ async fn framework_ssr_conformance(framework: &str, kind: Option<ferrite_e2e::Br
         .unwrap(),
     );
     let mut config = project.resolve_config_mode("production");
-    config.runtime.backend = "napi-vm".into();
+    config.runtime.backend = "rquickjs".into();
     config.build.minify = false;
     let builder = ferrite::Builder::new(
         config.clone(),
@@ -720,7 +720,7 @@ async fn framework_ssr_conformance(framework: &str, kind: Option<ferrite_e2e::Br
     let artifact_styles = artifact.stylesheets.clone();
     let adapter = artifact
         .into_adapter(
-            Arc::new(ferrite::runtime::napi_vm::NapiVmRuntime::with_defaults()),
+            Arc::new(ferrite::runtime::quickjs::QuickJsRuntime::with_defaults()),
             "<!--ssr-outlet-->".into(),
             "/",
         )
@@ -891,7 +891,7 @@ async fn framework_ssr_conformance(framework: &str, kind: Option<ferrite_e2e::Br
     }
 }
 
-#[cfg(feature = "napi-vm")]
+#[cfg(feature = "rquickjs")]
 #[tokio::test]
 #[ignore = "requires saved artifact from the official Vue renderer conformance case"]
 async fn official_vue_artifact_renders_without_compiler_host() {
@@ -899,7 +899,7 @@ async fn official_vue_artifact_renders_without_compiler_host() {
     let artifact = ferrite::SsrRendererArtifact::from_bytes(&std::fs::read(path).unwrap()).unwrap();
     let adapter = artifact
         .into_adapter(
-            Arc::new(ferrite::runtime::napi_vm::NapiVmRuntime::with_defaults()),
+            Arc::new(ferrite::runtime::quickjs::QuickJsRuntime::with_defaults()),
             "<!--ssr-outlet-->".into(),
             "/",
         )
@@ -939,42 +939,42 @@ async fn official_vue_artifact_renders_without_compiler_host() {
     }
 }
 
-#[cfg(feature = "napi-vm")]
+#[cfg(feature = "rquickjs")]
 #[tokio::test]
 #[ignore = "official packages, Node compiler host and Chromium; actual Vue SSR hydration"]
 async fn official_vue_ssr_hydrates_in_chromium() {
     vue_ssr_conformance(Some(ferrite_e2e::BrowserKind::Chromium)).await;
 }
 
-#[cfg(feature = "napi-vm")]
+#[cfg(feature = "rquickjs")]
 #[tokio::test]
 #[ignore = "official packages, Node compiler host and Firefox; actual Vue SSR hydration"]
 async fn official_vue_ssr_hydrates_in_firefox() {
     vue_ssr_conformance(Some(ferrite_e2e::BrowserKind::Firefox)).await;
 }
 
-#[cfg(feature = "napi-vm")]
+#[cfg(feature = "rquickjs")]
 #[tokio::test]
 #[ignore = "real registry/Node compiler host and both browsers; generated Vue SSR acceptance"]
 async fn generated_vue_ssr_sources_install_build_and_render() {
     generated_ssr_sources("vue", false).await;
 }
 
-#[cfg(feature = "napi-vm")]
+#[cfg(feature = "rquickjs")]
 #[tokio::test]
 #[ignore = "real registry, Node compiler and both browsers"]
 async fn generated_svelte_ssr_sources_install_build_and_render() {
     generated_ssr_sources("svelte", false).await;
 }
 
-#[cfg(feature = "napi-vm")]
+#[cfg(feature = "rquickjs")]
 #[tokio::test]
 #[ignore = "real registry and both browsers; official React renderer"]
 async fn generated_react_ssr_sources_install_build_and_render() {
     generated_ssr_sources("react", false).await;
 }
 
-#[cfg(feature = "napi-vm")]
+#[cfg(feature = "rquickjs")]
 async fn generated_ssr_sources(framework: &str, standalone: bool) {
     for language in ["js", "ts"] {
         let mut generated = ferrite::frameworks::scaffold::files(
@@ -1051,7 +1051,7 @@ async fn generated_ssr_sources(framework: &str, standalone: bool) {
         })
         .await
         .unwrap();
-        assert_eq!(builder.config.runtime.backend, "napi-vm");
+        assert_eq!(builder.config.runtime.backend, "rquickjs");
         let mut builder = builder;
         if standalone {
             builder.config.ssr.routes = Some(vec!["/".into(), "/users/*".into()]);
@@ -1069,7 +1069,7 @@ async fn generated_ssr_sources(framework: &str, standalone: bool) {
         );
         let adapter = artifact
             .into_adapter(
-                Arc::new(ferrite::runtime::napi_vm::NapiVmRuntime::with_defaults()),
+                Arc::new(ferrite::runtime::quickjs::QuickJsRuntime::with_defaults()),
                 "<!--ssr-outlet-->".into(),
                 "/",
             )
@@ -1288,7 +1288,7 @@ async fn generated_ssr_sources(framework: &str, standalone: bool) {
     }
 }
 
-#[cfg(feature = "napi-vm")]
+#[cfg(feature = "rquickjs")]
 #[tokio::test]
 #[ignore = "real registry and Node compiler host; generated Vue SSR development invalidation"]
 async fn generated_vue_ssr_dev_graph_updates_and_recovers() {
@@ -1298,7 +1298,7 @@ async fn generated_vue_ssr_dev_graph_updates_and_recovers() {
             "generated-dev",
             language,
             "node",
-            "napi-vm",
+            "rquickjs",
         )
         .unwrap();
         let inputs: Vec<_> = generated
@@ -1384,7 +1384,7 @@ async fn generated_vue_ssr_dev_graph_updates_and_recovers() {
             .unwrap();
         assert!(initial_style.code.contains("rgb(128, 0, 0)"));
         assert!(initial_style.code.contains("data-v-"));
-        let runtime = Arc::new(ferrite::runtime::napi_vm::NapiVmRuntime::with_defaults());
+        let runtime = Arc::new(ferrite::runtime::quickjs::QuickJsRuntime::with_defaults());
         let mut adapter = ferrite::ssr::JsSsrAdapter::new_graph(runtime, graph).unwrap();
         async fn render(adapter: &ferrite::ssr::JsSsrAdapter) -> String {
             adapter
@@ -1456,14 +1456,14 @@ async fn generated_vue_ssr_dev_graph_updates_and_recovers() {
     }
 }
 
-#[cfg(feature = "napi-vm")]
+#[cfg(feature = "rquickjs")]
 async fn generated_vue_dev_browser(kind: ferrite_e2e::BrowserKind) {
     for language in ["js", "ts"] {
         let mut generated = ferrite::frameworks::scaffold::vue_ssr_files(
             "generated-dev-browser",
             language,
             "embedded",
-            "napi-vm",
+            "rquickjs",
         )
         .unwrap();
         if language == "ts" {
@@ -1778,34 +1778,34 @@ async fn generated_vue_dev_browser(kind: ferrite_e2e::BrowserKind) {
     }
 }
 
-#[cfg(feature = "napi-vm")]
+#[cfg(feature = "rquickjs")]
 #[tokio::test]
 #[ignore = "real registry, embedded Vue compiler and Chromium; generated SSR watcher acceptance"]
 async fn generated_vue_dev_ssr_chromium() {
     generated_vue_dev_browser(ferrite_e2e::BrowserKind::Chromium).await;
 }
 
-#[cfg(feature = "napi-vm")]
+#[cfg(feature = "rquickjs")]
 #[tokio::test]
 #[ignore = "real registry, embedded Vue compiler and Firefox; generated SSR watcher acceptance"]
 async fn generated_vue_dev_ssr_firefox() {
     generated_vue_dev_browser(ferrite_e2e::BrowserKind::Firefox).await;
 }
 
-#[cfg(feature = "napi-vm")]
+#[cfg(feature = "rquickjs")]
 #[tokio::test]
 #[ignore = "official Svelte compiler/renderer, registry and Chromium; real SSR hydration"]
 async fn official_svelte_ssr_hydrates_in_chromium() {
     framework_ssr_conformance("svelte", Some(ferrite_e2e::BrowserKind::Chromium)).await;
 }
-#[cfg(feature = "napi-vm")]
+#[cfg(feature = "rquickjs")]
 #[tokio::test]
 #[ignore = "official Svelte compiler/renderer, registry and Firefox; real SSR hydration"]
 async fn official_svelte_ssr_hydrates_in_firefox() {
     framework_ssr_conformance("svelte", Some(ferrite_e2e::BrowserKind::Firefox)).await;
 }
 
-#[cfg(feature = "napi-vm")]
+#[cfg(feature = "rquickjs")]
 #[tokio::test]
 #[ignore = "official packages, generated Cargo binaries and both real browsers"]
 async fn generated_framework_standalone_browser_matrix() {
@@ -1814,7 +1814,7 @@ async fn generated_framework_standalone_browser_matrix() {
     }
 }
 
-#[cfg(feature = "napi-vm")]
+#[cfg(feature = "rquickjs")]
 #[tokio::test]
 #[ignore = "official registry packages and explicit Node compiler for Svelte"]
 async fn generated_react_svelte_dev_graph_edits_and_recovers() {

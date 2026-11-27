@@ -1,5 +1,5 @@
 //! Watched SSR application hydration, HMR and syntax recovery in real browsers.
-#![cfg(feature = "napi-vm")]
+#![cfg(feature = "rquickjs")]
 use ferrite_e2e::{Browser, BrowserKind, LaunchOptions};
 use std::time::Duration;
 async fn matrix(kind: BrowserKind) {

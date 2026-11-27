@@ -1,5 +1,5 @@
 //! Official framework islands preserve SSR nodes and hydrate on selected triggers.
-#![cfg(feature = "napi-vm")]
+#![cfg(feature = "rquickjs")]
 use ferrite_e2e::{Browser, BrowserKind, LaunchOptions};
 use std::time::Duration;
 fn fixture() -> ferrite_test::TempProject {
@@ -21,7 +21,7 @@ route="/admin/*"
 entry="src/admin.js"
 shell="admin.html"
 [runtime]
-backend="napi-vm"
+backend="rquickjs"
 "#),
         ("index.html",r#"<html><head><title>HOME</title></head><body><!--ssr-outlet--><script>globalThis.saved=Array.from(document.querySelectorAll('[data-ferrite-island] button'));globalThis.islandErrors=0;document.addEventListener('ferrite:island-error',event=>{globalThis.islandErrors++;globalThis.lastIslandError=String(event.detail)});</script></body></html>"#),
         ("admin.html","<html><head><title>ADMIN</title></head><body><!--ssr-outlet--></body></html>"),

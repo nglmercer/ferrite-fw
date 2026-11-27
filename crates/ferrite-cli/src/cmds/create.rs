@@ -244,11 +244,11 @@ mod tests {
         for (compiler, runtime, expected) in [
             (
                 Some("native"),
-                Some("napi-vm"),
+                Some("rquickjs"),
                 "does not support compiler host",
             ),
-            (Some("node"), None, "--ssr-runtime napi-vm"),
-            (Some("node"), Some("node"), "--ssr-runtime napi-vm"),
+            (Some("node"), None, "--ssr-runtime rquickjs"),
+            (Some("node"), Some("node"), "--ssr-runtime rquickjs"),
         ] {
             let path = root.path().join("invalid");
             let mut request = args(&path);
@@ -267,7 +267,7 @@ mod tests {
         }
         let path = root.path().join("client");
         let mut request = args(&path);
-        request.ssr_runtime = Some("napi-vm".into());
+        request.ssr_runtime = Some("rquickjs".into());
         assert!(create(request)
             .await
             .unwrap_err()
@@ -279,7 +279,7 @@ mod tests {
             let mut request = args(&path);
             request.framework = Some("vue".into());
             request.rendering = "ssr".into();
-            request.ssr_runtime = Some("napi-vm".into());
+            request.ssr_runtime = Some("rquickjs".into());
             request.language = language.into();
             request.no_install = true;
             if cfg!(feature = "rquickjs") {

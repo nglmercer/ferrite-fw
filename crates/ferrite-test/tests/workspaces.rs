@@ -1,5 +1,5 @@
 //! Live local dependency identities through development and emitted SSR graphs.
-#[cfg(feature = "napi-vm")]
+#[cfg(feature = "rquickjs")]
 #[tokio::test]
 async fn local_sources_build_render_and_update_without_reinstalling() {
     use ferrite::ssr::SsrAdapter;
@@ -29,7 +29,7 @@ async fn local_sources_build_render_and_update_without_reinstalling() {
     lock.write(&project.root.join("ferrite.lock")).unwrap();
     ferrite::npm::project_editor_dependencies(&project.root, &lock).unwrap();
     let mut config = project.resolve_config_mode("development");
-    config.runtime.backend = "napi-vm".into();
+    config.runtime.backend = "rquickjs".into();
     let server = ferrite::DevServer::new_without_watcher(config.clone(), vec![])
         .await
         .unwrap();
@@ -68,14 +68,14 @@ async fn local_sources_build_render_and_update_without_reinstalling() {
         .unwrap();
     assert_eq!(lock, before);
     let mut config = project.resolve_config_mode("production");
-    config.runtime.backend = "napi-vm".into();
+    config.runtime.backend = "rquickjs".into();
     let reports = ferrite::Builder::new(config, vec![])
         .build_app()
         .await
         .unwrap();
     let server = reports.iter().find(|report| report.env == "ssr").unwrap();
     let artifact = ferrite::SsrRendererArtifact::read(&server.out_dir).unwrap();
-    let runtime = Arc::new(ferrite::runtime::napi_vm::NapiVmRuntime::with_defaults());
+    let runtime = Arc::new(ferrite::runtime::quickjs::QuickJsRuntime::with_defaults());
     let adapter = artifact
         .into_adapter(runtime, "<main><!--ssr-outlet--></main>".into(), "/")
         .unwrap();

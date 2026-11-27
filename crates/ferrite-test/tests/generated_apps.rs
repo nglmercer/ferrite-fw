@@ -2299,7 +2299,7 @@ async fn firefox_generated_react_profiles() {
     acceptance(BrowserKind::Firefox, &["react"]).await;
 }
 
-#[cfg(feature = "napi-vm")]
+#[cfg(feature = "rquickjs")]
 #[tokio::test]
 #[ignore = "fresh napi-vm CLI and real registry; Vue SSR generation and frozen reinstall"]
 async fn cli_vue_ssr_generation_and_clean_frozen_reinstall() {
@@ -2333,7 +2333,7 @@ async fn cli_vue_ssr_generation_and_clean_frozen_reinstall() {
                 "--compiler-host",
                 "node",
                 "--ssr-runtime",
-                "napi-vm",
+                "rquickjs",
             ],
             false,
         )
@@ -2375,7 +2375,7 @@ async fn cli_vue_ssr_generation_and_clean_frozen_reinstall() {
             &command(&binary, &destination, &["doctor", "--json"], true).await,
         )
         .unwrap();
-        assert_eq!(report["ssr_runtime"], "napi-vm");
+        assert_eq!(report["ssr_runtime"], "rquickjs");
         assert_eq!(report["ssr_runtime_probe"], "compiled-not-executed");
         let vue = report["frameworks"]
             .as_array()
@@ -2392,25 +2392,25 @@ async fn cli_vue_ssr_generation_and_clean_frozen_reinstall() {
             .iter()
             .any(|row| row["language"] == language
                 && row["rendering"] == "ssr"
-                && row["ssr_runtime"] == "napi-vm"));
+                && row["ssr_runtime"] == "rquickjs"));
     }
 }
 
-#[cfg(feature = "napi-vm")]
+#[cfg(feature = "rquickjs")]
 #[tokio::test]
 #[ignore = "fresh napi-vm CLI, registry, Node compiler and both browsers"]
 async fn cli_vue_ssr_create_dev_build_preview_cycle() {
     cli_vue_ssr_cycle_at_base("/").await;
 }
 
-#[cfg(feature = "napi-vm")]
+#[cfg(feature = "rquickjs")]
 #[tokio::test]
 #[ignore = "fresh napi-vm CLI, registry, Node compiler and both browsers"]
 async fn cli_vue_ssr_base_path_cycle() {
     cli_vue_ssr_cycle_at_base("/app/").await;
 }
 
-#[cfg(feature = "napi-vm")]
+#[cfg(feature = "rquickjs")]
 async fn cli_vue_ssr_cycle_at_base(base: &str) {
     async fn get(url: &str, path: &str) -> String {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -2457,7 +2457,7 @@ async fn cli_vue_ssr_cycle_at_base(base: &str) {
                     "--compiler-host",
                     "node",
                     "--ssr-runtime",
-                    "napi-vm",
+                    "rquickjs",
                 ],
                 false,
             )

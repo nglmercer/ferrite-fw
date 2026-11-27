@@ -1,5 +1,5 @@
 //! Real emitted-renderer static generation, including rollback and public output.
-#[cfg(feature = "napi-vm")]
+#[cfg(feature = "rquickjs")]
 #[tokio::test]
 async fn real_ssr_prerender_is_deterministic_private_and_transactional() {
     let project = ferrite_test::TempProject::new(&[
@@ -9,7 +9,7 @@ async fn real_ssr_prerender_is_deterministic_private_and_transactional() {
         ("src/entry-server.ts", "export function render(url: string) { return `<h1>generated ${url}</h1>`; }"),
     ]);
     let mut config = project.resolve_config_mode("production");
-    config.runtime.backend = "napi-vm".into();
+    config.runtime.backend = "rquickjs".into();
     config.base = "/app/".into();
     let builder = ferrite::Builder::new(config, Vec::new());
     let routes = vec!["/products/item".into(), "/".into(), "/about.html".into()];

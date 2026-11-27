@@ -1,5 +1,5 @@
 //! Selected CSS and independent shells use emitted metadata in every host.
-#![cfg(feature = "napi-vm")]
+#![cfg(feature = "rquickjs")]
 use ferrite::ssr::{SsrAdapter, SsrHttpRequest};
 use std::sync::Arc;
 fn fixture() -> ferrite_test::TempProject {
@@ -14,7 +14,7 @@ fn fixture() -> ferrite_test::TempProject {
 }
 fn config(p: &ferrite_test::TempProject) -> ferrite::ResolvedConfig {
     let mut c = p.resolve_config_mode("production");
-    c.runtime.backend = "napi-vm".into();
+    c.runtime.backend = "rquickjs".into();
     c.base = "/app/".into();
     c.ssr.entry = Some("src/home.ts".into());
     c.ssr.entries = vec![ferrite::config::SsrRouteEntry {
@@ -111,7 +111,7 @@ async fn selected_documents_isolate_css_revalidate_shells_and_prerender() {
     let built = artifact
         .clone()
         .into_adapter(
-            Arc::new(ferrite::runtime::napi_vm::NapiVmRuntime::with_defaults()),
+            Arc::new(ferrite::runtime::quickjs::QuickJsRuntime::with_defaults()),
             std::fs::read_to_string(p.root.join("dist/index.html")).unwrap(),
             "/app/",
         )
@@ -198,7 +198,7 @@ async fn document_artifacts_reject_duplicate_routes_and_invalid_shells() {
 #[ignore = "fresh feature-enabled CLI, process-streamed static generation"]
 async fn cli_streamed_documents_prerender_without_node() {
     let p = fixture();
-    std::fs::write(p.root.join("ferrite.toml"),"base=\"/app/\"\n[ssr]\nentry=\"src/home.ts\"\nstreaming=true\nprerender=[\"/\",\"/admin\"]\n[[ssr.entries]]\nroute=\"/admin\"\nentry=\"src/admin.ts\"\nshell=\"admin.html\"\n[runtime]\nbackend=\"napi-vm-process\"\n").unwrap();
+    std::fs::write(p.root.join("ferrite.toml"),"base=\"/app/\"\n[ssr]\nentry=\"src/home.ts\"\nstreaming=true\nprerender=[\"/\",\"/admin\"]\n[[ssr.entries]]\nroute=\"/admin\"\nentry=\"src/admin.ts\"\nshell=\"admin.html\"\n[runtime]\nbackend=\"rquickjs\"\n").unwrap();
     for name in ["home", "admin"] {
         std::fs::write(p.root.join(format!("src/{name}.ts")),format!("import './{name}.css';export function render(){{return new ReadableStream({{start(c){{c.enqueue('<h1>{name}</h1>');c.close();}}}})}}")).unwrap();
     }
@@ -246,7 +246,7 @@ async fn legacy_manifest_only_renderer_remains_readable_and_executable() {
     assert!(legacy.documents.is_empty());
     let adapter = legacy
         .into_adapter(
-            Arc::new(ferrite::runtime::napi_vm::NapiVmRuntime::with_defaults()),
+            Arc::new(ferrite::runtime::quickjs::QuickJsRuntime::with_defaults()),
             std::fs::read_to_string(p.root.join("dist/index.html")).unwrap(),
             "/app/",
         )
@@ -332,7 +332,7 @@ async fn custom_shell_documents_do_not_require_default_index_html() {
         ("src/admin.ts", "export function render(){return '<h1>admin</h1>'}"),
     ]);
     let mut c = p.resolve_config_mode("production");
-    c.runtime.backend = "napi-vm".into();
+    c.runtime.backend = "rquickjs".into();
     c.ssr.entries = vec![ferrite::config::SsrRouteEntry {
         route: "/admin/*".into(),
         entry: "src/admin.ts".into(),
@@ -345,7 +345,7 @@ async fn custom_shell_documents_do_not_require_default_index_html() {
     assert!(!artifact.requires_default_shell());
     let adapter = artifact
         .into_adapter(
-            Arc::new(ferrite::runtime::napi_vm::NapiVmRuntime::with_defaults()),
+            Arc::new(ferrite::runtime::quickjs::QuickJsRuntime::with_defaults()),
             String::new(),
             "/",
         )

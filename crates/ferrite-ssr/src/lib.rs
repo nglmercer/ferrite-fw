@@ -77,12 +77,8 @@ mod tests {
             "{}",
             module.code
         );
-        assert!(module.code.contains("native_allow"), "{}", module.code);
-        assert!(
-            module.code.contains("--features napi-vm"),
-            "{}",
-            module.code
-        );
+        assert!(module.code.contains("unsupported"), "{}", module.code);
+        assert!(module.code.contains("rquickjs"), "{}", module.code);
         // Escaped literal: no raw quote or backslash breaks the JS string.
         assert!(
             module.code.contains("./na\\'tive\\\\addon.node"),

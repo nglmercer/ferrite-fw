@@ -961,7 +961,8 @@ mod ssr_preview_validation_tests {
         config.runtime.backend = "quickjs".into();
         let error = super::preview_with_plugins(&config, &[]).await.unwrap_err();
         assert!(
-            error.to_string().contains("quickjs") && error.to_string().contains("napi-vm"),
+            error.to_string().contains("quickjs")
+                && error.to_string().contains("--features rquickjs"),
             "{error}"
         );
     }
