@@ -11,12 +11,11 @@ does not yet mean every framework profile satisfies that requirement.
 | Vanilla generated applications | Rust | No | Covered by generated-app and SSR/standalone acceptance |
 | React generated applications | Rust/native transform | No for compilation and execution | Registry-backed package installation remains network-dependent; refresh coverage is incomplete |
 | Vue 3.5.22 | Official browser compiler embedded in napi-vm | No for the default embedded host | Experimental operational Rust-only profile; explicit Node remains a transitional fallback |
-| Svelte 5.39.6 | Official compiler in a Node child process | Yes, when explicitly enabled | Transitional experimental profile, not operational Rust-only |
+| Svelte 5.39.6 | Official self-contained compiler embedded in napi-vm | No for the default embedded host | Experimental operational Rust-only profile; explicit Node remains a transitional fallback |
 
 The SSR embedded runtime remains separate from framework compilation. Vue 3.5.22
-now uses the same embedded runtime technology for its official browser compiler
-by default, while Svelte still requires the explicit external Node compiler host.
-Selecting `runtime.backend = "napi-vm"` or `napi-vm-process` never by itself
+and Svelte 5.39.6 use the same embedded runtime technology for their official
+compilers by default. Selecting `runtime.backend = "napi-vm"` or `napi-vm-process` never by itself
 implies that a framework compiler is embedded.
 
 ## Inspect contract
@@ -44,13 +43,13 @@ The profile intentionally does not require Node. It currently proves the parts
 that can execute without it: compiler-host reporting, generated vanilla
 applications in real Chromium/Firefox, generated React and embedded Vue
 production builds/previews using only checked-in pinned package tarballs,
-embedded SSR packaging, streamed prerendering and standalone process/streaming
+embedded Svelte production builds/previews, embedded SSR packaging, streamed prerendering and standalone process/streaming
 recovery. The generated tests run
 their Ferrite child processes with an empty `PATH`.
 
-The profile is a stronger baseline, not final production proof. Svelte
-compilation still requires the explicit external Node compiler host. Vue is
-operational Rust-only through the embedded official compiler, but that is still
-a transitional bridge rather than a Rust-native compiler; dev/HMR, SSR, type
-dependency edge cases and cross-platform release matrices require continued
-acceptance before the full production claim is complete.
+The profile is a stronger baseline, not final production proof. Vue and Svelte
+are operational Rust-only through embedded official compilers, but those are
+transitional bridges rather than Rust-native compilers; embedded compiler
+performance, dev/HMR, SSR, type dependency edge cases and cross-platform
+release matrices require continued acceptance before the full production claim
+is complete.

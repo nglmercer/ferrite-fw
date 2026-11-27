@@ -90,6 +90,7 @@ def plan(profile):
         commands.append(exact("ferrite-test", "generated_apps", "rust_only_inspect_reports_compiler_hosts", "napi-vm"))
         commands.append(exact("ferrite-test", "generated_apps", "chromium_react_offline_fixture_build_and_preview", "napi-vm"))
         commands.append(exact("ferrite-test", "generated_apps", "chromium_vue_embedded_offline_fixture_build_and_preview", "napi-vm"))
+        commands.append(exact("ferrite-test", "generated_apps", "chromium_svelte_embedded_offline_fixture_build_and_preview", "napi-vm"))
         for engine in ("chromium", "firefox"):
             commands.append(exact("ferrite-test", "generated_apps", f"{engine}_generated_profiles", "napi-vm"))
         commands.append(exact("ferrite-test", "standalone", "standalone_ssr_build_compiles_and_renders_without_node", "napi-vm"))

@@ -355,6 +355,89 @@ async fn chromium_vue_embedded_offline_fixture_build_and_preview() {
 }
 
 #[tokio::test]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
+async fn chromium_svelte_embedded_offline_fixture_build_and_preview() {
+    let binary = cli();
+    let (_registry, registry) = fixture_registry("svelte-registry").await;
+    let project = ferrite_test::TempProject::new(&[]);
+    let destination = project.root.join("app");
+    command(
+        &binary,
+        &project.root,
+        &[
+            "create",
+            destination.to_str().unwrap(),
+            "--framework",
+            "svelte",
+            "--language",
+            "ts",
+            "--rendering",
+            "client",
+            "--no-install",
+        ],
+        false,
+    )
+    .await;
+    assert!(std::fs::read_to_string(destination.join("ferrite.toml"))
+        .unwrap()
+        .contains("compiler_host = \"embedded\""));
+    let lock =
+        include_str!("fixtures/svelte.lock").replace("https://registry.npmjs.org", &registry);
+    std::fs::write(destination.join("ferrite.lock"), lock).unwrap();
+    command(
+        &binary,
+        &destination,
+        &["install", "--frozen-lockfile"],
+        false,
+    )
+    .await;
+    let inspected: serde_json::Value =
+        serde_json::from_str(&command(&binary, &destination, &["inspect", "--json"], false).await)
+            .unwrap();
+    assert_eq!(inspected["compilerHosts"][0]["framework"], "svelte");
+    assert_eq!(
+        inspected["compilerHosts"][0]["execution"],
+        "embedded-napi-vm"
+    );
+    assert_eq!(inspected["compilerHosts"][0]["externalNodeRequired"], false);
+    command(&binary, &destination, &["build"], false).await;
+    let executable =
+        ferrite_e2e::find_chromium(None).expect("offline Svelte acceptance requires real Chromium");
+    let browser = Browser::launch(
+        LaunchOptions::default()
+            .browser(BrowserKind::Chromium)
+            .executable(executable),
+    )
+    .await
+    .unwrap();
+    let (mut preview, url) = server(&binary, &destination, "preview", false).await;
+    let page = browser.new_page().await.unwrap();
+    page.goto(&url).await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'count: 0' && getComputedStyle(document.querySelector('#counter')).color === 'rgb(128, 0, 0)'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "offline embedded Svelte preview: {error}; {:?}; {:?}",
+            page.page_errors(),
+            page.console_messages()
+        )
+    });
+    page.locator("#counter").click().await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'count: 1'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap();
+    preview.kill().await.unwrap();
+    preview.wait().await.unwrap();
+    browser.close().await.unwrap();
+}
+
+#[tokio::test]
 #[ignore = "requires freshly built FERRITE_CLI_PATH"]
 async fn rust_only_inspect_reports_compiler_hosts() {
     let binary = cli();
