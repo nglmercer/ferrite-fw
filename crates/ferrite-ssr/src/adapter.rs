@@ -481,4 +481,60 @@ mod rquickjs_tests {
             .iter()
             .any(|(name, value)| name == "x-engine" && value == "rquickjs"));
     }
+
+    #[tokio::test]
+    async fn rquickjs_streams_compiled_graph_with_shell() {
+        use futures::StreamExt;
+        let graph = CompiledModuleGraph {
+            entry: "/entry.js".into(),
+            modules: vec![CompiledModule {
+                id: "/entry.js".into(),
+                code: r#"export function render(url) {
+                  let index = 0;
+                  const chunks = ['<h1>', url, '</h1>'];
+                  return {
+                    status: 200,
+                    headers: [],
+                    body: new ReadableStream({
+                      pull(controller) {
+                        if (index < chunks.length) controller.enqueue(chunks[index++]);
+                        else controller.close();
+                      }
+                    })
+                  };
+                }"#
+                .into(),
+                url: None,
+            }],
+        };
+        let runtime: Arc<dyn JsRuntime> =
+            Arc::new(ferrite_runtime::quickjs::QuickJsRuntime::with_defaults());
+        let adapter = JsSsrAdapter::new_graph(runtime, graph)
+            .unwrap()
+            .with_streaming(true)
+            .with_shell("<html><!--ssr-outlet--></html>");
+        let response = adapter
+            .render(
+                SsrHttpRequest {
+                    method: "GET".into(),
+                    uri: "/stream".into(),
+                    headers: Vec::new(),
+                    body: Vec::new(),
+                },
+                SsrContext::default(),
+            )
+            .await
+            .unwrap();
+        let crate::RenderBody::Stream(stream) = response.body else {
+            panic!("expected streamed body");
+        };
+        let bytes = stream
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>>>()
+            .unwrap()
+            .concat();
+        assert_eq!(bytes, b"<html><h1>/stream</h1></html>");
+    }
 }

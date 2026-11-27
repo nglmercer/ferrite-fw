@@ -223,15 +223,68 @@ impl JsRuntime for QuickJsRuntime {
     async fn invoke_module_graph_stream(
         &self,
         graph: CompiledModuleGraph,
-        _export: &str,
-        _args: Vec<JsValue>,
-        _env: RuntimeEnvironment,
+        export: &str,
+        args: Vec<JsValue>,
+        env: RuntimeEnvironment,
     ) -> Result<JsStreamResponse> {
         graph.validate()?;
-        Err(FerriteError::Runtime(
-            "rquickjs streaming invocation is not implemented yet; use the non-streaming SSR path explicitly"
-                .into(),
-        ))
+        const WRAPPER_ID: &str = "/@ferrite/stream-session";
+        if graph.modules.iter().any(|module| module.id == WRAPPER_ID) {
+            return Err(FerriteError::Runtime(
+                "reserved stream wrapper module identity".into(),
+            ));
+        }
+        let mut graph = graph;
+        let wrapper = include_str!("process/stream_wrapper.js")
+            .replace(
+                "__ENTRY__",
+                &serde_json::to_string(&graph.entry)
+                    .map_err(|error| FerriteError::Runtime(error.to_string()))?,
+            )
+            .replace(
+                "__EXPORT__",
+                &serde_json::to_string(export)
+                    .map_err(|error| FerriteError::Runtime(error.to_string()))?,
+            );
+        graph.modules.push(crate::CompiledModule {
+            id: WRAPPER_ID.into(),
+            code: wrapper,
+            url: None,
+        });
+        graph.entry = WRAPPER_ID.into();
+
+        let namespace = self.evaluate_module_graph(graph, env).await?;
+        let start = namespace.get_function("start")?.clone();
+        let next = namespace.get_function("next")?.clone();
+        let head = self.call(&start, args).await?;
+        crate::js_value_to_json(&head)?;
+
+        let runtime = self.clone();
+        let request_timeout_ms = self.timeout_ms;
+        let started = Instant::now();
+        let body = futures::stream::try_unfold(
+            (runtime, next, started),
+            move |(runtime, next, started)| async move {
+                if request_timeout_ms != 0
+                    && started.elapsed() >= Duration::from_millis(request_timeout_ms)
+                {
+                    return Err(FerriteError::Runtime(
+                        "rquickjs stream deadline exceeded".into(),
+                    ));
+                }
+                let value = runtime.call(&next, vec![]).await?;
+                let chunk = decode_stream_chunk(&value)?;
+                if chunk.done {
+                    Ok(None)
+                } else {
+                    Ok(Some((chunk.bytes, (runtime, next, started))))
+                }
+            },
+        );
+        Ok(JsStreamResponse {
+            head,
+            body: Box::pin(body),
+        })
     }
 
     async fn call(&self, handle: &JsHandle, args: Vec<JsValue>) -> Result<JsValue> {
@@ -294,6 +347,60 @@ fn explain_error(
         detail.push_str(&format!("; {}", control.error()));
     }
     detail
+}
+
+struct StreamChunk {
+    done: bool,
+    bytes: Vec<u8>,
+}
+
+fn decode_stream_chunk(value: &JsValue) -> Result<StreamChunk> {
+    let json = crate::js_value_to_json(value)?;
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct EncodedChunk {
+        done: bool,
+        hex: String,
+        error: Option<String>,
+    }
+    let chunk: EncodedChunk = serde_json::from_value(json).map_err(|error| {
+        FerriteError::Runtime(format!("rquickjs malformed stream chunk: {error}"))
+    })?;
+    if let Some(error) = chunk.error {
+        return Err(FerriteError::Runtime(format!(
+            "rquickjs stream failed: {error}"
+        )));
+    }
+    const CHUNK_BYTES: usize = 64 * 1024;
+    if chunk.hex.len() > CHUNK_BYTES * 2 || !chunk.hex.len().is_multiple_of(2) {
+        return Err(FerriteError::Runtime(
+            "rquickjs invalid encoded stream chunk length".into(),
+        ));
+    }
+    let digit = |byte: u8| match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        _ => Err(FerriteError::Runtime(
+            "rquickjs invalid encoded stream byte".into(),
+        )),
+    };
+    let bytes = chunk
+        .hex
+        .as_bytes()
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| Ok((digit(pair[0])? << 4) | digit(pair[1])?))
+        .collect::<Result<Vec<_>>>()?;
+    if chunk.done && !bytes.is_empty() {
+        return Err(FerriteError::Runtime(
+            "rquickjs invalid terminal stream chunk".into(),
+        ));
+    }
+    Ok(StreamChunk {
+        done: chunk.done,
+        bytes,
+    })
 }
 
 struct GraphResolver;
@@ -458,6 +565,23 @@ if (typeof structuredClone === 'undefined') {
     seen.set(value, clone);
     for (const key of Object.keys(value)) clone[key] = structuredClone(value[key], seen);
     return clone;
+  };
+}
+
+if (typeof globalThis.__ferriteStreamBytes === 'undefined') {
+  globalThis.__ferriteStreamBytes = function ferriteStreamBytes(value, offset) {
+    let bytes;
+    if (typeof value === 'string') bytes = new TextEncoder().encode(value);
+    else if (ArrayBuffer.isView(value)) bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    else if (value instanceof ArrayBuffer) bytes = new Uint8Array(value);
+    else if (Array.isArray(value)) bytes = Uint8Array.from(value);
+    else throw new TypeError('stream chunks must be strings, ArrayBuffers, typed arrays, or byte arrays');
+    offset = Number(offset);
+    if (!Number.isInteger(offset) || offset < 0 || offset > bytes.length) throw new RangeError('invalid stream byte offset');
+    const end = Math.min(bytes.length, offset + 65536);
+    let hex = '';
+    for (let index = offset; index < end; index++) hex += bytes[index].toString(16).padStart(2, '0');
+    return { hex, length: bytes.length };
   };
 }
 "#,
@@ -842,6 +966,49 @@ mod tests {
             .await
             .unwrap();
         assert!(runtime.call(&old, vec![]).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn quickjs_streams_renderer_body_chunks() {
+        use futures::StreamExt;
+        let runtime = QuickJsRuntime::with_defaults();
+        let graph = graph(
+            r#"export async function render(url) {
+              let index = 0;
+              const chunks = ['<h1>', url, '</h1>'];
+              return {
+                status: 202,
+                headers: [['x-stream', 'yes']],
+                body: new ReadableStream({
+                  pull(controller) {
+                    if (index < chunks.length) controller.enqueue(chunks[index++]);
+                    else controller.close();
+                  }
+                })
+              };
+            }"#,
+        );
+        let response = runtime
+            .invoke_module_graph_stream(
+                graph,
+                "render",
+                vec![JsValue::String("/stream".into())],
+                RuntimeEnvironment {
+                    ssr: true,
+                    request_id: None,
+                },
+            )
+            .await
+            .unwrap();
+        let head = crate::js_value_to_json(&response.head).unwrap();
+        assert_eq!(head["status"], 202.0);
+        let chunks = response.body.collect::<Vec<_>>().await;
+        let body = chunks
+            .into_iter()
+            .collect::<Result<Vec<_>>>()
+            .unwrap()
+            .concat();
+        assert_eq!(body, b"<h1>/stream</h1>");
     }
 
     #[tokio::test]
