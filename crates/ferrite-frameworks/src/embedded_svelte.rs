@@ -342,5 +342,32 @@ mod tests {
             .unwrap();
         assert!(result.code.contains("increment"), "{}", result.code);
         assert!(!result.code.contains(": number"), "{}", result.code);
+
+        let component = host
+            .compile(CompileRequest {
+                framework: Framework::Svelte,
+                filename: root.path().join("App.svelte"),
+                source: "<script>let count = $state(0);</script><button onclick={() => count++}>{count}</button>".into(),
+                target: CompileTarget::Client,
+                development: true,
+                module: false,
+            })
+            .await
+            .unwrap();
+        assert!(
+            !component
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "invalid_original_source_map_position"),
+            "valid negative source-map deltas must not be discarded: {:?}",
+            component.diagnostics
+        );
+        let component_map = component.map.unwrap();
+        let map = oxc_sourcemap::SourceMap::from_json_string(&component_map.mappings).unwrap();
+        assert!(
+            map.get_tokens()
+                .any(|token| token.get_source_id().is_some()),
+            "valid original positions must survive"
+        );
     }
 }

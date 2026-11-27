@@ -46,22 +46,69 @@ function decodeMappings(mappings) {
     });
   });
 }
+function absoluteMappings(lines) {
+  let source = 0;
+  let originalLine = 0;
+  let originalColumn = 0;
+  let name = 0;
+  return lines.map(line => {
+    let generatedColumn = 0;
+    return line.map(segment => {
+      generatedColumn += segment[0];
+      const absolute = [generatedColumn];
+      if (segment.length > 1) {
+        source += segment[1];
+        originalLine += segment[2];
+        originalColumn += segment[3];
+        absolute.push(source, originalLine, originalColumn);
+        if (segment.length > 4) {
+          name += segment[4];
+          absolute.push(name);
+        }
+      }
+      return absolute;
+    });
+  });
+}
 function encodeMappings(lines) {
-  return lines.map(line => line.map(segment => segment.map(encodeValue).join('')).join(',')).join(';');
+  let previousSource = 0;
+  let previousOriginalLine = 0;
+  let previousOriginalColumn = 0;
+  let previousName = 0;
+  return lines.map(line => {
+    let previousGeneratedColumn = 0;
+    return line.map(segment => {
+      const encoded = [segment[0] - previousGeneratedColumn];
+      previousGeneratedColumn = segment[0];
+      if (segment.length > 1) {
+        encoded.push(segment[1] - previousSource, segment[2] - previousOriginalLine, segment[3] - previousOriginalColumn);
+        previousSource = segment[1];
+        previousOriginalLine = segment[2];
+        previousOriginalColumn = segment[3];
+        if (segment.length > 4) {
+          encoded.push(segment[4] - previousName);
+          previousName = segment[4];
+        }
+      }
+      return encoded.map(encodeValue).join('');
+    }).join(',');
+  }).join(';');
 }
 
 // ECMA-426 DecodeMappingsField: invalid original positions are null, with
-// a reported diagnostic. Never clamp them to fabricated source coordinates.
+// a reported diagnostic. Negative VLQ deltas are valid, so validity is decided
+// only after reconstructing absolute source positions. Never clamp them to
+// fabricated source coordinates.
 function svelteMap(value, request, diagnostics) {
   const json = clone(value);
   if (!json) return null;
   if (typeof json.mappings !== 'string') return json;
-  const lines = decodeMappings(json.mappings);
+  const lines = absoluteMappings(decodeMappings(json.mappings));
   let invalid = 0;
   for (const line of lines) {
     for (let index = 0; index < line.length; index++) {
       const segment = line[index];
-      if (segment.length > 1 && (segment[2] < 0 || segment[3] < 0)) {
+      if (segment.length > 1 && (segment[1] < 0 || segment[2] < 0 || segment[3] < 0)) {
         line[index] = [segment[0]];
         invalid++;
       }
