@@ -48,14 +48,16 @@ impl Drop for FixtureRegistry {
 }
 async fn fixture_registry() -> (FixtureRegistry, String) {
     use axum::{body::Body, response::Response, Router};
-    let root =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/framework-registry");
+    let root = std::fs::canonicalize(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/framework-registry"),
+    )
+    .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let app = Router::new().fallback(move |uri: axum::http::Uri| {
         let root = root.clone();
         async move {
-            let mut path = root;
+            let mut path = root.clone();
             let mut valid = true;
             for component in std::path::Path::new(uri.path().trim_start_matches('/')).components() {
                 match component {
@@ -65,8 +67,12 @@ async fn fixture_registry() -> (FixtureRegistry, String) {
                 }
             }
             if valid {
-                if let Ok(bytes) = tokio::fs::read(&path).await {
-                    return Response::new(Body::from(bytes));
+                if let Ok(canonical) = tokio::fs::canonicalize(&path).await {
+                    if canonical.starts_with(&root) {
+                        if let Ok(bytes) = tokio::fs::read(&canonical).await {
+                            return Response::new(Body::from(bytes));
+                        }
+                    }
                 }
             }
             Response::builder().status(404).body(Body::empty()).unwrap()
