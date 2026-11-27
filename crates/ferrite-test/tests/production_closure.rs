@@ -484,3 +484,154 @@ async fn chromium_worker_query_production_execution() {
     page.close().await.unwrap();
     browser.close().await.unwrap();
 }
+
+fn wasm_fixture() -> ferrite_test::TempProject {
+    let project = ferrite_test::TempProject::new(&[
+        ("index.html", "<html><head></head><body><script type='module' src='/src/main.js'></script></body></html>"),
+        ("src/main.js", "import init from './answer.wasm?wasm';\ninit().then((exports) => { globalThis.wasmResult = exports.answer(); });\nglobalThis.ready = true;\n"),
+    ]);
+    std::fs::write(
+        project.root.join("src/answer.wasm"),
+        [
+            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, // header
+            0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7f, // type: () -> i32
+            0x03, 0x02, 0x01, 0x00, // function
+            0x07, 0x0a, 0x01, 0x06, b'a', b'n', b's', b'w', b'e', b'r', 0x00, 0x00, // export
+            0x0a, 0x06, 0x01, 0x04, 0x00, 0x41, 0x2a, 0x0b, // code: i32.const 42
+        ],
+    )
+    .unwrap();
+    project
+}
+
+#[tokio::test]
+async fn wasm_query_emits_executable_asset_closure() {
+    for minify in [false, true] {
+        for scope_hoist in [false, true] {
+            let project = wasm_fixture();
+            let mut config = project.resolve_config_mode("production");
+            config.build.minify = minify;
+            config.build.scope_hoist = scope_hoist;
+            ferrite::Builder::new(config.clone(), vec![])
+                .build("client")
+                .await
+                .unwrap();
+            let wasm: Vec<_> = std::fs::read_dir(config.out_dir().join("assets"))
+                .unwrap()
+                .filter_map(|entry| {
+                    let path = entry.unwrap().path();
+                    (path
+                        .extension()
+                        .is_some_and(|extension| extension == "wasm"))
+                    .then_some(path)
+                })
+                .collect();
+            assert_eq!(wasm.len(), 1, "minify={minify} scope={scope_hoist}");
+            let wasm_name = wasm[0].file_name().unwrap().to_string_lossy().into_owned();
+            let mut js = String::new();
+            for entry in std::fs::read_dir(config.out_dir().join("assets")).unwrap() {
+                let path = entry.unwrap().path();
+                if path.extension().is_some_and(|extension| extension == "js") {
+                    js.push_str(&std::fs::read_to_string(path).unwrap());
+                }
+            }
+            for quote in ['"', '\'', '`'] {
+                assert!(
+                    !js.contains(&format!("{quote}/src/answer.wasm{quote}")),
+                    "unresolved source WASM URL for minify={minify} scope={scope_hoist}: {js}"
+                );
+            }
+            assert!(
+                js.contains(&wasm_name),
+                "WASM shim does not reference {wasm_name} for minify={minify} scope={scope_hoist}: {js}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+#[ignore = "real Chromium, emitted production WASM graph"]
+async fn chromium_wasm_query_production_execution() {
+    let executable = ferrite_e2e::find_chromium(None).expect("real Chromium required");
+    let browser = Browser::launch(
+        LaunchOptions::default()
+            .browser(BrowserKind::Chromium)
+            .executable(executable),
+    )
+    .await
+    .unwrap();
+    let project = wasm_fixture();
+    let mut config = project.resolve_config_mode("production");
+    config.base = "/app/".into();
+    config.build.minify = true;
+    config.build.scope_hoist = true;
+    ferrite::Builder::new(config.clone(), vec![])
+        .build("client")
+        .await
+        .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    config.server.port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let serving_config = config.clone();
+    let _serving = Serving(tokio::spawn(async move {
+        ferrite::preview_with_plugins(&serving_config, &[]).await
+    }));
+    let url = format!("http://127.0.0.1:{}/app/", config.server.port);
+    ferrite_e2e::wait_for_url(&url, Duration::from_secs(10))
+        .await
+        .unwrap();
+    let page = browser.new_page().await.unwrap();
+    page.goto(&url).await.unwrap();
+    page.wait_for_function("globalThis.wasmResult === 42", Duration::from_secs(10))
+        .await
+        .unwrap_or_else(|error| panic!("{error}; errors={:?}", page.page_errors()));
+    assert!(page.page_errors().is_empty(), "{:?}", page.page_errors());
+    page.close().await.unwrap();
+    browser.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn url_query_emits_hashed_asset_instead_of_source_path() {
+    let project = ferrite_test::TempProject::new(&[
+        (
+            "index.html",
+            "<html><body><script type='module' src='/src/main.js'></script></body></html>",
+        ),
+        (
+            "src/main.js",
+            "import logo from './logo.svg?url';\nglobalThis.logo = logo;\n",
+        ),
+        (
+            "src/logo.svg",
+            "<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'/>",
+        ),
+    ]);
+    let mut config = project.resolve_config_mode("production");
+    config.build.minify = true;
+    ferrite::Builder::new(config.clone(), vec![])
+        .build("client")
+        .await
+        .unwrap();
+    let assets: Vec<_> = std::fs::read_dir(config.out_dir().join("assets"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    let svg: Vec<_> = assets
+        .iter()
+        .filter(|path| path.extension().is_some_and(|extension| extension == "svg"))
+        .collect();
+    assert_eq!(svg.len(), 1, "{assets:?}");
+    let svg_name = svg[0].file_name().unwrap().to_string_lossy();
+    let js: String = assets
+        .iter()
+        .filter(|path| path.extension().is_some_and(|extension| extension == "js"))
+        .map(|path| std::fs::read_to_string(path).unwrap())
+        .collect();
+    assert!(js.contains(&*svg_name), "{js}");
+    for quote in ['"', '\'', '`'] {
+        assert!(
+            !js.contains(&format!("{quote}/src/logo.svg{quote}")),
+            "{js}"
+        );
+    }
+}
