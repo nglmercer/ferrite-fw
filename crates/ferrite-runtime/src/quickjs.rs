@@ -1016,42 +1016,42 @@ if (typeof globalThis.__ferriteStreamBytes === 'undefined') {
         ctx: &rquickjs::Ctx<'js>,
         control: &ExecutionControl,
     ) -> std::result::Result<(), String> {
-        loop {
+        self.check_control()?;
+        while ctx.execute_pending_job() {
             self.check_control()?;
-            let mut ran_job = false;
-            while ctx.execute_pending_job() {
-                ran_job = true;
-                self.check_control()?;
-            }
-            if ran_job {
-                continue;
-            }
-            let next = self
-                .timers
-                .borrow()
-                .timers
-                .iter()
-                .map(|(id, timer)| (*id, timer.due))
-                .min_by_key(|(_, due)| *due);
-            let Some((id, due)) = next else {
-                return Ok(());
-            };
-            if due > Instant::now() {
-                return Ok(());
-            }
-            let timer = self.timers.borrow_mut().timers.remove(&id).unwrap();
-            let callback = timer
-                .callback
-                .restore(ctx)
-                .map_err(|error| format!("rquickjs timer restore failed: {error:?}"))?;
-            let result: std::result::Result<Value, _> = callback.call(());
-            if let Err(error) = result {
-                return Err(format!(
-                    "rquickjs timer failed: {}",
-                    explain_error(ctx, error, control)
-                ));
-            }
         }
+        let next = self
+            .timers
+            .borrow()
+            .timers
+            .iter()
+            .map(|(id, timer)| (*id, timer.due))
+            .min_by_key(|(_, due)| *due);
+        let Some((id, due)) = next else {
+            return Ok(());
+        };
+        if due > Instant::now() {
+            return Ok(());
+        }
+        // Run one timer turn, not every expired timer. A renderer may chain
+        // zero-timeout batches indefinitely; delivering an already-resolved
+        // stream chunk between turns is what provides forward progress.
+        let timer = self.timers.borrow_mut().timers.remove(&id).unwrap();
+        let callback = timer
+            .callback
+            .restore(ctx)
+            .map_err(|error| format!("rquickjs timer restore failed: {error:?}"))?;
+        let result: std::result::Result<Value, _> = callback.call(());
+        if let Err(error) = result {
+            return Err(format!(
+                "rquickjs timer failed: {}",
+                explain_error(ctx, error, control)
+            ));
+        }
+        while ctx.execute_pending_job() {
+            self.check_control()?;
+        }
+        Ok(())
     }
 
     fn settle_value<'js>(
@@ -1424,6 +1424,39 @@ mod tests {
             .unwrap()
             .concat();
         assert!(!bytes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn quickjs_stream_zero_timer_chain_does_not_block_ready_chunks() {
+        use futures::StreamExt;
+        let runtime = QuickJsRuntime::new(QuickJsOptions {
+            request_timeout_ms: 200,
+            ..Default::default()
+        });
+        let response = runtime
+            .invoke_module_graph_stream(
+                graph(
+                    r#"export function render() {
+                  return new ReadableStream({
+                    start(controller) {
+                      controller.enqueue('ready');
+                      function chain() { setTimeout(chain, 0); }
+                      chain();
+                    }
+                  });
+                }"#,
+                ),
+                "render",
+                vec![],
+                RuntimeEnvironment {
+                    ssr: true,
+                    request_id: None,
+                },
+            )
+            .await
+            .unwrap();
+        let mut body = response.body;
+        assert_eq!(body.next().await.unwrap().unwrap(), b"ready");
     }
 
     #[tokio::test]
