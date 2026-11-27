@@ -12,6 +12,7 @@ ferrite-runtime = { workspace = true }
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+indexmap = { workspace = true }
 tokio = { workspace = true }
 futures = { workspace = true }
 bytes = { workspace = true }
@@ -19,4 +20,4 @@ rmp-serde = { workspace = true }
 ciborium = { workspace = true }
 
 [features]
-napi-vm = ["ferrite-runtime/napi-vm"]
+rquickjs = ["ferrite-runtime/rquickjs"]

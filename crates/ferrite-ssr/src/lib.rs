@@ -77,12 +77,8 @@ mod tests {
             "{}",
             module.code
         );
-        assert!(module.code.contains("native_allow"), "{}", module.code);
-        assert!(
-            module.code.contains("--features napi-vm"),
-            "{}",
-            module.code
-        );
+        assert!(module.code.contains("unsupported"), "{}", module.code);
+        assert!(module.code.contains("rquickjs"), "{}", module.code);
         // Escaped literal: no raw quote or backslash breaks the JS string.
         assert!(
             module.code.contains("./na\\'tive\\\\addon.node"),
@@ -193,11 +189,11 @@ mod tests {
         assert!(error.to_string().contains("does-not-exist"), "{error}");
     }
 
-    #[cfg(feature = "napi-vm")]
+    #[cfg(feature = "rquickjs")]
     #[tokio::test]
-    async fn renders_through_napi_vm() {
+    async fn renders_through_rquickjs() {
         let mut resolved = test_resolved();
-        resolved.runtime.backend = "napi-vm".to_string();
+        resolved.runtime.backend = "rquickjs".to_string();
         let adapter = JsSsrAdapter::from_resolved_graph(
             &resolved,
             ferrite_runtime::CompiledModuleGraph {
@@ -240,11 +236,11 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "napi-vm")]
+    #[cfg(feature = "rquickjs")]
     #[tokio::test]
     async fn bad_allowlist_mapping_fails_loudly() {
         let mut resolved = test_resolved();
-        resolved.runtime.backend = "napi-vm".to_string();
+        resolved.runtime.backend = "rquickjs".to_string();
         resolved.runtime.native_allow = vec!["/nonexistent-ferrite/missing.node".to_string()];
         let adapter = JsSsrAdapter::from_resolved(
             &resolved,
@@ -269,17 +265,14 @@ mod tests {
         assert!(error.to_string().contains("missing.node"), "{error}");
     }
 
-    #[cfg(feature = "napi-vm")]
+    #[cfg(feature = "rquickjs")]
     #[tokio::test]
-    async fn configured_guest_depth_and_job_caps_fail_and_allow_recovery() {
+    async fn guest_stack_limit_fails_and_allows_recovery() {
         for (code, expected) in [
             ("function recurse() { return 1 + recurse(); } export function render() { return recurse(); }", "Maximum call stack"),
-            ("function spin() { queueMicrotask(spin); } export function render() { queueMicrotask(spin); return 'unbounded'; }", "Maximum job count"),
         ] {
             let mut resolved = test_resolved();
-            resolved.runtime.backend = "napi-vm".into();
-            resolved.runtime.max_call_depth = 16;
-            resolved.runtime.max_jobs_per_drain = 16;
+            resolved.runtime.backend = "rquickjs".into();
             let graph = ferrite_runtime::CompiledModuleGraph { entry: "limited".into(), modules: vec![CompiledModule { id: "limited".into(), code: code.into(), url: None }] };
             let mut adapter = JsSsrAdapter::from_resolved_graph(&resolved, graph.clone()).unwrap();
             let request = SsrHttpRequest { method: "GET".into(), uri: "/".into(), headers: Vec::new(), body: Vec::new() };
@@ -293,11 +286,11 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "napi-vm")]
+    #[cfg(feature = "rquickjs")]
     #[tokio::test]
     async fn resolved_request_deadline_interrupts_renderer_and_allows_recovery() {
         let mut resolved = test_resolved();
-        resolved.runtime.backend = "napi-vm".into();
+        resolved.runtime.backend = "rquickjs".into();
         resolved.runtime.request_timeout_ms = 500;
         resolved.runtime.fuel_budget = u64::MAX;
         resolved.runtime.loop_budget = u64::MAX;
@@ -345,11 +338,11 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "napi-vm")]
+    #[cfg(feature = "rquickjs")]
     #[tokio::test]
     async fn resolved_payload_limit_is_enforced_by_the_selected_runtime() {
         let user: ferrite_config::UserConfig = serde_json::from_value(serde_json::json!({
-            "runtime": {"backend": "napi-vm", "queue_capacity": 2, "max_request_bytes": 16}
+            "runtime": {"backend": "rquickjs", "queue_capacity": 2, "max_request_bytes": 16}
         }))
         .unwrap();
         let mut resolved =
@@ -378,10 +371,11 @@ mod tests {
         assert_eq!(response.into_string().await.unwrap(), "<h1>bounded</h1>");
     }
 
-    #[cfg(feature = "napi-vm")]
+    #[cfg(feature = "rquickjs")]
     #[tokio::test]
     async fn independent_adapters_share_a_worker_without_graph_or_guest_state_races() {
-        let runtime = std::sync::Arc::new(ferrite_runtime::napi_vm::NapiVmRuntime::with_defaults());
+        let runtime =
+            std::sync::Arc::new(ferrite_runtime::quickjs::QuickJsRuntime::with_defaults());
         let mut tasks = Vec::new();
         for owner in 0..24 {
             let adapter = JsSsrAdapter::new(runtime.clone(), CompiledModule {
@@ -415,11 +409,11 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "napi-vm")]
+    #[cfg(feature = "rquickjs")]
     #[tokio::test]
     async fn repeated_and_concurrent_renders_isolate_guest_globals_and_prototypes() {
         let mut resolved = test_resolved();
-        resolved.runtime.backend = "napi-vm".into();
+        resolved.runtime.backend = "rquickjs".into();
         let adapter = std::sync::Arc::new(JsSsrAdapter::from_resolved(&resolved, CompiledModule {
             id: "isolated-renderer".into(),
             code: "globalThis.counter = (globalThis.counter || 0) + 1; export function render(url) { const previous = Object.prototype.previousRequest || 'empty'; Object.prototype.previousRequest = url; return `${globalThis.counter}|${previous}|${url}`; }".into(), url: None,
@@ -452,11 +446,11 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "napi-vm")]
+    #[cfg(feature = "rquickjs")]
     #[tokio::test]
     async fn javascript_renderer_receives_request_and_returns_http_metadata() {
         let mut resolved = test_resolved();
-        resolved.runtime.backend = "napi-vm".into();
+        resolved.runtime.backend = "rquickjs".into();
         let adapter = JsSsrAdapter::from_resolved(&resolved, CompiledModule {
             id: "request-renderer".into(),
             code: "export function render(url, request) { return { html: `<h1>${request.method} ${url} ${request.uri} ${request.headers[0][1]} ${request.body[0]}</h1>`, status: 202, headers: [['x-renderer', 'js'], ['set-cookie', 'a=1'], ['set-cookie', 'b=2']] }; }".into(),
@@ -495,11 +489,11 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "napi-vm")]
+    #[cfg(feature = "rquickjs")]
     #[tokio::test]
     async fn javascript_renderer_rejects_invalid_or_unsupported_response_shapes() {
         let mut resolved = test_resolved();
-        resolved.runtime.backend = "napi-vm".into();
+        resolved.runtime.backend = "rquickjs".into();
         for (result, expected) in [
             ("{html: 'ok', status: 100}", "invalid final HTTP status"),
             ("{html: 'ok', status: 200.5}", "invalid final HTTP status"),
@@ -659,5 +653,63 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(missing.status, 404);
+    }
+
+    #[cfg(feature = "rquickjs")]
+    #[tokio::test]
+    async fn undefined_optional_response_fields_use_defaults() {
+        let mut resolved = test_resolved();
+        resolved.runtime.backend = "rquickjs".into();
+        let adapter = JsSsrAdapter::from_resolved(
+            &resolved,
+            CompiledModule {
+                id: "entry".into(),
+                code: "export function render() { return {html:'<h1>optional</h1>',status:undefined,headers:undefined}; }".into(),
+                url: None,
+            },
+        );
+        let response = adapter
+            .render(
+                SsrHttpRequest {
+                    method: "GET".into(),
+                    uri: "/".into(),
+                    headers: vec![],
+                    body: vec![],
+                },
+                Default::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status, 200);
+        assert_eq!(response.into_string().await.unwrap(), "<h1>optional</h1>");
+    }
+
+    #[cfg(feature = "rquickjs")]
+    #[tokio::test]
+    async fn unsupported_napi_execution_limits_fail_loudly() {
+        let mut resolved = test_resolved();
+        resolved.runtime.backend = "rquickjs".into();
+        resolved.runtime.max_call_depth = 16;
+        let adapter = JsSsrAdapter::from_resolved(
+            &resolved,
+            CompiledModule {
+                id: "entry".into(),
+                code: "export function render() { return 'x'; }".into(),
+                url: None,
+            },
+        );
+        let error = adapter
+            .render(
+                SsrHttpRequest {
+                    method: "GET".into(),
+                    uri: "/".into(),
+                    headers: vec![],
+                    body: vec![],
+                },
+                Default::default(),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("does not implement"), "{error}");
     }
 }

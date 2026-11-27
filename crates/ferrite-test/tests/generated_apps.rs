@@ -424,7 +424,7 @@ async fn chromium_react_offline_fixture_ssr_build_and_preview() {
             "--rendering",
             "ssr",
             "--ssr-runtime",
-            "napi-vm",
+            "rquickjs",
             "--no-install",
         ],
         false,
@@ -439,6 +439,103 @@ async fn chromium_react_offline_fixture_ssr_build_and_preview() {
         false,
     )
     .await;
+    let inspected: serde_json::Value =
+        serde_json::from_str(&command(&binary, &destination, &["inspect", "--json"], false).await)
+            .unwrap();
+    assert_eq!(inspected["compilerHosts"][0]["framework"], "react");
+    assert_eq!(inspected["compilerHosts"][0]["execution"], "rust");
+    assert_eq!(inspected["compilerHosts"][0]["externalNodeRequired"], false);
+    command(&binary, &destination, &["build"], false).await;
+    assert!(destination.join("dist/server/renderer.json").exists());
+    assert!(std::fs::read_dir(destination.join("dist/server/assets"))
+        .unwrap()
+        .any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("entry-server-")));
+
+    let executable = ferrite_e2e::find_chromium(None)
+        .expect("offline React SSR acceptance requires real Chromium");
+    let browser = Browser::launch(
+        LaunchOptions::default()
+            .browser(BrowserKind::Chromium)
+            .executable(executable),
+    )
+    .await
+    .unwrap();
+    let (mut preview, url) = server(&binary, &destination, "preview", false).await;
+    let page = browser.new_page().await.unwrap();
+    page.goto(&url).await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'count: 0' && getComputedStyle(document.querySelector('#counter')).color === 'rgb(128, 0, 0)'",
+        Duration::from_secs(15),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "offline React SSR preview: {error}; {:?}; {:?}",
+            page.page_errors(),
+            page.console_messages()
+        )
+    });
+    page.locator("#counter").click().await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'count: 1'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap();
+    assert!(page.page_errors().is_empty(), "{:?}", page.page_errors());
+    preview.kill().await.unwrap();
+    preview.wait().await.unwrap();
+    browser.close().await.unwrap();
+}
+#[tokio::test]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
+async fn chromium_react_offline_fixture_streaming_ssr_build_and_preview() {
+    let binary = cli();
+    let (_registry, registry) = fixture_registry("react-registry").await;
+    let project = ferrite_test::TempProject::new(&[]);
+    let destination = project.root.join("app");
+    command(
+        &binary,
+        &project.root,
+        &[
+            "create",
+            destination.to_str().unwrap(),
+            "--framework",
+            "react",
+            "--language",
+            "ts",
+            "--rendering",
+            "ssr",
+            "--ssr-runtime",
+            "rquickjs",
+            "--no-install",
+        ],
+        false,
+    )
+    .await;
+    let lock = include_str!("fixtures/react.lock").replace("https://registry.npmjs.org", &registry);
+    std::fs::write(destination.join("ferrite.lock"), lock).unwrap();
+    command(
+        &binary,
+        &destination,
+        &["install", "--frozen-lockfile"],
+        false,
+    )
+    .await;
+    std::fs::write(
+        destination.join("src/entry-server.tsx"),
+        "import { renderToReadableStream } from 'react-dom/server.edge';\nimport App from './App';\nexport function render() { return renderToReadableStream(<App />); }\n",
+    )
+    .unwrap();
+    let config_path = destination.join("ferrite.toml");
+    let old_config = std::fs::read_to_string(&config_path).unwrap();
+    let config = old_config.replace("[ssr]\nentry", "[ssr]\nstreaming = true\nentry");
+    assert_ne!(config, old_config);
+    std::fs::write(config_path, config).unwrap();
     let inspected: serde_json::Value =
         serde_json::from_str(&command(&binary, &destination, &["inspect", "--json"], false).await)
             .unwrap();
@@ -512,7 +609,7 @@ async fn chromium_vue_embedded_offline_fixture_ssr_build_and_preview() {
             "--rendering",
             "ssr",
             "--ssr-runtime",
-            "napi-vm",
+            "rquickjs",
             "--no-install",
         ],
         false,
@@ -556,7 +653,140 @@ async fn chromium_vue_embedded_offline_fixture_ssr_build_and_preview() {
     assert_eq!(inspected["compilerHosts"][0]["framework"], "vue");
     assert_eq!(
         inspected["compilerHosts"][0]["execution"],
-        "embedded-napi-vm"
+        "embedded-rquickjs"
+    );
+    assert_eq!(inspected["compilerHosts"][0]["externalNodeRequired"], false);
+    command(&binary, &destination, &["build"], false).await;
+    assert!(destination.join("dist/server/renderer.json").exists());
+    assert!(std::fs::read_dir(destination.join("dist/server/assets"))
+        .unwrap()
+        .any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("entry-server-")));
+    let assets = std::fs::read_dir(destination.join("dist/assets")).unwrap();
+    assert!(assets.flatten().any(|entry| {
+        entry
+            .file_type()
+            .map(|kind| kind.is_file())
+            .unwrap_or(false)
+            && entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "js")
+            && std::fs::read_to_string(entry.path()).is_ok_and(|code| code.contains("_café_"))
+    }));
+    let executable =
+        ferrite_e2e::find_chromium(None).expect("offline Vue acceptance requires real Chromium");
+    let browser = Browser::launch(
+        LaunchOptions::default()
+            .browser(BrowserKind::Chromium)
+            .executable(executable),
+    )
+    .await
+    .unwrap();
+    let (mut preview, url) = server(&binary, &destination, "preview", false).await;
+    let page = browser.new_page().await.unwrap();
+    page.goto(&url).await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'count: 0' && getComputedStyle(document.querySelector('#counter')).backgroundColor === 'rgb(0, 128, 0)'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "offline embedded Vue preview: {error}; {:?}; {:?}",
+            page.page_errors(),
+            page.console_messages()
+        )
+    });
+    page.locator("#counter").click().await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'count: 1'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap();
+    preview.kill().await.unwrap();
+    preview.wait().await.unwrap();
+    browser.close().await.unwrap();
+}
+#[tokio::test]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
+async fn chromium_vue_embedded_offline_fixture_streaming_ssr_build_and_preview() {
+    let binary = cli();
+    let (_registry, registry) = fixture_registry("vue-registry").await;
+    let project = ferrite_test::TempProject::new(&[]);
+    let destination = project.root.join("app");
+    command(
+        &binary,
+        &project.root,
+        &[
+            "create",
+            destination.to_str().unwrap(),
+            "--framework",
+            "vue",
+            "--language",
+            "ts",
+            "--rendering",
+            "ssr",
+            "--ssr-runtime",
+            "rquickjs",
+            "--no-install",
+        ],
+        false,
+    )
+    .await;
+    assert!(std::fs::read_to_string(destination.join("ferrite.toml"))
+        .unwrap()
+        .contains("compiler_host = \"embedded\""));
+    let component_path = destination.join("src/App.vue");
+    let component = std::fs::read_to_string(&component_path).unwrap();
+    std::fs::write(
+        &component_path,
+        component
+            .replace("import { ref }", "import { ref, useCssModule }")
+            .replace(
+                "</script>",
+                "const classes = useCssModule('accents');\n</script>",
+            )
+            .replace("id=\"counter\"", "id=\"counter\" :class=\"[classes.accent, classes.café]\"")
+            + "\n<style module=\"accents\">.accent { background-color: rgb(0, 128, 0); } .café { border-style: solid; } [data-x=\\[] .café { border-width: 1px; } .accent::before { content: \"\\2192\"; }</style>\n<style>.escaped\\{literal { visibility: visible; }</style>\n",
+    )
+    .unwrap();
+    let lock = include_str!("fixtures/vue.lock").replace("https://registry.npmjs.org", &registry);
+    std::fs::write(destination.join("ferrite.lock"), lock).unwrap();
+    command(
+        &binary,
+        &destination,
+        &["install", "--frozen-lockfile"],
+        false,
+    )
+    .await;
+    std::fs::remove_file(
+        destination.join(
+            ".ferrite/npm/packages/@vue/compiler-sfc@3.5.22/dist/compiler-sfc.esm-browser.js",
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        destination.join("src/entry-server.ts"),
+        "import { createSSRApp } from 'vue';\nimport { renderToWebStream } from 'vue/server-renderer';\nimport App from './App.vue';\nexport function render() { return renderToWebStream(createSSRApp(App)); }\n",
+    )
+    .unwrap();
+    let config_path = destination.join("ferrite.toml");
+    let old_config = std::fs::read_to_string(&config_path).unwrap();
+    let config = old_config.replace("[ssr]\nentry", "[ssr]\nstreaming = true\nentry");
+    assert_ne!(config, old_config);
+    std::fs::write(config_path, config).unwrap();
+    let inspected: serde_json::Value =
+        serde_json::from_str(&command(&binary, &destination, &["inspect", "--json"], false).await)
+            .unwrap();
+    assert_eq!(inspected["compilerHosts"][0]["framework"], "vue");
+    assert_eq!(
+        inspected["compilerHosts"][0]["execution"],
+        "embedded-rquickjs"
     );
     assert_eq!(inspected["compilerHosts"][0]["externalNodeRequired"], false);
     command(&binary, &destination, &["build"], false).await;
@@ -774,7 +1004,7 @@ async fn chromium_svelte_embedded_offline_fixture_ssr_build_and_preview() {
             "--rendering",
             "ssr",
             "--ssr-runtime",
-            "napi-vm",
+            "rquickjs",
             "--no-install",
         ],
         false,
@@ -801,7 +1031,113 @@ async fn chromium_svelte_embedded_offline_fixture_ssr_build_and_preview() {
     assert_eq!(inspected["compilerHosts"][0]["framework"], "svelte");
     assert_eq!(
         inspected["compilerHosts"][0]["execution"],
-        "embedded-napi-vm"
+        "embedded-rquickjs"
+    );
+    assert_eq!(inspected["compilerHosts"][0]["externalNodeRequired"], false);
+    command(&binary, &destination, &["build"], false).await;
+    assert!(destination.join("dist/server/renderer.json").exists());
+    assert!(std::fs::read_dir(destination.join("dist/server/assets"))
+        .unwrap()
+        .any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("entry-server-")));
+    let executable =
+        ferrite_e2e::find_chromium(None).expect("offline Svelte acceptance requires real Chromium");
+    let browser = Browser::launch(
+        LaunchOptions::default()
+            .browser(BrowserKind::Chromium)
+            .executable(executable),
+    )
+    .await
+    .unwrap();
+    let (mut preview, url) = server(&binary, &destination, "preview", false).await;
+    let page = browser.new_page().await.unwrap();
+    page.goto(&url).await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'count: 0' && getComputedStyle(document.querySelector('#counter')).color === 'rgb(128, 0, 0)'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "offline embedded Svelte preview: {error}; {:?}; {:?}",
+            page.page_errors(),
+            page.console_messages()
+        )
+    });
+    page.locator("#counter").click().await.unwrap();
+    page.wait_for_function(
+        "document.querySelector('#counter')?.textContent === 'count: 1'",
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap();
+    preview.kill().await.unwrap();
+    preview.wait().await.unwrap();
+    browser.close().await.unwrap();
+}
+#[tokio::test]
+#[ignore = "requires freshly built FERRITE_CLI_PATH and real Chromium"]
+async fn chromium_svelte_embedded_offline_fixture_streamed_output_ssr_build_and_preview() {
+    let binary = cli();
+    let (_registry, registry) = fixture_registry("svelte-registry").await;
+    let project = ferrite_test::TempProject::new(&[]);
+    let destination = project.root.join("app");
+    command(
+        &binary,
+        &project.root,
+        &[
+            "create",
+            destination.to_str().unwrap(),
+            "--framework",
+            "svelte",
+            "--language",
+            "ts",
+            "--rendering",
+            "ssr",
+            "--ssr-runtime",
+            "rquickjs",
+            "--no-install",
+        ],
+        false,
+    )
+    .await;
+    assert!(std::fs::read_to_string(destination.join("ferrite.toml"))
+        .unwrap()
+        .contains("compiler_host = \"embedded\""));
+    let lock =
+        include_str!("fixtures/svelte.lock").replace("https://registry.npmjs.org", &registry);
+    std::fs::write(destination.join("ferrite.lock"), lock).unwrap();
+    command(
+        &binary,
+        &destination,
+        &["install", "--frozen-lockfile"],
+        false,
+    )
+    .await;
+    std::fs::remove_file(destination.join(".ferrite/npm/packages/svelte@5.39.6/compiler/index.js"))
+        .unwrap();
+    // Svelte 5.39.6 has asynchronous SSR but no public progressive stream API.
+    // Exercise Ferrite's streaming transport with the completed framework output.
+    std::fs::write(
+        destination.join("src/entry-server.ts"),
+        "import { render as renderComponent } from 'svelte/server';\nimport App from './App.svelte';\nasync function* body() { yield renderComponent(App).body; }\nexport function render() { return body(); }\n",
+    )
+    .unwrap();
+    let config_path = destination.join("ferrite.toml");
+    let old_config = std::fs::read_to_string(&config_path).unwrap();
+    let config = old_config.replace("[ssr]\nentry", "[ssr]\nstreaming = true\nentry");
+    assert_ne!(config, old_config);
+    std::fs::write(config_path, config).unwrap();
+    let inspected: serde_json::Value =
+        serde_json::from_str(&command(&binary, &destination, &["inspect", "--json"], false).await)
+            .unwrap();
+    assert_eq!(inspected["compilerHosts"][0]["framework"], "svelte");
+    assert_eq!(
+        inspected["compilerHosts"][0]["execution"],
+        "embedded-rquickjs"
     );
     assert_eq!(inspected["compilerHosts"][0]["externalNodeRequired"], false);
     command(&binary, &destination, &["build"], false).await;
@@ -2299,9 +2635,9 @@ async fn firefox_generated_react_profiles() {
     acceptance(BrowserKind::Firefox, &["react"]).await;
 }
 
-#[cfg(feature = "napi-vm")]
+#[cfg(feature = "rquickjs")]
 #[tokio::test]
-#[ignore = "fresh napi-vm CLI and real registry; Vue SSR generation and frozen reinstall"]
+#[ignore = "fresh rquickjs CLI and real registry; Vue SSR generation and frozen reinstall"]
 async fn cli_vue_ssr_generation_and_clean_frozen_reinstall() {
     let binary = cli();
     let listing = command(
@@ -2333,7 +2669,7 @@ async fn cli_vue_ssr_generation_and_clean_frozen_reinstall() {
                 "--compiler-host",
                 "node",
                 "--ssr-runtime",
-                "napi-vm",
+                "rquickjs",
             ],
             false,
         )
@@ -2375,7 +2711,7 @@ async fn cli_vue_ssr_generation_and_clean_frozen_reinstall() {
             &command(&binary, &destination, &["doctor", "--json"], true).await,
         )
         .unwrap();
-        assert_eq!(report["ssr_runtime"], "napi-vm");
+        assert_eq!(report["ssr_runtime"], "rquickjs");
         assert_eq!(report["ssr_runtime_probe"], "compiled-not-executed");
         let vue = report["frameworks"]
             .as_array()
@@ -2392,25 +2728,25 @@ async fn cli_vue_ssr_generation_and_clean_frozen_reinstall() {
             .iter()
             .any(|row| row["language"] == language
                 && row["rendering"] == "ssr"
-                && row["ssr_runtime"] == "napi-vm"));
+                && row["ssr_runtime"] == "rquickjs"));
     }
 }
 
-#[cfg(feature = "napi-vm")]
+#[cfg(feature = "rquickjs")]
 #[tokio::test]
-#[ignore = "fresh napi-vm CLI, registry, Node compiler and both browsers"]
+#[ignore = "fresh rquickjs CLI, registry, Node compiler and both browsers"]
 async fn cli_vue_ssr_create_dev_build_preview_cycle() {
     cli_vue_ssr_cycle_at_base("/").await;
 }
 
-#[cfg(feature = "napi-vm")]
+#[cfg(feature = "rquickjs")]
 #[tokio::test]
-#[ignore = "fresh napi-vm CLI, registry, Node compiler and both browsers"]
+#[ignore = "fresh rquickjs CLI, registry, Node compiler and both browsers"]
 async fn cli_vue_ssr_base_path_cycle() {
     cli_vue_ssr_cycle_at_base("/app/").await;
 }
 
-#[cfg(feature = "napi-vm")]
+#[cfg(feature = "rquickjs")]
 async fn cli_vue_ssr_cycle_at_base(base: &str) {
     async fn get(url: &str, path: &str) -> String {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -2457,7 +2793,7 @@ async fn cli_vue_ssr_cycle_at_base(base: &str) {
                     "--compiler-host",
                     "node",
                     "--ssr-runtime",
-                    "napi-vm",
+                    "rquickjs",
                 ],
                 false,
             )

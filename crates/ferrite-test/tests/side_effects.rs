@@ -68,7 +68,7 @@ fn project(npm: bool) -> TempProject {
 async fn build(project: &TempProject, treeshake: bool, hoist: bool) -> ferrite::BuildReport {
     let mut config = project.resolve_config_mode("production");
     config.ssr.entry = Some("src/entry-server.js".into());
-    config.runtime.backend = "napi-vm".into();
+    config.runtime.backend = "rquickjs".into();
     config.build.minify = treeshake;
     config.build.scope_hoist = hoist;
     ferrite::Builder::new(config, vec![])
@@ -129,7 +129,7 @@ async fn package_metadata_prunes_real_modules_and_assets_in_each_production_mode
     }
 }
 
-#[cfg(feature = "napi-vm")]
+#[cfg(feature = "rquickjs")]
 #[tokio::test]
 async fn emitted_graph_executes_required_effects_and_preserves_dynamic_boundaries() {
     use ferrite::runtime::{JsRuntime, RuntimeEnvironment};
@@ -138,7 +138,7 @@ async fn emitted_graph_executes_required_effects_and_preserves_dynamic_boundarie
             let project = project(npm);
             let report = build(&project, treeshake, hoist).await;
             let artifact = ferrite::SsrRendererArtifact::read(&report.out_dir).unwrap();
-            let runtime = ferrite::runtime::napi_vm::NapiVmRuntime::with_defaults();
+            let runtime = ferrite::runtime::quickjs::QuickJsRuntime::with_defaults();
             let result = runtime
                 .invoke_module_graph(
                     artifact.graph,

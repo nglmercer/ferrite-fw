@@ -1,5 +1,5 @@
 //! Route dispatch executes emitted graphs; unrelated lazy modules never evaluate.
-#![cfg(feature = "napi-vm")]
+#![cfg(feature = "rquickjs")]
 use ferrite::ssr::{SsrAdapter, SsrContext, SsrHttpRequest};
 use std::sync::Arc;
 fn project() -> ferrite_test::TempProject {
@@ -14,7 +14,7 @@ fn project() -> ferrite_test::TempProject {
 }
 fn config(project: &ferrite_test::TempProject) -> ferrite::ResolvedConfig {
     let mut config = project.resolve_config_mode("production");
-    config.runtime.backend = "napi-vm".into();
+    config.runtime.backend = "rquickjs".into();
     config.base = "/app/".into();
     config.ssr.entry = Some("src/default.ts".into());
     config.ssr.entries = [
@@ -134,7 +134,7 @@ async fn route_entries_dev_build_and_prerender_share_dispatch() {
         let artifact = ferrite::SsrRendererArtifact::read(&reports[1].out_dir).unwrap();
         let built = artifact
             .into_adapter(
-                Arc::new(ferrite::runtime::napi_vm::NapiVmRuntime::with_defaults()),
+                Arc::new(ferrite::runtime::quickjs::QuickJsRuntime::with_defaults()),
                 "<!--ssr-outlet-->".into(),
                 "/app/",
             )

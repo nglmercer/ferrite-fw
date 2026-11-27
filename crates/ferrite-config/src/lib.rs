@@ -729,12 +729,12 @@ impl Default for ReactConfig {
 /// Embedded JS runtime options (§20).
 ///
 /// The runtime is **disabled by default**: `backend = "auto"` means pure-Rust
-/// SSR with no JS engine. Set `backend = "napi-vm"` (and build with
-/// `--features napi-vm`) for in-process JS evaluation and `.node` loading.
+/// SSR with no JS engine. Set `backend = "rquickjs"` (and build with
+/// `--features rquickjs`) for in-process QuickJS evaluation.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct RuntimeConfig {
-    /// Backend name (`auto`, `none`, `napi-vm`, Linux `napi-vm-process`).
+    /// Backend name (`auto`, `none`, `rquickjs`).
     pub backend: String,
     /// End-to-end request deadline in milliseconds (0 disables the embedded
     /// deadline; the process profile selects a five-second default).
@@ -1593,10 +1593,10 @@ pub fn resolve_config(
             .runtime
             .as_deref()
             .unwrap_or(&user.runtime.backend)
-            != "napi-vm-process"
+            != "rquickjs"
     {
         return Err(FerriteError::Config(
-            "ssr.streaming requires the explicit napi-vm-process runtime".into(),
+            "ssr.streaming requires the explicit rquickjs runtime".into(),
         ));
     }
     let mut names = std::collections::HashSet::new();
@@ -1953,7 +1953,7 @@ compiler_host='embedded'",
     fn runtime_toml_shape_parses() {
         let user: UserConfig = toml::from_str(
             "[runtime]\n\
-             backend = \"napi-vm\"\n\
+             backend = \"rquickjs\"\n\
              max_call_depth = 16\n\
              max_jobs_per_drain = 32\n\
              request_timeout_ms = 250\n\
@@ -1966,7 +1966,7 @@ compiler_host='embedded'",
              \"native/addon.node\" = \"ab12\"\n",
         )
         .unwrap();
-        assert_eq!(user.runtime.backend, "napi-vm");
+        assert_eq!(user.runtime.backend, "rquickjs");
         assert_eq!(user.runtime.max_call_depth, 16);
         assert_eq!(user.runtime.max_jobs_per_drain, 32);
         assert_eq!(user.runtime.request_timeout_ms, 250);
@@ -1990,7 +1990,7 @@ compiler_host='embedded'",
     fn runtime_merge_and_cli_override() {
         let base = UserConfig::default();
         let mut over = UserConfig::default();
-        over.runtime.backend = "napi-vm".to_string();
+        over.runtime.backend = "rquickjs".to_string();
         over.runtime.process_memory_limit_bytes = 512 * 1024 * 1024;
         over.runtime.process_concurrency = 2;
         over.runtime.loop_budget = 5;
@@ -1999,7 +1999,7 @@ compiler_host='embedded'",
         over.runtime.shutdown_timeout_ms = 500;
         over.runtime.max_request_bytes = 1024;
         let merged = merge_user_config(base, over);
-        assert_eq!(merged.runtime.backend, "napi-vm");
+        assert_eq!(merged.runtime.backend, "rquickjs");
         assert_eq!(merged.runtime.loop_budget, 5);
         assert_eq!(merged.runtime.queue_capacity, 4);
         assert_eq!(merged.runtime.max_request_bytes, 1024);
@@ -2485,12 +2485,12 @@ mod ssr_route_tests {
     }
 
     #[test]
-    fn streaming_requires_effective_process_backend() {
+    fn streaming_requires_effective_rquickjs_backend() {
         let mut user = UserConfig::default();
         user.ssr.streaming = true;
         assert!(resolve_config(user.clone(), None, CliOverrides::default()).is_err());
         let process = CliOverrides {
-            runtime: Some("napi-vm-process".into()),
+            runtime: Some("rquickjs".into()),
             ..Default::default()
         };
         assert!(
@@ -2499,9 +2499,9 @@ mod ssr_route_tests {
                 .ssr
                 .streaming
         );
-        user.runtime.backend = "napi-vm-process".into();
+        user.runtime.backend = "rquickjs".into();
         let embedded = CliOverrides {
-            runtime: Some("napi-vm".into()),
+            runtime: Some("auto".into()),
             ..Default::default()
         };
         assert!(resolve_config(user.clone(), None, embedded).is_err());

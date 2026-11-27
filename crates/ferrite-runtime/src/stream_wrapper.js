@@ -22,10 +22,7 @@ if (typeof globalThis.ReadableStream === 'undefined') {
         enqueue(value) {
           if (state.ended || state.failure) throw new TypeError('stream is closed');
           const size = typeof value === 'string' ? value.length * 4 : value.byteLength === undefined ? value.length : value.byteLength;
-          if (!Number.isFinite(size) || size < 0 || size > 1048576 || state.queuedBytes + size > 1048576) {
-            const error = new RangeError('stream source exceeded the 1 MiB queue bound');
-            this.error(error); throw error;
-          }
+          if (!Number.isFinite(size) || size < 0) throw new RangeError('invalid stream chunk size');
           if (state.pending) { const pending = state.pending; state.pending = null; pending.resolve({done:false,value}); }
           else { state.queue.push({value,size}); state.queuedBytes += size; }
         },

@@ -59,9 +59,9 @@ impl Builder {
             let sdk = self.config.package.ssr_sdk.as_ref().ok_or_else(|| {
                 FerriteError::Build("SSR standalone requires explicit package.ssr_sdk pointing to a Ferrite SDK crate; build without standalone for preview".into())
             })?;
-            if !cfg!(feature = "napi-vm") {
+            if !cfg!(feature = "rquickjs") {
                 return Err(FerriteError::Build(
-                    "SSR standalone requires Ferrite built with the napi-vm feature".into(),
+                    "SSR standalone requires Ferrite built with the rquickjs feature".into(),
                 ));
             }
             let sdk = if sdk.is_absolute() {
@@ -661,7 +661,7 @@ mod standalone_tests {
         )
         .unwrap();
         config.package.standalone = true;
-        config.runtime.backend = "napi-vm".into();
+        config.runtime.backend = "rquickjs".into();
         config
     }
 
@@ -675,12 +675,12 @@ mod standalone_tests {
         assert!(!out.exists());
     }
 
-    #[cfg(feature = "napi-vm")]
+    #[cfg(feature = "rquickjs")]
     #[tokio::test]
     async fn unsupported_profiles_fail_before_client_output() {
         for (backend, embedded, expected) in [
-            ("node", true, "explicit napi-vm"),
-            ("napi-vm", false, "embed_assets = true"),
+            ("node", true, "explicit rquickjs"),
+            ("rquickjs", false, "embed_assets = true"),
         ] {
             let root = tempfile::tempdir().unwrap();
             let mut config = project(root.path());
@@ -694,7 +694,7 @@ mod standalone_tests {
         }
     }
 
-    #[cfg(not(feature = "napi-vm"))]
+    #[cfg(not(feature = "rquickjs"))]
     #[tokio::test]
     async fn unavailable_runtime_feature_fails_before_output() {
         let root = tempfile::tempdir().unwrap();
@@ -702,11 +702,11 @@ mod standalone_tests {
         config.package.ssr_sdk = Some(env!("CARGO_MANIFEST_DIR").into());
         let out = config.out_dir();
         let error = Builder::new(config, vec![]).build_app().await.unwrap_err();
-        assert!(error.to_string().contains("napi-vm feature"), "{error}");
+        assert!(error.to_string().contains("rquickjs feature"), "{error}");
         assert!(!out.exists());
     }
 
-    #[cfg(feature = "napi-vm")]
+    #[cfg(feature = "rquickjs")]
     #[tokio::test]
     async fn standalone_app_packages_final_renderer_after_both_builds() {
         let root = tempfile::tempdir().unwrap();
@@ -732,7 +732,7 @@ mod standalone_tests {
         .unwrap();
         let adapter = artifact
             .into_adapter(
-                Arc::new(ferrite_runtime::napi_vm::NapiVmRuntime::with_defaults()),
+                Arc::new(ferrite_runtime::quickjs::QuickJsRuntime::with_defaults()),
                 std::fs::read_to_string(out.join("index.html")).unwrap(),
                 &config.base,
             )

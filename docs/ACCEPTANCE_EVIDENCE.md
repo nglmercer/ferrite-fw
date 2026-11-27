@@ -1,3 +1,5 @@
+> **Runtime migration note:** sections mentioning `napi-vm` or `napi-vm-process` are historical evidence/design notes. The current replacement runtime is `rquickjs`; native `.node` addons and the process-isolated backend were removed.
+
 # Roadmap implementation evidence
 
 Host-specific results for the changes in this PR. This is not full release or

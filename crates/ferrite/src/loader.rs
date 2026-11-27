@@ -557,7 +557,7 @@ async fn preview_with_control(
     }
     let renderer = if !prerendered && (has_server || explicit_entry) {
         if !ferrite_runtime::compiled_graph_backend_available(&control.config.runtime.backend) {
-            return Err(FerriteError::Ssr(format!("built SSR preview requires the explicitly selected napi-vm runtime and its compiled feature; selected `{}`. Configure [runtime].backend = 'napi-vm' and build Ferrite with --features napi-vm", control.config.runtime.backend)));
+            return Err(FerriteError::Ssr(format!("built SSR preview requires the explicitly selected rquickjs runtime and its compiled feature; selected `{}`. Configure [runtime].backend = 'rquickjs' and build Ferrite with --features rquickjs", control.config.runtime.backend)));
         }
         let artifact = crate::SsrRendererArtifact::read(&server_dir)?;
         artifact.validate_published_styles(&server_dir)?;
@@ -961,7 +961,8 @@ mod ssr_preview_validation_tests {
         config.runtime.backend = "quickjs".into();
         let error = super::preview_with_plugins(&config, &[]).await.unwrap_err();
         assert!(
-            error.to_string().contains("quickjs") && error.to_string().contains("napi-vm"),
+            error.to_string().contains("quickjs")
+                && error.to_string().contains("--features rquickjs"),
             "{error}"
         );
     }

@@ -18,7 +18,7 @@ tracing-subscriber = { workspace = true }
 serde_json = { workspace = true }
 
 [features]
-napi-vm = ["ferrite/napi-vm"]
+rquickjs = ["ferrite/rquickjs"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

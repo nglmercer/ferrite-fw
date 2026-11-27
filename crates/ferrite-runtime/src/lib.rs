@@ -10,13 +10,9 @@ use std::sync::Arc;
 
 use ferrite_core::{FerriteError, Result};
 
-/// napi-vm embedded backend (feature `napi-vm`, disabled by default).
-#[cfg(feature = "napi-vm")]
-pub mod napi_vm;
-
-/// Linux process-isolated graph invocation.
-#[cfg(all(feature = "napi-vm", target_os = "linux"))]
-pub mod process;
+/// QuickJS embedded backend (feature `rquickjs`).
+#[cfg(feature = "rquickjs")]
+pub mod quickjs;
 
 /// A value crossing the Rust ↔ JS boundary (§87).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -339,25 +335,18 @@ impl JsRuntime for UnavailableRuntime {
 /// establish compatibility with any particular framework or language feature.
 #[must_use]
 pub fn compiled_graph_backend_available(backend: &str) -> bool {
-    (backend == "napi-vm" && cfg!(feature = "napi-vm"))
-        || (backend == "napi-vm-process" && cfg!(all(feature = "napi-vm", target_os = "linux")))
+    backend == "rquickjs" && cfg!(feature = "rquickjs")
 }
 
 /// Build the runtime for a backend name (`auto`/`none` need no engine).
 ///
-/// `napi-vm` requires the `napi-vm` cargo feature; without it the returned
+/// `rquickjs` requires the `rquickjs` cargo feature; without it the returned
 /// runtime explains how to enable it instead of failing at call time.
 #[must_use]
 pub fn runtime_for_backend(backend: &str) -> Arc<dyn JsRuntime> {
     match backend {
-        #[cfg(all(feature = "napi-vm", target_os = "linux"))]
-        "napi-vm-process" => Arc::new(process::ProcessRuntime::new(Default::default())),
-        #[cfg(feature = "napi-vm")]
-        "napi-vm" => Arc::new(napi_vm::NapiVmRuntime::with_defaults()),
-        #[cfg(not(feature = "napi-vm"))]
-        "napi-vm" => Arc::new(UnavailableRuntime {
-            backend: "napi-vm (rebuild with `--features napi-vm`)".to_string(),
-        }),
+        #[cfg(feature = "rquickjs")]
+        "rquickjs" => Arc::new(quickjs::QuickJsRuntime::with_defaults()),
         _ => Arc::new(UnavailableRuntime {
             backend: backend.to_string(),
         }),

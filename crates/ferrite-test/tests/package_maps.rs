@@ -1,5 +1,5 @@
 //! Checked package maps through the real compiler, bundler and embedded renderer.
-#[cfg(feature = "napi-vm")]
+#[cfg(feature = "rquickjs")]
 #[tokio::test]
 async fn emitted_import_maps_use_owner_edges_and_environment_conditions() {
     use ferrite::runtime::{JsRuntime, RuntimeEnvironment};
@@ -53,7 +53,7 @@ async fn emitted_import_maps_use_owner_edges_and_environment_conditions() {
     lock.write(&project.root.join("ferrite.lock")).unwrap();
     for hoist in [false, true] {
         let mut config = project.resolve_config_mode("production");
-        config.runtime.backend = "napi-vm".into();
+        config.runtime.backend = "rquickjs".into();
         config.build.scope_hoist = hoist;
         let reports = ferrite::Builder::new(config, vec![])
             .build_app()
@@ -79,7 +79,7 @@ async fn emitted_import_maps_use_owner_edges_and_environment_conditions() {
             .unwrap()
             .out_dir;
         let artifact = ferrite::SsrRendererArtifact::read(server).unwrap();
-        let runtime = ferrite::runtime::napi_vm::NapiVmRuntime::with_defaults();
+        let runtime = ferrite::runtime::quickjs::QuickJsRuntime::with_defaults();
         let result = runtime
             .invoke_module_graph(
                 artifact.graph,

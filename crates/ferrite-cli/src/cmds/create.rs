@@ -69,9 +69,9 @@ pub(crate) async fn create(args: CreateArgs) -> ferrite::Result<()> {
         }
         None => {}
     }
-    if profile.compiler_host == "embedded" && !cfg!(feature = "napi-vm") {
+    if profile.compiler_host == "embedded" && !cfg!(feature = "rquickjs") {
         return Err(ferrite::FerriteError::Config(
-            "embedded framework compilation requires a Ferrite binary built with --features napi-vm; use --compiler-host node for the transitional external host".into(),
+            "embedded framework compilation requires a Ferrite binary built with --features rquickjs; use --compiler-host node for the transitional external host".into(),
         ));
     }
     if args.ssr_runtime.as_deref() != profile.ssr_runtime {
@@ -80,8 +80,16 @@ pub(crate) async fn create(args: CreateArgs) -> ferrite::Result<()> {
             None => "--ssr-runtime requires an SSR template; client profiles have no server renderer".into(),
         }));
     }
-    if profile.ssr_runtime.is_some() && !cfg!(feature = "napi-vm") {
-        return Err(ferrite::FerriteError::Config("framework SSR requires a Ferrite binary built with --features napi-vm; no alternate runtime will be selected".into()));
+    let ssr_runtime_available = match profile.ssr_runtime {
+        Some("rquickjs") => cfg!(feature = "rquickjs"),
+        Some("napi-vm") | Some("napi-vm-process") => false,
+        Some(_) | None => true,
+    };
+    if profile.ssr_runtime.is_some() && !ssr_runtime_available {
+        return Err(ferrite::FerriteError::Config(format!(
+            "framework SSR runtime `{}` requires a Ferrite binary built with the matching runtime feature; no alternate runtime will be selected",
+            profile.ssr_runtime.unwrap_or("unknown")
+        )));
     }
     let name = args.name.ok_or_else(|| {
         ferrite::FerriteError::Config(
@@ -207,14 +215,14 @@ mod tests {
             let mut request = args(&path);
             request.framework = Some(framework.into());
             request.no_install = true;
-            if cfg!(feature = "napi-vm") {
+            if cfg!(feature = "rquickjs") {
                 create(request).await.unwrap();
                 assert!(std::fs::read_to_string(path.join("ferrite.toml"))
                     .unwrap()
                     .contains("compiler_host = \"embedded\""));
             } else {
                 let error = create(request).await.unwrap_err();
-                assert!(error.to_string().contains("--features napi-vm"));
+                assert!(error.to_string().contains("--features rquickjs"));
                 assert!(!path.exists());
             }
             let path = root.path().join(format!("{framework}-node"));
@@ -236,11 +244,11 @@ mod tests {
         for (compiler, runtime, expected) in [
             (
                 Some("native"),
-                Some("napi-vm"),
+                Some("rquickjs"),
                 "does not support compiler host",
             ),
-            (Some("node"), None, "--ssr-runtime napi-vm"),
-            (Some("node"), Some("node"), "--ssr-runtime napi-vm"),
+            (Some("node"), None, "--ssr-runtime rquickjs"),
+            (Some("node"), Some("node"), "--ssr-runtime rquickjs"),
         ] {
             let path = root.path().join("invalid");
             let mut request = args(&path);
@@ -259,7 +267,7 @@ mod tests {
         }
         let path = root.path().join("client");
         let mut request = args(&path);
-        request.ssr_runtime = Some("napi-vm".into());
+        request.ssr_runtime = Some("rquickjs".into());
         assert!(create(request)
             .await
             .unwrap_err()
@@ -271,10 +279,10 @@ mod tests {
             let mut request = args(&path);
             request.framework = Some("vue".into());
             request.rendering = "ssr".into();
-            request.ssr_runtime = Some("napi-vm".into());
+            request.ssr_runtime = Some("rquickjs".into());
             request.language = language.into();
             request.no_install = true;
-            if cfg!(feature = "napi-vm") {
+            if cfg!(feature = "rquickjs") {
                 create(request).await.unwrap();
                 let expected =
                     scaffold::files(scaffold::select("vue", language, "ssr").unwrap(), language)
@@ -291,7 +299,7 @@ mod tests {
                     .await
                     .unwrap_err()
                     .to_string()
-                    .contains("--features napi-vm"));
+                    .contains("--features rquickjs"));
                 assert!(!path.exists());
             }
         }

@@ -248,28 +248,28 @@ fn existing_ssr_output_is_not_embedded_or_packaged_as_static() {
 
 /// Build the real production graph, compile its generated application, then
 /// execute the embedded renderer with no source directory or command PATH.
-#[cfg(feature = "napi-vm")]
+#[cfg(feature = "rquickjs")]
 #[tokio::test]
 #[ignore = "slow: generated SSR Cargo build and HTTP server"]
 async fn standalone_ssr_build_compiles_and_renders_without_node() {
-    standalone_ssr_profile("napi-vm", false).await;
+    standalone_ssr_profile("rquickjs", false).await;
 }
 
-#[cfg(all(feature = "napi-vm", target_os = "linux"))]
+#[cfg(all(feature = "rquickjs", target_os = "linux"))]
 #[tokio::test]
-#[ignore = "slow: generated Linux process-runtime binary and HTTP recovery"]
-async fn standalone_process_runtime_renders_and_recovers_without_node() {
-    standalone_ssr_profile("napi-vm-process", false).await;
+#[ignore = "slow: generated rquickjs binary and HTTP recovery"]
+async fn standalone_rquickjs_runtime_renders_and_recovers_without_node() {
+    standalone_ssr_profile("rquickjs", false).await;
 }
 
-#[cfg(all(feature = "napi-vm", target_os = "linux"))]
+#[cfg(all(feature = "rquickjs", target_os = "linux"))]
 #[tokio::test]
 #[ignore = "slow: generated streaming binary without Node and HTTP recovery"]
 async fn standalone_streaming_renders_and_recovers_without_node() {
-    standalone_ssr_profile("napi-vm-process", true).await;
+    standalone_ssr_profile("rquickjs", true).await;
 }
 
-#[cfg(feature = "napi-vm")]
+#[cfg(feature = "rquickjs")]
 async fn standalone_ssr_profile(backend: &str, streaming: bool) {
     let project = TempProject::new(&[
         ("index.html", "<html><head></head><body><!--ssr-outlet--><script type=\"module\" src=\"/src/main.js\"></script></body></html>"),
@@ -304,7 +304,7 @@ async fn standalone_ssr_profile(backend: &str, streaming: bool) {
     }];
 
     config.runtime.backend = backend.into();
-    if backend == "napi-vm-process" {
+    if backend == "rquickjs" {
         config.runtime.request_timeout_ms = 750;
         config.runtime.fuel_budget = u64::MAX;
         config.runtime.loop_budget = u64::MAX;
@@ -361,7 +361,7 @@ async fn standalone_ssr_profile(backend: &str, streaming: bool) {
     }
     let _running = Running(child);
     wait_until_ready(port);
-    if backend == "napi-vm-process" {
+    if backend == "rquickjs" {
         let failed = http_get(port, "/app/slow");
         assert!(
             failed.starts_with("HTTP/1.0 500") && failed.contains("deadline"),

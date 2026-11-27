@@ -31,68 +31,54 @@ def plan(profile):
     commands = []
     if profile in ("core", "all"):
         commands.append(["cargo", "test", "--workspace", "--exclude", "ferrite-e2e", "--locked"])
-        commands.append(["cargo", "test", "--locked", "-p", "ferrite-test", "--features", "napi-vm", "--test", "side_effects", "--test", "package_maps", "--test", "workspaces"])
+        commands.append(["cargo", "test", "--locked", "-p", "ferrite-test", "--features", "rquickjs", "--test", "side_effects", "--test", "package_maps", "--test", "workspaces"])
     if profile in ("runtime", "all"):
-        commands.append(["cargo", "test", "--locked", "-p", "ferrite-runtime", "-p", "ferrite-ssr", "-p", "ferrite-config", "--features", "ferrite-runtime/napi-vm,ferrite-ssr/napi-vm", "--lib"])
+        commands.append(["cargo", "test", "--locked", "-p", "ferrite-runtime", "-p", "ferrite-ssr", "-p", "ferrite-config", "--features", "ferrite-runtime/rquickjs,ferrite-ssr/rquickjs", "--lib"])
     if profile in ("runtime", "all") and sys.platform.startswith("linux"):
-        commands.append(["cargo", "build", "--locked", "-p", "ferrite-cli", "--features", "napi-vm"])
-        for name in ("process_deadline_cancellation_limits_and_recovery", "process_queue_and_payload_are_bounded"):
-            commands.append(["cargo", "test", "--locked", "-p", "ferrite-runtime", "--features", "napi-vm", "--lib", f"process::tests::{name}", "--", "--ignored", "--exact", "--nocapture"])
-    if profile in ("runtime", "all"):
-        commands.append(["cargo", "test", "--locked", "-p", "ferrite-runtime", "--features", "napi-vm", "--lib", "napi_vm::syntax_cache::tests::parser_preflight_cold_and_cached_measurement", "--", "--ignored", "--exact", "--nocapture"])
-    if profile in ("runtime", "all") and sys.platform.startswith("linux"):
-        commands.append(exact("ferrite-test", "process_runtime", "http_disconnect_kills_render_worker_and_next_request_recovers", "napi-vm"))
-        for name in ("stream_pull_unicode_metadata_and_large_chunk_boundaries", "stream_byte_views_bounds_and_recovery", "stream_drop_and_unpolled_deadline_release_admission", "stream_shell_errors_terminate_without_suffix_and_recover", "real_http_stream_head_disconnect_and_recovery", "progressive_bytes_arrive_before_unresolved_async_start"):
-            commands.append(exact("ferrite-test", "streaming", name, "napi-vm"))
+        commands.append(["cargo", "build", "--locked", "-p", "ferrite-cli", "--features", "rquickjs"])
     if profile in ("frameworks", "all"):
-        commands.append(["cargo", "test", "--locked", "-p", "ferrite-test", "--features", "napi-vm", "--test", "ssr_routes"])
-        commands.append(["cargo", "build", "--locked", "-p", "ferrite-cli", "--features", "napi-vm"])
+        commands.append(["cargo", "test", "--locked", "-p", "ferrite-test", "--features", "rquickjs", "--test", "ssr_routes"])
+        commands.append(["cargo", "build", "--locked", "-p", "ferrite-cli", "--features", "rquickjs"])
         commands.append(exact("ferrite-frameworks", "compiler_host", "actual_project_matched_compilers_client_server_and_runes"))
         commands.append(["cargo", "test", "--locked", "-p", "ferrite-resolver", "--lib", "map_tests::node_reference_exports_selection_and_target_validation", "--", "--ignored", "--exact"])
         for name in ("official_svelte_server_renderer_executes_emitted_graph", "official_vue_server_renderer_executes_emitted_graph", "official_components_resources_maps_cache_and_library_parity", "generated_vue_ssr_sources_install_build_and_render", "generated_svelte_ssr_sources_install_build_and_render", "generated_react_ssr_sources_install_build_and_render", "official_vue_ssr_hydrates_in_chromium", "official_vue_ssr_hydrates_in_firefox", "official_svelte_ssr_hydrates_in_chromium", "official_svelte_ssr_hydrates_in_firefox", "generated_react_svelte_dev_graph_edits_and_recovers", "generated_framework_standalone_browser_matrix", "generated_vue_ssr_dev_graph_updates_and_recovers", "generated_vue_dev_ssr_chromium", "generated_vue_dev_ssr_firefox"):
-            commands.append(exact("ferrite-test", "framework_compilers", name, "napi-vm"))
-        commands.append(["cargo", "test", "--locked", "-p", "ferrite-test", "--features", "napi-vm", "--test", "prerender"])
-        if sys.platform.startswith("linux"):
-            commands.append(exact("ferrite-test", "streaming", "official_react_and_vue_renderers_execute_streamed_production_graphs", "napi-vm"))
+            commands.append(exact("ferrite-test", "framework_compilers", name, "rquickjs"))
+        commands.append(["cargo", "test", "--locked", "-p", "ferrite-test", "--features", "rquickjs", "--test", "prerender"])
         for engine in ("chromium", "firefox"):
-            commands.append(exact("ferrite-test", "dev_hmr", f"{engine}_framework_ssr_nested_hmr_and_recovery", "napi-vm"))
+            commands.append(exact("ferrite-test", "dev_hmr", f"{engine}_framework_ssr_nested_hmr_and_recovery", "rquickjs"))
         # Both engines and all existing generated-client/Refresh/foreign-hook
         # acceptance cases execute explicitly, rather than relying on unit tests.
         for engine in ("chromium", "firefox"):
             for suffix in ("generated_profiles", "generated_components", "dependency_acceptance", "transitive_self_acceptance", "initial_load_recovery", "configured_foreign_hooks", "react_refresh_dom", "react_refresh_wrapped", "react_refresh_imported_hook", "react_refresh_hook_barrel", "react_refresh_default_named", "react_refresh_default_anonymous_memo", "react_refresh_mixed_exports", "generated_react_profiles"):
-                commands.append(exact("ferrite-test", "generated_apps", f"{engine}_{suffix}", "napi-vm"))
+                commands.append(exact("ferrite-test", "generated_apps", f"{engine}_{suffix}", "rquickjs"))
         for name in ("cli_vue_ssr_generation_and_clean_frozen_reinstall", "cli_vue_ssr_create_dev_build_preview_cycle", "cli_vue_ssr_base_path_cycle"):
-            commands.append(exact("ferrite-test", "generated_apps", name, "napi-vm"))
+            commands.append(exact("ferrite-test", "generated_apps", name, "rquickjs"))
         commands.append(["cargo", "test", "--locked", "-p", "ferrite-plugin", "--", "--ignored"])
     if profile in ("ssr", "all"):
-        commands.append(["cargo", "test", "--locked", "-p", "ferrite-config", "-p", "ferrite-ssr", "-p", "ferrite-server", "-p", "ferrite", "--features", "ferrite/napi-vm", "--lib"])
-        commands.append(["cargo", "test", "--locked", "-p", "ferrite-test", "--features", "napi-vm", "--test", "ssr_documents", "--test", "ssr_routes", "--test", "prerender"])
+        commands.append(["cargo", "test", "--locked", "-p", "ferrite-config", "-p", "ferrite-ssr", "-p", "ferrite-server", "-p", "ferrite", "--features", "ferrite/rquickjs", "--lib"])
+        commands.append(["cargo", "test", "--locked", "-p", "ferrite-test", "--features", "rquickjs", "--test", "ssr_documents", "--test", "ssr_routes", "--test", "prerender"])
         for engine in ("chromium", "firefox"):
-            commands.append(exact("ferrite-test", "ssr_islands", f"{engine}_framework_islands_dev_preview_and_static", "napi-vm"))
-        commands.append(exact("ferrite-test", "ssr_islands", "standalone_framework_islands_without_node", "napi-vm"))
-        commands.append(exact("ferrite-test", "standalone", "standalone_ssr_build_compiles_and_renders_without_node", "napi-vm"))
+            commands.append(exact("ferrite-test", "ssr_islands", f"{engine}_framework_islands_dev_preview_and_static", "rquickjs"))
+        commands.append(exact("ferrite-test", "ssr_islands", "standalone_framework_islands_without_node", "rquickjs"))
+        commands.append(exact("ferrite-test", "standalone", "standalone_ssr_build_compiles_and_renders_without_node", "rquickjs"))
         if sys.platform.startswith("linux"):
-            commands.append(["cargo", "build", "--locked", "-p", "ferrite-cli", "--features", "napi-vm"])
-            commands.append(exact("ferrite-test", "ssr_documents", "cli_streamed_documents_prerender_without_node", "napi-vm"))
-            for name in ("stream_pull_unicode_metadata_and_large_chunk_boundaries", "stream_byte_views_bounds_and_recovery", "stream_drop_and_unpolled_deadline_release_admission", "stream_shell_errors_terminate_without_suffix_and_recover", "real_http_stream_head_disconnect_and_recovery", "progressive_bytes_arrive_before_unresolved_async_start", "official_react_and_vue_renderers_execute_streamed_production_graphs"):
-                commands.append(exact("ferrite-test", "streaming", name, "napi-vm"))
-            for name in ("standalone_process_runtime_renders_and_recovers_without_node", "standalone_streaming_renders_and_recovers_without_node"):
-                commands.append(exact("ferrite-test", "standalone", name, "napi-vm"))
+            commands.append(["cargo", "build", "--locked", "-p", "ferrite-cli", "--features", "rquickjs"])
+            commands.append(exact("ferrite-test", "ssr_documents", "cli_streamed_documents_prerender_without_node", "rquickjs"))
     if profile in ("production", "all"):
         commands.append(["cargo", "test", "--locked", "-p", "ferrite-transform", "-p", "ferrite-bundler", "--lib"])
-        commands.append(["cargo", "test", "--locked", "-p", "ferrite-test", "--features", "napi-vm", "--test", "side_effects", "--test", "vite_parity", "--test", "prerender", "--test", "ssr_routes"])
+        commands.append(["cargo", "test", "--locked", "-p", "ferrite-test", "--features", "rquickjs", "--test", "side_effects", "--test", "vite_parity", "--test", "prerender", "--test", "ssr_routes"])
         for name in ("css_changes_rename_importer_cones_and_final_maps_retain_original_positions", "code_replacement_without_composable_map_drops_stale_original_positions"):
-            commands.append(["cargo", "test", "--locked", "-p", "ferrite-test", "--features", "napi-vm", "--test", "production_closure", name, "--", "--exact"])
+            commands.append(["cargo", "test", "--locked", "-p", "ferrite-test", "--features", "rquickjs", "--test", "production_closure", name, "--", "--exact"])
         for engine in ("chromium", "firefox"):
-            commands.append(exact("ferrite-test", "production_closure", f"{engine}_lazy_css_shared_chunks_assets_and_retry", "napi-vm"))
+            commands.append(exact("ferrite-test", "production_closure", f"{engine}_lazy_css_shared_chunks_assets_and_retry", "rquickjs"))
     if profile in ("rust-only", "all"):
-        commands.append(["cargo", "build", "--locked", "-p", "ferrite-cli", "--features", "napi-vm"])
-        commands.append(exact("ferrite-test", "generated_apps", "rust_only_inspect_reports_compiler_hosts", "napi-vm"))
-        commands.append(exact("ferrite-test", "generated_apps", "chromium_react_offline_fixture_dev_refresh_preserves_state", "napi-vm"))
-        commands.append(exact("ferrite-test", "generated_apps", "chromium_react_offline_fixture_build_and_preview", "napi-vm"))
-        commands.append(exact("ferrite-test", "generated_apps", "chromium_react_offline_fixture_ssr_build_and_preview", "napi-vm"))
-        commands.append(exact("ferrite-test", "production_closure", "chromium_worker_query_production_execution", "napi-vm"))
-        commands.append(exact("ferrite-test", "production_closure", "chromium_wasm_query_production_execution", "napi-vm"))
+        commands.append(["cargo", "build", "--locked", "-p", "ferrite-cli", "--features", "rquickjs"])
+        commands.append(exact("ferrite-test", "generated_apps", "rust_only_inspect_reports_compiler_hosts", "rquickjs"))
+        commands.append(exact("ferrite-test", "generated_apps", "chromium_react_offline_fixture_dev_refresh_preserves_state", "rquickjs"))
+        commands.append(exact("ferrite-test", "generated_apps", "chromium_react_offline_fixture_build_and_preview", "rquickjs"))
+        commands.append(exact("ferrite-test", "generated_apps", "chromium_react_offline_fixture_ssr_build_and_preview", "rquickjs"))
+        commands.append(exact("ferrite-test", "production_closure", "chromium_worker_query_production_execution", "rquickjs"))
+        commands.append(exact("ferrite-test", "production_closure", "chromium_wasm_query_production_execution", "rquickjs"))
         for name in (
             "chromium_react_refresh_dom",
             "chromium_react_refresh_wrapped",
@@ -102,24 +88,24 @@ def plan(profile):
             "chromium_react_refresh_default_anonymous_memo",
             "chromium_react_refresh_mixed_exports",
         ):
-            commands.append(exact("ferrite-test", "generated_apps", name, "napi-vm"))
-        commands.append(exact("ferrite-test", "generated_apps", "chromium_vue_embedded_offline_fixture_ssr_build_and_preview", "napi-vm"))
-        commands.append(exact("ferrite-test", "ssr_islands", "chromium_framework_islands_dev_preview_and_static", "napi-vm"))
-        commands.append(exact("ferrite-test", "generated_apps", "chromium_svelte_embedded_offline_fixture_dev_hmr", "napi-vm"))
-        commands.append(exact("ferrite-test", "generated_apps", "chromium_svelte_embedded_offline_fixture_ssr_build_and_preview", "napi-vm"))
+            commands.append(exact("ferrite-test", "generated_apps", name, "rquickjs"))
+        commands.append(exact("ferrite-test", "generated_apps", "chromium_vue_embedded_offline_fixture_ssr_build_and_preview", "rquickjs"))
+        commands.append(exact("ferrite-test", "ssr_islands", "chromium_framework_islands_dev_preview_and_static", "rquickjs"))
+        commands.append(exact("ferrite-test", "generated_apps", "chromium_svelte_embedded_offline_fixture_dev_hmr", "rquickjs"))
+        commands.append(exact("ferrite-test", "generated_apps", "chromium_svelte_embedded_offline_fixture_ssr_build_and_preview", "rquickjs"))
         for engine in ("chromium", "firefox"):
-            commands.append(exact("ferrite-test", "generated_apps", f"{engine}_generated_profiles", "napi-vm"))
-        commands.append(exact("ferrite-test", "standalone", "standalone_ssr_build_compiles_and_renders_without_node", "napi-vm"))
+            commands.append(exact("ferrite-test", "generated_apps", f"{engine}_generated_profiles", "rquickjs"))
+        commands.append(exact("ferrite-test", "standalone", "standalone_ssr_build_compiles_and_renders_without_node", "rquickjs"))
         if sys.platform.startswith("linux"):
-            commands.append(exact("ferrite-test", "ssr_documents", "cli_streamed_documents_prerender_without_node", "napi-vm"))
-            for name in ("standalone_process_runtime_renders_and_recovers_without_node", "standalone_streaming_renders_and_recovers_without_node"):
-                commands.append(exact("ferrite-test", "standalone", name, "napi-vm"))
+            commands.append(exact("ferrite-test", "ssr_documents", "cli_streamed_documents_prerender_without_node", "rquickjs"))
+            for name in ("standalone_rquickjs_runtime_renders_and_recovers_without_node", "standalone_streaming_renders_and_recovers_without_node"):
+                commands.append(exact("ferrite-test", "standalone", name, "rquickjs"))
     if profile in ("standalone", "all"):
         for name in ("standalone_build_compiles_and_serves", "standalone_ssr_build_compiles_and_renders_without_node"):
-            commands.append(exact("ferrite-test", "standalone", name, "napi-vm"))
+            commands.append(exact("ferrite-test", "standalone", name, "rquickjs"))
         if sys.platform.startswith("linux"):
-            commands.append(exact("ferrite-test", "standalone", "standalone_process_runtime_renders_and_recovers_without_node", "napi-vm"))
-            commands.append(exact("ferrite-test", "standalone", "standalone_streaming_renders_and_recovers_without_node", "napi-vm"))
+            commands.append(exact("ferrite-test", "standalone", "standalone_rquickjs_runtime_renders_and_recovers_without_node", "rquickjs"))
+            commands.append(exact("ferrite-test", "standalone", "standalone_streaming_renders_and_recovers_without_node", "rquickjs"))
     if profile in ("e2e", "all"):
         commands.append(["cargo", "test", "--locked", "-p", "ferrite-e2e", "--", "--test-threads=1"])
     return commands

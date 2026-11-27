@@ -156,7 +156,7 @@ impl Config {
                     let host: Arc<dyn crate::frameworks::compiler_host::FrameworkCompiler> =
                         match profile.compiler_host.as_deref() {
                             Some("embedded") => {
-                                #[cfg(feature = "napi-vm")]
+                                #[cfg(feature = "rquickjs")]
                                 {
                                     match framework {
                                         crate::frameworks::compiler_host::Framework::Vue => Arc::new(
@@ -177,10 +177,10 @@ impl Config {
                                         ),
                                     }
                                 }
-                                #[cfg(not(feature = "napi-vm"))]
+                                #[cfg(not(feature = "rquickjs"))]
                                 {
                                     return Err(ferrite_core::FerriteError::Config(
-                                        "embedded framework compilation requires a Ferrite binary built with --features napi-vm".into(),
+                                        "embedded framework compilation requires a Ferrite binary built with --features rquickjs".into(),
                                     ));
                                 }
                             }

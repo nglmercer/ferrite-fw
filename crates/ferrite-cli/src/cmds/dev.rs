@@ -40,7 +40,7 @@ pub(crate) async fn dev(
     if ssr {
         if !ferrite::runtime::compiled_graph_backend_available(&resolved.runtime.backend) {
             return Err(ferrite::FerriteError::Other(format!(
-                "SSR requires a renderer-capable runtime; selected backend `{}` cannot execute entry-server. Select --runtime napi-vm with the napi-vm feature, or omit --ssr for client serving",
+                "SSR requires a renderer-capable runtime; selected backend `{}` cannot execute entry-server. Select --runtime rquickjs with the rquickjs feature, or omit --ssr for client serving",
                 resolved.runtime.backend
             )));
         }
@@ -51,7 +51,7 @@ pub(crate) async fn dev(
                 ferrite::FerriteError::Other(format!("SSR initialization failed: {note}"))
             })?;
         server.set_ssr_adapter(adapter).await;
-        ssr_mode = String::from("enabled (napi-vm entry-server)");
+        ssr_mode = String::from("enabled (rquickjs entry-server)");
     }
     println!();
     println!("  FERRITE v{}", ferrite::VERSION);
@@ -127,7 +127,7 @@ pub(crate) fn spawn_key_handler(server: ferrite::DevServer, port: u16) {
     });
 }
 
-/// Build a napi-vm SSR adapter from the shared configured server-entry selection.
+/// Build an rquickjs SSR adapter from the shared configured server-entry selection.
 /// The explicit SSR caller propagates selection/compilation failures.
 pub(crate) async fn js_ssr_adapter(
     server: &ferrite::DevServer,
@@ -139,7 +139,7 @@ pub(crate) async fn js_ssr_adapter(
         .map_err(|error| error.to_string())
 }
 
-#[cfg(all(test, feature = "napi-vm"))]
+#[cfg(all(test, feature = "rquickjs"))]
 mod ssr_tests {
     use super::*;
 
@@ -156,7 +156,7 @@ mod ssr_tests {
             Default::default(),
         )
         .unwrap();
-        resolved.runtime.backend = "napi-vm".into();
+        resolved.runtime.backend = "rquickjs".into();
         resolved.server.host = "127.0.0.1".into();
         resolved.server.port = 0;
         let server = ferrite::DevServer::new_without_watcher(resolved.clone(), Vec::new())
@@ -248,7 +248,7 @@ mod ssr_tests {
             Default::default(),
         )
         .unwrap();
-        resolved.runtime.backend = "napi-vm".into();
+        resolved.runtime.backend = "rquickjs".into();
         resolved.server.host = "127.0.0.1".into();
         resolved.server.port = 0;
         let server = ferrite::DevServer::new_without_watcher(resolved.clone(), Vec::new())

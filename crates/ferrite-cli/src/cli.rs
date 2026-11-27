@@ -81,7 +81,7 @@ pub(crate) struct DevArgs {
     /// Disable HMR.
     #[arg(long)]
     pub(crate) no_hmr: bool,
-    /// Embedded runtime backend (`auto`, `none`, `napi-vm`).
+    /// Embedded runtime backend (`auto`, `none`, `rquickjs`).
     #[arg(long)]
     pub(crate) runtime: Option<String>,
 }
@@ -210,7 +210,7 @@ pub(crate) struct CreateArgs {
     /// Explicit compiler host (`native` or `node`); required for Node profiles.
     #[arg(long)]
     pub(crate) compiler_host: Option<String>,
-    /// Explicit SSR runtime (`napi-vm`); separate from the compiler host.
+    /// Explicit SSR runtime (`rquickjs`); separate from the compiler host.
     #[arg(long)]
     pub(crate) ssr_runtime: Option<String>,
     /// Source language (`js` or `ts`).
@@ -378,7 +378,7 @@ mod tests {
             "--compiler-host",
             "node",
             "--ssr-runtime",
-            "napi-vm",
+            "rquickjs",
             "--dry-run",
         ])
         .unwrap();
@@ -387,7 +387,7 @@ mod tests {
             panic!("expected create");
         };
         assert_eq!(args.compiler_host.as_deref(), Some("node"));
-        assert_eq!(args.ssr_runtime.as_deref(), Some("napi-vm"));
+        assert_eq!(args.ssr_runtime.as_deref(), Some("rquickjs"));
         assert_eq!(args.rendering, "ssr");
         assert!(args.dry_run);
     }

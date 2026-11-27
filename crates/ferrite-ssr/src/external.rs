@@ -49,10 +49,9 @@ pub fn is_external(specifier: &str, config: &SsrConfig) -> bool {
 /// SSR placeholder for a native `.node` binary (§22–§23).
 ///
 /// Bundlers and `ssrLoadModule` implementations must substitute this for
-/// any [`is_native_specifier`] import instead of reading the binary: the
-/// stub throws on evaluation with an actionable message telling the user
-/// to allowlist the file under `[runtime]` and select the `napi-vm`
-/// backend (feature `napi-vm`, disabled by default).
+/// any [`is_native_specifier`] import instead of reading the binary. Native
+/// addon execution was removed with napi-vm; rquickjs does not load `.node`
+/// binaries, so the stub fails explicitly with migration guidance.
 #[must_use]
 pub fn native_shim_module(specifier: &str) -> SsrModule {
     let literal = js_single_quoted(specifier);
@@ -60,9 +59,8 @@ pub fn native_shim_module(specifier: &str) -> SsrModule {
         id: specifier.to_string(),
         code: format!(
             "throw new Error(\"[ferrite] cannot bundle native module {literal}: \
-             .node binaries stay external in SSR. Allowlist the file under [runtime] \
-             native_allow (+ native_integrity) and run with `--runtime napi-vm` \
-             (build with `--features napi-vm`).\");\n"
+             native .node addons are unsupported by the rquickjs runtime; replace the \
+             addon with a pure JavaScript/WASM dependency or an external service.\");\n"
         ),
         dependencies: Vec::new(),
     }

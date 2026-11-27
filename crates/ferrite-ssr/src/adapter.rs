@@ -9,8 +9,6 @@ use ferrite_runtime::JsRuntime;
 use ferrite_runtime::JsValue;
 use ferrite_runtime::RuntimeEnvironment;
 use ferrite_runtime::{CompiledModule, CompiledModuleGraph};
-#[cfg(feature = "napi-vm")]
-use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Framework SSR adapter (§46).
@@ -150,10 +148,9 @@ impl JsSsrAdapter {
 
     /// Build from resolved config.
     ///
-    /// The `napi-vm` backend maps fuel/loop budgets plus the native
-    /// allowlist/integrity pins onto the worker; every other name goes
-    /// through [`runtime_for_backend`] (unknown or unavailable backends
-    /// fail loudly at render, never silently).
+    /// The `rquickjs` backend maps the configured request timeout onto the
+    /// worker; every other name goes through [`runtime_for_backend`]
+    /// (unknown or unavailable backends fail loudly at render, never silently).
     #[must_use]
     pub fn from_resolved(resolved: &ResolvedConfig, module: CompiledModule) -> Self {
         Self::new(Self::runtime_for_resolved(resolved), module)
@@ -162,50 +159,35 @@ impl JsSsrAdapter {
 
     /// Create one configured runtime shared by route/document adapters.
     pub fn runtime_for_resolved(resolved: &ResolvedConfig) -> Arc<dyn JsRuntime> {
-        #[cfg(feature = "napi-vm")]
-        if resolved.runtime.backend == "napi-vm"
-            || (resolved.runtime.backend == "napi-vm-process" && cfg!(target_os = "linux"))
+        #[cfg(feature = "rquickjs")]
+        if resolved.runtime.backend == "rquickjs"
+            && (resolved.runtime.max_call_depth != 0
+                || resolved.runtime.max_jobs_per_drain != 0
+                || !matches!(resolved.runtime.fuel_budget, 0 | u64::MAX)
+                || !matches!(resolved.runtime.loop_budget, 0 | u64::MAX))
         {
-            let mut options = ferrite_runtime::napi_vm::NapiVmOptions {
-                roots: vec![resolved.root.clone()],
-                max_call_depth: resolved.runtime.max_call_depth,
-                max_jobs_per_drain: resolved.runtime.max_jobs_per_drain,
-                request_timeout_ms: resolved.runtime.request_timeout_ms,
-                shutdown_timeout_ms: resolved.runtime.shutdown_timeout_ms,
-                queue_capacity: resolved.runtime.queue_capacity,
-                max_request_bytes: resolved.runtime.max_request_bytes,
-                fuel_budget: resolved.runtime.fuel_budget,
-                loop_budget: resolved.runtime.loop_budget,
-                ..Default::default()
-            };
-            for entry in &resolved.runtime.native_allow {
-                options
-                    .native_allow
-                    .push(ferrite_runtime::napi_vm::NativeAddonAllow {
-                        path: PathBuf::from(entry),
-                        sha256_hex: resolved.runtime.native_integrity.get(entry).cloned(),
-                    });
-            }
-            let runtime: Arc<dyn JsRuntime> = {
-                #[cfg(target_os = "linux")]
-                if resolved.runtime.backend == "napi-vm-process" {
-                    Arc::new(ferrite_runtime::process::ProcessRuntime::new(
-                        ferrite_runtime::process::ProcessOptions {
-                            engine: options,
-                            memory_limit_bytes: resolved.runtime.process_memory_limit_bytes,
-                            concurrency: resolved.runtime.process_concurrency,
-                            ..Default::default()
-                        },
-                    ))
-                } else {
-                    Arc::new(ferrite_runtime::napi_vm::NapiVmRuntime::new(options))
-                }
-                #[cfg(not(target_os = "linux"))]
-                {
-                    Arc::new(ferrite_runtime::napi_vm::NapiVmRuntime::new(options))
-                }
-            };
-            return runtime;
+            return Arc::new(ferrite_runtime::UnavailableRuntime {
+                backend: "rquickjs does not implement napi-vm call-depth/job/fuel/loop limits; use request_timeout_ms, queue_capacity and max_request_bytes".into(),
+            });
+        }
+        #[cfg(feature = "rquickjs")]
+        if resolved.runtime.backend == "rquickjs" && !resolved.runtime.native_allow.is_empty() {
+            return Arc::new(ferrite_runtime::UnavailableRuntime {
+                backend: format!(
+                    "rquickjs native addon `{}` is unsupported; native .node loading was removed with napi-vm",
+                    resolved.runtime.native_allow[0]
+                ),
+            });
+        }
+        #[cfg(feature = "rquickjs")]
+        if resolved.runtime.backend == "rquickjs" {
+            return Arc::new(ferrite_runtime::quickjs::QuickJsRuntime::new(
+                ferrite_runtime::quickjs::QuickJsOptions {
+                    request_timeout_ms: resolved.runtime.request_timeout_ms,
+                    queue_capacity: resolved.runtime.queue_capacity,
+                    max_request_bytes: resolved.runtime.max_request_bytes,
+                },
+            ));
         }
         runtime_for_backend(&resolved.runtime.backend)
     }
@@ -276,13 +258,27 @@ impl SsrAdapter for JsSsrAdapter {
             modules: vec![self.module.clone()],
         });
         // Keep the legacy URL argument, adding a lossless request payload.
-        // Bytes are an array rather than a lossy UTF-8 body conversion.
-        let request_value = JsValue::from(serde_json::json!({
-            "method": request.method,
-            "uri": request.uri,
-            "headers": request.headers,
-            "body": request.body,
-        }));
+        // Bytes stay binary here rather than a lossy UTF-8 body conversion.
+        let mut request_object = indexmap::IndexMap::new();
+        request_object.insert("method".into(), JsValue::String(request.method.clone()));
+        request_object.insert("uri".into(), JsValue::String(request.uri.clone()));
+        request_object.insert(
+            "headers".into(),
+            JsValue::Array(
+                request
+                    .headers
+                    .iter()
+                    .map(|(name, value)| {
+                        JsValue::Array(vec![
+                            JsValue::String(name.clone()),
+                            JsValue::String(value.clone()),
+                        ])
+                    })
+                    .collect(),
+            ),
+        );
+        request_object.insert("body".into(), JsValue::Bytes(request.body.clone()));
+        let request_value = JsValue::Object(request_object);
         if self.streaming {
             let stream = self
                 .runtime
@@ -424,5 +420,109 @@ impl futures::Stream for ShellStream {
             }
         }
         std::task::Poll::Ready(self.suffix.take().map(Ok))
+    }
+}
+
+#[cfg(all(test, feature = "rquickjs"))]
+mod rquickjs_tests {
+    use super::*;
+    use ferrite_runtime::{CompiledModule, CompiledModuleGraph};
+
+    #[tokio::test]
+    async fn rquickjs_renders_compiled_graph() {
+        let graph = CompiledModuleGraph {
+            entry: "/entry.js".into(),
+            modules: vec![
+                CompiledModule {
+                    id: "/entry.js".into(),
+                    code: "import { label } from './dep.js'; export function render(url, request) { return { html: '<h1>' + label + ' ' + url + ' ' + request.method + '</h1>', status: 201, headers: [['x-engine','rquickjs']] }; }".into(),
+                    url: None,
+                },
+                CompiledModule {
+                    id: "/dep.js".into(),
+                    code: "export const label = 'ssr';".into(),
+                    url: None,
+                },
+            ],
+        };
+        let runtime: Arc<dyn JsRuntime> =
+            Arc::new(ferrite_runtime::quickjs::QuickJsRuntime::with_defaults());
+        let adapter = JsSsrAdapter::new_graph(runtime, graph).unwrap();
+        let response = adapter
+            .render(
+                SsrHttpRequest {
+                    method: "GET".into(),
+                    uri: "/hello".into(),
+                    headers: Vec::new(),
+                    body: Vec::new(),
+                },
+                SsrContext::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status, 201);
+        assert!(
+            matches!(&response.body, crate::RenderBody::Full(html) if html.contains("ssr /hello GET"))
+        );
+        assert!(response
+            .headers
+            .iter()
+            .any(|(name, value)| name == "x-engine" && value == "rquickjs"));
+    }
+
+    #[tokio::test]
+    async fn rquickjs_streams_compiled_graph_with_shell() {
+        use futures::StreamExt;
+        let graph = CompiledModuleGraph {
+            entry: "/entry.js".into(),
+            modules: vec![CompiledModule {
+                id: "/entry.js".into(),
+                code: r#"export function render(url) {
+                  let index = 0;
+                  const chunks = ['<h1>', url, '</h1>'];
+                  return {
+                    status: 200,
+                    headers: [],
+                    body: new ReadableStream({
+                      pull(controller) {
+                        if (index < chunks.length) controller.enqueue(chunks[index++]);
+                        else controller.close();
+                      }
+                    })
+                  };
+                }"#
+                .into(),
+                url: None,
+            }],
+        };
+        let runtime: Arc<dyn JsRuntime> =
+            Arc::new(ferrite_runtime::quickjs::QuickJsRuntime::with_defaults());
+        let adapter = JsSsrAdapter::new_graph(runtime, graph)
+            .unwrap()
+            .with_streaming(true)
+            .with_shell("<html><!--ssr-outlet--></html>");
+        let response = adapter
+            .render(
+                SsrHttpRequest {
+                    method: "GET".into(),
+                    uri: "/stream".into(),
+                    headers: Vec::new(),
+                    body: Vec::new(),
+                },
+                SsrContext::default(),
+            )
+            .await
+            .unwrap();
+        let crate::RenderBody::Stream(stream) = response.body else {
+            panic!("expected streamed body");
+        };
+        let bytes = stream
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>>>()
+            .unwrap()
+            .concat();
+        assert_eq!(bytes, b"<html><h1>/stream</h1></html>");
     }
 }
