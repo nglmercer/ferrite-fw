@@ -739,17 +739,46 @@ impl DevServer {
     }
 
     /// Rewrite `<script type="module">` + `<link>` sources in HTML.
-    pub(crate) async fn rewrite_html_scripts(&self, html: &str) -> String {
+    pub(crate) async fn rewrite_html_scripts(&self, html: &str, html_path: &str) -> String {
         let environment = self.inner.config.client_env();
         let ctx = self.plugin_context(&environment);
+        let importer = ModuleId::new(html_path);
+        let base = self.inner.config.base.trim_end_matches('/');
         let mut mapping: HashMap<String, String> = HashMap::new();
         for entry in ferrite_html::discover_entries(html) {
             let spec = entry.src.clone();
             if spec.starts_with("/@") || spec.starts_with("http") {
                 continue;
             }
-            if let Ok(resolved) = self.resolve_id(&ctx, &spec, None, &environment).await {
-                mapping.insert(spec, resolved.id.0);
+            let already_based = !base.is_empty()
+                && base != "/"
+                && spec
+                    .strip_prefix(base)
+                    .is_some_and(|rest| rest.starts_with('/'));
+            let resolve_spec = if already_based {
+                format!("/{}", &spec[base.len() + 1..])
+            } else {
+                spec.clone()
+            };
+            if let Ok(resolved) = self
+                .resolve_id(&ctx, &resolve_spec, Some(&importer), &environment)
+                .await
+            {
+                let mut url = if resolved.id.0.starts_with('\0') {
+                    virtual_url(&resolved.id.0)
+                } else {
+                    resolved.id.0.clone()
+                };
+                if !base.is_empty()
+                    && base != "/"
+                    && url.starts_with('/')
+                    && !url
+                        .strip_prefix(base)
+                        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+                {
+                    url = format!("{base}{url}");
+                }
+                mapping.insert(spec, url);
             }
         }
         let rewritten = ferrite_html::rewrite_module_scripts(html, |src| {

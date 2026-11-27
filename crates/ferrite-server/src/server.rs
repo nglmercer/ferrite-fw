@@ -152,7 +152,7 @@ impl DevServer {
         // container already orders hooks, so: core → hooks → inject.
         let rewritten = ferrite_html::apply_core_rewrites(&html, &self.inner.config.base, true);
         // Rewrite module script sources to resolved URLs.
-        let rewritten = self.rewrite_html_scripts(&rewritten).await;
+        let rewritten = self.rewrite_html_scripts(&rewritten, path).await;
         let fallback = rewritten.clone();
         let result = self
             .inner
@@ -170,7 +170,7 @@ impl DevServer {
         let html = result.html.unwrap_or(fallback);
         let html = ferrite_html::inject_tags(&html, &result.tags);
         if self.inner.config.npm.dev_strategy == "import-map" {
-            self.collect_import_map(&html).await;
+            self.collect_import_map(&html, path).await;
             let map = self
                 .inner
                 .import_map
@@ -191,9 +191,11 @@ impl DevServer {
     /// Only statically analyzable imports (static + dynamic-with-literal)
     /// are collected; runtime-computed specifiers keep the rewrite
     /// strategy's behavior of failing at fetch time.
-    pub(crate) async fn collect_import_map(&self, html: &str) {
+    pub(crate) async fn collect_import_map(&self, html: &str, html_path: &str) {
         let environment = self.inner.config.client_env();
         let ctx = self.plugin_context(&environment);
+        let importer = ModuleId::new(html_path);
+        let base = self.inner.config.base.trim_end_matches('/');
         let mut seen = std::collections::HashSet::new();
         let mut stack = Vec::new();
         for entry in ferrite_html::discover_entries(html) {
@@ -201,14 +203,27 @@ impl DevServer {
                 continue;
             }
             let spec = entry.src.as_str();
-            if spec.starts_with("/@")
-                || spec.starts_with("http")
-                || spec.starts_with("data:")
-                || spec.starts_with("blob:")
+            let already_based = !base.is_empty()
+                && base != "/"
+                && spec
+                    .strip_prefix(base)
+                    .is_some_and(|rest| rest.starts_with('/'));
+            let resolve_spec = if already_based {
+                format!("/{}", &spec[base.len() + 1..])
+            } else {
+                spec.to_string()
+            };
+            if resolve_spec.starts_with("/@")
+                || resolve_spec.starts_with("http")
+                || resolve_spec.starts_with("data:")
+                || resolve_spec.starts_with("blob:")
             {
                 continue;
             }
-            match self.resolve_id(&ctx, spec, None, &environment).await {
+            match self
+                .resolve_id(&ctx, &resolve_spec, Some(&importer), &environment)
+                .await
+            {
                 Ok(resolved) if !resolved.external => stack.push(resolved.id),
                 Ok(_) => {}
                 Err(error) => tracing::warn!("cannot resolve entry `{spec}`: {error}"),
