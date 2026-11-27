@@ -229,6 +229,9 @@ impl DevServer {
                 Err(error) => tracing::warn!("cannot resolve entry `{spec}`: {error}"),
             }
         }
+        if !self.inner.config.ssr.islands.is_empty() {
+            stack.push(ModuleId::new("/@ferrite/islands-client"));
+        }
         while let Some(id) = stack.pop() {
             if !seen.insert(id.0.clone()) {
                 continue;
