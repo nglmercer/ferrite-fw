@@ -78,6 +78,7 @@ enum Job {
     Call {
         handle: u64,
         args: Vec<JsValue>,
+        interleave_timers: bool,
         reply: Reply<serde_json::Value>,
     },
 }
@@ -374,6 +375,7 @@ impl QuickJsRuntime {
             Job::Call {
                 handle: handle.id,
                 args,
+                interleave_timers: true,
                 reply: tx,
             },
             control,
@@ -527,6 +529,7 @@ impl JsRuntime for QuickJsRuntime {
         let _guard = self.send(Job::Call {
             handle: handle.id,
             args,
+            interleave_timers: false,
             reply: tx,
         })?;
         Ok(JsValue::from(self.receive::<serde_json::Value>(rx).await?))
@@ -925,7 +928,7 @@ if (typeof globalThis.__ferriteStreamBytes === 'undefined') {
                             explain_error(&ctx, error, &control)
                         )
                     })?;
-            self.settle_value(ctx.clone(), promise.into_value(), &control)
+            self.settle_value(ctx.clone(), promise.into_value(), &control, false)
                 .map_err(|error| {
                     format!(
                         "rquickjs graph entry `{}` promise failed: {error}",
@@ -1015,43 +1018,48 @@ if (typeof globalThis.__ferriteStreamBytes === 'undefined') {
         &self,
         ctx: &rquickjs::Ctx<'js>,
         control: &ExecutionControl,
+        interleave_timers: bool,
     ) -> std::result::Result<(), String> {
-        self.check_control()?;
-        while ctx.execute_pending_job() {
+        loop {
             self.check_control()?;
+            while ctx.execute_pending_job() {
+                self.check_control()?;
+            }
+            let next = self
+                .timers
+                .borrow()
+                .timers
+                .iter()
+                .map(|(id, timer)| (*id, timer.due))
+                .min_by_key(|(_, due)| *due);
+            let Some((id, due)) = next else {
+                return Ok(());
+            };
+            if due > Instant::now() {
+                return Ok(());
+            }
+            let timer = self.timers.borrow_mut().timers.remove(&id).unwrap();
+            let callback = timer
+                .callback
+                .restore(ctx)
+                .map_err(|error| format!("rquickjs timer restore failed: {error:?}"))?;
+            let result: std::result::Result<Value, _> = callback.call(());
+            if let Err(error) = result {
+                return Err(format!(
+                    "rquickjs timer failed: {}",
+                    explain_error(ctx, error, control)
+                ));
+            }
+            while ctx.execute_pending_job() {
+                self.check_control()?;
+            }
+            // Streaming reads interleave one timer turn with chunk delivery.
+            // Non-streaming invocation drains the ready timer cascade, matching
+            // the event-loop progress that would occur before a later render.
+            if interleave_timers {
+                return Ok(());
+            }
         }
-        let next = self
-            .timers
-            .borrow()
-            .timers
-            .iter()
-            .map(|(id, timer)| (*id, timer.due))
-            .min_by_key(|(_, due)| *due);
-        let Some((id, due)) = next else {
-            return Ok(());
-        };
-        if due > Instant::now() {
-            return Ok(());
-        }
-        // Run one timer turn, not every expired timer. A renderer may chain
-        // zero-timeout batches indefinitely; delivering an already-resolved
-        // stream chunk between turns is what provides forward progress.
-        let timer = self.timers.borrow_mut().timers.remove(&id).unwrap();
-        let callback = timer
-            .callback
-            .restore(ctx)
-            .map_err(|error| format!("rquickjs timer restore failed: {error:?}"))?;
-        let result: std::result::Result<Value, _> = callback.call(());
-        if let Err(error) = result {
-            return Err(format!(
-                "rquickjs timer failed: {}",
-                explain_error(ctx, error, control)
-            ));
-        }
-        while ctx.execute_pending_job() {
-            self.check_control()?;
-        }
-        Ok(())
     }
 
     fn settle_value<'js>(
@@ -1059,15 +1067,16 @@ if (typeof globalThis.__ferriteStreamBytes === 'undefined') {
         ctx: rquickjs::Ctx<'js>,
         value: Value<'js>,
         control: &ExecutionControl,
+        interleave_timers: bool,
     ) -> std::result::Result<Value<'js>, String> {
         if !value.is_promise() {
-            self.drain_ready_work(&ctx, control)?;
+            self.drain_ready_work(&ctx, control, interleave_timers)?;
             return Ok(value);
         }
         let promise = value.into_promise().unwrap();
         loop {
             self.check_control()?;
-            self.drain_ready_work(&ctx, control)?;
+            self.drain_ready_work(&ctx, control, interleave_timers)?;
             if let Some(result) = promise.result::<Value>() {
                 return result.map_err(|error| explain_error(&ctx, error, control));
             }
@@ -1130,6 +1139,7 @@ if (typeof globalThis.__ferriteStreamBytes === 'undefined') {
         handle: u64,
         args: &[JsValue],
         control: ExecutionControl,
+        interleave_timers: bool,
     ) -> std::result::Result<serde_json::Value, String> {
         self.set_control(control.clone());
         self.check_control()?;
@@ -1156,7 +1166,7 @@ if (typeof globalThis.__ferriteStreamBytes === 'undefined') {
                 )
             })?;
             let result = self
-                .settle_value(ctx.clone(), result, &control)
+                .settle_value(ctx.clone(), result, &control, interleave_timers)
                 .map_err(|error| format!("rquickjs promise failed: {error}"))?;
             self.check_control()?;
             Ok(self.json_value(&result, 0))
@@ -1205,19 +1215,22 @@ fn worker_loop(rx: mpsc::Receiver<Request>, shutdown: Arc<AtomicBool>) {
                             .ok_or_else(|| {
                                 format!("entry `{}` has no function export `{export}`", graph.entry)
                             })?;
-                        engine.call(handle, &args, control.clone())
+                        engine.call(handle, &args, control.clone(), false)
                     });
                 let _ = reply.send(result);
             }
             Job::Call {
                 handle,
                 args,
+                interleave_timers,
                 reply,
             } => {
                 let result = engine
                     .as_mut()
                     .ok_or_else(|| "rquickjs runtime state is unavailable".to_string())
-                    .and_then(|engine| engine.call(handle, &args, control.clone()));
+                    .and_then(|engine| {
+                        engine.call(handle, &args, control.clone(), interleave_timers)
+                    });
                 let _ = reply.send(result);
             }
         }
@@ -1457,6 +1470,28 @@ mod tests {
             .unwrap();
         let mut body = response.body;
         assert_eq!(body.next().await.unwrap().unwrap(), b"ready");
+    }
+
+    #[tokio::test]
+    async fn quickjs_nonstream_waits_for_chained_initialization_timers() {
+        let runtime = QuickJsRuntime::with_defaults();
+        let result = runtime
+            .invoke_module_graph(
+                graph(
+                    r#"let initialized = false;
+                  setTimeout(() => setTimeout(() => { initialized = true; }, 0), 0);
+                  export function render() { return initialized ? 'ready' : 'uninitialized'; }"#,
+                ),
+                "render",
+                vec![],
+                RuntimeEnvironment {
+                    ssr: true,
+                    request_id: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(result, JsValue::String(value) if value == "ready"));
     }
 
     #[tokio::test]
