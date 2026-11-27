@@ -43,6 +43,39 @@ pub(crate) async fn inspect(
     for _ in resolved.foreign_plugins.iter().flatten() {
         plugins.push("ferrite:foreign-hook".into());
     }
+    let compiler_hosts = resolved
+        .framework
+        .as_ref()
+        .map(|profile| {
+            profile
+                .enabled
+                .iter()
+                .map(|name| {
+                    let host = if name == "react" {
+                        "native"
+                    } else {
+                        profile.compiler_host.as_deref().unwrap_or("disabled")
+                    };
+                    serde_json::json!({
+                        "framework": name,
+                        "host": host,
+                        "execution": if host == "native" { "rust" } else if host == "node" { "external-node-process" } else { "unavailable" },
+                        "externalNodeRequired": host == "node",
+                        "support": "experimental",
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .filter(|hosts: &Vec<_>| !hosts.is_empty())
+        .unwrap_or_else(|| {
+            vec![serde_json::json!({
+                "framework": "vanilla",
+                "host": "native",
+                "execution": "rust",
+                "externalNodeRequired": false,
+                "support": "experimental",
+            })]
+        });
     if args.json {
         println!(
             "{}",
@@ -55,6 +88,7 @@ pub(crate) async fn inspect(
                 "server": { "host": resolved.server.host, "port": resolved.server.port },
                 "build": { "outDir": resolved.build.out_dir, "minify": resolved.build.minify, "target": resolved.build.target },
                 "compiler": resolved.compiler.engine,
+                "compilerHosts": compiler_hosts.clone(),
                 "framework": resolved.framework,
                 "jsxOwnershipScope": ferrite::frameworks::doctor::JSX_SCAN_SCOPE,
                 "jsxOwnership": jsx_ownership,
@@ -86,6 +120,15 @@ pub(crate) async fn inspect(
         );
         println!("out_dir:  {}", resolved.build.out_dir);
         println!("compiler: {}", resolved.compiler.engine);
+        for host in &compiler_hosts {
+            println!(
+                "compiler host: {}={} ({}, external Node: {})",
+                host["framework"].as_str().unwrap_or("unknown"),
+                host["host"].as_str().unwrap_or("unknown"),
+                host["execution"].as_str().unwrap_or("unknown"),
+                host["externalNodeRequired"].as_bool().unwrap_or(false)
+            );
+        }
         println!("plugins:  {}", plugins.join(", "));
         println!("framework compiler: {:?}", resolved.framework);
         println!("SSR runtime: {}", resolved.runtime.backend);

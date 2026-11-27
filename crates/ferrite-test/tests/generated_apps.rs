@@ -131,6 +131,52 @@ async fn configured_react_selection_matches_inspect_and_transform() {
 
 #[tokio::test]
 #[ignore = "requires freshly built FERRITE_CLI_PATH"]
+async fn rust_only_inspect_reports_compiler_hosts() {
+    let binary = cli();
+    let project = ferrite_test::TempProject::new(&[]);
+    async fn inspect(binary: &Path, project: &Path) -> serde_json::Value {
+        serde_json::from_str::<serde_json::Value>(
+            &command(binary, project, &["inspect", "--json"], false).await,
+        )
+        .unwrap()
+    }
+    let vanilla = inspect(&binary, &project.root).await;
+    assert_eq!(vanilla["compilerHosts"][0]["framework"], "vanilla");
+    assert_eq!(vanilla["compilerHosts"][0]["execution"], "rust");
+    assert_eq!(vanilla["compilerHosts"][0]["externalNodeRequired"], false);
+
+    std::fs::write(
+        project.root.join("ferrite.toml"),
+        "[framework]
+enabled = ['react']
+compiler_host = 'native'
+",
+    )
+    .unwrap();
+    let react = inspect(&binary, &project.root).await;
+    assert_eq!(react["compilerHosts"][0]["framework"], "react");
+    assert_eq!(react["compilerHosts"][0]["execution"], "rust");
+    assert_eq!(react["compilerHosts"][0]["externalNodeRequired"], false);
+
+    std::fs::write(
+        project.root.join("ferrite.toml"),
+        "[framework]
+enabled = ['vue']
+compiler_host = 'node'
+",
+    )
+    .unwrap();
+    let vue = inspect(&binary, &project.root).await;
+    assert_eq!(vue["compilerHosts"][0]["framework"], "vue");
+    assert_eq!(
+        vue["compilerHosts"][0]["execution"],
+        "external-node-process"
+    );
+    assert_eq!(vue["compilerHosts"][0]["externalNodeRequired"], true);
+}
+
+#[tokio::test]
+#[ignore = "requires freshly built FERRITE_CLI_PATH"]
 async fn jsx_ownership_cli_reports_package_conflicts() {
     let binary = cli();
     let project = ferrite_test::TempProject::new(&[

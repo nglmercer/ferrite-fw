@@ -85,6 +85,16 @@ def plan(profile):
             commands.append(["cargo", "test", "--locked", "-p", "ferrite-test", "--features", "napi-vm", "--test", "production_closure", name, "--", "--exact"])
         for engine in ("chromium", "firefox"):
             commands.append(exact("ferrite-test", "production_closure", f"{engine}_lazy_css_shared_chunks_assets_and_retry", "napi-vm"))
+    if profile in ("rust-only", "all"):
+        commands.append(["cargo", "build", "--locked", "-p", "ferrite-cli", "--features", "napi-vm"])
+        commands.append(exact("ferrite-test", "generated_apps", "rust_only_inspect_reports_compiler_hosts", "napi-vm"))
+        for engine in ("chromium", "firefox"):
+            commands.append(exact("ferrite-test", "generated_apps", f"{engine}_generated_profiles", "napi-vm"))
+        commands.append(exact("ferrite-test", "standalone", "standalone_ssr_build_compiles_and_renders_without_node", "napi-vm"))
+        if sys.platform.startswith("linux"):
+            commands.append(exact("ferrite-test", "ssr_documents", "cli_streamed_documents_prerender_without_node", "napi-vm"))
+            for name in ("standalone_process_runtime_renders_and_recovers_without_node", "standalone_streaming_renders_and_recovers_without_node"):
+                commands.append(exact("ferrite-test", "standalone", name, "napi-vm"))
     if profile in ("standalone", "all"):
         for name in ("standalone_build_compiles_and_serves", "standalone_ssr_build_compiles_and_renders_without_node"):
             commands.append(exact("ferrite-test", "standalone", name, "napi-vm"))
@@ -117,7 +127,7 @@ def run(args):
         print(json.dumps(commands, indent=2))
         return 0
     env = dict(os.environ)
-    if args.profile in ("core", "frameworks", "production", "ssr", "e2e", "all"):
+    if args.profile in ("core", "frameworks", "production", "ssr", "e2e", "rust-only", "all"):
         for variable, names in (("FERRITE_CHROMIUM_PATH", ("chromium", "google-chrome", "chrome-headless-shell")), ("FERRITE_FIREFOX_PATH", ("firefox",))):
             binary = env.get(variable) or next((path for name in names if (path := shutil.which(name))), None)
             if not binary or not Path(binary).is_file():
@@ -177,7 +187,7 @@ def run(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--profile", choices=("core", "runtime", "frameworks", "production", "ssr", "standalone", "e2e", "all"), default="runtime")
+    parser.add_argument("--profile", choices=("core", "runtime", "frameworks", "production", "ssr", "standalone", "e2e", "rust-only", "all"), default="runtime")
     parser.add_argument("--list", action="store_true")
     parser.add_argument("--report", type=Path, default=ROOT / ".ferrite/acceptance/report.json")
     parser.add_argument("--timeout", type=int, default=1800, help="maximum seconds per gate")

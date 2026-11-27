@@ -8,7 +8,9 @@ for a first application.
 
 [Completion plan](COMPLETION_PLAN.md) records the current work packages and
 explicit acceptance runner. The [Rust-only all-in-one plan](RUST_ONLY_ALL_IN_ONE_PLAN.md)
-sequences the remaining work toward a self-contained Vite alternative.
+sequences the remaining work toward a self-contained Vite alternative. The
+[operational Rust-only status](OPERATIONAL_RUST_ONLY.md) records which profiles
+currently need external Node and how acceptance proves empty-`PATH` execution.
 `IMPLEMENTATION_STATUS.md` retains historical evidence; older remaining-work
 paragraphs are not a current consolidated backlog.
 
