@@ -8,7 +8,7 @@ fn fixture() -> ferrite_test::TempProject {
         ("ferrite.toml",r#"base="/app/"
 [framework]
 enabled=["vue","svelte"]
-compiler_host="node"
+compiler_host="embedded"
 [ssr]
 entry="src/server.js"
 [ssr.islands]
@@ -245,12 +245,12 @@ async fn matrix(kind: BrowserKind) {
     browser.close().await.unwrap();
 }
 #[tokio::test]
-#[ignore = "official React Vue Svelte packages, Node compiler and Chromium"]
+#[ignore = "official React Vue Svelte packages, embedded compilers and Chromium"]
 async fn chromium_framework_islands_dev_preview_and_static() {
     matrix(BrowserKind::Chromium).await;
 }
 #[tokio::test]
-#[ignore = "official React Vue Svelte packages, Node compiler and Firefox"]
+#[ignore = "official React Vue Svelte packages, embedded compilers and Firefox"]
 async fn firefox_framework_islands_dev_preview_and_static() {
     matrix(BrowserKind::Firefox).await;
 }
