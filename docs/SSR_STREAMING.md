@@ -26,6 +26,7 @@ payload bound applies to the compiled graph plus arguments.
 
 Streaming leases a reusable worker from a pool bounded by `queue_capacity`; when all pool workers hold open responses, new streaming renders fail explicitly instead of creating unbounded threads; completing or dropping a response resets its JavaScript context before the worker is reused. The old `napi-vm-process`
 Linux worker protocol and native `.node` addon support were removed with the
-napi-vm backend. Framework-specific streaming acceptance remains narrower than
-buffered SSR acceptance; validate a framework renderer before advertising its
-streaming profile.
+napi-vm backend. React `renderToReadableStream` and Vue `renderToWebStream` have offline
+production acceptance in Chromium. Svelte 5.39.6 has asynchronous SSR but no
+public progressive stream API; Ferrite can transport its completed output as a
+stream chunk, but must not advertise progressive Svelte streaming.
